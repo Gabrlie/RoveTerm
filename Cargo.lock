@@ -3920,6 +3920,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "rove-ssh"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "devsshd",
+ "parking_lot",
+ "rove-kernel",
+ "rove-session",
+ "rove-vault",
+ "russh",
+ "serde",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "rove-vault"
 version = "0.1.0"
 dependencies = [
