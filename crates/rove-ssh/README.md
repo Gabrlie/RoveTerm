@@ -13,6 +13,8 @@ SSH 终端 Provider：认证、host key 校验，以及打开 PTY shell channel�
 - `AuthSpec` 中的秘密材料在 drop 时清零。密码认证失败后，会用同一个密码尝试 keyboard-interactive。
 - `AuthSpec::resolve` 根据主机的认证方式、已存凭据和用户输入的密码确定凭据；需要先向用户索取密码时返回 `CredentialsRequired`。
 
+- `parse_quick_connect` 解析快速连接字符串；`parse_ssh_config` 解析 OpenSSH 客户端配置；`import_ssh_config` 把配置中的主机写入 vault，跳过用户名、主机名、端口都相同的已有主机。
+
 ## 配置（`[plugin.ssh]`）
 
 | 键 | 默认值 | 范围 | 含义 |
@@ -27,3 +29,4 @@ SSH 终端 Provider：认证、host key 校验，以及打开 PTY shell channel�
 
 - 暂不支持 OpenSSH 证书认证、GSSAPI。
 - 私钥支持 OpenSSH 和 PEM 格式，暂不支持 PuTTY 的 `.ppk` 格式。
+- ssh_config 解析忽略 `Match` 块和 `Include` 指令；`ProxyJump` 会被解析出来，但还没有接入连接流程。

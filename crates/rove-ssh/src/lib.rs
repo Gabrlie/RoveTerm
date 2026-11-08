@@ -7,6 +7,7 @@
 mod connection;
 mod hostkey;
 mod pool;
+mod sshconfig;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,6 +21,10 @@ use zeroize::Zeroizing;
 pub use connection::{ConnectOptions, SshConnection};
 pub use hostkey::{
     HostKeyAnswer, HostKeyPrompt, HostKeyPrompts, HostKeyRejection, HostKeyVerifier, VaultVerifier,
+};
+pub use sshconfig::{
+    ImportReport, QuickTarget, SshConfigHost, import_ssh_config, parse_quick_connect,
+    parse_ssh_config,
 };
 
 /// Where to connect.

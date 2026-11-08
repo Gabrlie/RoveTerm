@@ -47,3 +47,18 @@
 - `open_terminal` 在共享连接上打开 channel；如果复用的连接打开 channel 失败，丢弃它并重连一次。
 - 每个打开的 channel 持有一个租约。最后一个租约释放后，启动一个 `idle_disconnect_secs` 的计时器；期间连接被再次取出或打开新 channel，计时作废，否则断开连接。
 - `live_connections()` 返回存活连接数；`disconnect_all()` 用于退出应用时断开全部连接。
+
+## 快速连接
+
+`parse_quick_connect` 接受以下形式，返回 `QuickTarget { username, hostname, port }`，其中用户名和端口可以省略：
+
+- `host`、`user@host`、`host:port`、`user@host:port`
+- `[IPv6]:port`、不带端口的 IPv6 地址
+- `ssh://user@host:port`
+- `ssh [-p port] [-l user] user@host`（不支持其他选项）
+
+## ssh_config 导入
+
+`parse_ssh_config` 为 `Host` 行中每个不含通配符的别名生成一条 `SshConfigHost`。每个字段按 OpenSSH 的首次匹配规则取值：按文件顺序遍历所有与该别名匹配的块（包括 `Host *`、带 `!` 的排除模式，以及第一个 `Host` 行之前的全局设置），采用第一个出现的值。读取的字段有 `HostName`、`Port`、`User`、`IdentityFile`（取第一个）和 `ProxyJump`；`Match` 块和 `Include` 指令被忽略。
+
+`import_ssh_config(vault, text, home, default_user)` 的转换规则：有 `IdentityFile` 时认证方式为 `KeyFile`，并把 `~` 展开为 `home`；否则为 `Agent`。缺少 `User` 时使用 `default_user`，导入的主机带 `ssh-config` 标签。用户名、主机名（不区分大小写）、端口都相同的已有主机会被跳过。
