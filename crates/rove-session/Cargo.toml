@@ -1,0 +1,22 @@
+[package]
+name = "rove-session"
+description = "TerminalSession seam, session manager, output coalescing and replay for RoveTerm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+parking_lot.workspace = true
+rove-kernel = { path = "../rove-kernel" }
+serde.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
+toml.workspace = true

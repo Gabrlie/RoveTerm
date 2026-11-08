@@ -63,7 +63,7 @@ Waterfall 拦截器按优先级串成链，**拦截器必须调用 `next` 才会
 Provider（rove-pty / rove-ssh）
   └─ open → OpenedTerminal { session: Arc<dyn TerminalSession>, output: Receiver<TerminalOutput> }
 SessionManager::attach
-  ├─ 分配 SessionId，写入 Journal 事件 session/opened
+  ├─ 分配 SessionId，发出 Live 事件 SessionOpened（journal 插件监听后写入 Journal）
   └─ 输出泵：按时间窗口或字节上限合并输出 → 回放环形缓冲 → OutputSink
 src-tauri 的 OutputSink → ipc::Channel → TermView.write(Uint8Array)
 输入：TermView.onData → invoke("session_write") → SessionManager → TerminalSession::write
