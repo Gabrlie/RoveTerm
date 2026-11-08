@@ -1,0 +1,21 @@
+[package]
+name = "rove-pty"
+description = "Local PTY terminal provider for RoveTerm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+parking_lot.workspace = true
+portable-pty = "0.9"
+rove-kernel = { path = "../rove-kernel" }
+rove-session = { path = "../rove-session" }
+serde.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
