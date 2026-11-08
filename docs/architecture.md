@@ -112,4 +112,4 @@ src-tauri 的 OutputSink → ipc::Channel → TermView.write(Uint8Array)
 | 观察进行中的工作 | 监听对应的 Live 事件 |
 | 限制或审计某项能力 | 在该能力的 waterfall 事件上注册拦截器 |
 | 新增凭据缓存方式 | 实现 `KeyCache` 并在 profile 中替换 |
-| 新增一个插件 | 实现 `Plugin`，在 profile 中启用（[cookbook](cookbook/README.md)） |
+| 新增一个插件 | 实现 `Plugin`，在 profile 中启用（[cookbook](cookbook/adding-a-plugin.md)） |
