@@ -16,6 +16,7 @@
   } from '../ipc';
   import { errorText, t } from '../i18n';
   import { currentTheme } from './theme';
+  import { isAppShortcut } from '../actions';
 
   interface Props {
     open: (size: TermSize, onOutput: (message: OutputMessage) => void) => Promise<SessionId>;
@@ -66,7 +67,11 @@
 
   function refit(): void {
     if (!term || !fit) return;
+    // Hidden views (inactive tabs) have no size; fitting them would shrink the shell to nothing.
+    if (container.clientWidth === 0 || container.clientHeight === 0) return;
     fit.fit();
+    // Resizing the WebGL canvas clears it; repaint the viewport without waiting for new output.
+    term.refresh(0, term.rows - 1);
     const size = { cols: term.cols, rows: term.rows };
     if (sessionId && (size.cols !== lastSize.cols || size.rows !== lastSize.rows)) {
       lastSize = size;
@@ -79,13 +84,29 @@
     frame = requestAnimationFrame(refit);
   }
 
+  /**
+   * WebKitGTK (Linux desktop) stops repainting older WebGL terminals once several GL contexts
+   * coexist, so Linux desktop keeps xterm's DOM renderer. WKWebView, WebView2 and Android WebView
+   * use WebGL.
+   */
+  function prefersWebgl(): boolean {
+    const agent = navigator.userAgent;
+    return !(agent.includes('Linux') && !agent.includes('Android'));
+  }
+
   /** Loads the WebGL renderer lazily; xterm keeps its DOM renderer when WebGL is unavailable. */
   async function loadWebgl(target: Terminal): Promise<void> {
     try {
       const { WebglAddon } = await import('@xterm/addon-webgl');
       if (target !== term) return;
       const webgl = new WebglAddon();
-      webgl.onContextLoss(() => webgl.dispose());
+      webgl.onContextLoss(() => {
+        // The browser reclaimed the GL context (WebViews cap live contexts); fall back to the DOM
+        // renderer and repaint, since nothing else triggers a redraw until new output arrives.
+        console.info('WebGL context lost, using DOM renderer');
+        webgl.dispose();
+        target.refresh(0, target.rows - 1);
+      });
       target.loadAddon(webgl);
     } catch (error) {
       console.info('WebGL renderer unavailable, using DOM renderer', error);
@@ -113,10 +134,12 @@
     term.unicode.activeVersion = '11';
     term.loadAddon(new WebLinksAddon());
     term.open(container);
-    void loadWebgl(term);
+    if (prefersWebgl()) void loadWebgl(term);
     fit.fit();
     lastSize = { cols: term.cols, rows: term.rows };
 
+    // App shortcuts are handled by the window; the terminal must not also send them to the shell.
+    term.attachCustomKeyEventHandler((event) => !isAppShortcut(event));
     term.onData((data) => {
       if (sessionId) sessionWrite(sessionId, data).catch((error: unknown) => console.warn('write failed', error));
     });

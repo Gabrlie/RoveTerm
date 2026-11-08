@@ -18,6 +18,21 @@ export const en = {
   'error.vault.locked': 'Credential vault is locked',
   'error.input.invalid': 'Invalid input',
   'error.unknown': 'Something went wrong',
+  'action.tab.newLocal': 'New local terminal',
+  'action.tab.close': 'Close pane',
+  'action.tab.next': 'Next tab',
+  'action.tab.prev': 'Previous tab',
+  'action.tab.goto': 'Go to tab',
+  'action.pane.splitRight': 'Split right',
+  'action.pane.splitDown': 'Split down',
+  'action.pane.focusNext': 'Focus next pane',
+  'action.pane.focusPrev': 'Focus previous pane',
+  'action.terminal.copy': 'Copy',
+  'action.terminal.paste': 'Paste',
+  'action.palette.open': 'Command palette',
+  'palette.placeholder': 'Type a command',
+  'palette.empty': 'No matching commands',
+  'workspace.empty': 'No open terminals',
 } as const;
 
 export type MessageKey = keyof typeof en;
