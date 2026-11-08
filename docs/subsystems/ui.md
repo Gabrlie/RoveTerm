@@ -15,7 +15,9 @@
 | `src/lib/workspace/workspace.svelte.ts` | 标签、分屏树和每个面板的连接目标 |
 | `src/lib/tabs/TabBar.svelte` | 标签栏 |
 | `src/lib/actions.ts` | actions 表：快捷键、命令面板的唯一来源 |
-| `src/lib/ui/` | 通用组件：`Icon`、`IconButton`、`CommandPalette`；图标映射在 `icons.ts` |
+| `src/lib/ui/` | 通用组件：`Icon`、`IconButton`、`Dialog`、`CommandPalette`；图标映射在 `icons.ts` |
+| `src/lib/hosts/` | 主机列表与搜索、主机编辑、快速连接、密码输入、host key 确认 |
+| `src/lib/vault/vault.svelte.ts` | vault 锁定状态，以及由用户操作触发的解锁和重置 |
 | `src/lib/i18n/` | 文案字典与 `t()`、`errorText()` |
 | `src/styles/tokens.css` | 设计 token：颜色、间距（4px 网格）、圆角、字号、字体 |
 
@@ -39,6 +41,17 @@
 - 拆分面板时，新面板打开与原面板相同的目标；对 SSH 面板，后端会复用已有连接，不需要再次输入凭据。
 - 本地 shell 以退出码 0 退出时自动关闭面板；其他情况保留面板并显示退出提示。
 
+## 主机与凭据
+
+- 侧栏按分组列出主机，搜索时匹配名称、地址、用户名、分组和标签；双击或按 Enter 连接，悬停时显示编辑和删除按钮。
+- 连接前，如果主机使用"每次询问"认证，或者使用密码认证但没有保存密码，先弹出密码框；用户可以勾选"记住密码"，连接成功后由后端写入 vault。
+- 打开面板时如果后端返回 `ssh.credentials_required`，弹出密码框，再用新面板替换原面板重新连接（`workspace.reopen`）。
+- 一次性密码只保存在面板状态中，会话打开后立即清除。
+- 主机编辑表单在保存失败（例如用户拒绝解锁）时保持打开，已填写的内容不会丢失。留空的秘密字段表示保留已保存的值。
+- `hostkey-prompt` 事件按到达顺序排队，逐个弹出确认框，显示算法和 `SHA256:` 指纹。关闭对话框视为拒绝。
+- 侧栏底部显示 vault 状态。锁定时点击即请求解锁；设备密钥丢失时，确认后可以重置并丢弃已保存的凭据。
+- 快速连接接受 `user@host:port` 等形式；不填密码时使用 SSH agent。
+
 ## actions 表
 
 `actions.ts` 是快捷键、命令面板（以及之后的菜单和快捷键设置页）的唯一来源。新增应用快捷键时只在这里登记，不要在组件里单独监听按键。
@@ -58,6 +71,9 @@
 | 切换到第 N 个标签 | `App+1` … `App+9` |
 | 复制 / 粘贴 | `App+C` / `App+V` |
 | 命令面板 | `App+P` |
+| 快速连接 | `App+K` |
+| 新建主机 | `App+N` |
+| 显示或隐藏主机栏 | `App+B` |
 
 ## 图标
 

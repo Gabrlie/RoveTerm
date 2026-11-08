@@ -6,8 +6,16 @@
   import { workspace, type PaneState, type Tab } from '../workspace/workspace.svelte';
   import { sessionOpenLocal, sessionOpenQuick, sessionOpenSsh, type OutputMessage, type TermSize } from '../ipc';
   import type { Divider, PaneId } from './layout';
+  import { isCommandError } from '../ipc';
 
-  let { tab, visible }: { tab: Tab; visible: boolean } = $props();
+  interface Props {
+    tab: Tab;
+    visible: boolean;
+    /** Called when a pane needs a password before it can connect. */
+    oncredentials: (paneId: PaneId) => void;
+  }
+
+  let { tab, visible, oncredentials }: Props = $props();
 
   let grid: HTMLDivElement;
   const views: Record<PaneId, TermView> = $state({});
@@ -96,6 +104,7 @@
           onsession={(sessionId) => workspace.attached(id, sessionId)}
           onexit={(status) => onExit(pane, status.code)}
           ontitle={(title) => workspace.retitle(id, title)}
+          onerror={(error) => isCommandError(error) && error.code === 'ssh.credentials_required' && oncredentials(id)}
         />
       </div>
     {/if}

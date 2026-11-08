@@ -14,6 +14,9 @@ export type ActionId =
   | 'terminal.copy'
   | 'terminal.paste'
   | 'palette.open'
+  | 'host.quickConnect'
+  | 'host.new'
+  | 'sidebar.toggle'
   | `tab.goto${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
 
 export interface Action {
@@ -29,6 +32,9 @@ export const isMac = /Mac|iPhone|iPad/.test(navigator.platform) || navigator.use
 
 export const actions: Action[] = [
   { id: 'tab.newLocal', label: 'action.tab.newLocal', keys: ['App+T'] },
+  { id: 'host.quickConnect', label: 'action.host.quickConnect', keys: ['App+K'] },
+  { id: 'host.new', label: 'action.host.new', keys: ['App+N'] },
+  { id: 'sidebar.toggle', label: 'action.sidebar.toggle', keys: ['App+B'] },
   { id: 'tab.close', label: 'action.tab.close', keys: ['App+W'] },
   { id: 'tab.next', label: 'action.tab.next', keys: ['Ctrl+Tab'] },
   { id: 'tab.prev', label: 'action.tab.prev', keys: ['Ctrl+Shift+Tab'] },

@@ -1,0 +1,128 @@
+<script lang="ts">
+  // Create or edit a host. The draft stays in the form when saving fails (for example a denied unlock).
+  import Dialog from '../ui/Dialog.svelte';
+  import { hostCreate, hostUpdate, type AuthMethod, type HostDraft, type HostEntry, type Secret } from '../ipc';
+  import { errorText, t } from '../i18n';
+  import { hosts } from './hosts.svelte';
+
+  let { host, onclose }: { host: HostEntry | null; onclose: () => void } = $props();
+
+  type Method = AuthMethod['method'];
+
+  // svelte-ignore state_referenced_locally
+  const initial = host;
+  let name = $state(initial?.name ?? '');
+  let group = $state(initial?.group ?? '');
+  let hostname = $state(initial?.hostname ?? '');
+  let port = $state(initial?.port ?? 22);
+  let username = $state(initial?.username ?? 'root');
+  let method = $state<Method>(initial?.auth.method ?? 'password');
+  let keyPath = $state(initial?.auth.method === 'key_file' ? initial.auth.path : '~/.ssh/id_ed25519');
+  let password = $state('');
+  let privateKey = $state('');
+  let passphrase = $state('');
+  let error = $state('');
+  let saving = $state(false);
+  const hasSecret = initial?.has_secret ?? false;
+
+  function auth(): AuthMethod {
+    return method === 'key_file' ? { method, path: keyPath.trim() } : ({ method } as AuthMethod);
+  }
+
+  function secret(): Secret | null {
+    switch (method) {
+      case 'password':
+        return password ? { kind: 'password', password } : null;
+      case 'private_key':
+        return privateKey.trim() ? { kind: 'private_key', key: privateKey, passphrase: passphrase || null } : null;
+      case 'key_file':
+        return passphrase ? { kind: 'passphrase', passphrase } : null;
+      default:
+        return null;
+    }
+  }
+
+  async function save(event: SubmitEvent): Promise<void> {
+    event.preventDefault();
+    if (method === 'private_key' && !hasSecret && !privateKey.trim()) {
+      error = t('host.privateKeyRequired');
+      return;
+    }
+    const draft: HostDraft = {
+      name,
+      group: group.trim() || null,
+      hostname,
+      port: Number(port),
+      username,
+      auth: auth(),
+      tags: initial?.tags ?? [],
+    };
+    saving = true;
+    error = '';
+    try {
+      if (initial) await hostUpdate(initial.id, draft, secret(), false);
+      else await hostCreate(draft, secret());
+      await hosts.refresh();
+      onclose();
+    } catch (caught) {
+      error = errorText(caught);
+    } finally {
+      saving = false;
+    }
+  }
+</script>
+
+<Dialog title={initial ? t('host.edit') : t('host.new')} {onclose}>
+  <form id="host-form" onsubmit={save}>
+    <div class="row">
+      <label>{t('host.hostname')}<input bind:value={hostname} required autocomplete="off" spellcheck="false" /></label>
+      <label class="port">{t('host.port')}<input type="number" min="1" max="65535" bind:value={port} required /></label>
+    </div>
+    <label>{t('host.username')}<input bind:value={username} required autocomplete="off" spellcheck="false" /></label>
+    <div class="row">
+      <label>{t('host.name')}<input bind:value={name} placeholder={hostname} autocomplete="off" /></label>
+      <label>{t('host.group')}<input bind:value={group} autocomplete="off" /></label>
+    </div>
+    <label
+      >{t('host.auth')}
+      <select bind:value={method}>
+        <option value="password">{t('host.auth.password')}</option>
+        <option value="private_key">{t('host.auth.privateKey')}</option>
+        <option value="key_file">{t('host.auth.keyFile')}</option>
+        <option value="agent">{t('host.auth.agent')}</option>
+        <option value="interactive">{t('host.auth.interactive')}</option>
+      </select>
+    </label>
+    {#if method === 'password'}
+      <label
+        >{t('host.password')}
+        <input type="password" bind:value={password} placeholder={hasSecret ? t('host.keepSecret') : t('host.passwordOptional')} autocomplete="new-password" />
+      </label>
+    {:else if method === 'private_key'}
+      <label
+        >{t('host.privateKey')}
+        <textarea rows="5" bind:value={privateKey} placeholder={hasSecret ? t('host.keepSecret') : '-----BEGIN OPENSSH PRIVATE KEY-----'} spellcheck="false"></textarea>
+      </label>
+      <label>{t('host.passphrase')}<input type="password" bind:value={passphrase} autocomplete="new-password" /></label>
+    {:else if method === 'key_file'}
+      <label>{t('host.keyPath')}<input bind:value={keyPath} required spellcheck="false" /></label>
+      <label>{t('host.passphrase')}<input type="password" bind:value={passphrase} placeholder={hasSecret ? t('host.keepSecret') : ''} autocomplete="new-password" /></label>
+    {/if}
+    {#if error}<p class="error">{error}</p>{/if}
+  </form>
+  {#snippet actions()}
+    <button type="button" class="secondary" onclick={onclose}>{t('common.cancel')}</button>
+    <button type="submit" class="primary" form="host-form" disabled={saving}>{t('common.save')}</button>
+  {/snippet}
+</Dialog>
+
+<style>
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  .port {
+    flex: 0 0 96px !important;
+  }
+</style>

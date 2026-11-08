@@ -46,6 +46,12 @@ export function splitPane(node: LayoutNode, target: PaneId, dir: SplitDir, added
   return { ...node, a: splitPane(node.a, target, dir, added), b: splitPane(node.b, target, dir, added) };
 }
 
+/** Renames pane `target` to `replacement`, keeping its position. */
+export function replacePane(node: LayoutNode, target: PaneId, replacement: PaneId): LayoutNode {
+  if (node.kind === 'pane') return node.id === target ? pane(replacement) : node;
+  return { ...node, a: replacePane(node.a, target, replacement), b: replacePane(node.b, target, replacement) };
+}
+
 /** Removes pane `target`; its sibling takes the parent's place. Returns null when the tree empties. */
 export function removePane(node: LayoutNode, target: PaneId): LayoutNode | null {
   if (node.kind === 'pane') return node.id === target ? null : node;

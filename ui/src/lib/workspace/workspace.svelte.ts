@@ -1,7 +1,7 @@
 // Tabs, their split layouts, and what each pane is connected to.
 import { sessionClose, type ExitStatus, type HostId, type SessionId } from '../ipc';
 import { terminals } from '../terminal/registry';
-import { computeLayout, pane, paneIds, removePane, setRatio, splitPane, type LayoutNode, type PaneId, type Path, type SplitDir } from '../layout/layout';
+import { computeLayout, pane, paneIds, removePane, replacePane, setRatio, splitPane, type LayoutNode, type PaneId, type Path, type SplitDir } from '../layout/layout';
 
 /** What a pane opens. Splitting a pane opens the same target again. */
 export type PaneTarget =
@@ -152,6 +152,21 @@ class Workspace {
     const ids = paneIds(tab.root);
     const index = ids.indexOf(tab.focused);
     tab.focused = ids[(index + offset + ids.length) % ids.length] ?? tab.focused;
+  }
+
+  /**
+   * Replaces a pane that failed to open with a fresh one carrying one-shot credentials. The new pane
+   * mounts a new terminal view, which opens the target again.
+   */
+  reopen(paneId: PaneId, password: string, remember: boolean): void {
+    const tab = this.tabs.find((candidate) => paneIds(candidate.root).includes(paneId));
+    const old = this.panes[paneId];
+    if (!tab || !old) return;
+    const added = this.createPane(old.target, password, remember);
+    tab.root = replacePane(tab.root, paneId, added);
+    if (tab.focused === paneId) tab.focused = added;
+    delete this.panes[paneId];
+    terminals.delete(paneId);
   }
 
   resize(tabId: string, path: Path, ratio: number): void {
