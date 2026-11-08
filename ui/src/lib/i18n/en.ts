@@ -1,0 +1,24 @@
+// English UI strings: the source catalog. Every other locale implements `Messages`.
+export const en = {
+  'app.title': 'RoveTerm',
+  'terminal.exited': 'Process exited (code {code})',
+  'terminal.exitedSignal': 'Process terminated by signal {signal}',
+  'terminal.openFailed': 'Could not open terminal: {message}',
+  'terminal.reconnectHint': 'Press Enter to reconnect',
+  'error.ssh.connect': 'Could not connect to the server',
+  'error.ssh.timeout': 'Connection timed out',
+  'error.ssh.auth_failed': 'Authentication failed',
+  'error.ssh.credentials_required': 'Password required',
+  'error.ssh.host_key_mismatch': 'The server host key changed; connection refused',
+  'error.ssh.host_key_declined': 'Host key rejected',
+  'error.ssh.host_key': 'Host key verification failed',
+  'error.ssh.key': 'Private key could not be read or decrypted',
+  'error.ssh.agent': 'SSH agent unavailable',
+  'error.ssh.protocol': 'SSH protocol error',
+  'error.vault.locked': 'Credential vault is locked',
+  'error.input.invalid': 'Invalid input',
+  'error.unknown': 'Something went wrong',
+} as const;
+
+export type MessageKey = keyof typeof en;
+export type Messages = Record<MessageKey, string>;
