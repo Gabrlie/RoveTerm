@@ -24,7 +24,7 @@
 
 ### 数据目录
 
-应用数据存放在系统的应用数据目录下（Linux 为 `~/.local/share/dev.roveterm.app`）。设置环境变量 `ROVETERM_DATA_DIR` 可以改用其他目录，便于并行运行多个开发实例。用户配置文件是应用配置目录下的 `roveterm.toml`（Linux 为 `~/.config/dev.roveterm.app/roveterm.toml`），可以覆盖任意插件的配置段。开发构建使用独立的钥匙串服务名 `dev.roveterm.app.dev`，不会读写正式版的设备主密钥。
+应用数据存放在系统的应用数据目录下（Linux 为 `~/.local/share/dev.roveterm.app`）。设置环境变量 `ROVETERM_DATA_DIR` 可以改用其他目录，便于并行运行多个开发实例。用户配置文件是应用配置目录下的 `roveterm.toml`（Linux 为 `~/.config/dev.roveterm.app/roveterm.toml`），可以覆盖任意插件的配置段。开发构建使用独立的钥匙串服务名 `dev.roveterm.app.dev`，不会读写正式版的设备主密钥。在没有系统钥匙串的环境（无头 X 服务器、CI）中，开发构建可以设置 `ROVETERM_DEV_MEMORY_KEYCACHE=1`，改用只存在于内存中的设备主密钥；重启后，之前保存的凭据将无法解密。release 构建忽略该变量。
 
 ### 提交
 

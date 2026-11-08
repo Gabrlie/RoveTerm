@@ -18,7 +18,7 @@ rove-journal = { path = "../crates/rove-journal" }
 rove-kernel = { path = "../crates/rove-kernel" }
 rove-session = { path = "../crates/rove-session" }
 rove-ssh = { path = "../crates/rove-ssh" }
-rove-vault = { path = "../crates/rove-vault" }
+rove-vault = { path = "../crates/rove-vault", features = ["memory-key-cache"] }
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }

@@ -31,9 +31,22 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let user_file = app.path().app_config_dir()?.join("roveterm.toml");
     let profile = profile::load(&data_dir, &user_file)?;
     let ctx = Context::new();
+    // Host-provided services; kept for the application lifetime.
+    #[cfg_attr(not(any(mobile, debug_assertions)), allow(unused_mut))]
+    let mut host_services = Vec::new();
     #[cfg(mobile)]
-    let _key_cache =
-        ctx.provide::<dyn rove_vault::KeyCache>(std::sync::Arc::new(mobile::UnavailableKeyCache))?;
+    host_services.push(
+        ctx.provide::<dyn rove_vault::KeyCache>(std::sync::Arc::new(mobile::UnavailableKeyCache))?,
+    );
+    // Development builds can run without a platform key store (CI, headless X servers); the key
+    // lives only in memory, so stored secrets become unreadable after a restart.
+    #[cfg(debug_assertions)]
+    if std::env::var_os("ROVETERM_DEV_MEMORY_KEYCACHE").is_some() {
+        tracing::warn!("using the in-memory development key cache");
+        host_services.push(ctx.provide::<dyn rove_vault::KeyCache>(std::sync::Arc::new(
+            rove_vault::MemoryKeyCache::default(),
+        ))?);
+    }
     let runtime = Runtime::boot_in(ctx.clone(), &profile, &profile::catalog())?;
     tracing::info!(profile = profile.name(), data_dir = %data_dir.display(), "runtime booted");
 
@@ -46,6 +59,7 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     });
     if let Some((_, disposers)) = state.lifetime.lock().expect("lifetime lock").as_mut() {
         disposers.push(forward);
+        disposers.extend(host_services);
     }
 
     let vault = state.vault.clone();
