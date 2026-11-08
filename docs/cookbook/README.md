@@ -5,3 +5,4 @@
 | 指南 | 内容 |
 |---|---|
 | [adding-a-plugin](adding-a-plugin.md) | 新增插件并在 profile 中启用 |
+| [adding-a-tauri-command](adding-a-tauri-command.md) | 新增供前端调用的命令 |

@@ -32,7 +32,7 @@ Profile 是一组启用的插件加一份 TOML 配置。随应用交付的 profi
 | `mobile` | `src-tauri`（Android） | 移动端，不启用本地 PTY |
 | `headless` | `rove` CLI | 以 MCP server / ACP 模式运行，无 UI |
 
-配置按层合并：内置默认 → 用户配置文件 → 命令行覆盖；后一层按表深度合并覆盖前一层。每个插件在 `apply` 时校验自己的配置段，配置错误让启动失败，而不是被静默忽略。
+配置按层合并：内置 profile（`src-tauri/profiles/*.toml`）→ 用户配置文件（应用配置目录下的 `roveterm.toml`）→ 应用运行时生成的一层（数据库路径、钥匙串服务名）；后一层按表深度合并覆盖前一层。每个插件在 `apply` 时校验自己的配置段，配置错误让启动失败，而不是被静默忽略。
 
 ## 核心 crate
 
@@ -106,7 +106,7 @@ src-tauri 的 OutputSink → ipc::Channel → TermView.write(Uint8Array)
 | 目标 | 做法 |
 |---|---|
 | 新增一种终端来源（serial、telnet……） | 新插件实现 `TerminalSession`，并提供自己的打开服务；产物交给 `SessionManager::attach` |
-| 新增 UI 可调用的操作 | 在 `src-tauri/src/commands/` 新增命令，只做参数校验和服务调用（[cookbook](cookbook/README.md)） |
+| 新增 UI 可调用的操作 | 在 `src-tauri/src/commands/` 新增命令，只做参数校验和服务调用（[cookbook](cookbook/adding-a-tauri-command.md)） |
 | 新增快捷键或菜单项 | 在 `ui/src/lib/actions.ts` 的 actions 表登记（[ui](subsystems/ui.md)） |
 | 新增需要持久化的事实 | 定义新的 Journal 事件类型，从日志回放 |
 | 观察进行中的工作 | 监听对应的 Live 事件 |

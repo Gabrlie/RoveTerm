@@ -3965,12 +3965,22 @@ dependencies = [
 name = "roveterm"
 version = "0.1.0"
 dependencies = [
+ "rove-journal",
+ "rove-kernel",
+ "rove-pty",
+ "rove-session",
+ "rove-ssh",
+ "rove-vault",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml 1.2.1+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]
