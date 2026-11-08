@@ -1,6 +1,7 @@
 //! An authenticated SSH connection and the PTY shell channels opened on it.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -29,6 +30,9 @@ pub struct ConnectOptions {
     pub keepalive_interval: Duration,
     /// Unanswered keepalives before the connection is considered dead.
     pub keepalive_max: usize,
+    /// Disconnect this long after the last channel closes; `None` keeps the connection until it
+    /// is dropped.
+    pub idle_timeout: Option<Duration>,
 }
 
 struct ClientHandler {
@@ -83,6 +87,10 @@ impl client::Handler for ClientHandler {
 pub struct SshConnection {
     handle: Handle<ClientHandler>,
     target: SshTarget,
+    channels: AtomicUsize,
+    idle_generation: AtomicU64,
+    retired: AtomicBool,
+    idle_timeout: Option<Duration>,
 }
 
 impl SshConnection {
@@ -130,12 +138,34 @@ impl SshConnection {
         Ok(Self {
             handle,
             target: target.clone(),
+            channels: AtomicUsize::new(0),
+            idle_generation: AtomicU64::new(0),
+            retired: AtomicBool::new(false),
+            idle_timeout: options.idle_timeout,
         })
     }
 
     /// Returns `true` once the underlying connection has ended.
     pub fn is_closed(&self) -> bool {
-        self.handle.is_closed()
+        self.retired.load(Ordering::SeqCst) || self.handle.is_closed()
+    }
+
+    /// Returns the number of open channels on this connection.
+    pub fn open_channels(&self) -> usize {
+        self.channels.load(Ordering::SeqCst)
+    }
+
+    /// Postpones a pending idle disconnect; called when the pool hands this connection out.
+    pub(crate) fn touch(&self) {
+        self.idle_generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn lease(self: &Arc<Self>) -> ChannelLease {
+        self.channels.fetch_add(1, Ordering::SeqCst);
+        self.idle_generation.fetch_add(1, Ordering::SeqCst);
+        ChannelLease {
+            connection: self.clone(),
+        }
     }
 
     /// Opens a session channel with a PTY and a login shell.
@@ -192,8 +222,8 @@ impl SshConnection {
         Ok(OpenedTerminal {
             session: Arc::new(SshTerminal {
                 writer,
-                closed: std::sync::atomic::AtomicBool::new(false),
-                _connection: self.clone(),
+                closed: AtomicBool::new(false),
+                _lease: self.lease(),
             }),
             output: rx,
             info: SessionInfo {
@@ -360,14 +390,46 @@ where
 
 struct SshTerminal {
     writer: ChannelWriteHalf<client::Msg>,
-    closed: std::sync::atomic::AtomicBool,
-    _connection: Arc<SshConnection>,
+    closed: AtomicBool,
+    _lease: ChannelLease,
+}
+
+/// Counts an open channel. When the last lease of a connection drops, the connection is
+/// disconnected after its idle timeout unless a new channel opens first.
+struct ChannelLease {
+    connection: Arc<SshConnection>,
+}
+
+impl Drop for ChannelLease {
+    fn drop(&mut self) {
+        let connection = &self.connection;
+        if connection.channels.fetch_sub(1, Ordering::SeqCst) != 1 {
+            return;
+        }
+        let Some(idle) = connection.idle_timeout else {
+            return;
+        };
+        let generation = connection.idle_generation.load(Ordering::SeqCst);
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let connection = connection.clone();
+        runtime.spawn(async move {
+            tokio::time::sleep(idle).await;
+            let still_idle = connection.channels.load(Ordering::SeqCst) == 0
+                && connection.idle_generation.load(Ordering::SeqCst) == generation;
+            if still_idle && !connection.retired.swap(true, Ordering::SeqCst) {
+                tracing::debug!(address = %connection.target.address(), "closing idle ssh connection");
+                connection.disconnect().await;
+            }
+        });
+    }
 }
 
 #[async_trait]
 impl TerminalSession for SshTerminal {
     async fn write(&self, data: &[u8]) -> Result<(), SessionError> {
-        if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
+        if self.closed.load(Ordering::SeqCst) {
             return Err(SessionError::Closed);
         }
         self.writer
@@ -384,7 +446,7 @@ impl TerminalSession for SshTerminal {
     }
 
     async fn close(&self) -> Result<(), SessionError> {
-        if self.closed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        if self.closed.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
         if let Err(error) = self.writer.close().await {

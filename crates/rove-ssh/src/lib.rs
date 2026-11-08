@@ -6,6 +6,7 @@
 
 mod connection;
 mod hostkey;
+mod pool;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -163,6 +164,8 @@ pub struct SshConfig {
     pub keepalive_max: usize,
     /// How long to wait for the user to confirm an unknown host key, in seconds (10–600).
     pub hostkey_prompt_secs: u64,
+    /// Seconds a shared connection stays open after its last terminal closes (0–3600).
+    pub idle_disconnect_secs: u64,
 }
 
 impl Default for SshConfig {
@@ -172,6 +175,7 @@ impl Default for SshConfig {
             keepalive_secs: 30,
             keepalive_max: 3,
             hostkey_prompt_secs: 120,
+            idle_disconnect_secs: 60,
         }
     }
 }
@@ -193,7 +197,8 @@ impl SshConfig {
         check("connect_timeout_secs", self.connect_timeout_secs, 1..=120)?;
         check("keepalive_secs", self.keepalive_secs, 5..=600)?;
         check("keepalive_max", self.keepalive_max as u64, 1..=10)?;
-        check("hostkey_prompt_secs", self.hostkey_prompt_secs, 10..=600)
+        check("hostkey_prompt_secs", self.hostkey_prompt_secs, 10..=600)?;
+        check("idle_disconnect_secs", self.idle_disconnect_secs, 0..=3600)
     }
 
     fn options(&self) -> ConnectOptions {
@@ -201,14 +206,16 @@ impl SshConfig {
             connect_timeout: Duration::from_secs(self.connect_timeout_secs),
             keepalive_interval: Duration::from_secs(self.keepalive_secs),
             keepalive_max: self.keepalive_max,
+            idle_timeout: Some(Duration::from_secs(self.idle_disconnect_secs)),
         }
     }
 }
 
-/// Opens SSH terminals.
+/// Opens SSH terminals. Terminals to the same `user@host:port` share one connection.
 pub struct SshConnector {
     options: ConnectOptions,
     verifier: Arc<dyn HostKeyVerifier>,
+    pool: pool::Pool,
 }
 
 impl SshConnector {
@@ -217,10 +224,11 @@ impl SshConnector {
         Self {
             options: config.options(),
             verifier,
+            pool: pool::Pool::default(),
         }
     }
 
-    /// Connects and authenticates to `target`.
+    /// Connects and authenticates to `target` on a new, unshared connection.
     pub async fn connect(
         &self,
         target: &SshTarget,
@@ -231,14 +239,63 @@ impl SshConnector {
             .map(Arc::new)
     }
 
-    /// Connects to `target` and opens a PTY shell of `size`.
+    /// Returns the shared connection to `target`, connecting with `auth` when none is live.
+    /// `auth` is ignored when a live connection is reused.
+    pub async fn shared(
+        &self,
+        target: &SshTarget,
+        auth: &AuthSpec,
+    ) -> Result<Arc<SshConnection>, SshError> {
+        let slot = self.pool.slot(pool::PoolKey::of(target));
+        let mut guard = slot.connection.lock().await;
+        if let Some(connection) = guard.as_ref().filter(|connection| !connection.is_closed()) {
+            connection.touch();
+            return Ok(connection.clone());
+        }
+        let connection = self.connect(target, auth).await?;
+        *guard = Some(connection.clone());
+        Ok(connection)
+    }
+
+    /// Opens a PTY shell of `size` on the shared connection to `target`.
+    ///
+    /// When opening the channel fails on a reused connection, the connection is replaced once.
     pub async fn open_terminal(
         &self,
         target: &SshTarget,
         auth: &AuthSpec,
         size: TermSize,
     ) -> Result<OpenedTerminal, SshError> {
-        self.connect(target, auth).await?.open_shell(size).await
+        let connection = self.shared(target, auth).await?;
+        match connection.open_shell(size).await {
+            Ok(opened) => Ok(opened),
+            Err(SshError::Channel(reason)) => {
+                tracing::debug!(%reason, "reused ssh connection failed; reconnecting");
+                let slot = self.pool.slot(pool::PoolKey::of(target));
+                let mut guard = slot.connection.lock().await;
+                if guard
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &connection))
+                {
+                    guard.take();
+                }
+                drop(guard);
+                self.shared(target, auth).await?.open_shell(size).await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Returns the number of live shared connections.
+    pub fn live_connections(&self) -> usize {
+        self.pool.live().len()
+    }
+
+    /// Disconnects every shared connection. Used on shutdown.
+    pub async fn disconnect_all(&self) {
+        for connection in self.pool.live() {
+            connection.disconnect().await;
+        }
     }
 }
 
