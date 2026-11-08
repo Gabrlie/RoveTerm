@@ -1,0 +1,16 @@
+[package]
+name = "devsshd"
+description = "Development SSH server for RoveTerm tests and local debugging"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+rand = { version = "0.10", features = ["thread_rng"] }
+rove-pty = { path = "../../crates/rove-pty" }
+rove-session = { path = "../../crates/rove-session" }
+russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "process", "io-util", "signal"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true

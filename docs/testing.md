@@ -12,7 +12,7 @@
 | 层 | 位置 | 说明 |
 |---|---|---|
 | 单元测试 | 各 crate 的 `#[cfg(test)]` 模块 | 不依赖网络和系统钥匙串 |
-| 集成测试 | 各 crate 的 `tests/` | SSH 相关测试连接进程内启动的 devsshd（`tools/devsshd`） |
+| 集成测试 | 各 crate 的 `tests/` | SSH 相关测试连接进程内启动的 [devsshd](../tools/devsshd/README.md) |
 | 手工端到端 | `pnpm tauri dev` | 按下方清单逐项确认 |
 
 需要系统钥匙串的测试用 `KeyCache` 的内存实现代替；该实现只在测试和 `dev` 构建中可用。
