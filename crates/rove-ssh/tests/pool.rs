@@ -101,3 +101,25 @@ async fn idle_connection_closes_and_next_open_reconnects() {
         .unwrap();
     assert_eq!(server.connections(), 2);
 }
+
+#[tokio::test]
+async fn open_live_reuses_connection_without_credentials() {
+    let (server, connector, _listener) = setup(60).await;
+    assert!(
+        connector
+            .open_live(&target(&server), TermSize::default())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let _first = connector
+        .open_terminal(&target(&server), &auth(), TermSize::default())
+        .await
+        .unwrap();
+    let second = connector
+        .open_live(&target(&server), TermSize::default())
+        .await
+        .unwrap();
+    assert!(second.is_some());
+    assert_eq!(server.connections(), 1);
+}

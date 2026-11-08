@@ -262,6 +262,35 @@ impl SshConnector {
         Ok(connection)
     }
 
+    /// Opens a PTY shell on the live shared connection to `target` without credentials. Returns
+    /// `Ok(None)` when no live connection exists or it can no longer open channels; the caller then
+    /// resolves credentials and uses [`SshConnector::open_terminal`].
+    pub async fn open_live(
+        &self,
+        target: &SshTarget,
+        size: TermSize,
+    ) -> Result<Option<OpenedTerminal>, SshError> {
+        let slot = self.pool.slot(pool::PoolKey::of(target));
+        let connection = {
+            let guard = slot.connection.lock().await;
+            match guard.as_ref().filter(|connection| !connection.is_closed()) {
+                Some(connection) => {
+                    connection.touch();
+                    connection.clone()
+                }
+                None => return Ok(None),
+            }
+        };
+        match connection.open_shell(size).await {
+            Ok(opened) => Ok(Some(opened)),
+            Err(SshError::Channel(reason)) => {
+                tracing::debug!(%reason, "live ssh connection cannot open channels");
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Opens a PTY shell of `size` on the shared connection to `target`.
     ///
     /// When opening the channel fails on a reused connection, the connection is replaced once.

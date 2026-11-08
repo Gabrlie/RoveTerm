@@ -44,6 +44,7 @@
 `SshConnector` 按 (小写主机名, 端口, 用户名) 维护连接池：
 
 - `shared(target, auth)` 返回该目标的存活连接；没有时用 `auth` 新建。每个目标有一把异步锁，并发请求只会建立一条连接。
+- `open_live(target, size)` 只使用存活连接，不需要凭据；没有存活连接时返回 `None`。
 - `open_terminal` 在共享连接上打开 channel；如果复用的连接打开 channel 失败，丢弃它并重连一次。
 - 每个打开的 channel 持有一个租约。最后一个租约释放后，启动一个 `idle_disconnect_secs` 的计时器；期间连接被再次取出或打开新 channel，计时作废，否则断开连接。
 - `live_connections()` 返回存活连接数；`disconnect_all()` 用于退出应用时断开全部连接。

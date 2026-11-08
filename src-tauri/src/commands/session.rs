@@ -67,6 +67,12 @@ pub async fn session_open_ssh(
     let size = TermSize::new(cols, rows)?;
     let host_id: HostId = host_id.parse()?;
     let host = state.vault.host(host_id)?;
+    let target = SshTarget::from_host(&host);
+    if let Some(opened) = state.ssh.open_live(&target, size).await? {
+        return Ok(state
+            .sessions
+            .attach(opened, Arc::new(ChannelSink(on_output))));
+    }
     let typed = password.map(Zeroizing::new);
     let needs_stored_secret = match &host.auth {
         AuthMethod::Password => typed.is_none(),
@@ -80,10 +86,7 @@ pub async fn session_open_ssh(
         None
     };
     let auth = AuthSpec::resolve(&host, stored, typed.clone())?;
-    let opened = state
-        .ssh
-        .open_terminal(&SshTarget::from_host(&host), &auth, size)
-        .await?;
+    let opened = state.ssh.open_terminal(&target, &auth, size).await?;
     if remember
         && let Some(password) = typed
         && matches!(host.auth, AuthMethod::Password)
@@ -124,6 +127,13 @@ pub async fn session_open_quick(
         host_id: None,
         title: None,
     };
+    if password.is_none()
+        && let Some(opened) = state.ssh.open_live(&target, size).await?
+    {
+        return Ok(state
+            .sessions
+            .attach(opened, Arc::new(ChannelSink(on_output))));
+    }
     let auth = match password {
         Some(password) => AuthSpec::Password(Zeroizing::new(password)),
         None => AuthSpec::Agent,

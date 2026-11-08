@@ -9,6 +9,7 @@ SSH 终端 Provider：认证、host key 校验，以及打开 PTY shell channel�
 - `SshConnector::open_terminal` 复用同一 `user@host:port`（主机名不区分大小写）的连接，每个终端是一个独立的 channel；并发打开同一目标时只建立一条连接。复用时忽略传入的 `AuthSpec`。
 - 连接上最后一个终端关闭后，连接再空闲 `idle_disconnect_secs` 秒才断开；期间有新终端打开则取消断开。
 - 复用的连接打开 channel 失败时，丢弃这条连接并重连一次。
+- `open_live` 只在已有存活连接时打开 channel，不需要凭据；没有存活连接时返回 `None`。应用在解析凭据之前先调用它，因此在已连接的主机上分屏不会再次索取密码。
 - `SshConnector::connect` 建立不进入连接池的独立连接。
 - `AuthSpec` 中的秘密材料在 drop 时清零。密码认证失败后，会用同一个密码尝试 keyboard-interactive。
 - `AuthSpec::resolve` 根据主机的认证方式、已存凭据和用户输入的密码确定凭据；需要先向用户索取密码时返回 `CredentialsRequired`。
