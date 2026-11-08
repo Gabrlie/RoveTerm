@@ -34,3 +34,16 @@
 | 空闲内存（桌面） | < 120 MB | 启动后打开一个本地终端，静置 10 秒，统计进程树的 RSS 总和 |
 | 冷启动 | < 500 ms | 从进程启动到第一个终端可输入 |
 | 安装包体积 | 尽量小 | `pnpm tauri build` 产物大小 |
+
+### 当前测量结果
+
+测量环境：Linux x86_64，Xvfb 软件渲染（无 GPU），WebKitGTK 2.52，release 构建（`pnpm tauri build --no-bundle`），在 `dbus-run-session` 内运行，打开一个本地终端，三次取平均。
+
+| 指标 | 结果 | 是否达标 |
+|---|---|---|
+| 可执行文件体积 | 9.4 MB | — |
+| 进程启动到第一个 shell 启动 | 约 1.1 s（含测量脚本 0.3 s 的等待） | 未达标 |
+| 空闲 RSS 总和 | 约 370 MB：主进程 147 MB、WebKitWebProcess 172 MB、WebKitNetworkProcess 49 MB、bash 10 MB | 未达标 |
+
+- 没有 D-Bus 会话总线时，GTK / WebKit 的 D-Bus 连接会超时，启动时间超过 30 s；正常桌面会话不受影响。
+- 软件渲染会抬高主进程和 WebProcess 的内存，真实桌面需要重新测量；内存优化（共享 WebProcess、关闭不需要的 WebKit 功能、减少 scrollback）是后续工作。
