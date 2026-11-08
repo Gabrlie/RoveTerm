@@ -1,0 +1,30 @@
+# rove-vault
+
+存储主机、主机凭据和 known_hosts；凭据用设备主密钥派生的密钥加密。参考见 [docs/subsystems/vault.md](../../docs/subsystems/vault.md)，密钥层级见 [docs/security.md](../../docs/security.md)。
+
+## 契约
+
+- `Vault` 打开后处于锁定状态。主机元数据和 known_hosts 在锁定时照常可读写；读写凭据需要先解锁，否则返回 `VaultError::Locked`。
+- `try_unlock()` 用于启动阶段，失败时只改变锁定状态，不返回错误。`unlock()` 用于用户发起的操作，允许系统弹出授权。
+- 首次解锁且没有任何密钥时，生成新的设备主密钥并写入 `KeyCache`。
+- vault 中已有凭据、但 `KeyCache` 中的密钥缺失或不匹配时，状态为 `KeyLost`；只能通过 `reset_secrets()` 丢弃全部凭据后重新解锁，主机和 known_hosts 保留。
+- 删除主机时级联删除它的凭据；修改主机的认证方式类别时删除原有凭据。
+- 数据库结构版本记录在 `PRAGMA user_version` 中，只增不减；打开更新版本写入的数据库时返回 `FutureSchema`。
+
+## 配置（`[plugin.vault]`）
+
+| 键 | 默认值 | 含义 |
+|---|---|---|
+| `database` | 必填 | 数据库路径，由应用根据数据目录设置 |
+| `keychain_service` | `dev.roveterm.app` | 系统钥匙串中的服务名；开发构建使用不同的名字 |
+
+宿主可以在应用插件之前向 `Context` 提供自己的 `dyn KeyCache`；否则插件使用 `OsKeyCache`。
+
+## Feature
+
+- `memory-key-cache`：启用 `MemoryKeyCache`，一个不持久化的 `KeyCache`，只用于测试和开发构建。
+
+## 局限
+
+- Linux 需要可用的 Secret Service；`keyring` 无法保证"不弹窗"，Secret Service 集合被锁定时可能弹出解锁对话框。
+- Android 和 iOS 上没有内置的 `KeyCache`，宿主必须自行提供。
