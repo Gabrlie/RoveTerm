@@ -16,6 +16,14 @@
 3. 另开一个终端，启动测试 SSH 服务器：`cargo run -p devsshd -- --addr 127.0.0.1:2222`
 4. 在应用中快速连接 `demo@127.0.0.1:2222`，密码 `demo`，确认能进入 shell。
 
+### Android
+
+1. 确认已设置 `ANDROID_HOME`、`NDK_HOME`，并安装 JDK 17。
+2. 构建调试 APK：`pnpm tauri android build --debug --apk --target aarch64`，产物位于 `src-tauri/gen/android/app/build/outputs/apk/`。
+3. 连接设备调试：`pnpm tauri android dev`。
+
+`mobile` profile 不启用本地终端；在接入 Android Keystore 之前，凭据库在 Android 上保持锁定，可以使用每次输入密码的方式连接主机。
+
 ## 贡献者参考
 
 ### 目录与依赖方向

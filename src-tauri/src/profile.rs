@@ -13,15 +13,14 @@ const BUILTIN: &str = include_str!("../profiles/mobile.toml");
 
 /// Every plugin this build can load.
 pub fn catalog() -> Vec<Arc<dyn Plugin>> {
-    let mut plugins: Vec<Arc<dyn Plugin>> = vec![
+    vec![
         Arc::new(rove_vault::VaultPlugin),
         Arc::new(rove_journal::JournalPlugin),
         Arc::new(rove_session::SessionPlugin),
         Arc::new(rove_ssh::SshPlugin),
-    ];
-    #[cfg(desktop)]
-    plugins.push(Arc::new(rove_pty::PtyPlugin));
-    plugins
+        #[cfg(desktop)]
+        Arc::new(rove_pty::PtyPlugin),
+    ]
 }
 
 /// Keychain service name; development builds never touch the production key.
