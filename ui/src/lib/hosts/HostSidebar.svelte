@@ -3,6 +3,7 @@
   import IconButton from '../ui/IconButton.svelte';
   import { hosts } from './hosts.svelte';
   import { vault } from '../vault/vault.svelte';
+  import { ask } from '../ui/confirm.svelte';
   import { forwardStatuses } from '../forwards/forwards.svelte';
   import { errorText, t } from '../i18n';
   import type { HostEntry } from '../ipc';
@@ -15,9 +16,10 @@
     onquick: () => void;
     onnotice: (message: string) => void;
     onsettings: () => void;
+    onkeys: () => void;
   }
 
-  let { onconnect, onfiles, onforwards, onedit, onquick, onnotice, onsettings }: Props = $props();
+  let { onconnect, onfiles, onforwards, onedit, onquick, onnotice, onsettings, onkeys }: Props = $props();
 
   /** Suffix naming how the host is reached, empty for direct connections. */
   function routeNote(host: HostEntry): string {
@@ -37,13 +39,15 @@
   }
 
   async function remove(host: HostEntry): Promise<void> {
-    if (!confirm(t('host.confirmDelete', { name: host.name }))) return;
+    const confirmed = await ask({ title: t('host.delete'), message: t('host.confirmDelete', { name: host.name }), confirmLabel: t('common.delete'), danger: true });
+    if (!confirmed) return;
     await hosts.remove(host.id).catch((error: unknown) => onnotice(errorText(error)));
   }
 
   async function unlock(): Promise<void> {
     if (vault.keyLost) {
-      if (!confirm(t('vault.confirmReset'))) return;
+      const confirmed = await ask({ title: t('vault.keyLost'), message: t('vault.confirmReset'), confirmLabel: t('vault.reset'), danger: true });
+      if (!confirmed) return;
       await vault.reset().catch((error: unknown) => onnotice(errorText(error)));
       return;
     }
@@ -59,6 +63,7 @@
   <div class="toolbar">
     <span class="heading">{t('host.title')}</span>
     <IconButton icon="quickConnect" label={t('action.host.quickConnect')} onclick={onquick} />
+    <IconButton icon="key" label={t('action.keys.manage')} onclick={onkeys} />
     <IconButton icon="importConfig" label={t('host.import')} onclick={importConfig} />
     <IconButton icon="add" label={t('host.new')} onclick={() => onedit(null)} />
   </div>

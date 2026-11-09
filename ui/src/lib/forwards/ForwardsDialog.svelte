@@ -5,6 +5,7 @@
   import Icon from '../ui/Icon.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import Select from '../ui/Select.svelte';
+  import { ask } from '../ui/confirm.svelte';
   import {
     forwardCreate,
     forwardDelete,
@@ -137,7 +138,13 @@
   }
 
   async function remove(rule: ForwardEntry): Promise<void> {
-    if (!confirm(t('forward.confirmDelete', { rule: rule.label || describeSpec(rule.spec) }))) return;
+    const confirmed = await ask({
+      title: t('common.delete'),
+      message: t('forward.confirmDelete', { rule: rule.label || describeSpec(rule.spec) }),
+      confirmLabel: t('common.delete'),
+      danger: true,
+    });
+    if (!confirmed) return;
     try {
       await forwardDelete(rule.id);
       await load();

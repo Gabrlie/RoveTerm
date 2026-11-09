@@ -7,6 +7,9 @@
   import HostEditor from './lib/hosts/HostEditor.svelte';
   import PasswordPrompt from './lib/hosts/PasswordPrompt.svelte';
   import SettingsDialog from './lib/settings/SettingsDialog.svelte';
+  import ConfirmHost from './lib/ui/ConfirmHost.svelte';
+  import KeysDialog from './lib/keys/KeysDialog.svelte';
+  import { keys } from './lib/keys/keys.svelte';
   import QuickConnect from './lib/hosts/QuickConnect.svelte';
   import HostKeyDialog from './lib/hosts/HostKeyDialog.svelte';
   import ForwardsDialog from './lib/forwards/ForwardsDialog.svelte';
@@ -33,6 +36,7 @@
   let hostKeyPrompts = $state<HostKeyPrompt[]>([]);
   let forwardsHost = $state<HostEntry | null>(null);
   let settingsOpen = $state(false);
+  let keysOpen = $state(false);
   let notice = $state('');
   let noticeTimer = 0;
 
@@ -151,6 +155,9 @@
       case 'settings.open':
         settingsOpen = true;
         break;
+      case 'keys.manage':
+        keysOpen = true;
+        break;
       case 'host.quickConnect':
         quickOpen = true;
         break;
@@ -188,6 +195,7 @@
     workspace.openTab({ kind: 'local' });
     vault.init().catch((error: unknown) => console.warn('vault state unavailable', error));
     hosts.refresh().catch((error: unknown) => showNotice(errorText(error)));
+    keys.refresh().catch((error: unknown) => console.warn('key library unavailable', error));
     forwardStatuses.start().catch((error: unknown) => console.warn('forward events unavailable', error));
     const unlisten = onHostKeyPrompt((prompt) => (hostKeyPrompts = [...hostKeyPrompts, prompt]));
     return () => void unlisten.then((stop) => stop());
@@ -198,7 +206,7 @@
 
 <div class="app">
   {#if sidebarOpen}
-    <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onquick={() => (quickOpen = true)} onnotice={showNotice} onsettings={() => (settingsOpen = true)} />
+    <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onquick={() => (quickOpen = true)} onnotice={showNotice} onsettings={() => (settingsOpen = true)} onkeys={() => (keysOpen = true)} />
   {/if}
   <div class="main">
     <TabBar onnew={() => run('tab.newLocal')} />
@@ -226,7 +234,7 @@
 {/if}
 
 {#if editing !== undefined}
-  <HostEditor host={editing} onclose={() => (editing = undefined)} />
+  <HostEditor host={editing} onclose={() => (editing = undefined)} onmanagekeys={() => (keysOpen = true)} />
 {/if}
 
 {#if quickOpen}
@@ -251,6 +259,12 @@
     onclose={() => (passwordRequest = null)}
   />
 {/if}
+
+{#if keysOpen}
+  <KeysDialog onclose={() => (keysOpen = false)} />
+{/if}
+
+<ConfirmHost />
 
 {#if settingsOpen}
   <SettingsDialog onclose={() => (settingsOpen = false)} />

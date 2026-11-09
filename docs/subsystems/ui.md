@@ -20,6 +20,7 @@
 | `src/lib/forwards/` | 端口转发对话框 `ForwardsDialog`、转发状态 `forwards.svelte.ts` |
 | `src/lib/hosts/` | 主机列表与搜索、主机编辑、快速连接、密码输入、host key 确认 |
 | `src/lib/vault/vault.svelte.ts` | vault 锁定状态，以及由用户操作触发的解锁和重置 |
+| `src/lib/keys/` | 密钥库对话框 `KeysDialog` 与密钥列表 `keys.svelte.ts` |
 | `src/lib/settings/` | 偏好设置 `prefs.svelte.ts`（启动时在挂载前加载）与设置对话框 `SettingsDialog` |
 | `src/lib/i18n/` | 文案字典与 `t()`、`errorText()` |
 | `src/styles/tokens.css` | 设计 token：颜色、间距（4px 网格）、圆角、字号、字体 |
@@ -65,6 +66,19 @@
 - 编辑器按类型显示字段和说明；本地或动态转发的监听地址不是回环地址时显示警告。勾选"自动启动"的规则在打开该主机的终端时启动。
 - 启动时需要密码（`ssh.credentials_required`）就在该规则下显示密码框，可以勾选记住密码。
 - `forwards.svelte.ts` 监听 `forward-update` 事件；主机栏在有运行中的转发时，在主机名旁显示转发数。
+
+## 密钥库
+
+主机栏顶部的钥匙按钮或命令面板的"密钥库"打开 `KeysDialog`：左侧是密钥列表和"生成密钥""导入密钥"入口，右侧显示选中的密钥。
+
+- 生成：名称、类型（Ed25519、ECDSA P-256、RSA 3072）、注释、可选的私钥密码。
+- 导入：粘贴私钥或从文件读取（`key_read_file`）；加密私钥缺少密码时高亮密码框。
+- 查看：算法、指纹、公钥（可复制）；"显示私钥"解锁后调用 `key_reveal` 显示私钥，可复制。
+- 改名、删除（仍被主机使用时提示失败原因）。
+- 安装公钥到主机：选择已保存主机后调用 `key_install`；主机还不能登录时显示密码框，以 `password_kind = "password"` 连接。
+- 主机编辑的认证方式"密钥库中的密钥"用下拉框选择密钥，旁边的"管理密钥库…"在编辑框之上打开密钥库，关闭后列表自动更新。每台主机单独保存私钥的旧方式只对已在使用它的主机显示。
+
+确认操作统一使用 `ask()`（`src/lib/ui/confirm.svelte.ts`），由 `ConfirmHost` 渲染为主题化的对话框，不使用浏览器的 `confirm()`。
 
 ## 设置
 

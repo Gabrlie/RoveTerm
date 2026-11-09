@@ -20,6 +20,7 @@ export type ActionId =
   | 'files.open'
   | 'forward.manage'
   | 'settings.open'
+  | 'keys.manage'
   | `tab.goto${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
 
 export interface Action {
@@ -53,6 +54,7 @@ export const actions: Action[] = [
   { id: 'terminal.paste', label: 'action.terminal.paste', keys: ['App+V'], yieldsToTextField: true },
   { id: 'palette.open', label: 'action.palette.open', keys: ['App+P'] },
   { id: 'settings.open', label: 'action.settings.open', keys: ['App+,'] },
+  { id: 'keys.manage', label: 'action.keys.manage', keys: [] },
   ...([1, 2, 3, 4, 5, 6, 7, 8, 9] as const).map(
     (n): Action => ({ id: `tab.goto${n}`, label: 'action.tab.goto', keys: [`App+${n}`], hidden: true }),
   ),

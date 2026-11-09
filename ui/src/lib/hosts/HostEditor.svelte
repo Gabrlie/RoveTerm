@@ -6,7 +6,16 @@
   import { errorText, t } from '../i18n';
   import { hosts } from './hosts.svelte';
 
-  let { host, onclose }: { host: HostEntry | null; onclose: () => void } = $props();
+  import { keys } from '../keys/keys.svelte';
+
+  interface Props {
+    host: HostEntry | null;
+    onclose: () => void;
+    /** Opens the key library above the editor. */
+    onmanagekeys: () => void;
+  }
+
+  let { host, onclose, onmanagekeys }: Props = $props();
 
   type Method = AuthMethod['method'];
   type RouteKind = 'direct' | 'jump' | 'http' | 'socks5';
@@ -20,6 +29,14 @@
   let username = $state(initial?.username ?? 'root');
   let method = $state<Method>(initial?.auth.method ?? 'password');
   let keyPath = $state(initial?.auth.method === 'key_file' ? initial.auth.path : '~/.ssh/id_ed25519');
+  let libraryKey = $state(initial?.auth.method === 'key' ? initial.auth.key : '');
+  const keyOptions = $derived(keys.items.map((key) => ({ value: key.id, label: `${key.name} (${key.algorithm})` })));
+  // Keep a selection as keys load or get added in the library.
+  $effect(() => {
+    if (method === 'key' && !libraryKey && keyOptions[0]) libraryKey = keyOptions[0].value;
+  });
+  /** The per-host stored key is kept only for hosts that already use it. */
+  const legacyPrivateKey = initial?.auth.method === 'private_key';
   let password = $state('');
   let privateKey = $state('');
   let passphrase = $state('');
@@ -37,7 +54,9 @@
   const hasSecret = initial?.has_secret ?? false;
 
   function auth(): AuthMethod {
-    return method === 'key_file' ? { method, path: keyPath.trim() } : ({ method } as AuthMethod);
+    if (method === 'key_file') return { method, path: keyPath.trim() };
+    if (method === 'key') return { method, key: libraryKey };
+    return { method } as AuthMethod;
   }
 
   // Picking "jump" preselects the first candidate so the drop-down never shows an empty value.
@@ -74,6 +93,10 @@
     event.preventDefault();
     if (method === 'private_key' && !hasSecret && !privateKey.trim()) {
       error = t('host.privateKeyRequired');
+      return;
+    }
+    if (method === 'key' && !libraryKey) {
+      error = t('keys.none');
       return;
     }
     if (routeKind === 'jump' && !jumpHost) {
@@ -122,7 +145,8 @@
         bind:value={method}
         options={[
           { value: 'password', label: t('host.auth.password') },
-          { value: 'private_key', label: t('host.auth.privateKey') },
+          { value: 'key', label: t('host.auth.libraryKey') },
+          ...(legacyPrivateKey ? [{ value: 'private_key' as const, label: t('host.auth.privateKey') }] : []),
           { value: 'key_file', label: t('host.auth.keyFile') },
           { value: 'agent', label: t('host.auth.agent') },
           { value: 'interactive', label: t('host.auth.interactive') },
@@ -134,6 +158,13 @@
         >{t('host.password')}
         <input type="password" bind:value={password} placeholder={hasSecret ? t('host.keepSecret') : t('host.passwordOptional')} autocomplete="new-password" />
       </label>
+    {:else if method === 'key'}
+      {#if keyOptions.length > 0}
+        <label>{t('host.key')}<Select bind:value={libraryKey} options={keyOptions} /></label>
+      {:else}
+        <p class="hint">{t('keys.none')}</p>
+      {/if}
+      <button type="button" class="link" onclick={onmanagekeys}>{t('keys.manage')}</button>
     {:else if method === 'private_key'}
       <label
         >{t('host.privateKey')}
@@ -185,6 +216,17 @@
   }
   .port {
     flex: 0 0 96px !important;
+  }
+  .link {
+    align-self: flex-start;
+    margin-top: calc(-1 * var(--space-2));
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    font-size: var(--text-footnote);
+    cursor: pointer;
   }
   .hint {
     margin: calc(-1 * var(--space-2)) 0 0;
