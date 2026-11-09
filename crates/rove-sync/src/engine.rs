@@ -143,6 +143,8 @@ pub async fn sync(
 ) -> Result<Report, SyncError> {
     let mut next = state.clone();
     let mut report = Report::default();
+    // A device's first round: it has never read nor written anything in this space.
+    let joining = state.known.is_empty() && state.seen.is_empty() && state.next_seq <= 1;
     let own_dir = format!("{DEVICES}/{}", next.device);
     crate::backend::check_path(&own_dir)?;
 
@@ -235,16 +237,20 @@ pub async fn sync(
         }
     }
 
-    // Merge: a remote change wins when its timestamp is later than what this device knows.
+    // Merge: a remote change wins when its timestamp is later than what this device knows. In a
+    // device's first round the space wins for records both sides have: the local copies were
+    // only just timestamped, not just edited (a fresh device's default preferences, say).
     remote.sort_by(|a, b| a.hlc.cmp(&b.hlc));
     let mut winners: BTreeMap<String, Change> = BTreeMap::new();
     for change in remote {
         next.clock.observe(&change.hlc);
         let record_id = record_key(&change.kind, &change.id);
-        if next
-            .known
-            .get(&record_id)
-            .is_some_and(|known| known.hlc >= change.hlc)
+        let space_wins = joining && pending.contains_key(&record_id);
+        if !space_wins
+            && next
+                .known
+                .get(&record_id)
+                .is_some_and(|known| known.hlc >= change.hlc)
         {
             continue;
         }

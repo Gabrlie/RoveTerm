@@ -264,3 +264,29 @@ async fn long_histories_are_compacted_without_losing_anything() {
     b.sync(&backend, &key).await;
     assert_eq!(b.store.all(), a.store.all());
 }
+
+#[tokio::test]
+async fn a_joining_device_takes_the_space_version_of_shared_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = FolderBackend::new(dir.path());
+    let key = create_space(&backend, "pw", fast()).await.unwrap();
+    let mut a = Device::new("device-a");
+    a.store.set("prefs", "app", json!({"theme": "dark"}));
+    a.sync(&backend, &key).await;
+
+    // B starts with its own defaults and a host of its own, then joins.
+    let mut b = Device::new("device-b");
+    b.store.set("prefs", "app", json!({"theme": "system"}));
+    b.store.set("host", "only-b", json!({"name": "b"}));
+    b.sync(&backend, &key).await;
+    assert_eq!(b.store.get("prefs", "app"), Some(json!({"theme": "dark"})));
+    a.sync(&backend, &key).await;
+    assert_eq!(a.store.get("prefs", "app"), Some(json!({"theme": "dark"})));
+    assert_eq!(a.store.get("host", "only-b"), Some(json!({"name": "b"})));
+
+    // After joining, B's edits win as usual.
+    b.store.set("prefs", "app", json!({"theme": "light"}));
+    b.sync(&backend, &key).await;
+    a.sync(&backend, &key).await;
+    assert_eq!(a.store.get("prefs", "app"), Some(json!({"theme": "light"})));
+}
