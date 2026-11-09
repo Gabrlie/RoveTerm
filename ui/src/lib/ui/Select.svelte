@@ -128,7 +128,7 @@
   onkeydown={onKeydown}
 >
   <span class="value">{selected?.label ?? ''}</span>
-  <Icon name="chevronDown" size={14} />
+  <span class="chevron"><Icon name="chevronsUpDown" size={14} /></span>
 </button>
 
 {#if open}
@@ -168,7 +168,7 @@
     gap: var(--space-2);
     width: 100%;
     height: var(--control-height);
-    padding: 0 var(--space-1) 0 var(--space-2);
+    padding: 0 6px 0 var(--space-2);
     border: none;
     border-radius: var(--radius-sm);
     background: var(--surface-raised);
@@ -193,14 +193,11 @@
     opacity: 0.5;
     cursor: default;
   }
-  .select :global(svg) {
+  /* Up-down chevrons like a system pop-up button, centred on the right. */
+  .chevron {
+    display: inline-flex;
     flex: none;
-    width: 18px;
-    height: 18px;
-    padding: 2px;
-    border-radius: var(--radius-xs);
-    background: var(--accent);
-    color: var(--accent-fg);
+    color: var(--fg-muted);
   }
   .value {
     overflow: hidden;

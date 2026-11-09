@@ -18,6 +18,7 @@ import command from 'lucide-static/icons/command.svg?raw';
 import more from 'lucide-static/icons/ellipsis.svg?raw';
 import chevron from 'lucide-static/icons/chevron-right.svg?raw';
 import chevronDown from 'lucide-static/icons/chevron-down.svg?raw';
+import chevronsUpDown from 'lucide-static/icons/chevrons-up-down.svg?raw';
 import check from 'lucide-static/icons/check.svg?raw';
 import folder from 'lucide-static/icons/folder.svg?raw';
 import file from 'lucide-static/icons/file.svg?raw';
@@ -73,6 +74,7 @@ export const icons = {
   more,
   chevron,
   chevronDown,
+  chevronsUpDown,
   check,
   folder,
   file,
