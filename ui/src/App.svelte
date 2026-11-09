@@ -6,7 +6,7 @@
   import HostSidebar from './lib/hosts/HostSidebar.svelte';
   import HostEditor from './lib/hosts/HostEditor.svelte';
   import PasswordPrompt from './lib/hosts/PasswordPrompt.svelte';
-  import SettingsDialog from './lib/settings/SettingsDialog.svelte';
+  import SettingsDialog, { type SettingsSection } from './lib/settings/SettingsDialog.svelte';
   import ConfirmHost from './lib/ui/ConfirmHost.svelte';
   import KeysDialog from './lib/keys/KeysDialog.svelte';
   import HomePage from './lib/home/HomePage.svelte';
@@ -112,6 +112,17 @@
   let hostKeyPrompts = $state<HostKeyPrompt[]>([]);
   let forwardsHost = $state<HostEntry | null>(null);
   let settingsOpen = $state(false);
+  /** Section the settings dialog opens on; the first one when unset. */
+  let settingsSection = $state<SettingsSection | undefined>(undefined);
+
+  async function importSshConfig(): Promise<void> {
+    try {
+      const report = await hosts.importSshConfig();
+      showNotice(t('host.imported', { created: report.created.length, skipped: report.skipped.length }));
+    } catch (error) {
+      showNotice(errorText(error));
+    }
+  }
   let keysOpen = $state(false);
   let notice = $state('');
   let noticeTimer = 0;
@@ -229,7 +240,19 @@
         paletteOpen = true;
         break;
       case 'settings.open':
+        settingsSection = undefined;
         settingsOpen = true;
+        break;
+      case 'help.shortcuts':
+        settingsSection = 'shortcuts';
+        settingsOpen = true;
+        break;
+      case 'help.about':
+        settingsSection = 'about';
+        settingsOpen = true;
+        break;
+      case 'host.import':
+        void importSshConfig();
         break;
       case 'keys.manage':
         keysOpen = true;
@@ -402,7 +425,7 @@
 <ConfirmHost />
 
 {#if settingsOpen}
-  <SettingsDialog onclose={() => (settingsOpen = false)} />
+  <SettingsDialog initial={settingsSection} onclose={() => (settingsOpen = false)} />
 {/if}
 
 {#if forwardsHost}

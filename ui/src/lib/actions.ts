@@ -23,6 +23,9 @@ export type ActionId =
   | 'keys.manage'
   | 'panel.right'
   | 'panel.bottom'
+  | 'host.import'
+  | 'help.shortcuts'
+  | 'help.about'
   | `tab.goto${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
 
 export interface Action {
@@ -59,6 +62,9 @@ export const actions: Action[] = [
   { id: 'keys.manage', label: 'action.keys.manage', keys: [] },
   { id: 'panel.right', label: 'action.panel.right', keys: ['App+L'] },
   { id: 'panel.bottom', label: 'action.panel.bottom', keys: ['App+J'] },
+  { id: 'host.import', label: 'action.host.import', keys: [] },
+  { id: 'help.shortcuts', label: 'action.help.shortcuts', keys: [] },
+  { id: 'help.about', label: 'action.help.about', keys: [] },
   ...([1, 2, 3, 4, 5, 6, 7, 8, 9] as const).map(
     (n): Action => ({ id: `tab.goto${n}`, label: 'action.tab.goto', keys: [`App+${n}`], hidden: true }),
   ),

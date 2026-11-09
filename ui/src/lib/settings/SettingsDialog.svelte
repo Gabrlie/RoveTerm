@@ -1,3 +1,7 @@
+<script lang="ts" module>
+  export type SettingsSection = 'appearance' | 'terminal' | 'files' | 'status' | 'shortcuts' | 'about';
+</script>
+
 <script lang="ts">
   // Preferences, grouped like the system settings: sections on the left, grouped rows on the
   // right. Every change applies and is stored at once.
@@ -13,9 +17,9 @@
   import ShortcutsSettings from './sections/ShortcutsSettings.svelte';
   import AboutSettings from './sections/AboutSettings.svelte';
 
-  let { onclose }: { onclose: () => void } = $props();
+  let { initial = 'appearance', onclose }: { initial?: SettingsSection; onclose: () => void } = $props();
 
-  type Section = 'appearance' | 'terminal' | 'files' | 'status' | 'shortcuts' | 'about';
+  type Section = SettingsSection;
 
   const SECTIONS: { id: Section; label: MessageKey; icon: IconName; tint: string }[] = [
     { id: 'appearance', label: 'settings.section.appearance', icon: 'palette', tint: 'blue' },
@@ -26,7 +30,8 @@
     { id: 'about', label: 'settings.section.about', icon: 'info', tint: 'purple' },
   ];
 
-  let section = $state<Section>('appearance');
+  // svelte-ignore state_referenced_locally
+  let section = $state<Section>(initial);
   settingsError.text = '';
 </script>
 
