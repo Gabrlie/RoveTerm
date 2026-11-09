@@ -107,57 +107,73 @@
 </div>
 
 <style>
+  /* A glass menu: accent-filled highlight, hairline separators. */
   .menu {
     position: fixed;
     z-index: 1000;
-    min-width: 180px;
-    padding: var(--space-1);
-    border: 1px solid var(--border);
+    min-width: 200px;
+    padding: 5px;
     border-radius: var(--radius-md);
-    background: var(--bg-elevated);
-    box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+    background: var(--material-popover);
+    backdrop-filter: var(--material-blur);
+    -webkit-backdrop-filter: var(--material-blur);
+    box-shadow: var(--glass-edge), var(--shadow-lg);
     outline: none;
+    animation: pop var(--dur-fast) var(--ease-out);
+  }
+  @keyframes pop {
+    from {
+      opacity: 0;
+      transform: scale(0.97);
+    }
   }
   button {
     display: flex;
     align-items: center;
     gap: var(--space-2);
     width: 100%;
-    height: 30px;
+    height: 26px;
     padding: 0 var(--space-3) 0 var(--space-2);
     border: none;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-xs);
     background: transparent;
     color: var(--fg);
     font: inherit;
     font-size: var(--text-body);
     text-align: left;
-    cursor: pointer;
+    cursor: default;
   }
   button.highlighted {
-    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    background: var(--accent);
+    color: var(--accent-fg);
   }
   button.danger {
     color: var(--danger);
   }
+  button.danger.highlighted {
+    background: var(--danger);
+    color: #fff;
+  }
   button.separated {
-    margin-top: var(--space-1);
+    margin-top: 9px;
     position: relative;
   }
   button.separated::before {
     content: '';
     position: absolute;
-    top: calc(-1 * var(--space-1) / 2 - 1px);
+    top: -5px;
     left: var(--space-2);
     right: var(--space-2);
-    border-top: 1px solid var(--border);
+    height: 1px;
+    background: var(--separator);
   }
   .icon {
     display: inline-flex;
     width: 16px;
     color: var(--fg-muted);
   }
+  button.highlighted .icon,
   button.danger .icon {
-    color: var(--danger);
+    color: inherit;
   }
 </style>

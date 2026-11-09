@@ -2,6 +2,7 @@
   // Lists the actions table; Enter runs the highlighted action.
   import { actions, bindingsOf, displayBinding, type ActionId } from '../actions';
   import { t } from '../i18n';
+  import Icon from './Icon.svelte';
 
   let { onrun, onclose }: { onrun: (id: ActionId) => void; onclose: () => void } = $props();
 
@@ -40,6 +41,8 @@
 
 <div class="backdrop" role="presentation" onpointerdown={onclose}>
   <div class="palette" role="dialog" tabindex="-1" aria-label={t('action.palette.open')} onpointerdown={(event) => event.stopPropagation()}>
+    <div class="field">
+    <Icon name="search" size={18} />
     <input class="bare"
       bind:this={input}
       bind:value={query}
@@ -48,12 +51,13 @@
       placeholder={t('palette.placeholder')}
       spellcheck="false"
     />
+    </div>
     <ul>
       {#each matches as action, index (action.id)}
         <li class:selected={index === selected}>
           <button type="button" onclick={() => { onclose(); onrun(action.id); }} onpointerenter={() => (selected = index)}>
             <span>{t(action.label)}</span>
-            <kbd>{bindingsOf(action).map(displayBinding)[0] ?? ''}</kbd>
+            {#if bindingsOf(action)[0]}<kbd>{displayBinding(bindingsOf(action)[0] ?? '')}</kbd>{/if}
           </button>
         </li>
       {:else}
@@ -64,65 +68,100 @@
 </div>
 
 <style>
+  /* Spotlight-like: a large field over a glass list. */
   .backdrop {
     position: fixed;
     inset: 0;
     z-index: 20;
     display: flex;
     justify-content: center;
-    padding-top: 12vh;
-    background: color-mix(in srgb, var(--bg-sunken) 40%, transparent);
+    padding-top: 14vh;
+    background: color-mix(in srgb, var(--overlay) 50%, transparent);
+    animation: fade var(--dur) var(--ease-out);
   }
   .palette {
-    width: min(520px, 90vw);
-    max-height: 60vh;
+    width: min(600px, 90vw);
+    max-height: 62vh;
+    align-self: flex-start;
     display: flex;
     flex-direction: column;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    box-shadow: 0 12px 32px rgb(0 0 0 / 0.18);
+    background: var(--material-popover);
+    backdrop-filter: var(--material-blur);
+    -webkit-backdrop-filter: var(--material-blur);
+    box-shadow: var(--glass-edge), var(--shadow-lg);
     overflow: hidden;
+    animation: drop var(--dur-slow) var(--ease);
+  }
+  @keyframes fade {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes drop {
+    from {
+      opacity: 0;
+      transform: translateY(-8px) scale(0.98);
+    }
+  }
+  .field {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    color: var(--fg-muted);
+    box-shadow: inset 0 -0.5px 0 var(--separator);
   }
   input {
-    padding: var(--space-3) var(--space-4);
-    border: none;
-    border-bottom: 1px solid var(--border);
-    background: transparent;
+    flex: 1;
+    min-width: 0;
     color: var(--fg);
-    font: inherit;
-    font-size: var(--text-title);
+    font-size: var(--text-large);
+    font-weight: 300;
     outline: none;
   }
   ul {
     margin: 0;
-    padding: var(--space-1);
+    padding: 6px;
     list-style: none;
     overflow-y: auto;
   }
   li button {
     width: 100%;
     display: flex;
+    align-items: center;
     justify-content: space-between;
-    padding: var(--space-2) var(--space-3);
+    gap: var(--space-3);
+    height: 34px;
+    padding: 0 var(--space-3);
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--fg);
     font: inherit;
     text-align: left;
-    cursor: pointer;
+    cursor: default;
   }
   li.selected button {
-    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    background: var(--accent);
+    color: var(--accent-fg);
   }
   kbd {
+    padding: 1px 6px;
+    border-radius: var(--radius-xs);
+    background: var(--fill);
     color: var(--fg-muted);
     font-family: var(--font-ui);
-    font-size: var(--text-footnote);
+    font-size: var(--text-caption);
+    font-weight: 500;
+  }
+  li.selected kbd {
+    background: rgb(255 255 255 / 0.2);
+    color: var(--accent-fg);
   }
   .empty {
-    padding: var(--space-3);
+    padding: var(--space-4);
     color: var(--fg-muted);
+    text-align: center;
   }
 </style>
