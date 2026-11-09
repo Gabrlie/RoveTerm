@@ -44,10 +44,12 @@ impl RecordStore for Store {
             })
             .collect())
     }
-    fn apply(&self, change: &Change) -> Result<(), SyncError> {
-        match &change.body {
-            Some(body) => self.set(&change.kind, &change.id, body.clone()),
-            None => self.remove(&change.kind, &change.id),
+    fn apply(&self, changes: &[Change]) -> Result<(), SyncError> {
+        for change in changes {
+            match &change.body {
+                Some(body) => self.set(&change.kind, &change.id, body.clone()),
+                None => self.remove(&change.kind, &change.id),
+            }
         }
         Ok(())
     }

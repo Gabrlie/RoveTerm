@@ -32,11 +32,12 @@ pub struct Change {
     pub body: Option<Value>,
 }
 
-/// The local data being synced. `records` lists everything syncable; `apply` writes a change
-/// that won the merge (upsert, or delete when `body` is `None`).
+/// The local data being synced. `records` lists everything syncable; `apply` writes the
+/// changes that won the merge (upsert, or delete when `body` is `None`), ordered by timestamp.
+/// The store may reorder them to satisfy its own references (parents before children).
 pub trait RecordStore: Send + Sync {
     fn records(&self) -> Result<Vec<Record>, SyncError>;
-    fn apply(&self, change: &Change) -> Result<(), SyncError>;
+    fn apply(&self, changes: &[Change]) -> Result<(), SyncError>;
 }
 
 /// What this device last knew about a record.
@@ -232,6 +233,7 @@ pub async fn sync(
 
     // Merge: a remote change wins when its timestamp is later than what this device knows.
     remote.sort_by(|a, b| a.hlc.cmp(&b.hlc));
+    let mut winners: BTreeMap<String, Change> = BTreeMap::new();
     for change in remote {
         next.clock.observe(&change.hlc);
         let record_id = record_key(&change.kind, &change.id);
@@ -242,8 +244,6 @@ pub async fn sync(
         {
             continue;
         }
-        store.apply(&change)?;
-        report.applied += 1;
         pending.remove(&record_id);
         let known = match &change.body {
             Some(body) => Known {
@@ -257,7 +257,14 @@ pub async fn sync(
                 deleted: true,
             },
         };
-        next.known.insert(record_id, known);
+        next.known.insert(record_id.clone(), known);
+        winners.insert(record_id, change);
+    }
+    if !winners.is_empty() {
+        let mut ordered: Vec<Change> = winners.into_values().collect();
+        ordered.sort_by(|a, b| a.hlc.cmp(&b.hlc));
+        store.apply(&ordered)?;
+        report.applied = ordered.len();
     }
 
     // Push what is left as one new segment, numbered after anything already written.
