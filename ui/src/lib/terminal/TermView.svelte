@@ -143,6 +143,13 @@
     }
   }
 
+  // Applies a changed colour scheme to a running terminal.
+  $effect(() => {
+    void prefs.value.terminal.scheme_light;
+    void prefs.value.terminal.scheme_dark;
+    applyTheme();
+  });
+
   // Applies preference changes to a running terminal.
   $effect(() => {
     const { font_size: fontSize, line_height: lineHeight } = prefs.value.terminal;

@@ -27,6 +27,7 @@
 | `src/lib/i18n/` | 文案字典与 `t()`、`errorText()` |
 | `src/styles/tokens.css` | 设计 token：表面与材质、细线、阴影、强调色派生、状态色、间距（4px 网格）、圆角、字号、字体、动效 |
 | `src/styles/controls.css` | 共享控件样式：按钮（`primary` / `secondary` / `plain`）、文本框、滚动条、分组表单（`form-group` / `form-row`） |
+| `src/lib/terminal/schemes.ts`、`SCHEMES.md` | 终端配色目录与第三方配色来源 |
 | `src/styles/fonts.css`、`src/assets/fonts/` | 内置的 Symbols Nerd Font Mono 及其许可说明 |
 
 ## TermView
@@ -40,7 +41,7 @@
 - macOS、Windows 和 Android 上按需动态加载 WebGL 渲染器；Linux 桌面（WebKitGTK）在同时存在多个 GL 上下文时，较早的 WebGL 终端不再重绘，因此使用 DOM 渲染器。WebGL 上下文丢失时退回 DOM 渲染器并立即重绘。
 - 每次 `fit` 之后重绘可见区域，避免画布尺寸变化后留白。
 - 注册 `attachCustomKeyEventHandler`，应用快捷键不会再发给 shell。
-- 跟随系统亮暗主题切换配色。
+- 终端配色按界面亮暗分别取偏好中的 `scheme_light` / `scheme_dark`（`theme.ts`），两个槽位都可以选任意方案，未知 id 退回同亮度的 RoveTerm 配色；终端周围的 `--term-bg` / `--term-fg` 跟随所选方案。修改偏好后已打开的终端立即换色。
 - 字体、字号、行高取自偏好设置，修改后对已打开的终端立即生效。字体栈依次为用户选择的字体、`--font-mono` 内置字体栈（以 `monospace` 结尾）、内置的 Symbols Nerd Font Mono；符号字体放在最后，因为第一个可用字体决定行高度量。创建终端和切换字体前先等待字体加载，避免字形在加载前被测量或缓存。
 - 组件提供 `focus()`、`selection()`、`paste(text)` 方法。
 
