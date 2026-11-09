@@ -28,6 +28,7 @@
   import { baseName, formatMode, formatSize, formatTime, joinPath, normalizePath, parentPath, sortEntries } from './format';
   import { isFinal, transfers } from './transfers.svelte';
   import { prefs } from '../settings/prefs.svelte';
+  import FilesSkeleton from './FilesSkeleton.svelte';
   import { editPrefs } from '../settings/edit.svelte';
 
   interface Props {
@@ -432,7 +433,7 @@
   </div>
   <div class="list" tabindex="0" role="listbox" aria-multiselectable="true" aria-label={label} bind:this={list} onkeydown={onListKeydown}>
     {#if !fsId && loading}
-      <p class="placeholder">{t('files.connecting')}</p>
+      <FilesSkeleton />
     {:else if shown.length === 0 && !loading && fsId}
       <p class="placeholder">{t('files.empty')}</p>
     {/if}

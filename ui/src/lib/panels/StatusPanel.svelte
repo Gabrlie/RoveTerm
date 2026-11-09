@@ -26,7 +26,8 @@
   import { prefs } from '../settings/prefs.svelte';
   import { sourceKey } from '../workspace/workspace.svelte';
 
-  let { source, visible }: { source: RemoteSource; visible: boolean } = $props();
+  /** With no `source` (nothing remote focused) the panel shows its skeleton and samples nothing. */
+  let { source, visible }: { source: RemoteSource | null; visible: boolean } = $props();
 
   /** Samples kept per core: two minutes at the default interval. */
   const HISTORY = 40;
@@ -35,8 +36,8 @@
 
   // The panel is keyed by source, so the key never changes for one instance.
   // svelte-ignore state_referenced_locally
-  const key = sourceKey(source);
-  const cached = snapshots.get(key);
+  const key = source ? sourceKey(source) : null;
+  const cached = key ? snapshots.get(key) : undefined;
   let stats = $state<ServerStats | null>(cached?.stats ?? null);
   let previous: { stats: ServerStats; at: number } | null = cached?.previous ?? null;
   let cpu = $state<number | null>(cached?.cpu ?? null);
@@ -56,6 +57,7 @@
   }
 
   async function sample(): Promise<void> {
+    if (!source || !key) return;
     try {
       const next = await serverStats(source);
       if (stopped) return;
@@ -83,18 +85,15 @@
       problem = null;
     } catch (error) {
       if (stopped) return;
-      problem =
-        isCommandError(error) && error.code === 'ssh.not_connected'
-          ? t('status.notConnected')
-          : isCommandError(error) && error.code === 'monitor.unsupported'
-            ? t('status.unsupported')
-            : errorText(error);
+      // Not connected yet: keep showing the skeleton until the connection is up.
+      if (isCommandError(error) && error.code === 'ssh.not_connected') return;
+      problem = isCommandError(error) && error.code === 'monitor.unsupported' ? t('status.unsupported') : errorText(error);
     }
   }
 
   function schedule(): void {
     clearTimeout(timer);
-    if (stopped || !visible) return;
+    if (stopped || !visible || !source) return;
     timer = window.setTimeout(async () => {
       await sample();
       schedule();

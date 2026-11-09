@@ -27,13 +27,9 @@
   </div>
   <div class="body">
     {#if page === 'status'}
-      {#if source}
-        {#key sourceKey(source)}
-          <StatusPanel {source} visible={true} />
-        {/key}
-      {:else}
-        <p class="muted">{t('status.noRemote')}</p>
-      {/if}
+      {#key source ? sourceKey(source) : ''}
+        <StatusPanel {source} visible={true} />
+      {/key}
     {:else}
       <SnippetsPanel />
     {/if}
@@ -63,12 +59,5 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-  }
-  .muted {
-    margin: 0;
-    padding: var(--space-6) var(--space-4);
-    color: var(--fg-muted);
-    font-size: var(--text-footnote);
-    text-align: center;
   }
 </style>

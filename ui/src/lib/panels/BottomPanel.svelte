@@ -1,9 +1,8 @@
 <script lang="ts">
   // The bottom panel: files of the focused pane's remote, over the same shared connection.
   import { untrack } from 'svelte';
-  import IconButton from '../ui/IconButton.svelte';
   import FileBrowser from '../files/FileBrowser.svelte';
-  import { t } from '../i18n';
+  import FilesSkeleton from '../files/FilesSkeleton.svelte';
   import { remoteSourceOf, sourceKey, workspace } from '../workspace/workspace.svelte';
   import type { RemoteSource } from '../ipc';
 
@@ -34,8 +33,7 @@
     </div>
   {/each}
   {#if !source}
-    <p class="muted">{t('status.noRemote')}</p>
-    <span class="close"><IconButton icon="close" label={t('common.close')} small onclick={onclose} /></span>
+    <FilesSkeleton toolbar {onclose} />
   {/if}
 </section>
 
@@ -53,17 +51,5 @@
   }
   .browser[hidden] {
     display: none;
-  }
-  .close {
-    position: absolute;
-    top: 7px;
-    right: var(--space-2);
-  }
-  .muted {
-    margin: 0;
-    padding: var(--space-6) var(--space-4);
-    color: var(--fg-muted);
-    font-size: var(--text-footnote);
-    text-align: center;
   }
 </style>
