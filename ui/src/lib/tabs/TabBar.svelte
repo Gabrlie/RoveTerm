@@ -5,18 +5,7 @@
   import { t } from '../i18n';
   import type { IconName } from '../ui/icons';
 
-  interface Props {
-    onnew: () => void;
-    sidebarOpen: boolean;
-    /** Shows the collapsed sidebar again. */
-    onsidebar: () => void;
-    rightOpen: boolean;
-    bottomOpen: boolean;
-    ontoggleright: () => void;
-    ontogglebottom: () => void;
-  }
-
-  let { onnew, sidebarOpen, onsidebar, rightOpen, bottomOpen, ontoggleright, ontogglebottom }: Props = $props();
+  let { onnew }: { onnew: () => void } = $props();
 
   function title(tabId: string): string {
     const tab = workspace.tabs.find((candidate) => candidate.id === tabId);
@@ -44,10 +33,7 @@
   }
 </script>
 
-<div class="tabbar" class:bare-corner={!sidebarOpen} role="tablist" data-tauri-drag-region>
-  {#if !sidebarOpen}
-    <IconButton icon="sidebar" label={t('action.sidebar.toggle')} onclick={onsidebar} />
-  {/if}
+<div class="tabbar" role="tablist">
   <div
     class="tab home"
     class:active={workspace.activeTabId === HOME_TAB}
@@ -80,9 +66,6 @@
     </div>
   {/each}
   <IconButton icon="add" label={t('tab.new')} onclick={onnew} />
-  <span class="spacer" data-tauri-drag-region></span>
-  <IconButton icon="panelBottom" label={t('action.panel.bottom')} active={bottomOpen} onclick={ontogglebottom} />
-  <IconButton icon="panelRight" label={t('action.panel.right')} active={rightOpen} onclick={ontoggleright} />
 </div>
 
 <style>
@@ -98,10 +81,6 @@
     box-shadow: inset 0 -1px 0 var(--separator);
     overflow-x: auto;
     scrollbar-width: none;
-  }
-  /* With the sidebar collapsed the macOS window buttons sit over the tab bar. */
-  :global(:root[data-platform='mac']) .tabbar.bare-corner {
-    padding-left: 84px;
   }
   .tab {
     position: relative;
@@ -126,9 +105,6 @@
       opacity: 0;
       transform: scale(0.94);
     }
-  }
-  .spacer {
-    flex: 1;
   }
   .tab.home {
     flex: none;

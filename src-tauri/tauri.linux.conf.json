@@ -1,0 +1,15 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "RoveTerm",
+        "width": 1200,
+        "height": 760,
+        "minWidth": 480,
+        "minHeight": 320,
+        "decorations": false
+      }
+    ]
+  }
+}

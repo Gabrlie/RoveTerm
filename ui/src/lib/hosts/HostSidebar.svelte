@@ -15,15 +15,11 @@
     onfiles: (host: HostEntry) => void;
     onforwards: (host: HostEntry) => void;
     onedit: (host: HostEntry | null) => void;
-    onquick: () => void;
     onnotice: (message: string) => void;
     onsettings: () => void;
-    onkeys: () => void;
-    /** Collapses the sidebar. */
-    oncollapse: () => void;
   }
 
-  let { onconnect, onfiles, onforwards, onedit, onquick, onnotice, onsettings, onkeys, oncollapse }: Props = $props();
+  let { onconnect, onfiles, onforwards, onedit, onnotice, onsettings }: Props = $props();
 
   let menu = $state<{ x: number; y: number; host: HostEntry } | null>(null);
 
@@ -63,15 +59,6 @@
     return '';
   }
 
-  async function importConfig(): Promise<void> {
-    try {
-      const report = await hosts.importSshConfig();
-      onnotice(t('host.imported', { created: report.created.length, skipped: report.skipped.length }));
-    } catch (error) {
-      onnotice(errorText(error));
-    }
-  }
-
   async function remove(host: HostEntry): Promise<void> {
     const confirmed = await ask({ title: t('host.delete'), message: t('host.confirmDelete', { name: host.name }), confirmLabel: t('common.delete'), danger: true });
     if (!confirmed) return;
@@ -94,14 +81,6 @@
 </script>
 
 <aside class="sidebar">
-  <div class="toolbar" data-tauri-drag-region>
-    <span class="heading" data-tauri-drag-region>{t('host.title')}</span>
-    <IconButton icon="quickConnect" label={t('action.host.quickConnect')} onclick={onquick} />
-    <IconButton icon="key" label={t('action.keys.manage')} onclick={onkeys} />
-    <IconButton icon="importConfig" label={t('host.import')} onclick={importConfig} />
-    <IconButton icon="add" label={t('host.new')} onclick={() => onedit(null)} />
-    <IconButton icon="sidebar" label={t('action.sidebar.toggle')} onclick={oncollapse} />
-  </div>
   <div class="search">
     <Icon name="search" size={14} />
     <input class="bare" bind:value={hosts.query} placeholder={t('host.search')} spellcheck="false" />
@@ -182,29 +161,12 @@
     -webkit-backdrop-filter: var(--material-blur);
     box-shadow: inset -1px 0 0 var(--separator);
   }
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    height: 44px;
-    padding: 0 var(--space-2) 0 var(--space-4);
-  }
-  /* Room for the macOS window buttons drawn over the corner. */
-  :global(:root[data-platform='mac']) .toolbar {
-    padding-left: 84px;
-  }
-  .heading {
-    flex: 1;
-    font-size: var(--text-title);
-    font-weight: 700;
-    letter-spacing: -0.01em;
-  }
   .search {
     display: flex;
     align-items: center;
     gap: var(--space-2);
     height: var(--control-height);
-    margin: 0 var(--space-3) var(--space-2);
+    margin: var(--space-3) var(--space-3) var(--space-2);
     padding: 0 var(--space-2);
     border-radius: var(--radius-sm);
     background: var(--fill);

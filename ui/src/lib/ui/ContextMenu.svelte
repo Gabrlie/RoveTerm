@@ -7,6 +7,8 @@
     danger?: boolean;
     /** Draws a separator above the item. */
     separated?: boolean;
+    /** Right-aligned text, such as the shortcut. */
+    hint?: string;
     onselect: () => void;
   }
 </script>
@@ -22,9 +24,13 @@
     y: number;
     items: MenuItem[];
     onclose: () => void;
+    /** Clicks inside this element do not close the menu (the menu bar handles them itself). */
+    owner?: HTMLElement;
+    /** Left and right arrows, for moving between the menus of a menu bar. */
+    onstep?: (direction: -1 | 1) => void;
   }
 
-  let { x, y, items, onclose }: Props = $props();
+  let { x, y, items, onclose, owner, onstep }: Props = $props();
   let menu = $state<HTMLDivElement>();
   let highlighted = $state(0);
   let position = $state({ left: 0, top: 0 });
@@ -54,6 +60,11 @@
       case 'Escape':
         onclose();
         break;
+      case 'ArrowLeft':
+      case 'ArrowRight':
+        if (!onstep) return;
+        onstep(event.key === 'ArrowLeft' ? -1 : 1);
+        break;
       default:
         return;
     }
@@ -62,7 +73,8 @@
   }
 
   function onPointerDown(event: PointerEvent): void {
-    if (!menu?.contains(event.target as Node)) onclose();
+    const target = event.target as Node;
+    if (!menu?.contains(target) && !owner?.contains(target)) onclose();
   }
 
   onMount(() => {
@@ -101,7 +113,8 @@
       onclick={() => choose(item)}
     >
       <span class="icon">{#if item.icon}<Icon name={item.icon} size={14} />{/if}</span>
-      {item.label}
+      <span class="label">{item.label}</span>
+      {#if item.hint}<span class="hint">{item.hint}</span>{/if}
     </button>
   {/each}
 </div>
@@ -166,6 +179,18 @@
     right: var(--space-2);
     height: 1px;
     background: var(--separator);
+  }
+  .label {
+    flex: 1;
+  }
+  .hint {
+    margin-left: var(--space-6);
+    color: var(--fg-muted);
+    font-size: var(--text-footnote);
+  }
+  button.highlighted .hint {
+    color: inherit;
+    opacity: 0.85;
   }
   .icon {
     display: inline-flex;

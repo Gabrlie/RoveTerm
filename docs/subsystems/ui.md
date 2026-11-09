@@ -124,7 +124,7 @@
 - 主机前的头像（`src/lib/ui/Avatar.svelte`）取名称的首字母，颜色由名称稳定地选自系统色板 `--sys-*`（`src/lib/ui/avatar.ts`），侧栏和主页共用。
 - 侧栏按分组列出主机，搜索时匹配名称、地址、用户名、分组和标签；双击或按 Enter 连接。悬停时只显示"连接"和"更多"两个按钮，右键、"更多"或 ContextMenu 键打开菜单：连接、浏览文件、端口转发、编辑、复制主机（不复制已保存的凭据）、删除。
 - 经跳板机或代理连接的主机在名称后显示小图标，悬停提示经由的跳板机或代理，不占用地址那一行。
-- 侧栏右上角的按钮或 `App+B` 收起侧栏，收起后标签栏左侧出现展开按钮；是否展开按设备记在 localStorage。
+- 标题栏右侧的布局按钮或 `App+B` 收起和展开侧栏；是否展开按设备记在 localStorage。侧栏顶部直接是搜索框，快速连接、新建主机、导入和密钥库都在应用菜单里。
 - 连接前，如果主机使用"每次询问"认证，或者使用密码认证但没有保存密码，先弹出密码框；用户可以勾选"记住密码"，连接成功后由后端写入 vault。
 - 终端打开失败时记录到面板的 `failure`，在面板底部显示失败原因和操作：重试、输入私钥密码（缺少 passphrase 时）、使用密码登录（对密钥主机以 `password_kind = "password"` 重连，这种密码不能记住）、编辑主机、关闭。
 - 打开面板时如果后端返回 `ssh.credentials_required` 或 `ssh.passphrase_required`，弹出密码或私钥密码框，再用新面板替换原面板重新连接（`workspace.reopen`）。密钥主机可以勾选"记住私钥密码"，成功后存为 passphrase。
@@ -188,7 +188,9 @@
 
 - 表面分层：`--window`（窗口底色）之上是半透明材质 `--material-sidebar` / `--material-bar` / `--material-popover`，配合 `--material-blur` 做毛玻璃；内容区用不透明的 `--surface` / `--surface-raised`。WebKitGTK 接受但不绘制 `backdrop-filter`，所以 Linux 上 `<html data-blur="off">`，弹层材质改为不透明。
 - 窗口材质：启动时调用 `window_set_material`（`src/lib/ui/window.ts`），macOS 26 及以上用 Liquid Glass，更早的 macOS 用侧栏毛玻璃（vibrancy），Windows 11 用 Mica；Windows 10、Linux 和移动端返回 `false`，保持不透明。生效时 `<html data-material="on">`，`--window` 变为透明，侧栏和工具栏只做淡色叠加，内容区和终端仍不透明。窗口为此在 `tauri.macos.conf.json` / `tauri.windows.conf.json` 中设为 `transparent`。
-- macOS 使用覆盖式标题栏（`titleBarStyle: Overlay`，隐藏标题），红绿灯按钮画在侧栏头部，`<html data-platform="mac">` 时侧栏头部（侧栏收起时为标签栏）左侧留出 84px；侧栏头部和标签栏空白处带 `data-tauri-drag-region`，可拖动窗口。
+- 窗口顶部是 `TitleBar`（`src/lib/layout/TitleBar.svelte`，高 38px），空白处带 `data-tauri-drag-region`，可拖动、双击最大化；右侧是侧栏、底部面板、右侧面板三个布局开关。
+  - Windows 与 Linux 不用系统标题栏（`decorations: false`，见 `tauri.windows.conf.json` / `tauri.linux.conf.json`）：左侧是 `menu.ts` 定义的文字菜单，点击展开、展开时指向其他菜单名即切换、左右方向键在菜单间移动；最右侧是自绘的最小化、最大化/还原、关闭按钮，最大化状态随窗口缩放更新。Windows 11 悬停最大化按钮时的贴靠布局弹窗因此不可用。
+  - macOS 使用覆盖式标题栏（`titleBarStyle: Overlay`，隐藏标题），红绿灯画在标题栏左侧（`trafficLightPosition` 为 16, 19），标题栏左侧留出 80px，不显示文字菜单。
 - 分隔一律用半透明细线 `--separator`（常以 0.5px 的 `box-shadow` 绘制），`--border` 只给输入类控件描边。
 - 强调色只设 `--accent`，`--accent-hover`、`--accent-soft`、`--focus-ring` 等由 `color-mix()` 派生；状态色有 `--success` / `--warning` / `--danger` 及其 soft 版本。
 - `--shadow-sm|md|lg` 是多层柔和阴影，`--glass-edge` 是玻璃边缘高光；动效用 `--ease` 与 `--dur-fast|dur|dur-slow`，系统要求减少动效时时长为 0。

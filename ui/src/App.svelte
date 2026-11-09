@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import TabBar from './lib/tabs/TabBar.svelte';
+  import TitleBar from './lib/layout/TitleBar.svelte';
   import PaneGrid from './lib/layout/PaneGrid.svelte';
   import CommandPalette from './lib/ui/CommandPalette.svelte';
   import HostSidebar from './lib/hosts/HostSidebar.svelte';
@@ -329,19 +330,13 @@
 <svelte:window onkeydowncapture={onKeydown} />
 
 <div class="app">
+  <TitleBar {sidebarOpen} {rightOpen} {bottomOpen} onaction={run} />
+  <div class="body">
   {#if sidebarOpen}
-    <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onquick={() => (quickOpen = true)} onnotice={showNotice} onsettings={() => (settingsOpen = true)} onkeys={() => (keysOpen = true)} oncollapse={() => (sidebarOpen = false)} />
+    <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onnotice={showNotice} onsettings={() => (settingsOpen = true)} />
   {/if}
   <div class="main">
-    <TabBar
-      onnew={() => workspace.activate(HOME_TAB)}
-      {sidebarOpen}
-      onsidebar={() => (sidebarOpen = true)}
-      {rightOpen}
-      {bottomOpen}
-      ontoggleright={() => (rightOpen = !rightOpen)}
-      ontogglebottom={() => (bottomOpen = !bottomOpen)}
-    />
+    <TabBar onnew={() => workspace.activate(HOME_TAB)} />
     <div class="workarea">
     <div class="center">
     <main class="stage">
@@ -380,6 +375,7 @@
       </div>
     {/if}
     </div>
+  </div>
   </div>
 </div>
 
@@ -441,6 +437,12 @@
 <style>
   .app {
     height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .body {
+    flex: 1;
+    min-height: 0;
     display: flex;
   }
   .main {
