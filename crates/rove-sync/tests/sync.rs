@@ -223,3 +223,44 @@ async fn altered_or_moved_segments_are_refused() {
     ));
     assert!(b.store.all().is_empty());
 }
+
+#[tokio::test]
+async fn long_histories_are_compacted_without_losing_anything() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = FolderBackend::new(dir.path());
+    let key = create_space(&backend, "pw", fast()).await.unwrap();
+    let mut a = Device::new("device-a");
+    let mut b = Device::new("device-b");
+    a.store.set("host", "doomed", json!({"name": "gone soon"}));
+    a.sync(&backend, &key).await;
+    b.sync(&backend, &key).await;
+    // B edits one record last; A's later compaction must not bring A's older version back.
+    a.store.set("host", "shared", json!({"by": "a"}));
+    a.sync(&backend, &key).await;
+    b.sync(&backend, &key).await;
+    b.store.set("host", "shared", json!({"by": "b"}));
+    b.sync(&backend, &key).await;
+    a.store.remove("host", "doomed");
+    let mut compacted = false;
+    for round in 0..=COMPACT_AFTER {
+        a.store.set("snippet", "counter", json!({ "n": round }));
+        compacted |= a.sync(&backend, &key).await.compacted;
+    }
+    assert!(compacted);
+    // The rounds after the compaction each add one segment again.
+    assert!(backend.list("devices/device-a").await.unwrap().len() < 5);
+
+    // A device joining now ends up with exactly the same records.
+    let mut c = Device::new("device-c");
+    c.sync(&backend, &key).await;
+    assert_eq!(c.store.all(), a.store.all());
+    assert_eq!(c.store.get("host", "shared"), Some(json!({"by": "b"})));
+    assert_eq!(c.store.get("host", "doomed"), None);
+    assert_eq!(
+        c.store.get("snippet", "counter"),
+        Some(json!({ "n": COMPACT_AFTER }))
+    );
+    // And B, which read the old segments, is unaffected.
+    b.sync(&backend, &key).await;
+    assert_eq!(b.store.all(), a.store.all());
+}

@@ -11,7 +11,7 @@ mod space;
 
 pub use backend::{FolderBackend, MAX_FILE, SyncBackend, check_path};
 pub use crypto::{KdfParams, SyncKey};
-pub use engine::{Change, Known, Record, RecordStore, Report, SyncState, sync};
+pub use engine::{COMPACT_AFTER, Change, Known, Record, RecordStore, Report, SyncState, sync};
 pub use hlc::{Clock, Hlc};
 pub use space::{MANIFEST, create_space, join_space, space_exists};
 

@@ -14,6 +14,8 @@ const DEVICES: &str = "devices";
 const SEGMENT_SUFFIX: &str = ".seg";
 /// Longest record kind or id accepted from a segment.
 const MAX_ID: usize = 128;
+/// Once this device has more segments than this, a round rewrites its history as one segment.
+pub const COMPACT_AFTER: usize = 32;
 
 /// A record as the store holds it: `kind` names the table (`host`, `snippet`…), `id` the row.
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +89,8 @@ pub struct Report {
     pub applied: usize,
     /// Local changes sent in a new segment.
     pub pushed: usize,
+    /// This device's segments were rewritten as one.
+    pub compacted: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -268,25 +272,102 @@ pub async fn sync(
     }
 
     // Push what is left as one new segment, numbered after anything already written.
+    let mut written = segments_in(backend, &own_dir).await?;
     if !pending.is_empty() {
-        let written = segments_in(backend, &own_dir).await?;
         let seq = next.next_seq.max(written.last().map_or(1, |last| last + 1));
-        let segment = Segment {
-            device: next.device.clone(),
-            seq,
-            changes: pending.into_values().collect(),
-        };
-        let plain = zeroize::Zeroizing::new(
-            serde_json::to_vec(&segment).map_err(|error| SyncError::Format(error.to_string()))?,
-        );
-        let sealed = key.seal(&plain, &segment_aad(&next.device, seq))?;
-        backend
-            .put(&format!("{own_dir}/{}", segment_name(seq)), &sealed)
-            .await?;
-        report.pushed = segment.changes.len();
+        let changes: Vec<Change> = pending.into_values().collect();
+        report.pushed = changes.len();
+        write_segment(backend, key, &next.device, seq, changes).await?;
         next.next_seq = seq + 1;
+        written.push(seq);
+    }
+
+    if written.len() > COMPACT_AFTER {
+        compact(backend, key, &mut next, store, &written).await?;
+        report.compacted = true;
     }
 
     *state = next;
     Ok(report)
+}
+
+async fn write_segment(
+    backend: &dyn SyncBackend,
+    key: &SyncKey,
+    device: &str,
+    seq: u64,
+    changes: Vec<Change>,
+) -> Result<(), SyncError> {
+    let segment = Segment {
+        device: device.to_owned(),
+        seq,
+        changes,
+    };
+    let plain = zeroize::Zeroizing::new(
+        serde_json::to_vec(&segment).map_err(|error| SyncError::Format(error.to_string()))?,
+    );
+    let sealed = key.seal(&plain, &segment_aad(device, seq))?;
+    backend
+        .put(
+            &format!("{DEVICES}/{device}/{}", segment_name(seq)),
+            &sealed,
+        )
+        .await
+}
+
+/// Rewrites this device's history as one segment: the latest change it made to every record
+/// it was the last to change (deletions included), then removes the older segments. Changes
+/// other devices superseded are dropped; they would lose every merge anyway. A device reading
+/// meanwhile misses nothing: the new segment has a higher number than everything it replaces.
+async fn compact(
+    backend: &dyn SyncBackend,
+    key: &SyncKey,
+    state: &mut SyncState,
+    store: &dyn RecordStore,
+    written: &[u64],
+) -> Result<(), SyncError> {
+    let mut bodies: HashMap<String, Value> = store
+        .records()?
+        .into_iter()
+        .map(|record| (record_key(&record.kind, &record.id), record.body))
+        .collect();
+    let mut changes = Vec::new();
+    for (record_id, known) in &state.known {
+        if known.hlc.device != state.device {
+            continue;
+        }
+        let Some((kind, id)) = record_id.split_once(':') else {
+            continue;
+        };
+        let body = if known.deleted {
+            None
+        } else {
+            // Gone from the store without a round seeing it: the next round records the deletion.
+            match bodies.remove(record_id) {
+                Some(body) => Some(body),
+                None => continue,
+            }
+        };
+        changes.push(Change {
+            kind: kind.to_owned(),
+            id: id.to_owned(),
+            hlc: known.hlc.clone(),
+            body,
+        });
+    }
+    let seq = state
+        .next_seq
+        .max(written.last().map_or(1, |last| last + 1));
+    write_segment(backend, key, &state.device, seq, changes).await?;
+    state.next_seq = seq + 1;
+    for old in written.iter().filter(|old| **old < seq) {
+        backend
+            .delete(&format!(
+                "{DEVICES}/{}/{}",
+                state.device,
+                segment_name(*old)
+            ))
+            .await?;
+    }
+    Ok(())
 }
