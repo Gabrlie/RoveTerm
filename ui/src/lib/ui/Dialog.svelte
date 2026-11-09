@@ -58,9 +58,8 @@
     z-index: 30;
     display: grid;
     place-items: center;
+    /* A plain dim: a small backdrop blur ghosts text on WebView2 instead of softening it. */
     background: var(--overlay);
-    backdrop-filter: blur(3px);
-    -webkit-backdrop-filter: blur(3px);
     animation: fade var(--dur) var(--ease-out);
   }
   .dialog {
