@@ -5,7 +5,14 @@
   import { t } from '../i18n';
   import type { IconName } from '../ui/icons';
 
-  let { onnew }: { onnew: () => void } = $props();
+  interface Props {
+    onnew: () => void;
+    sidebarOpen: boolean;
+    /** Shows the collapsed sidebar again. */
+    onsidebar: () => void;
+  }
+
+  let { onnew, sidebarOpen, onsidebar }: Props = $props();
 
   function title(tabId: string): string {
     const tab = workspace.tabs.find((candidate) => candidate.id === tabId);
@@ -24,6 +31,9 @@
 </script>
 
 <div class="tabbar" role="tablist">
+  {#if !sidebarOpen}
+    <IconButton icon="sidebar" label={t('action.sidebar.toggle')} onclick={onsidebar} />
+  {/if}
   {#each workspace.tabs as tab (tab.id)}
     <div
       class="tab"

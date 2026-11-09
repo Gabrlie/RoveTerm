@@ -38,6 +38,8 @@ import play from 'remixicon/icons/Media/play-line.svg?raw';
 import stop from 'remixicon/icons/Media/stop-line.svg?raw';
 import warning from 'remixicon/icons/System/error-warning-line.svg?raw';
 import settings from 'remixicon/icons/System/settings-3-line.svg?raw';
+import sidebar from 'remixicon/icons/Design/layout-left-line.svg?raw';
+import copy from 'remixicon/icons/Document/file-copy-line.svg?raw';
 
 export const icons = {
   add,
@@ -79,6 +81,8 @@ export const icons = {
   stop,
   warning,
   settings,
+  sidebar,
+  copy,
 } as const;
 
 export type IconName = keyof typeof icons;

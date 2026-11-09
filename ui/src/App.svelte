@@ -29,7 +29,25 @@
     | { kind: 'pane'; paneId: PaneId; title: string; secret: CredentialKind; allowRemember: boolean; override: boolean };
 
   let paletteOpen = $state(false);
-  let sidebarOpen = $state(true);
+  /** Per-device UI state kept in localStorage; storage may be unavailable. */
+  function stored(key: string, fallback: boolean): boolean {
+    try {
+      const value = localStorage.getItem(key);
+      return value === null ? fallback : value === '1';
+    } catch {
+      return fallback;
+    }
+  }
+  function store(key: string, value: boolean): void {
+    try {
+      localStorage.setItem(key, value ? '1' : '0');
+    } catch {
+      // Storage unavailable: the choice lasts for this run only.
+    }
+  }
+
+  let sidebarOpen = $state(stored('ui.sidebar', true));
+  $effect(() => store('ui.sidebar', sidebarOpen));
   let quickOpen = $state(false);
   let editing = $state<HostEntry | null | undefined>(undefined);
   let passwordRequest = $state<PasswordRequest | null>(null);
@@ -206,10 +224,10 @@
 
 <div class="app">
   {#if sidebarOpen}
-    <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onquick={() => (quickOpen = true)} onnotice={showNotice} onsettings={() => (settingsOpen = true)} onkeys={() => (keysOpen = true)} />
+    <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onquick={() => (quickOpen = true)} onnotice={showNotice} onsettings={() => (settingsOpen = true)} onkeys={() => (keysOpen = true)} oncollapse={() => (sidebarOpen = false)} />
   {/if}
   <div class="main">
-    <TabBar onnew={() => run('tab.newLocal')} />
+    <TabBar onnew={() => run('tab.newLocal')} {sidebarOpen} onsidebar={() => (sidebarOpen = true)} />
     <main class="stage">
       {#each workspace.tabs as tab (tab.id)}
         <PaneGrid
