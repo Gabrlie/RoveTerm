@@ -131,6 +131,7 @@ export const zhCN: Messages = {
   'snippets.noTerminal': '聚焦一个终端后即可运行快捷指令。',
 
   'tab.new': '新标签',
+  'tab.closeGroup': '关闭分组',
   'home.hosts': '主机',
   'home.empty': '还没有保存的主机，新建后会显示在这里。',
   'home.never': '从未连接',

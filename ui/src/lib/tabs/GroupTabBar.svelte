@@ -1,75 +1,86 @@
 <script lang="ts">
+  // Tabs of one editor group: home, the group's tabs, a button to show home ("new tab"), and
+  // splitting or closing the group.
   import IconButton from '../ui/IconButton.svelte';
   import Icon from '../ui/Icon.svelte';
-  import { HOME_TAB, workspace } from '../workspace/workspace.svelte';
+  import { workspace, type Group } from '../workspace/workspace.svelte';
+  import type { PaneId } from '../layout/layout';
   import { t } from '../i18n';
   import type { IconName } from '../ui/icons';
 
-  let { onnew }: { onnew: () => void } = $props();
-
-  function title(tabId: string): string {
-    const tab = workspace.tabs.find((candidate) => candidate.id === tabId);
-    return tab ? (workspace.panes[tab.focused]?.title ?? '') : '';
+  interface Props {
+    group: Group;
+    /** The group has focus: its current tab is highlighted. */
+    focused: boolean;
+    /** Whether the group can be closed (other groups remain). */
+    closable: boolean;
   }
 
-  function tabIcon(tabId: string): IconName {
-    const tab = workspace.tabs.find((candidate) => candidate.id === tabId);
-    const kind = tab ? workspace.panes[tab.focused]?.target.kind : undefined;
+  let { group, focused, closable }: Props = $props();
+
+  function tabIcon(paneId: PaneId): IconName {
+    const kind = workspace.panes[paneId]?.target.kind;
     return kind === 'local' ? 'terminal' : kind === 'sftp' ? 'files' : 'server';
   }
 
-  /** Connection state of the tab's focused pane, shown as a dot. */
-  function tabState(tabId: string): 'live' | 'connecting' | 'failed' | 'ended' {
-    const tab = workspace.tabs.find((candidate) => candidate.id === tabId);
-    const pane = tab ? workspace.panes[tab.focused] : undefined;
+  /** Connection state of a tab, shown as a dot. */
+  function tabState(paneId: PaneId): 'live' | 'connecting' | 'failed' | 'ended' {
+    const pane = workspace.panes[paneId];
     if (!pane) return 'ended';
     if (pane.failure) return 'failed';
     if (pane.exited) return 'ended';
-    return pane.sessionId ? 'live' : 'connecting';
+    return pane.sessionId || pane.target.kind === 'sftp' ? 'live' : 'connecting';
   }
 
-  function onAuxClick(event: MouseEvent, tabId: string): void {
-    if (event.button === 1) workspace.closeTab(tabId);
+  function onAuxClick(event: MouseEvent, paneId: PaneId): void {
+    if (event.button === 1) workspace.closePane(paneId);
   }
+
 </script>
 
-<div class="tabbar" role="tablist">
+<div class="tabbar" class:focused role="tablist">
   <div
     class="tab home"
-    class:active={workspace.activeTabId === HOME_TAB}
+    class:active={group.active === null}
     role="tab"
     tabindex="0"
-    aria-selected={workspace.activeTabId === HOME_TAB}
+    aria-selected={group.active === null}
     title={t('home.title')}
-    onclick={() => workspace.activate(HOME_TAB)}
-    onkeydown={(event) => event.key === 'Enter' && workspace.activate(HOME_TAB)}
+    onclick={() => workspace.activate(group.id, null)}
+    onkeydown={(event) => event.key === 'Enter' && workspace.activate(group.id, null)}
   >
     <Icon name="home" size={14} />
   </div>
-  {#each workspace.tabs as tab (tab.id)}
+  {#each group.tabs as paneId (paneId)}
     <div
       class="tab"
-      class:active={tab.id === workspace.activeTabId}
+      class:active={paneId === group.active}
       role="tab"
       tabindex="0"
-      aria-selected={tab.id === workspace.activeTabId}
-      onclick={() => workspace.activate(tab.id)}
-      onkeydown={(event) => event.key === 'Enter' && workspace.activate(tab.id)}
-      onauxclick={(event) => onAuxClick(event, tab.id)}
+      aria-selected={paneId === group.active}
+      onclick={() => workspace.activate(group.id, paneId)}
+      onkeydown={(event) => event.key === 'Enter' && workspace.activate(group.id, paneId)}
+      onauxclick={(event) => onAuxClick(event, paneId)}
     >
       <span class="glyph">
-        <Icon name={tabIcon(tab.id)} size={14} />
-        <span class="dot {tabState(tab.id)}"></span>
+        <Icon name={tabIcon(paneId)} size={14} />
+        <span class="dot {tabState(paneId)}"></span>
       </span>
-      <span class="title">{title(tab.id)}</span>
-      <IconButton icon="close" label={t('action.tab.close')} small onclick={(event) => { event.stopPropagation(); workspace.closeTab(tab.id); }} />
+      <span class="title">{workspace.panes[paneId]?.title ?? ''}</span>
+      <IconButton icon="close" label={t('action.tab.close')} small onclick={(event) => { event.stopPropagation(); workspace.closePane(paneId); }} />
     </div>
   {/each}
-  <IconButton icon="add" label={t('tab.new')} onclick={onnew} />
+  <IconButton icon="add" label={t('tab.new')} onclick={() => workspace.activate(group.id, null)} />
+  <span class="spacer"></span>
+  <IconButton icon="splitRight" label={t('action.pane.splitRight')} small onclick={() => { workspace.focusGroup(group.id); workspace.splitFocused('row'); }} />
+  {#if closable}
+    <IconButton icon="close" label={t('tab.closeGroup')} small onclick={() => workspace.closeGroupWithTabs(group.id)} />
+  {/if}
 </div>
 
 <style>
   .tabbar {
+    flex: none;
     display: flex;
     align-items: center;
     gap: 2px;
@@ -174,5 +185,14 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-weight: 500;
+  }
+  .spacer {
+    flex: 1;
+  }
+  /* The current tab of a group that does not have focus is drawn quieter. */
+  .tabbar:not(.focused) .tab.active {
+    background: color-mix(in srgb, var(--surface) 60%, transparent);
+    color: var(--fg-muted);
+    box-shadow: 0 0 0 0.5px var(--separator);
   }
 </style>

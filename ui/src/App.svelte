@@ -1,8 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import TabBar from './lib/tabs/TabBar.svelte';
   import TitleBar from './lib/layout/TitleBar.svelte';
-  import PaneGrid from './lib/layout/PaneGrid.svelte';
+  import EditorGroups from './lib/layout/EditorGroups.svelte';
   import CommandPalette from './lib/ui/CommandPalette.svelte';
   import HostSidebar from './lib/hosts/HostSidebar.svelte';
   import HostEditor from './lib/hosts/HostEditor.svelte';
@@ -23,7 +22,7 @@
   import { actionFor, isMac, type ActionId } from './lib/actions';
   import { isActionId, nativeMenuLabels, nativeMenus } from './lib/menu';
   import { terminals } from './lib/terminal/registry';
-  import { HOME_TAB, workspace, type PaneTarget } from './lib/workspace/workspace.svelte';
+  import { workspace, type PaneTarget } from './lib/workspace/workspace.svelte';
   import { menuSet, onHostKeyPrompt, onMenuAction, workspaceLoad, workspaceSave, type CredentialKind, type HostEntry, type HostKeyPrompt } from './lib/ipc';
   import { parseSnapshot } from './lib/workspace/snapshot';
   import { errorText, t } from './lib/i18n';
@@ -352,29 +351,19 @@
   <div class="main">
     <div class="workarea">
     <div class="center">
-    <TabBar onnew={() => workspace.activate(HOME_TAB)} />
-    <main class="stage">
-      {#each workspace.tabs as tab (tab.id)}
-        <PaneGrid
-          {tab}
-          visible={tab.id === workspace.activeTabId}
-          oncredentials={requestPaneCredentials}
-          onedithost={(hostId) => (editing = hosts.find(hostId) ?? undefined)}
-        />
-      {/each}
-      {#if workspace.activeTabId === HOME_TAB}
-        <HomePage
-          onconnect={connect}
-          onfiles={openFiles}
-          onedit={(host) => (editing = host)}
-          onquick={() => (quickOpen = true)}
-          onlocal={() => run('tab.newLocal')}
-          onforwards={(host) => (forwardsHost = host)}
-          onnotice={showNotice}
-          onaction={run}
-        />
-      {/if}
-    </main>
+    {#snippet home()}
+      <HomePage
+        onconnect={connect}
+        onfiles={openFiles}
+        onedit={(host) => (editing = host)}
+        onquick={() => (quickOpen = true)}
+        onlocal={() => run('tab.newLocal')}
+        onforwards={(host) => (forwardsHost = host)}
+        onnotice={showNotice}
+        onaction={run}
+      />
+    {/snippet}
+    <EditorGroups {home} oncredentials={requestPaneCredentials} onedithost={(hostId) => (editing = hosts.find(hostId) ?? undefined)} />
     {#if bottomOpen}
       <div class="edge horizontal" role="separator" aria-orientation="horizontal" onpointerdown={resizeBottom}></div>
     {/if}
@@ -478,21 +467,13 @@
     display: flex;
     gap: var(--gap-panel);
   }
+  /* The editor groups above and the files panel below, separated by a gap like the cards. */
   .center {
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
-    border-radius: var(--radius-lg);
-    background: var(--surface);
-    box-shadow: var(--panel-shadow);
-    overflow: hidden;
-  }
-  .stage {
-    position: relative;
-    flex: 1;
-    min-height: 0;
-    background: var(--term-bg);
+    gap: var(--gap-panel);
   }
   .bottom[hidden] {
     display: none;
@@ -502,40 +483,39 @@
     flex: none;
     min-height: 0;
     min-width: 0;
-  }
-  .right {
     border-radius: var(--radius-lg);
     box-shadow: var(--panel-shadow);
     overflow: hidden;
   }
-  /* Panel edges: a hairline with a wider invisible grip around it. */
+  /* Panel edges are the gaps between cards; a line shows only while hovering. */
   .edge {
     position: relative;
     z-index: 5;
     flex: none;
-    background: var(--separator);
-    transition: background-color var(--dur-fast) var(--ease-out);
   }
   .edge::before {
     content: '';
     position: absolute;
+    border-radius: 1px;
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  .edge:hover::before {
+    background: var(--accent);
   }
   .edge.horizontal {
-    height: 1px;
+    height: var(--gap-panel);
+    margin: calc(-1 * var(--gap-panel)) 0;
     cursor: row-resize;
   }
   .edge.horizontal::before {
-    left: 0;
-    right: 0;
-    top: -3px;
-    bottom: -3px;
+    left: var(--space-3);
+    right: var(--space-3);
+    top: calc(50% - 1px);
+    height: 2px;
   }
-  /* Between the work area and the right panel the edge is the gap itself; the line shows only
-     while hovering. */
   .edge.vertical {
     width: var(--gap-panel);
     margin: 0 calc(-1 * var(--gap-panel));
-    background: transparent;
     cursor: col-resize;
   }
   .edge.vertical::before {
@@ -543,17 +523,6 @@
     bottom: var(--space-3);
     left: calc(50% - 1px);
     width: 2px;
-    border-radius: 1px;
-    transition: background-color var(--dur-fast) var(--ease-out);
-  }
-  .edge.vertical:hover {
-    background: transparent;
-  }
-  .edge.vertical:hover::before {
-    background: var(--accent);
-  }
-  .edge:hover {
-    background: var(--accent);
   }
   .notice {
     position: fixed;

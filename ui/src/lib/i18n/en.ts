@@ -129,6 +129,7 @@ export const en = {
   'snippets.noTerminal': 'Focus a terminal to run snippets.',
 
   'tab.new': 'New tab',
+  'tab.closeGroup': 'Close group',
   'home.hosts': 'Hosts',
   'home.empty': 'No saved hosts yet. Add one to see it here.',
   'home.never': 'Never connected',
