@@ -24,6 +24,14 @@
 
 交叉构建只产出 NSIS 安装包；MSI 和代码签名需要在 Windows 上构建。链接时 `LNK4099` 缺少 pdb 的警告可以忽略。
 
+### 在 macOS 上构建
+
+1. 安装 Xcode 命令行工具（`xcode-select --install`）、Rust、Node.js 24+ 与 pnpm。
+2. 构建：`pnpm install && pnpm tauri build`，产物位于 `target/release/bundle/macos/RoveTerm.app` 与 `target/release/bundle/dmg/`。
+3. 同时支持 Apple Silicon 与 Intel：先 `rustup target add aarch64-apple-darwin x86_64-apple-darwin`，再 `pnpm tauri build --target universal-apple-darwin`。
+
+产物未签名：首次打开需在 Finder 中右键选择“打开”，或执行 `xattr -cr /Applications/RoveTerm.app`。钥匙串首次读取设备主密钥时会弹窗授权，选“始终允许”后之后启动即可静默解锁。
+
 ### Android
 
 1. 确认已设置 `ANDROID_HOME`、`NDK_HOME`，并安装 JDK 17。
