@@ -175,6 +175,23 @@ pub struct TransferQueue {
     events: EventBus,
     permits: Arc<Semaphore>,
     jobs: Jobs,
+    reserved: Reserved,
+}
+
+/// Destination paths claimed by running transfers, as (file system label, path). Two transfers
+/// never pick the same top-level destination, so "rename" cannot make them overwrite each other.
+type Reserved = Arc<Mutex<std::collections::HashSet<(String, String)>>>;
+
+/// Releases a reserved destination when the transfer ends.
+struct Reservation {
+    reserved: Reserved,
+    key: (String, String),
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        self.reserved.lock().remove(&self.key);
+    }
 }
 
 impl TransferQueue {
@@ -185,6 +202,7 @@ impl TransferQueue {
             config,
             events,
             jobs: Arc::default(),
+            reserved: Arc::default(),
         }
     }
 
@@ -224,6 +242,7 @@ impl TransferQueue {
             last_emit: Instant::now(),
             buffer: self.config.buffer_kib * 1024,
             cancel,
+            reserved: self.reserved.clone(),
         };
         let permits = self.permits.clone();
         tokio::spawn(async move {
@@ -328,6 +347,7 @@ struct Runner {
     last_emit: Instant,
     buffer: usize,
     cancel: CancellationToken,
+    reserved: Reserved,
 }
 
 impl Runner {
@@ -378,27 +398,62 @@ impl Runner {
         }
     }
 
-    /// Picks the destination path of the top-level item, or `None` to skip.
-    async fn destination(&self, request: &TransferRequest) -> Result<Option<String>, FsError> {
+    /// Claims `path` on the destination for this transfer; `None` when another running transfer
+    /// holds it.
+    fn reserve(&self, request: &TransferRequest, path: &str) -> Option<Reservation> {
+        let key = (request.dst.label(), path.to_owned());
+        self.reserved.lock().insert(key.clone()).then(|| Reservation {
+            reserved: self.reserved.clone(),
+            key,
+        })
+    }
+
+    /// Picks and reserves the destination path of the top-level item, or `None` to skip. A path
+    /// another running transfer reserved counts as taken.
+    async fn destination(
+        &self,
+        request: &TransferRequest,
+    ) -> Result<Option<(String, Reservation)>, FsError> {
         let dst = request.dst.as_ref();
         let name = &self.update.name;
         let path = child_path(dst, &request.dst_dir, name)?;
-        if !Self::exists(dst, &path).await? {
-            return Ok(Some(path));
-        }
-        match request.conflict {
-            Conflict::Overwrite => Ok(Some(path)),
-            Conflict::Skip => Ok(None),
-            Conflict::Rename => {
-                for n in 1..=999 {
-                    let candidate = dst.join(&request.dst_dir, &numbered(name, n));
-                    if !Self::exists(dst, &candidate).await? {
-                        return Ok(Some(candidate));
-                    }
+        let existing = match dst.stat(&path).await {
+            Ok(metadata) => Some(metadata.kind),
+            Err(FsError::NotFound(_)) => None,
+            Err(error) => return Err(error),
+        };
+        match (existing, request.conflict) {
+            (None, _) | (Some(_), Conflict::Overwrite) => {
+                match self.reserve(request, &path) {
+                    Some(reservation) => Ok(Some((path, reservation))),
+                    // Another transfer is writing this name right now.
+                    None if request.conflict == Conflict::Rename => self.renamed(request, name).await,
+                    None if request.conflict == Conflict::Skip => Ok(None),
+                    None => Err(FsError::AlreadyExists(path)),
                 }
-                Err(FsError::AlreadyExists(path))
+            }
+            (Some(_), Conflict::Skip) => Ok(None),
+            (Some(_), Conflict::Rename) => self.renamed(request, name).await,
+        }
+    }
+
+    /// The first free `name (n).ext` in the destination directory, reserved.
+    async fn renamed(
+        &self,
+        request: &TransferRequest,
+        name: &str,
+    ) -> Result<Option<(String, Reservation)>, FsError> {
+        let dst = request.dst.as_ref();
+        for n in 1..=999 {
+            let candidate = child_path(dst, &request.dst_dir, &numbered(name, n))?;
+            if Self::exists(dst, &candidate).await? {
+                continue;
+            }
+            if let Some(reservation) = self.reserve(request, &candidate) {
+                return Ok(Some((candidate, reservation)));
             }
         }
+        Err(FsError::AlreadyExists(dst.join(&request.dst_dir, name)))
     }
 
     /// Expands the source into directory and file steps, parents before children.
@@ -451,7 +506,7 @@ impl Runner {
     }
 
     async fn run(&mut self, request: &TransferRequest) -> Result<(), FsError> {
-        let Some(dst_path) = self.destination(request).await? else {
+        let Some((dst_path, _reservation)) = self.destination(request).await? else {
             self.update.skipped = true;
             return Ok(());
         };
@@ -502,7 +557,14 @@ impl Runner {
         let name: String = basename(dst).chars().take(100).collect();
         let temp = fs.join(&dir, &format!(".{name}.{}.part", self.update.id));
         let keep_mode = match fs.stat(dst).await {
-            Ok(existing) => existing.permissions,
+            Ok(existing) => {
+                // Only "overwrite" replaces files; with "rename" or "skip" a file that appeared
+                // meanwhile is left alone.
+                if request.conflict != Conflict::Overwrite {
+                    return Err(FsError::AlreadyExists(dst.to_owned()));
+                }
+                existing.permissions
+            }
             Err(FsError::NotFound(_)) => None,
             Err(error) => return Err(error),
         };

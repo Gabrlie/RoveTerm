@@ -376,3 +376,38 @@ async fn overwriting_keeps_the_existing_permissions() {
         assert_eq!(kept, mode, "{name}");
     }
 }
+
+#[tokio::test]
+async fn concurrent_renames_pick_different_names() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let (queue, mut rx) = queue(TransferConfig::default());
+    let mut ids = Vec::new();
+    for (folder, content) in [("a", vec![1u8; 2_000_000]), ("b", vec![2u8; 2_000_000]), ("c", vec![3u8; 2_000_000])] {
+        let dir = src.path().join(folder);
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("note.bin"), content).unwrap();
+        ids.push(queue.enqueue(request(&dir.join("note.bin"), dst.path(), Conflict::Rename)));
+    }
+    // Collect every final update in one pass: waiting per id would drop the others' events.
+    let mut finished = std::collections::HashMap::new();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while finished.len() < ids.len() {
+            let update = rx.recv().await.unwrap();
+            if ids.contains(&update.id) && update.state.is_final() {
+                finished.insert(update.id, update);
+            }
+        }
+    })
+    .await
+    .expect("transfers finished in time");
+    for done in finished.values() {
+        assert_eq!(done.state, TransferState::Done, "{:?}", done.error);
+    }
+    let mut firsts: Vec<u8> = ["note.bin", "note (1).bin", "note (2).bin"]
+        .iter()
+        .map(|name| std::fs::read(dst.path().join(name)).unwrap()[0])
+        .collect();
+    firsts.sort();
+    assert_eq!(firsts, [1, 2, 3]);
+}
