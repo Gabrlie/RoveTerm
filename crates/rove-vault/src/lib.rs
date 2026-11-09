@@ -24,9 +24,11 @@ pub use key_cache::MemoryKeyCache;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use key_cache::OsKeyCache;
 pub use key_cache::{Interaction, KeyCache, KeyCacheError};
-pub use model::{AuthMethod, Host, HostDraft, HostId, HostKey, KnownHostStatus, Secret};
+pub use model::{
+    AuthMethod, Host, HostDraft, HostId, HostKey, HostRoute, KnownHostStatus, ProxyProtocol, Secret,
+};
 pub use prefs::{Preferences, TerminalPrefs};
-pub use store::{LockReason, LockState, SCHEMA_VERSION, Vault};
+pub use store::{LockReason, LockState, MAX_JUMP_DEPTH, SCHEMA_VERSION, Vault};
 
 /// Errors returned by the vault.
 #[derive(Debug, thiserror::Error)]

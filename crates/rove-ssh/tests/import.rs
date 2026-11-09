@@ -15,6 +15,7 @@ fn imports_hosts_and_skips_existing() {
             port: 22,
             username: "me".into(),
             auth: AuthMethod::Agent,
+            route: rove_vault::HostRoute::Direct,
             tags: Vec::new(),
         })
         .unwrap();

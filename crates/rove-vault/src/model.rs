@@ -66,6 +66,39 @@ pub enum AuthMethod {
     Interactive,
 }
 
+/// How the TCP connection to a host is made.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HostRoute {
+    /// Connect directly.
+    #[default]
+    Direct,
+    /// Tunnel through an SSH connection to another saved host (`ProxyJump`).
+    Jump {
+        /// The jump host.
+        host: HostId,
+    },
+    /// Connect through an HTTP `CONNECT` or SOCKS5 proxy without authentication.
+    Proxy {
+        /// Proxy protocol.
+        protocol: ProxyProtocol,
+        /// Proxy host name or address.
+        host: String,
+        /// Proxy port.
+        port: u16,
+    },
+}
+
+/// Protocol of a [`HostRoute::Proxy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyProtocol {
+    /// HTTP `CONNECT`.
+    Http,
+    /// SOCKS5 `CONNECT` with the destination name resolved by the proxy.
+    Socks5,
+}
+
 /// A saved host as stored and listed. Contains no secrets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Host {
@@ -83,6 +116,8 @@ pub struct Host {
     pub username: String,
     /// Authentication method.
     pub auth: AuthMethod,
+    /// How the connection is made.
+    pub route: HostRoute,
     /// Free-form tags.
     pub tags: Vec<String>,
     /// Creation time, Unix milliseconds.
@@ -109,6 +144,10 @@ pub struct HostDraft {
     pub username: String,
     /// Authentication method.
     pub auth: AuthMethod,
+    /// How the connection is made. Jump hosts are checked by the vault, which knows the other
+    /// hosts.
+    #[serde(default)]
+    pub route: HostRoute,
     /// Free-form tags.
     #[serde(default)]
     pub tags: Vec<String>,
@@ -175,6 +214,17 @@ impl HostDraft {
             return Err(VaultError::Invalid(
                 "key file path must not be empty".into(),
             ));
+        }
+        if let HostRoute::Proxy { host, port, .. } = &mut self.route {
+            *host = host.trim().to_owned();
+            if host.is_empty() || host.len() > 255 || host.chars().any(char::is_whitespace) {
+                return Err(VaultError::Invalid(
+                    "proxy host must be 1-255 characters without spaces".into(),
+                ));
+            }
+            if *port == 0 {
+                return Err(VaultError::Invalid("proxy port must be 1-65535".into()));
+            }
         }
         Ok(self)
     }
@@ -262,8 +312,30 @@ mod tests {
             port: 22,
             username: "root".into(),
             auth: AuthMethod::Agent,
+            route: HostRoute::Direct,
             tags: vec![" prod ".into(), "".into()],
         }
+    }
+
+    #[test]
+    fn validate_checks_proxy_routes() {
+        let proxy = |host: &str, port| HostDraft {
+            route: HostRoute::Proxy {
+                protocol: ProxyProtocol::Socks5,
+                host: host.into(),
+                port,
+            },
+            ..draft()
+        };
+        let ok = proxy(" 127.0.0.1 ", 7890).validate().unwrap();
+        assert!(matches!(ok.route, HostRoute::Proxy { ref host, .. } if host == "127.0.0.1"));
+        assert!(proxy("", 7890).validate().is_err());
+        assert!(proxy("a b", 7890).validate().is_err());
+        assert!(proxy("proxy", 0).validate().is_err());
+        let parsed: HostDraft =
+            serde_json::from_str(r#"{"hostname":"h","username":"u","auth":{"method":"agent"}}"#)
+                .unwrap();
+        assert_eq!(parsed.route, HostRoute::Direct);
     }
 
     #[test]

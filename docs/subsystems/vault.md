@@ -40,14 +40,17 @@ pub trait KeyCache: Send + Sync {
 
 | 类型 | 说明 |
 |---|---|
-| `Host` | `id`、`name`、`group`、`hostname`、`port`、`username`、`auth`、`tags`、时间戳；不含任何秘密 |
+| `Host` | `id`、`name`、`group`、`hostname`、`port`、`username`、`auth`、`route`、`tags`、时间戳；不含任何秘密 |
 | `HostDraft` | 新建或修改主机的输入，由 `validate()` 去除空白并检查长度和字符 |
 | `AuthMethod` | `Password`、`PrivateKey`、`KeyFile { path }`、`Agent`、`Interactive` |
+| `HostRoute` | `Direct`（默认）、`Jump { host }`（经另一台已保存主机跳转）、`Proxy { protocol, host, port }`（`http` 或 `socks5`，无认证） |
 | `Secret` | `Password`、`PrivateKey { key, passphrase }`、`Passphrase`；字段为 `Zeroizing<String>`，`Debug` 不输出内容 |
 | `HostKey` | 服务器公钥：算法、OpenSSH 单行格式、`SHA256:` 指纹 |
 | `KnownHostStatus` | `Trusted`、`Unknown`、`Mismatch { expected_algorithm, expected_fingerprint }` |
 
 每台主机最多一条凭据。known_hosts 按（小写主机名, 端口）记录一把受信任的公钥。
+
+保存主机时校验路线：代理地址与端口由 `HostDraft::validate` 检查；跳板机必须是另一台已存在的主机，沿跳板链不能回到自身，链长不超过 `MAX_JUMP_DEPTH`（4）。删除主机时，以它为跳板的主机改为直连。
 
 端口转发规则 `ForwardRule { id, host_id, label, spec, auto_start }` 属于一台主机，不含秘密，锁定时照常可读写。`ForwardSpec` 有三种：
 
@@ -71,4 +74,4 @@ pub trait KeyCache: Send + Sync {
 
 ## 表结构
 
-`meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`、`forwards`（外键级联删除）、`preferences`。结构版本记录在 `PRAGMA user_version`，当前版本为 3；打开旧版本数据库时按版本依次迁移。
+`meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`、`forwards`（外键级联删除）、`preferences`。主机的路线以 JSON 存在 `hosts.route` 列。结构版本记录在 `PRAGMA user_version`，当前版本为 4；打开旧版本数据库时按版本依次迁移。

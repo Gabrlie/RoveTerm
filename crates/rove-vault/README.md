@@ -9,6 +9,7 @@
 - 首次解锁且没有任何密钥时，生成新的设备主密钥并写入 `KeyCache`。
 - vault 中已有凭据、但 `KeyCache` 中的密钥缺失或不匹配时，状态为 `KeyLost`；只能通过 `reset_secrets()` 丢弃全部凭据后重新解锁，主机和 known_hosts 保留。
 - 删除主机时级联删除它的凭据；修改主机的认证方式类别时删除原有凭据。
+- 主机的跳板机必须是另一台已存在的主机，跳板链无环且不超过 `MAX_JUMP_DEPTH`；删除跳板机后依赖它的主机改为直连。
 - 端口转发规则随主机级联删除；`ForwardDraft::validate` 拒绝不是 IP 地址或 `localhost` 的本地监听地址。
 - `preferences()` 在没有记录时返回默认值；`set_preferences()` 校验后整体替换。偏好设置不含秘密，锁定时可读写。
 - 数据库结构版本记录在 `PRAGMA user_version` 中，只增不减，旧版本按顺序迁移；打开更新版本写入的数据库时返回 `FutureSchema`。

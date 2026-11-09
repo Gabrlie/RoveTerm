@@ -412,6 +412,7 @@ mod tests {
             port: 22,
             username: "u".into(),
             auth,
+            route: rove_vault::HostRoute::Direct,
             tags: Vec::new(),
             created_at: 0,
             updated_at: 0,

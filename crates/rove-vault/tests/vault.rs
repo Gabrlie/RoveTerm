@@ -11,6 +11,7 @@ fn draft(hostname: &str, auth: AuthMethod) -> HostDraft {
         port: 22,
         username: "root".into(),
         auth,
+        route: HostRoute::Direct,
         tags: Vec::new(),
     }
 }
@@ -293,7 +294,7 @@ fn version_one_databases_migrate_to_the_current_schema() {
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(
-            "CREATE TABLE meta (key TEXT PRIMARY KEY, value BLOB NOT NULL);
+            r#"CREATE TABLE meta (key TEXT PRIMARY KEY, value BLOB NOT NULL);
              CREATE TABLE hosts (id TEXT PRIMARY KEY, name TEXT NOT NULL, group_name TEXT,
                  hostname TEXT NOT NULL, port INTEGER NOT NULL, username TEXT NOT NULL,
                  auth TEXT NOT NULL, tags TEXT NOT NULL, created_at INTEGER NOT NULL,
@@ -303,13 +304,18 @@ fn version_one_databases_migrate_to_the_current_schema() {
              CREATE TABLE known_hosts (hostname TEXT NOT NULL, port INTEGER NOT NULL,
                  algorithm TEXT NOT NULL, public_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
                  added_at INTEGER NOT NULL, PRIMARY KEY (hostname, port));
-             PRAGMA user_version = 1;",
+             INSERT INTO hosts VALUES ('0190a0b0-0000-7000-8000-000000000001', 'old', NULL, 'old.lan',
+                 22, 'root', '{"method":"agent"}', '[]', 0, 0);
+             PRAGMA user_version = 1;"#,
         )
         .unwrap();
     }
     let vault = Vault::open(&path, Arc::new(MemoryKeyCache::default())).unwrap();
     assert!(vault.list_forwards(None).unwrap().is_empty());
     assert_eq!(vault.preferences().unwrap(), Preferences::default());
+    let hosts = vault.list_hosts().unwrap();
+    assert_eq!(hosts.len(), 1);
+    assert_eq!(hosts[0].route, HostRoute::Direct);
     let conn = rusqlite::Connection::open(&path).unwrap();
     let version: i32 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
@@ -341,4 +347,73 @@ fn preferences_default_validate_and_persist_while_locked() {
     let prefs = vault.preferences().unwrap();
     assert_eq!(prefs.terminal.font_family, "MesloLGS NF");
     assert_eq!(prefs.terminal.font_size, 15);
+}
+
+#[test]
+fn jump_routes_reject_cycles_and_reset_when_the_jump_host_is_deleted() {
+    let (vault, _) = vault();
+    let bastion = vault
+        .create_host(draft("bastion", AuthMethod::Agent))
+        .unwrap();
+    let inner = vault
+        .create_host(HostDraft {
+            route: HostRoute::Jump { host: bastion.id },
+            ..draft("inner", AuthMethod::Agent)
+        })
+        .unwrap();
+    assert_eq!(
+        vault.host(inner.id).unwrap().route,
+        HostRoute::Jump { host: bastion.id }
+    );
+
+    // bastion -> inner -> bastion would loop.
+    let looped = vault.update_host(
+        bastion.id,
+        HostDraft {
+            route: HostRoute::Jump { host: inner.id },
+            ..draft("bastion", AuthMethod::Agent)
+        },
+    );
+    assert!(matches!(looped, Err(VaultError::Invalid(_))), "{looped:?}");
+    let missing = vault.create_host(HostDraft {
+        route: HostRoute::Jump {
+            host: HostId::new(),
+        },
+        ..draft("orphan", AuthMethod::Agent)
+    });
+    assert!(matches!(missing, Err(VaultError::HostNotFound(_))));
+
+    let mut previous = inner.id;
+    for depth in 2..=MAX_JUMP_DEPTH + 1 {
+        let next = vault.create_host(HostDraft {
+            route: HostRoute::Jump { host: previous },
+            ..draft(&format!("hop{depth}"), AuthMethod::Agent)
+        });
+        if depth <= MAX_JUMP_DEPTH {
+            previous = next.unwrap().id;
+        } else {
+            assert!(matches!(next, Err(VaultError::Invalid(_))));
+        }
+    }
+
+    vault.delete_host(bastion.id).unwrap();
+    assert_eq!(vault.host(inner.id).unwrap().route, HostRoute::Direct);
+}
+
+#[test]
+fn proxy_routes_round_trip() {
+    let (vault, _) = vault();
+    let route = HostRoute::Proxy {
+        protocol: ProxyProtocol::Http,
+        host: "proxy.lan".into(),
+        port: 3128,
+    };
+    let host = vault
+        .create_host(HostDraft {
+            route: route.clone(),
+            ..draft("web", AuthMethod::Agent)
+        })
+        .unwrap();
+    assert_eq!(vault.list_hosts().unwrap()[0].route, route);
+    assert_eq!(vault.host(host.id).unwrap().route, route);
 }

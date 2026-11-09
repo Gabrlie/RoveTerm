@@ -292,6 +292,7 @@ pub fn import_ssh_config(
             port,
             username,
             auth,
+            route: rove_vault::HostRoute::Direct,
             tags: vec!["ssh-config".into()],
         })?;
         report.created.push(entry.alias);

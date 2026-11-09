@@ -11,12 +11,15 @@ use zeroize::Zeroizing;
 use crate::crypto::FieldCipher;
 use crate::model::now_millis;
 use crate::{
-    ForwardDraft, ForwardId, ForwardRule, Host, HostDraft, HostId, HostKey, Interaction, KeyCache,
-    KeyCacheError, KnownHostStatus, MasterKey, Preferences, Secret, VaultError,
+    ForwardDraft, ForwardId, ForwardRule, Host, HostDraft, HostId, HostKey, HostRoute, Interaction,
+    KeyCache, KeyCacheError, KnownHostStatus, MasterKey, Preferences, Secret, VaultError,
 };
 
 /// Version of the on-disk schema, stored in `PRAGMA user_version`. Only ever increases.
-pub const SCHEMA_VERSION: i32 = 3;
+pub const SCHEMA_VERSION: i32 = 4;
+
+/// Longest chain of jump hosts a route may form.
+pub const MAX_JUMP_DEPTH: usize = 4;
 
 const KEY_CHECK_PLAINTEXT: &[u8] = b"rove-vault-key-check";
 const KEY_CHECK_AAD: &[u8] = b"rove/vault/key-check/v1";
@@ -187,7 +190,7 @@ impl Vault {
     pub fn list_hosts(&self) -> Result<Vec<Host>, VaultError> {
         let conn = self.conn.lock();
         let mut statement = conn.prepare(
-            "SELECT id, name, group_name, hostname, port, username, auth, tags, created_at, updated_at
+            "SELECT id, name, group_name, hostname, port, username, auth, tags, created_at, updated_at, route
              FROM hosts ORDER BY group_name IS NOT NULL, group_name, name COLLATE NOCASE",
         )?;
         let rows = statement.query_map([], row_to_host)?;
@@ -199,7 +202,7 @@ impl Vault {
     pub fn host(&self, id: HostId) -> Result<Host, VaultError> {
         let conn = self.conn.lock();
         conn.query_row(
-            "SELECT id, name, group_name, hostname, port, username, auth, tags, created_at, updated_at
+            "SELECT id, name, group_name, hostname, port, username, auth, tags, created_at, updated_at, route
              FROM hosts WHERE id = ?1",
             params![id.to_string()],
             row_to_host,
@@ -211,22 +214,25 @@ impl Vault {
     /// Validates `draft` and stores it as a new host.
     pub fn create_host(&self, draft: HostDraft) -> Result<Host, VaultError> {
         let draft = draft.validate()?;
+        let id = HostId::new();
+        self.check_route(id, &draft.route)?;
         let now = now_millis();
         let host = Host {
-            id: HostId::new(),
+            id,
             name: draft.name,
             group: draft.group,
             hostname: draft.hostname,
             port: draft.port,
             username: draft.username,
             auth: draft.auth,
+            route: draft.route,
             tags: draft.tags,
             created_at: now,
             updated_at: now,
         };
         self.conn.lock().execute(
-            "INSERT INTO hosts (id, name, group_name, hostname, port, username, auth, tags, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO hosts (id, name, group_name, hostname, port, username, auth, tags, created_at, updated_at, route)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 host.id.to_string(),
                 host.name,
@@ -237,7 +243,8 @@ impl Vault {
                 serde_json::to_string(&host.auth)?,
                 serde_json::to_string(&host.tags)?,
                 host.created_at,
-                host.updated_at
+                host.updated_at,
+                serde_json::to_string(&host.route)?
             ],
         )?;
         Ok(host)
@@ -248,13 +255,14 @@ impl Vault {
     pub fn update_host(&self, id: HostId, draft: HostDraft) -> Result<Host, VaultError> {
         let draft = draft.validate()?;
         let previous = self.host(id)?;
+        self.check_route(id, &draft.route)?;
         let now = now_millis();
         {
             let mut conn = self.conn.lock();
             let tx = conn.transaction()?;
             tx.execute(
                 "UPDATE hosts SET name = ?2, group_name = ?3, hostname = ?4, port = ?5, username = ?6,
-                 auth = ?7, tags = ?8, updated_at = ?9 WHERE id = ?1",
+                 auth = ?7, tags = ?8, updated_at = ?9, route = ?10 WHERE id = ?1",
                 params![
                     id.to_string(),
                     draft.name,
@@ -264,7 +272,8 @@ impl Vault {
                     draft.username,
                     serde_json::to_string(&draft.auth)?,
                     serde_json::to_string(&draft.tags)?,
-                    now
+                    now,
+                    serde_json::to_string(&draft.route)?
                 ],
             )?;
             if std::mem::discriminant(&previous.auth) != std::mem::discriminant(&draft.auth) {
@@ -280,12 +289,44 @@ impl Vault {
 
     /// Deletes a host together with its stored secret. Works while locked.
     pub fn delete_host(&self, id: HostId) -> Result<(), VaultError> {
-        let deleted = self
-            .conn
-            .lock()
-            .execute("DELETE FROM hosts WHERE id = ?1", params![id.to_string()])?;
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+        let deleted = tx.execute("DELETE FROM hosts WHERE id = ?1", params![id.to_string()])?;
         if deleted == 0 {
             return Err(VaultError::HostNotFound(id));
+        }
+        // Hosts that jumped through the deleted host connect directly from now on.
+        tx.execute(
+            "UPDATE hosts SET route = ?2, updated_at = ?3
+             WHERE json_extract(route, '$.kind') = 'jump' AND json_extract(route, '$.host') = ?1",
+            params![
+                id.to_string(),
+                serde_json::to_string(&HostRoute::Direct)?,
+                now_millis()
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Checks that a jump route of `id` names another existing host and that following jump
+    /// hosts from there neither returns to `id` nor exceeds [`MAX_JUMP_DEPTH`].
+    fn check_route(&self, id: HostId, route: &HostRoute) -> Result<(), VaultError> {
+        let mut next = route.clone();
+        let mut depth = 0;
+        while let HostRoute::Jump { host } = next {
+            depth += 1;
+            if host == id {
+                return Err(VaultError::Invalid(
+                    "a host cannot jump through itself".into(),
+                ));
+            }
+            if depth > MAX_JUMP_DEPTH {
+                return Err(VaultError::Invalid(format!(
+                    "at most {MAX_JUMP_DEPTH} jump hosts in a chain"
+                )));
+            }
+            next = self.host(host)?.route;
         }
         Ok(())
     }
@@ -564,6 +605,7 @@ fn row_to_host(row: &rusqlite::Row<'_>) -> rusqlite::Result<HostRow> {
     let id: String = row.get(0)?;
     let auth: String = row.get(6)?;
     let tags: String = row.get(7)?;
+    let route: String = row.get(10)?;
     Ok((|| {
         Ok(Host {
             id: id.parse()?,
@@ -573,6 +615,7 @@ fn row_to_host(row: &rusqlite::Row<'_>) -> rusqlite::Result<HostRow> {
             port: row.get(4)?,
             username: row.get(5)?,
             auth: serde_json::from_str(&auth)?,
+            route: serde_json::from_str(&route)?,
             tags: serde_json::from_str(&tags)?,
             created_at: row.get(8)?,
             updated_at: row.get(9)?,
@@ -646,6 +689,14 @@ fn migrate(conn: &Connection) -> Result<(), VaultError> {
              );
              PRAGMA user_version = 3;
              COMMIT;",
+        )?;
+    }
+    if version < 4 {
+        conn.execute_batch(
+            r#"BEGIN;
+             ALTER TABLE hosts ADD COLUMN route TEXT NOT NULL DEFAULT '{"kind":"direct"}';
+             PRAGMA user_version = 4;
+             COMMIT;"#,
         )?;
     }
     Ok(())
