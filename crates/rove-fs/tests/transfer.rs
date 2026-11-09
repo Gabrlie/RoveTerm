@@ -266,6 +266,31 @@ async fn source_names_cannot_escape_the_destination() {
     );
 }
 
+#[tokio::test]
+async fn a_failed_overwrite_keeps_the_existing_file() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let file = src.path().join("data.bin");
+    std::fs::write(&file, b"new").unwrap();
+    std::fs::write(dst.path().join("data.bin"), b"old").unwrap();
+
+    let (queue, mut rx) = queue(TransferConfig::default());
+    let mut failing = request(&file, dst.path(), Conflict::Overwrite);
+    failing.src = Arc::new(Hostile {
+        injected: None,
+        unreadable: true,
+    });
+    let done = wait_final(&mut rx, queue.enqueue(failing)).await;
+    assert_eq!(done.state, TransferState::Failed);
+    assert_eq!(std::fs::read(dst.path().join("data.bin")).unwrap(), b"old");
+    // No temporary file is left behind.
+    let names: Vec<_> = std::fs::read_dir(dst.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["data.bin"]);
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn remove_all_removes_a_directory_link_but_not_its_target() {

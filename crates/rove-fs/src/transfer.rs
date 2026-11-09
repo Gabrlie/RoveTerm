@@ -476,18 +476,53 @@ impl Runner {
                     Err(error) => return Err(error),
                 },
                 Step::File { src, dst, .. } => {
-                    if let Err(error) = self.copy(request, src, dst).await {
-                        if let Err(cleanup) = request.dst.remove_file(dst).await {
-                            tracing::debug!(%cleanup, dst, "removing partial file failed");
-                        }
-                        return Err(error);
-                    }
+                    self.copy_file(request, src, dst).await?;
                     self.update.files_done += 1;
                     self.progress();
                 }
             }
         }
         Ok(())
+    }
+
+    /// Copies `src` to a temporary file beside `dst`, then moves it over `dst`. A failure at any
+    /// point leaves an existing `dst` untouched and removes only the temporary file.
+    async fn copy_file(
+        &mut self,
+        request: &TransferRequest,
+        src: &str,
+        dst: &str,
+    ) -> Result<(), FsError> {
+        let fs = request.dst.as_ref();
+        let dir = fs.parent(dst).ok_or_else(|| FsError::InvalidPath(dst.to_owned()))?;
+        let name: String = basename(dst).chars().take(100).collect();
+        let temp = fs.join(&dir, &format!(".{name}.{}.part", self.update.id));
+        let result = match self.copy(request, src, &temp).await {
+            Ok(()) => Self::replace(fs, &temp, dst).await,
+            Err(error) => Err(error),
+        };
+        if result.is_err()
+            && let Err(cleanup) = fs.remove_file(&temp).await
+            && !matches!(cleanup, FsError::NotFound(_))
+        {
+            tracing::debug!(%cleanup, temp, "removing temporary file failed");
+        }
+        result
+    }
+
+    /// Moves `temp` to `dst`. Servers whose rename refuses an existing target (SFTP version 3)
+    /// get the target removed first.
+    async fn replace(fs: &dyn FileSystem, temp: &str, dst: &str) -> Result<(), FsError> {
+        match fs.rename(temp, dst).await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                if !Self::exists(fs, dst).await? {
+                    return Err(error);
+                }
+                fs.remove_file(dst).await?;
+                fs.rename(temp, dst).await
+            }
+        }
     }
 
     async fn copy(
