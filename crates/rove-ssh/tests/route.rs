@@ -227,3 +227,15 @@ async fn exec_collects_output_status_and_truncates() {
     assert_eq!(long.stdout.len(), 16);
     assert!(long.truncated);
 }
+
+#[tokio::test]
+async fn server_status_samples_this_linux_machine() {
+    let harness = Harness::new(DevConfig::demo()).await;
+    let connection = harness.connect().await;
+    let stats = rove_ssh::sample_server(&connection).await.unwrap();
+    assert!(stats.cores >= 1);
+    assert!(stats.mem_total > stats.mem_available);
+    assert!(stats.cpu_total > stats.cpu_idle);
+    assert!(stats.disk_total >= stats.disk_used);
+    assert!(!stats.hostname.is_empty());
+}

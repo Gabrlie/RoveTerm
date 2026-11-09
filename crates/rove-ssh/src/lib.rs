@@ -8,6 +8,7 @@ mod connection;
 mod forward;
 mod hostkey;
 mod keys;
+mod monitor;
 mod pool;
 mod progress;
 mod proxy;
@@ -32,6 +33,7 @@ pub use hostkey::{
 pub use keys::{
     KeyInfo, KeyType, authorize_command, describe as describe_key, generate as generate_key,
 };
+pub use monitor::{ServerStats, sample as sample_server};
 pub use progress::{AuthKind, ConnectStep, Progress};
 pub use sftp::SftpFs;
 pub use sshconfig::{
