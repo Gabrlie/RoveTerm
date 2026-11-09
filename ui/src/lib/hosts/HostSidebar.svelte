@@ -8,12 +8,13 @@
 
   interface Props {
     onconnect: (host: HostEntry) => void;
+    onfiles: (host: HostEntry) => void;
     onedit: (host: HostEntry | null) => void;
     onquick: () => void;
     onnotice: (message: string) => void;
   }
 
-  let { onconnect, onedit, onquick, onnotice }: Props = $props();
+  let { onconnect, onfiles, onedit, onquick, onnotice }: Props = $props();
 
   async function importConfig(): Promise<void> {
     try {
@@ -65,6 +66,7 @@
             <span class="address">{host.username}@{host.hostname}{host.port === 22 ? '' : `:${host.port}`}</span>
           </div>
           <div class="actions">
+            <IconButton icon="files" label={t('host.openFiles')} small onclick={() => onfiles(host)} />
             <IconButton icon="edit" label={t('host.edit')} small onclick={() => onedit(host)} />
             <IconButton icon="remove" label={t('common.delete')} small danger onclick={() => remove(host)} />
           </div>

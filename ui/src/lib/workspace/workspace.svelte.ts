@@ -1,5 +1,5 @@
 // Tabs, their split layouts, and what each pane is connected to.
-import { sessionClose, type ExitStatus, type HostId, type SessionId } from '../ipc';
+import { sessionClose, type ExitStatus, type HostId, type RemoteSource, type SessionId } from '../ipc';
 import { terminals } from '../terminal/registry';
 import { computeLayout, pane, paneIds, removePane, replacePane, setRatio, splitPane, type LayoutNode, type PaneId, type Path, type SplitDir } from '../layout/layout';
 
@@ -7,7 +7,8 @@ import { computeLayout, pane, paneIds, removePane, replacePane, setRatio, splitP
 export type PaneTarget =
   | { kind: 'local' }
   | { kind: 'ssh'; hostId: HostId; title: string }
-  | { kind: 'quick'; address: string };
+  | { kind: 'quick'; address: string }
+  | { kind: 'sftp'; source: RemoteSource; title: string };
 
 export interface PaneState {
   id: PaneId;
@@ -37,6 +38,22 @@ function initialTitle(target: PaneTarget): string {
       return target.title;
     case 'quick':
       return target.address;
+    case 'sftp':
+      return target.title;
+  }
+}
+
+/** The SFTP target for the same remote as `target`, or null for local terminals. */
+export function filesTargetFor(target: PaneTarget): PaneTarget | null {
+  switch (target.kind) {
+    case 'local':
+      return null;
+    case 'ssh':
+      return { kind: 'sftp', source: { hostId: target.hostId }, title: target.title };
+    case 'quick':
+      return { kind: 'sftp', source: { address: target.address }, title: target.address };
+    case 'sftp':
+      return target;
   }
 }
 
@@ -76,6 +93,22 @@ class Workspace {
     const added = this.createPane(source.target);
     tab.root = splitPane(tab.root, source.id, dir, added);
     tab.focused = added;
+  }
+
+  /**
+   * Opens a file browser for the focused pane's remote beside it. Returns false when the focused
+   * pane is not remote.
+   */
+  openFilesBesideFocused(): boolean {
+    const tab = this.activeTab;
+    const source = this.focusedPane;
+    if (!tab || !source) return false;
+    const target = filesTargetFor(source.target);
+    if (!target) return false;
+    const added = this.createPane(target);
+    tab.root = splitPane(tab.root, source.id, 'row', added);
+    tab.focused = added;
+    return true;
   }
 
   /** Closes a pane and its session; closing a tab's last pane closes the tab. */
@@ -180,6 +213,12 @@ class Workspace {
     if (!state) return;
     state.sessionId = sessionId;
     state.password = null;
+  }
+
+  /** Drops one-shot credentials once a file pane has opened its session. */
+  opened(paneId: PaneId): void {
+    const state = this.panes[paneId];
+    if (state) state.password = null;
   }
 
   exited(paneId: PaneId, status: ExitStatus): void {

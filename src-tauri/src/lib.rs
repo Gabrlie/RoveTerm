@@ -108,6 +108,7 @@ pub fn run() {
         )
         .init();
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(boot)
         .invoke_handler(tauri::generate_handler![
             commands::session::session_open_local,

@@ -1,6 +1,6 @@
 # ui
 
-`ui/` 是 Svelte 5 + TypeScript 前端：终端视图、标签与分屏、主机管理、actions 表、i18n 字典和设计 token。前端只持有 `SessionId` / `HostId`，会话本身活在 Rust 侧。
+`ui/` 是 Svelte 5 + TypeScript 前端：终端视图、文件面板、标签与分屏、主机管理、actions 表、i18n 字典和设计 token。前端只持有 `SessionId` / `HostId` / `FsId`，会话本身活在 Rust 侧。
 
 ## 目录
 
@@ -16,6 +16,7 @@
 | `src/lib/tabs/TabBar.svelte` | 标签栏 |
 | `src/lib/actions.ts` | actions 表：快捷键、命令面板的唯一来源 |
 | `src/lib/ui/` | 通用组件：`Icon`、`IconButton`、`Dialog`、`CommandPalette`；图标映射在 `icons.ts` |
+| `src/lib/files/` | SFTP 文件面板 `FileBrowser`、传输状态 `transfers.svelte.ts`、路径与格式化的纯函数 `format.ts` |
 | `src/lib/hosts/` | 主机列表与搜索、主机编辑、快速连接、密码输入、host key 确认 |
 | `src/lib/vault/vault.svelte.ts` | vault 锁定状态，以及由用户操作触发的解锁和重置 |
 | `src/lib/i18n/` | 文案字典与 `t()`、`errorText()` |
@@ -40,6 +41,18 @@
 - `PaneGrid` 把分屏树换算成每个面板的矩形，用绝对定位渲染。面板按 ID 作为 key，拆分或调整大小时终端组件不会重新挂载，会话也不会重启；非活动标签页用 `visibility: hidden` 隐藏，终端保持原有尺寸。
 - 拆分面板时，新面板打开与原面板相同的目标；对 SSH 面板，后端会复用已有连接，不需要再次输入凭据。
 - 本地 shell 以退出码 0 退出时自动关闭面板；其他情况保留面板并显示退出提示。
+
+## 文件面板
+
+文件面板是一种面板类型（`PaneTarget` 的 `sftp`），和终端一样参与标签与分屏。
+
+- 打开方式：在主机栏中点主机的"浏览文件"按钮，新开一个标签；或在 SSH 终端中按 `App+O`，在右侧分屏打开同一主机。对快速连接的终端同样有效。
+- `FileBrowser` 挂载时调用 `sftp_open`，卸载时调用 `sftp_close`。需要密码时走与终端相同的 `ssh.credentials_required` → 密码框 → `workspace.reopen` 流程。
+- 双击目录进入，双击文件下载到系统下载目录；路径栏可以直接输入路径。单击选择，Ctrl/⌘ 单击多选，Shift 单击连选。
+- 列表获得焦点时：方向键移动选择，Enter 打开，Backspace 返回上级，Delete 删除，F2 重命名，Ctrl/⌘+A 全选。
+- 上传通过系统文件选择框（`tauri-plugin-dialog`，只授予 `dialog:allow-open`），或把文件从系统拖到面板上。上传时若当前目录已有同名项，询问替换、保留两者还是跳过；下载总是自动改名，不覆盖本地文件。
+- 面板底部列出与该主机相关的传输（`transfer-update` 事件），显示进度并可取消；上传到当前目录的传输完成后自动刷新列表。
+- 是否显示隐藏文件保存在 `localStorage`，读写失败时按不显示处理。
 
 ## 主机与凭据
 
@@ -74,6 +87,7 @@
 | 快速连接 | `App+K` |
 | 新建主机 | `App+N` |
 | 显示或隐藏主机栏 | `App+B` |
+| 在终端旁打开文件面板 | `App+O` |
 
 ## 图标
 

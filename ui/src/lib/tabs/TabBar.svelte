@@ -3,12 +3,19 @@
   import Icon from '../ui/Icon.svelte';
   import { workspace } from '../workspace/workspace.svelte';
   import { t } from '../i18n';
+  import type { IconName } from '../ui/icons';
 
   let { onnew }: { onnew: () => void } = $props();
 
   function title(tabId: string): string {
     const tab = workspace.tabs.find((candidate) => candidate.id === tabId);
     return tab ? (workspace.panes[tab.focused]?.title ?? '') : '';
+  }
+
+  function tabIcon(tabId: string): IconName {
+    const tab = workspace.tabs.find((candidate) => candidate.id === tabId);
+    const kind = tab ? workspace.panes[tab.focused]?.target.kind : undefined;
+    return kind === 'local' ? 'terminal' : kind === 'sftp' ? 'files' : 'server';
   }
 
   function onAuxClick(event: MouseEvent, tabId: string): void {
@@ -28,7 +35,7 @@
       onkeydown={(event) => event.key === 'Enter' && workspace.activate(tab.id)}
       onauxclick={(event) => onAuxClick(event, tab.id)}
     >
-      <Icon name={workspace.panes[tab.focused]?.target.kind === 'local' ? 'terminal' : 'server'} size={14} />
+      <Icon name={tabIcon(tab.id)} size={14} />
       <span class="title">{title(tab.id)}</span>
       <IconButton icon="close" label={t('action.tab.close')} small onclick={(event) => { event.stopPropagation(); workspace.closeTab(tab.id); }} />
     </div>

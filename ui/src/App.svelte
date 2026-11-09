@@ -12,13 +12,14 @@
   import { vault } from './lib/vault/vault.svelte';
   import { actionFor, type ActionId } from './lib/actions';
   import { terminals } from './lib/terminal/registry';
-  import { workspace } from './lib/workspace/workspace.svelte';
+  import { workspace, type PaneTarget } from './lib/workspace/workspace.svelte';
   import { onHostKeyPrompt, type HostEntry, type HostKeyPrompt } from './lib/ipc';
   import { errorText, t } from './lib/i18n';
   import type { PaneId } from './lib/layout/layout';
 
   type PasswordRequest =
     | { kind: 'host'; host: HostEntry }
+    | { kind: 'files'; host: HostEntry }
     | { kind: 'pane'; paneId: PaneId; title: string; allowRemember: boolean };
 
   let paletteOpen = $state(false);
@@ -49,10 +50,25 @@
     workspace.openTab({ kind: 'ssh', hostId: host.id, title: host.name });
   }
 
+  function openFiles(host: HostEntry): void {
+    if (needsPassword(host)) {
+      passwordRequest = { kind: 'files', host };
+      return;
+    }
+    workspace.openTab({ kind: 'sftp', source: { hostId: host.id }, title: host.name });
+  }
+
+  function hostIdOf(target: PaneTarget): string | undefined {
+    if (target.kind === 'ssh') return target.hostId;
+    if (target.kind === 'sftp' && 'hostId' in target.source) return target.source.hostId;
+    return undefined;
+  }
+
   function requestPaneCredentials(paneId: PaneId): void {
     const pane = workspace.panes[paneId];
     if (!pane || pane.target.kind === 'local') return;
-    const host = pane.target.kind === 'ssh' ? hosts.find(pane.target.hostId) : undefined;
+    const hostId = hostIdOf(pane.target);
+    const host = hostId ? hosts.find(hostId) : undefined;
     passwordRequest = {
       kind: 'pane',
       paneId,
@@ -65,9 +81,13 @@
     const request = passwordRequest;
     passwordRequest = null;
     if (!request) return;
-    if (request.kind === 'host') {
+    if (request.kind === 'host' || request.kind === 'files') {
       const { host } = request;
-      workspace.openTab({ kind: 'ssh', hostId: host.id, title: host.name }, password, remember);
+      const target: PaneTarget =
+        request.kind === 'host'
+          ? { kind: 'ssh', hostId: host.id, title: host.name }
+          : { kind: 'sftp', source: { hostId: host.id }, title: host.name };
+      workspace.openTab(target, password, remember);
       if (remember) setTimeout(() => void hosts.refresh(), 3000);
     } else {
       workspace.reopen(request.paneId, password, remember);
@@ -123,6 +143,9 @@
       case 'sidebar.toggle':
         sidebarOpen = !sidebarOpen;
         break;
+      case 'files.open':
+        if (!workspace.openFilesBesideFocused()) showNotice(t('files.noRemote'));
+        break;
       default:
         if (id.startsWith('tab.goto')) workspace.gotoTab(Number(id.slice('tab.goto'.length)) - 1);
     }
@@ -149,7 +172,7 @@
 
 <div class="app">
   {#if sidebarOpen}
-    <HostSidebar onconnect={connect} onedit={(host) => (editing = host)} onquick={() => (quickOpen = true)} onnotice={showNotice} />
+    <HostSidebar onconnect={connect} onfiles={openFiles} onedit={(host) => (editing = host)} onquick={() => (quickOpen = true)} onnotice={showNotice} />
   {/if}
   <div class="main">
     <TabBar onnew={() => run('tab.newLocal')} />
@@ -188,9 +211,9 @@
 {#if passwordRequest}
   <PasswordPrompt
     title={t('host.passwordFor', {
-      address: passwordRequest.kind === 'host' ? `${passwordRequest.host.username}@${passwordRequest.host.hostname}` : passwordRequest.title,
+      address: passwordRequest.kind === 'pane' ? passwordRequest.title : `${passwordRequest.host.username}@${passwordRequest.host.hostname}`,
     })}
-    allowRemember={passwordRequest.kind === 'host' ? passwordRequest.host.auth.method === 'password' : passwordRequest.allowRemember}
+    allowRemember={passwordRequest.kind === 'pane' ? passwordRequest.allowRemember : passwordRequest.host.auth.method === 'password'}
     onsubmit={submitPassword}
     onclose={() => (passwordRequest = null)}
   />

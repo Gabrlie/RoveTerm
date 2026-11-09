@@ -2,6 +2,7 @@
   // Renders one tab's panes as absolutely positioned views. Panes stay mounted while the layout
   // changes, so splitting or resizing never restarts a terminal.
   import TermView from '../terminal/TermView.svelte';
+  import FileBrowser from '../files/FileBrowser.svelte';
   import { terminals } from '../terminal/registry';
   import { workspace, type PaneState, type Tab } from '../workspace/workspace.svelte';
   import { sessionOpenLocal, sessionOpenQuick, sessionOpenSsh, type OutputMessage, type TermSize } from '../ipc';
@@ -32,6 +33,8 @@
           return sessionOpenSsh(target.hostId, pane.password, pane.remember, size, onOutput);
         case 'quick':
           return sessionOpenQuick(target.address, pane.password, size, onOutput);
+        case 'sftp':
+          return Promise.reject(new Error('file panes have no terminal'));
       }
     };
   }
@@ -97,15 +100,27 @@
         onfocusin={() => workspace.focus(id)}
         onpointerdown={() => workspace.focus(id)}
       >
-        <TermView
-          bind:this={views[id]}
-          open={opener(pane)}
-          active={visible && tab.focused === id}
-          onsession={(sessionId) => workspace.attached(id, sessionId)}
-          onexit={(status) => onExit(pane, status.code)}
-          ontitle={(title) => workspace.retitle(id, title)}
-          onerror={(error) => isCommandError(error) && error.code === 'ssh.credentials_required' && oncredentials(id)}
-        />
+        {#if pane.target.kind === 'sftp'}
+          <FileBrowser
+            source={pane.target.source}
+            password={pane.password}
+            remember={pane.remember}
+            active={visible && tab.focused === id}
+            {visible}
+            onopened={() => workspace.opened(id)}
+            onerror={(error) => isCommandError(error) && error.code === 'ssh.credentials_required' && oncredentials(id)}
+          />
+        {:else}
+          <TermView
+            bind:this={views[id]}
+            open={opener(pane)}
+            active={visible && tab.focused === id}
+            onsession={(sessionId) => workspace.attached(id, sessionId)}
+            onexit={(status) => onExit(pane, status.code)}
+            ontitle={(title) => workspace.retitle(id, title)}
+            onerror={(error) => isCommandError(error) && error.code === 'ssh.credentials_required' && oncredentials(id)}
+          />
+        {/if}
       </div>
     {/if}
   {/each}

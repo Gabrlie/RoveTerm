@@ -172,3 +172,100 @@ export function onHostKeyPrompt(handler: (prompt: HostKeyPrompt) => void): Promi
 export function hostkeyRespond(requestId: string, answer: 'trust' | 'reject'): Promise<boolean> {
   return invoke('hostkey_respond', { requestId, answer });
 }
+
+export type FsId = string;
+export type TransferId = string;
+
+export type EntryKind = 'file' | 'dir' | 'symlink' | 'other';
+
+export interface DirEntry {
+  name: string;
+  kind: EntryKind;
+  size: number;
+  modified: number | null;
+  permissions: number | null;
+}
+
+/** Where a remote pane connects: a saved host or a quick-connect address. */
+export type RemoteSource = { hostId: HostId } | { address: string };
+
+export interface SftpOpened {
+  id: FsId;
+  label: string;
+  home: string;
+}
+
+export function sftpOpen(source: RemoteSource, password: string | null, remember: boolean): Promise<SftpOpened> {
+  return invoke('sftp_open', {
+    hostId: 'hostId' in source ? source.hostId : null,
+    address: 'address' in source ? source.address : null,
+    password,
+    remember,
+  });
+}
+
+export function sftpList(id: FsId, path: string): Promise<DirEntry[]> {
+  return invoke('sftp_list', { id, path });
+}
+
+export function sftpMkdir(id: FsId, dir: string, name: string): Promise<string> {
+  return invoke('sftp_mkdir', { id, dir, name });
+}
+
+export function sftpRename(id: FsId, path: string, name: string): Promise<string> {
+  return invoke('sftp_rename', { id, path, name });
+}
+
+export function sftpRemove(id: FsId, paths: string[]): Promise<void> {
+  return invoke('sftp_remove', { id, paths });
+}
+
+export function sftpClose(id: FsId): Promise<boolean> {
+  return invoke('sftp_close', { id });
+}
+
+export type Conflict = 'overwrite' | 'rename' | 'skip';
+
+export type TransferState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+
+export interface TransferUpdate {
+  id: TransferId;
+  tag: 'upload' | 'download';
+  name: string;
+  src_label: string;
+  src_path: string;
+  dst_label: string;
+  dst_path: string;
+  state: TransferState;
+  bytes_done: number;
+  bytes_total: number;
+  files_done: number;
+  files_total: number;
+  skipped: boolean;
+  error: { kind: string; detail?: string } | null;
+}
+
+export function transferUpload(id: FsId, localPaths: string[], remoteDir: string, conflict: Conflict): Promise<TransferId[]> {
+  return invoke('transfer_upload', { id, localPaths, remoteDir, conflict });
+}
+
+/** Downloads into `localDir`, or into the system download directory when it is null. */
+export function transferDownload(id: FsId, remotePaths: string[], localDir: string | null, conflict: Conflict): Promise<TransferId[]> {
+  return invoke('transfer_download', { id, remotePaths, localDir, conflict });
+}
+
+export function transferList(): Promise<TransferUpdate[]> {
+  return invoke('transfer_list');
+}
+
+export function transferCancel(id: TransferId): Promise<boolean> {
+  return invoke('transfer_cancel', { id });
+}
+
+export function transferClear(): Promise<void> {
+  return invoke('transfer_clear');
+}
+
+export function onTransferUpdate(handler: (update: TransferUpdate) => void): Promise<UnlistenFn> {
+  return listen<TransferUpdate>('transfer-update', (event) => handler(event.payload));
+}
