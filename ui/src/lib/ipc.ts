@@ -506,7 +506,8 @@ export interface ServerStats {
   kernel: string;
   hostname: string;
   os: string;
-  sample_ms: number;
+  /** Latency of each path segment in microseconds: one per jump host plus the final hop. */
+  latency_us: number[];
 }
 
 export function serverStats(source: RemoteSource): Promise<ServerStats> {

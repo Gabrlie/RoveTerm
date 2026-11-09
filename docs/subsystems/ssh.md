@@ -79,7 +79,8 @@
 - `generate_key(kind, comment, passphrase)` 生成 Ed25519、ECDSA P-256 或 RSA 3072 密钥，返回 OpenSSH 格式文本，提供 passphrase 时加密。
 - `check_public_key(public, info)` 确认用户提供的公钥与私钥是同一把密钥（注释可以不同），返回去掉首尾空白的公钥行。
 - `describe_key(private, passphrase)` 解析私钥，返回算法、带注释的 OpenSSH 公钥行和 `SHA256:` 指纹。
-- `sample_server(connection)` 用一次 `exec` 读取 Linux 服务器 `/proc` 等只读信息，返回 `ServerStats`：负载、总 CPU 与每核的累计时间、内存与交换分区、所有存放数据的挂载分区（排除 tmpfs 等伪文件系统、loop 设备和 `/run`、`/snap` 等运行时挂载，同一设备只列一次）、各网卡（不含 `lo`）的累计字节、运行时间、内核、主机名、发行版名称（`/etc/os-release`），以及本次采样耗时 `sample_ms`。使用率和速率由调用方用两次采样的差值计算；输出不是 Linux 格式时返回 `Protocol`。
+- `sample_server(connection)` 用一次 `exec` 读取 Linux 服务器 `/proc` 等只读信息，返回 `ServerStats`：负载、总 CPU 与每核的累计时间、内存与交换分区、所有存放数据的挂载分区（排除 tmpfs 等伪文件系统、loop 设备和 `/run`、`/snap` 等运行时挂载，同一设备只列一次）、各网卡（不含 `lo`）的累计字节、运行时间、内核、主机名、发行版名称（`/etc/os-release`），以及 `latency_us`：到服务器路径上每一段的延迟（微秒），直连或经代理为一段，每多一个跳板机多一段。使用率和速率由调用方用两次采样的差值计算；输出不是 Linux 格式时返回 `Protocol`。
+- `SshConnection::chain()` 返回连接经过的跳板连接链（第一跳在前，以自身结尾）；`round_trip()` 用 `keepalive@openssh.com` 测一次协议往返；`hop_latency()` 并发测链上每条连接的往返时间，相邻两者之差即该段延迟（最小为 0）。
 - 应用命令 `server_stats(host_id | address)` 只使用已有的共享连接采样（8 秒超时），不会新建连接或询问凭据；没有连接时返回 `ssh.not_connected`，非 Linux 服务器返回 `monitor.unsupported`。
 - `authorize_command(public_key)` 生成把公钥追加到 `~/.ssh/authorized_keys` 的命令（已存在则不重复），只保留算法和密钥数据，注释不会进入 shell。
 

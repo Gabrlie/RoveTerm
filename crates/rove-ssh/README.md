@@ -20,7 +20,7 @@ SSH Provider：认证、host key 校验，打开 PTY shell channel，`FileSystem
 - 连接池按 `user@host:port` 加 `SshTarget::route` 区分；路线标识由跳板链上每一跳实际的地址组成（`route_key`），修改跳板机配置后不会复用旧连接。
 - `SshConnector::shared_via` 按 `Via` 建立传输：直连、HTTP / SOCKS5 代理（无认证），或经跳板连接的 `direct-tcpip` channel；跳板连接在派生连接存在期间保持打开。
 - 连接时可传入 `Progress` 回调，按顺序收到 `ConnectStep`（连接、握手、host key、逐个凭据的尝试与拒绝、认证成功）。
-- `SshConnection::exec` 运行命令并收集有上限的输出；`generate_key`、`describe_key`、`authorize_command` 用于密钥库与公钥安装；`sample_server` 采样 Linux 服务器状态（只读）。
+- `SshConnection::exec` 运行命令并收集有上限的输出；`generate_key`、`describe_key`、`authorize_command` 用于密钥库与公钥安装；`sample_server` 采样 Linux 服务器状态（只读）；`hop_latency` 测量经跳板机时每一段的延迟。
 - `parse_quick_connect` 解析快速连接字符串；`parse_ssh_config` 解析 OpenSSH 客户端配置；`import_ssh_config` 把配置中的主机写入 vault，跳过用户名、主机名、端口都相同的已有主机。
 
 ## 配置（`[plugin.ssh]`）

@@ -89,19 +89,22 @@ pub struct ServerStats {
     pub hostname: String,
     /// Distribution name from `/etc/os-release`, when present.
     pub os: String,
-    /// How long the sample took end to end, in milliseconds: one channel round trip plus the
-    /// script.
-    pub sample_ms: u64,
+    /// Latency of each segment of the path to the server, in microseconds: one entry for a
+    /// direct or proxied connection, one more per jump host. See
+    /// [`SshConnection::hop_latency`].
+    pub latency_us: Vec<u64>,
 }
 
 /// Samples the server behind `connection`. Fails with [`SshError::Protocol`] when the output is
 /// not what a Linux server prints (the panel then reports the server as unsupported).
 pub async fn sample(connection: &Arc<SshConnection>) -> Result<ServerStats, SshError> {
-    let started = std::time::Instant::now();
-    let output = connection.exec(SCRIPT, MAX_OUTPUT).await?;
-    let mut stats = parse(&String::from_utf8_lossy(&output.stdout))
+    let (output, latency) = tokio::join!(
+        connection.exec(SCRIPT, MAX_OUTPUT),
+        connection.hop_latency()
+    );
+    let mut stats = parse(&String::from_utf8_lossy(&output?.stdout))
         .ok_or_else(|| SshError::Protocol("unsupported server status output".into()))?;
-    stats.sample_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    stats.latency_us = latency?;
     Ok(stats)
 }
 

@@ -242,4 +242,33 @@ async fn server_status_samples_this_linux_machine() {
     assert!(!stats.cpus.is_empty());
     assert!(stats.disks.iter().any(|disk| disk.mount == "/"));
     assert!(!stats.hostname.is_empty());
+    assert_eq!(stats.latency_us.len(), 1);
+}
+
+#[tokio::test]
+async fn hop_latency_has_one_segment_per_jump() {
+    let bastion = Harness::new(DevConfig::demo()).await;
+    let inner = DevServer::start("127.0.0.1:0", DevConfig::demo())
+        .await
+        .unwrap();
+    let jump = bastion.connect().await;
+    let direct = tokio::time::timeout(Duration::from_secs(5), jump.hop_latency())
+        .await
+        .expect("ping answered")
+        .unwrap();
+    assert_eq!(direct.len(), 1);
+
+    let hop = bastion
+        .connector
+        .connect_via(&target_of(&inner), &demo(), &Via::Jump(jump.clone()), None)
+        .await
+        .unwrap();
+    let chain = hop.chain();
+    assert_eq!(chain.len(), 2);
+    assert!(Arc::ptr_eq(&chain[0], &jump));
+    let segments = tokio::time::timeout(Duration::from_secs(5), hop.hop_latency())
+        .await
+        .expect("pings answered")
+        .unwrap();
+    assert_eq!(segments.len(), 2);
 }

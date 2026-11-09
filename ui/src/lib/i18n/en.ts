@@ -73,6 +73,7 @@ export const en = {
   'status.kernel': 'Kernel',
   'status.response': 'Response time',
   'status.ms': '{n} ms',
+  'status.latencySegments': 'Latency of each segment: this device → jump host → … → server',
   'status.uptimeLabel': 'Uptime',
   'status.average': 'average usage',
   'status.perCore': 'Usage per core',

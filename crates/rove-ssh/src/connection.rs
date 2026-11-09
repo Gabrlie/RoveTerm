@@ -326,6 +326,54 @@ impl SshConnection {
         &self.target
     }
 
+    /// The connections this one runs through, first jump host first, ending with this
+    /// connection. A direct or proxied connection is its own whole chain.
+    pub fn chain(self: &Arc<Self>) -> Vec<Arc<SshConnection>> {
+        let mut chain = vec![self.clone()];
+        let mut current = self.clone();
+        while let Some(next) = current._tunnel.as_ref().map(|lease| lease.connection.clone()) {
+            chain.push(next.clone());
+            current = next;
+        }
+        chain.reverse();
+        chain
+    }
+
+    /// Time for one protocol round trip (`keepalive@openssh.com` and its reply), in
+    /// microseconds.
+    pub async fn round_trip(&self) -> Result<u64, SshError> {
+        let started = std::time::Instant::now();
+        self.handle
+            .send_ping()
+            .await
+            .map_err(|error| SshError::Channel(error.to_string()))?;
+        Ok(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX))
+    }
+
+    /// Latency of each segment of the path, in microseconds: one entry per hop of [`chain`],
+    /// the first from this machine to the first server, each later one from the previous jump
+    /// host to the next server. A proxy is not a separate segment. Round trips are measured
+    /// concurrently; a segment is the difference between consecutive round trips (at least 0).
+    ///
+    /// [`chain`]: Self::chain
+    pub async fn hop_latency(self: &Arc<Self>) -> Result<Vec<u64>, SshError> {
+        let pings: Vec<_> = self
+            .chain()
+            .into_iter()
+            .map(|connection| tokio::spawn(async move { connection.round_trip().await }))
+            .collect();
+        let mut segments = Vec::with_capacity(pings.len());
+        let mut reached = 0;
+        for ping in pings {
+            let round_trip = ping
+                .await
+                .map_err(|error| SshError::Channel(error.to_string()))??;
+            segments.push(round_trip.saturating_sub(reached));
+            reached = reached.max(round_trip);
+        }
+        Ok(segments)
+    }
+
     pub(crate) fn lease(self: &Arc<Self>) -> ChannelLease {
         self.channels.fetch_add(1, Ordering::SeqCst);
         self.idle_generation.fetch_add(1, Ordering::SeqCst);

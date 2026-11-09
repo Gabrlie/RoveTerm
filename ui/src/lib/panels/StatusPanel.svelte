@@ -106,6 +106,11 @@
     return days > 0 ? t('status.uptimeDays', { days, hours }) : t('status.uptimeHours', { hours, minutes });
   }
 
+  /** Segment latencies as `12+85`: one decimal below 10 ms. */
+  function latency(segments: number[]): string {
+    return segments.map((us) => (us < 10_000 ? (us / 1000).toFixed(1) : Math.round(us / 1000).toString())).join('+');
+  }
+
   function rate(bytes: number | undefined): string {
     return bytes === undefined ? '…' : `${formatSize(Math.round(bytes))}/s`;
   }
@@ -142,7 +147,7 @@
       <dl class="facts">
         <div><dt>{t('status.hostname')}</dt><dd>{stats.hostname}</dd></div>
         <div><dt>{t('status.os')}</dt><dd>{stats.os || stats.kernel.split(' ')[0]}</dd></div>
-        <div><dt>{t('status.response')}</dt><dd>{t('status.ms', { n: stats.sample_ms })}</dd></div>
+        <div title={stats.latency_us.length > 1 ? t('status.latencySegments') : undefined}><dt>{t('status.response')}</dt><dd>{t('status.ms', { n: latency(stats.latency_us) })}</dd></div>
         <div><dt>{t('status.uptimeLabel')}</dt><dd>{uptime(stats.uptime_secs)}</dd></div>
         <div class="wide"><dt>{t('status.kernel')}</dt><dd>{stats.kernel}</dd></div>
       </dl>
