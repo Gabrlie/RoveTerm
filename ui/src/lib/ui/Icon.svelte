@@ -11,9 +11,14 @@
     display: inline-flex;
     flex: none;
   }
+  /* Lucide icons are strokes; a slightly lighter line suits the interface text. */
   .icon :global(svg) {
     width: 100%;
     height: 100%;
-    fill: currentColor;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 </style>

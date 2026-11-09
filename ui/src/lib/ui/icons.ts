@@ -1,53 +1,58 @@
-// Interface icons, named by meaning. Only Remix Icon 4.8.0 (Apache-2.0) line icons are used.
-import add from 'remixicon/icons/System/add-line.svg?raw';
-import close from 'remixicon/icons/System/close-line.svg?raw';
-import splitRight from 'remixicon/icons/Design/layout-column-line.svg?raw';
-import splitDown from 'remixicon/icons/Design/layout-row-line.svg?raw';
-import terminal from 'remixicon/icons/Development/terminal-box-line.svg?raw';
-import server from 'remixicon/icons/Device/server-line.svg?raw';
-import search from 'remixicon/icons/System/search-line.svg?raw';
-import lock from 'remixicon/icons/System/lock-line.svg?raw';
-import unlock from 'remixicon/icons/System/lock-unlock-line.svg?raw';
-import key from 'remixicon/icons/Others/key-2-line.svg?raw';
-import edit from 'remixicon/icons/Design/pencil-line.svg?raw';
-import remove from 'remixicon/icons/System/delete-bin-line.svg?raw';
-import importConfig from 'remixicon/icons/System/download-2-line.svg?raw';
-import quickConnect from 'remixicon/icons/Weather/flashlight-line.svg?raw';
-import command from 'remixicon/icons/Development/command-line.svg?raw';
-import more from 'remixicon/icons/System/more-2-line.svg?raw';
-import chevron from 'remixicon/icons/Arrows/arrow-right-s-line.svg?raw';
-import chevronDown from 'remixicon/icons/Arrows/arrow-down-s-line.svg?raw';
-import check from 'remixicon/icons/System/check-line.svg?raw';
-import folder from 'remixicon/icons/Document/folder-line.svg?raw';
-import file from 'remixicon/icons/Document/file-line.svg?raw';
-import folderAdd from 'remixicon/icons/Document/folder-add-line.svg?raw';
-import folderUpload from 'remixicon/icons/Document/folder-upload-line.svg?raw';
-import folderDownload from 'remixicon/icons/Document/folder-download-line.svg?raw';
-import files from 'remixicon/icons/Document/folder-transfer-line.svg?raw';
-import transfer from 'remixicon/icons/Document/file-transfer-line.svg?raw';
-import upload from 'remixicon/icons/System/upload-2-line.svg?raw';
-import download from 'remixicon/icons/System/download-line.svg?raw';
-import refresh from 'remixicon/icons/System/refresh-line.svg?raw';
-import up from 'remixicon/icons/Arrows/arrow-up-line.svg?raw';
-import eye from 'remixicon/icons/System/eye-line.svg?raw';
-import eyeOff from 'remixicon/icons/System/eye-off-line.svg?raw';
-import link from 'remixicon/icons/Editor/link.svg?raw';
-import clear from 'remixicon/icons/Editor/format-clear.svg?raw';
-import forwards from 'remixicon/icons/Arrows/arrow-left-right-line.svg?raw';
-import play from 'remixicon/icons/Media/play-line.svg?raw';
-import stop from 'remixicon/icons/Media/stop-line.svg?raw';
-import warning from 'remixicon/icons/System/error-warning-line.svg?raw';
-import settings from 'remixicon/icons/System/settings-3-line.svg?raw';
-import panelRight from 'remixicon/icons/Design/layout-right-line.svg?raw';
-import panelBottom from 'remixicon/icons/Design/layout-bottom-line.svg?raw';
-import home from 'remixicon/icons/Buildings/home-4-line.svg?raw';
-import sidebar from 'remixicon/icons/Design/layout-left-line.svg?raw';
-import copy from 'remixicon/icons/Document/file-copy-line.svg?raw';
-import palette from 'remixicon/icons/Design/palette-line.svg?raw';
-import keyboard from 'remixicon/icons/Device/keyboard-line.svg?raw';
-import info from 'remixicon/icons/System/information-line.svg?raw';
-import pulse from 'remixicon/icons/Health & Medical/pulse-line.svg?raw';
-import paste from 'remixicon/icons/Document/clipboard-line.svg?raw';
+// Interface icons, named by meaning. Only Lucide 1.61.0 (ISC) icons are used: rounded stroke
+// caps and joins, drawn with `currentColor`.
+import add from 'lucide-static/icons/plus.svg?raw';
+import close from 'lucide-static/icons/x.svg?raw';
+import splitRight from 'lucide-static/icons/columns-2.svg?raw';
+import splitDown from 'lucide-static/icons/rows-2.svg?raw';
+import terminal from 'lucide-static/icons/square-terminal.svg?raw';
+import server from 'lucide-static/icons/server.svg?raw';
+import search from 'lucide-static/icons/search.svg?raw';
+import lock from 'lucide-static/icons/lock.svg?raw';
+import unlock from 'lucide-static/icons/lock-open.svg?raw';
+import key from 'lucide-static/icons/key-round.svg?raw';
+import edit from 'lucide-static/icons/pencil.svg?raw';
+import remove from 'lucide-static/icons/trash-2.svg?raw';
+import importConfig from 'lucide-static/icons/file-down.svg?raw';
+import quickConnect from 'lucide-static/icons/zap.svg?raw';
+import command from 'lucide-static/icons/command.svg?raw';
+import more from 'lucide-static/icons/ellipsis.svg?raw';
+import chevron from 'lucide-static/icons/chevron-right.svg?raw';
+import chevronDown from 'lucide-static/icons/chevron-down.svg?raw';
+import check from 'lucide-static/icons/check.svg?raw';
+import folder from 'lucide-static/icons/folder.svg?raw';
+import file from 'lucide-static/icons/file.svg?raw';
+import folderAdd from 'lucide-static/icons/folder-plus.svg?raw';
+import folderUpload from 'lucide-static/icons/folder-up.svg?raw';
+import folderDownload from 'lucide-static/icons/folder-down.svg?raw';
+import files from 'lucide-static/icons/folder-sync.svg?raw';
+import transfer from 'lucide-static/icons/arrow-down-up.svg?raw';
+import upload from 'lucide-static/icons/upload.svg?raw';
+import download from 'lucide-static/icons/download.svg?raw';
+import refresh from 'lucide-static/icons/refresh-cw.svg?raw';
+import up from 'lucide-static/icons/arrow-up.svg?raw';
+import eye from 'lucide-static/icons/eye.svg?raw';
+import eyeOff from 'lucide-static/icons/eye-off.svg?raw';
+import link from 'lucide-static/icons/link.svg?raw';
+import clear from 'lucide-static/icons/eraser.svg?raw';
+import forwards from 'lucide-static/icons/arrow-left-right.svg?raw';
+import play from 'lucide-static/icons/play.svg?raw';
+import stop from 'lucide-static/icons/square.svg?raw';
+import warning from 'lucide-static/icons/triangle-alert.svg?raw';
+import settings from 'lucide-static/icons/settings.svg?raw';
+import panelRight from 'lucide-static/icons/panel-right.svg?raw';
+import panelBottom from 'lucide-static/icons/panel-bottom.svg?raw';
+import home from 'lucide-static/icons/house.svg?raw';
+import sidebar from 'lucide-static/icons/panel-left.svg?raw';
+import copy from 'lucide-static/icons/copy.svg?raw';
+import palette from 'lucide-static/icons/palette.svg?raw';
+import keyboard from 'lucide-static/icons/keyboard.svg?raw';
+import info from 'lucide-static/icons/info.svg?raw';
+import pulse from 'lucide-static/icons/activity.svg?raw';
+import paste from 'lucide-static/icons/clipboard.svg?raw';
+import minimize from 'lucide-static/icons/minus.svg?raw';
+import maximize from 'lucide-static/icons/square.svg?raw';
+import restore from 'lucide-static/icons/copy.svg?raw';
+import winClose from 'lucide-static/icons/x.svg?raw';
 
 export const icons = {
   add,
@@ -89,16 +94,20 @@ export const icons = {
   stop,
   warning,
   settings,
-  sidebar,
-  home,
   panelRight,
   panelBottom,
+  home,
+  sidebar,
   copy,
   palette,
   keyboard,
   info,
   pulse,
   paste,
+  minimize,
+  maximize,
+  restore,
+  winClose,
 } as const;
 
 export type IconName = keyof typeof icons;

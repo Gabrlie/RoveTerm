@@ -167,7 +167,7 @@
 
 ## 图标
 
-界面图标只使用 Remix Icon 4.8.0（Apache-2.0）的 `-line` 样式，在 `src/lib/ui/icons.ts` 中按含义命名后通过 `?raw` 导入。4.9 及以后的版本改用了另一种许可证，升级前需要先核对许可证。只有图标的按钮统一使用 `IconButton`，`label` 同时作为提示文字和无障碍名称。
+界面图标只使用 Lucide（`lucide-static` 1.61.0，ISC 许可），在 `src/lib/ui/icons.ts` 中按含义命名后通过 `?raw` 导入；`Icon` 统一以 1.75 线宽、圆头圆角描边绘制，颜色取 `currentColor`。只有图标的按钮统一使用 `IconButton`，`label` 同时作为提示文字和无障碍名称。
 
 右键菜单统一使用 `ContextMenu`：在指定坐标弹出并移到 `<body>`，自动避开窗口边缘，支持方向键和 Enter，选中、Escape、点击别处或窗口缩放时关闭。
 
