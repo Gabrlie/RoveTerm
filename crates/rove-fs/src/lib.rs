@@ -127,6 +127,10 @@ pub trait FileSystem: Send + Sync {
     /// Returns metadata of `path` itself: a symlink reports [`EntryKind::Symlink`].
     async fn lstat(&self, path: &str) -> Result<Metadata, FsError>;
 
+    /// Sets the POSIX permission bits (`0o7777` mask) of `path`. Providers without POSIX
+    /// permissions apply what they can (Windows: read-only when no owner write bit).
+    async fn set_permissions(&self, path: &str, mode: u32) -> Result<(), FsError>;
+
     /// Creates the directory `path`; its parent must exist.
     async fn mkdir(&self, path: &str) -> Result<(), FsError>;
 

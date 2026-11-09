@@ -88,6 +88,22 @@ impl FileSystem for LocalFs {
             .map_err(|error| FsError::from_io(&error, path))
     }
 
+    async fn set_permissions(&self, path: &str, mode: u32) -> Result<(), FsError> {
+        let io = |error: std::io::Error| FsError::from_io(&error, path);
+        #[cfg(unix)]
+        let permissions = {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::Permissions::from_mode(mode & 0o7777)
+        };
+        #[cfg(not(unix))]
+        let permissions = {
+            let mut permissions = tokio::fs::metadata(path).await.map_err(io)?.permissions();
+            permissions.set_readonly(mode & 0o200 == 0);
+            permissions
+        };
+        tokio::fs::set_permissions(path, permissions).await.map_err(io)
+    }
+
     async fn mkdir(&self, path: &str) -> Result<(), FsError> {
         tokio::fs::create_dir(path)
             .await

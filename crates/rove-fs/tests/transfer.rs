@@ -230,6 +230,9 @@ impl FileSystem for Hostile {
         }
         LocalFs.rename(from, to).await
     }
+    async fn set_permissions(&self, path: &str, mode: u32) -> Result<(), rove_fs::FsError> {
+        LocalFs.set_permissions(path, mode).await
+    }
     async fn open_read(&self, path: &str) -> Result<rove_fs::FsReader, rove_fs::FsError> {
         if self.unreadable {
             return Err(rove_fs::FsError::PermissionDenied(path.into()));
@@ -343,4 +346,31 @@ async fn a_failed_rename_restores_the_existing_file() {
         .map(|entry| entry.unwrap().file_name())
         .collect();
     assert_eq!(names, ["data.bin"]);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn overwriting_keeps_the_existing_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let (queue, mut rx) = queue(TransferConfig::default());
+    for (name, mode) in [("secret.txt", 0o600), ("tool.sh", 0o755)] {
+        let file = src.path().join(name);
+        std::fs::write(&file, b"new").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let target = dst.path().join(name);
+        std::fs::write(&target, b"old").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode)).unwrap();
+
+        let done = wait_final(
+            &mut rx,
+            queue.enqueue(request(&file, dst.path(), Conflict::Overwrite)),
+        )
+        .await;
+        assert_eq!(done.state, TransferState::Done, "{:?}", done.error);
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        let kept = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(kept, mode, "{name}");
+    }
 }

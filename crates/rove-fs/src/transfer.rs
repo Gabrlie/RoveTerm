@@ -485,8 +485,10 @@ impl Runner {
         Ok(())
     }
 
-    /// Copies `src` to a temporary file beside `dst`, then moves it over `dst`. A failure at any
-    /// point leaves an existing `dst` untouched and removes only the temporary file.
+    /// Copies `src` to a temporary file beside `dst`, then moves it over `dst`. The temporary file
+    /// gets an existing `dst`'s permissions before any data is written, so the copy is never more
+    /// readable than the file it replaces. A failure at any point leaves an existing `dst`
+    /// untouched and removes only the temporary file.
     async fn copy_file(
         &mut self,
         request: &TransferRequest,
@@ -497,7 +499,12 @@ impl Runner {
         let dir = fs.parent(dst).ok_or_else(|| FsError::InvalidPath(dst.to_owned()))?;
         let name: String = basename(dst).chars().take(100).collect();
         let temp = fs.join(&dir, &format!(".{name}.{}.part", self.update.id));
-        let result = match self.copy(request, src, &temp).await {
+        let keep_mode = match fs.stat(dst).await {
+            Ok(existing) => existing.permissions,
+            Err(FsError::NotFound(_)) => None,
+            Err(error) => return Err(error),
+        };
+        let result = match self.copy(request, src, &temp, keep_mode).await {
             Ok(()) => Self::replace(fs, &temp, dst, &format!("{temp}.old")).await,
             Err(error) => Err(error),
         };
@@ -538,14 +545,20 @@ impl Runner {
         }
     }
 
+    /// Copies `src` to `dst`. With `mode`, `dst` gets those permissions right after it is created,
+    /// before data is written.
     async fn copy(
         &mut self,
         request: &TransferRequest,
         src: &str,
         dst: &str,
+        mode: Option<u32>,
     ) -> Result<(), FsError> {
         let mut reader = request.src.open_read(src).await?;
         let mut writer = request.dst.open_write(dst).await?;
+        if let Some(mode) = mode {
+            request.dst.set_permissions(dst, mode).await?;
+        }
         let mut buffer = vec![0; self.buffer];
         let cancel = self.cancel.clone();
         loop {

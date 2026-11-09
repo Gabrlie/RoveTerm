@@ -141,7 +141,17 @@ async fn uploads_and_downloads_through_the_transfer_queue() {
         b"readme"
     );
 
-    // Overwriting an existing remote file replaces it through the temporary file.
+    // Overwriting an existing remote file replaces it through the temporary file and keeps its
+    // permissions.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            remote.path().join("project/README"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+    }
     std::fs::write(tree.join("README"), b"updated").unwrap();
     let again = queue.enqueue(TransferRequest {
         src: Arc::new(LocalFs),
@@ -157,6 +167,15 @@ async fn uploads_and_downloads_through_the_transfer_queue() {
         std::fs::read(remote.path().join("project/README")).unwrap(),
         b"updated"
     );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(remote.path().join("project/README"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
     let leftovers: Vec<_> = std::fs::read_dir(remote.path().join("project"))
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())

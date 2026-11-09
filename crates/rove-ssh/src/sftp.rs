@@ -109,6 +109,17 @@ impl FileSystem for SftpFs {
             .map_err(|error| fs_error(error, path))
     }
 
+    async fn set_permissions(&self, path: &str, mode: u32) -> Result<(), FsError> {
+        let attrs = FileAttributes {
+            permissions: Some(mode & 0o7777),
+            ..FileAttributes::empty()
+        };
+        self.session
+            .set_metadata(path, attrs)
+            .await
+            .map_err(|error| fs_error(error, path))
+    }
+
     async fn mkdir(&self, path: &str) -> Result<(), FsError> {
         self.session
             .create_dir(path)
