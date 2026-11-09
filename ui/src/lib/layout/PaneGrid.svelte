@@ -198,6 +198,8 @@
     position: absolute;
     box-sizing: border-box;
     border: 1px solid transparent;
+    /* Content stays inside its pane: wide file lists must not paint over neighbouring panels. */
+    overflow: hidden;
   }
   .pane.focused {
     border-color: color-mix(in srgb, var(--accent) 45%, transparent);
