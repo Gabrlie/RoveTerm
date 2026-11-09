@@ -8,17 +8,43 @@
   import { forwardStatuses } from '../forwards/forwards.svelte';
   import { t } from '../i18n';
   import type { HostEntry } from '../ipc';
+  import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
+  import { hostMenuItems } from '../hosts/hostMenu';
+  import { actions, type ActionId } from '../actions';
 
   interface Props {
     onconnect: (host: HostEntry) => void;
     onfiles: (host: HostEntry) => void;
+    onforwards: (host: HostEntry) => void;
     onedit: (host: HostEntry | null) => void;
     onquick: () => void;
     onlocal: () => void;
+    onnotice: (message: string) => void;
+    /** Runs an action from the empty-space menu. */
+    onaction: (id: ActionId) => void;
   }
 
-  let { onconnect, onfiles, onedit, onquick, onlocal }: Props = $props();
+  let { onconnect, onfiles, onforwards, onedit, onquick, onlocal, onnotice, onaction }: Props = $props();
   let query = $state('');
+  let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+
+  /** Actions offered when right-clicking empty space. */
+  const PAGE_ACTIONS: ActionId[] = ['host.new', 'host.quickConnect', 'host.import', 'tab.newLocal'];
+
+  function hostMenu(event: MouseEvent, host: HostEntry): void {
+    event.preventDefault();
+    event.stopPropagation();
+    menu = { x: event.clientX, y: event.clientY, items: hostMenuItems(host, { onconnect, onfiles, onforwards, onedit, onnotice }) };
+  }
+
+  function pageMenu(event: MouseEvent): void {
+    event.preventDefault();
+    const items = PAGE_ACTIONS.flatMap((id) => {
+      const action = actions.find((candidate) => candidate.id === id);
+      return action ? [{ label: t(action.label), onselect: () => onaction(id) }] : [];
+    });
+    menu = { x: event.clientX, y: event.clientY, items };
+  }
 
   /** Hosts matching `query`, recently connected first, then never-connected hosts by name. */
   const sorted = $derived(
@@ -43,7 +69,7 @@
   }
 </script>
 
-<div class="home">
+<div class="home" role="presentation" oncontextmenu={pageMenu}>
   <header>
     <div class="search">
       <Icon name="search" size={15} />
@@ -70,6 +96,7 @@
           tabindex="0"
           onclick={() => onconnect(host)}
           onkeydown={(event) => event.key === 'Enter' && onconnect(host)}
+          oncontextmenu={(event) => hostMenu(event, host)}
           title={`${host.username}@${host.hostname}:${host.port}`}
         >
           <Avatar name={host.name} size={38} />
@@ -109,6 +136,10 @@
     </div>
   {/if}
 </div>
+
+{#if menu}
+  <ContextMenu x={menu.x} y={menu.y} items={menu.items} onclose={() => (menu = null)} />
+{/if}
 
 <style>
   .home {

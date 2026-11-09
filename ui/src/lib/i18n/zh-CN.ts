@@ -353,6 +353,8 @@ export const zhCN: Messages = {
   'files.download': '下载到"下载"文件夹',
   'files.downloadTo': '下载到…',
   'files.rename': '重命名',
+  'files.open': '打开',
+  'files.copyPath': '复制路径',
   'files.showHidden': '显示隐藏文件',
   'files.name': '名称',
   'files.size': '大小',

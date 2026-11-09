@@ -351,6 +351,8 @@ export const en = {
   'files.download': 'Download to Downloads folder',
   'files.downloadTo': 'Download to…',
   'files.rename': 'Rename',
+  'files.open': 'Open',
+  'files.copyPath': 'Copy path',
   'files.showHidden': 'Show hidden files',
   'files.name': 'Name',
   'files.size': 'Size',

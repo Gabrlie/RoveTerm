@@ -29,6 +29,7 @@
   import { isFinal, transfers } from './transfers.svelte';
   import { prefs } from '../settings/prefs.svelte';
   import FilesSkeleton from './FilesSkeleton.svelte';
+  import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
   import { editPrefs } from '../settings/edit.svelte';
 
   interface Props {
@@ -172,6 +173,54 @@
     if (entry.kind === 'symlink') return 'var(--fg-muted)';
     const tint = FILE_TINTS.find(([pattern]) => pattern.test(entry.name))?.[1];
     return tint ? `var(--sys-${tint})` : 'var(--fg-muted)';
+  }
+
+  let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+
+  function copyPath(name: string): void {
+    navigator.clipboard.writeText(joinPath(cwd, name)).catch((error: unknown) => console.warn('copy failed', error));
+  }
+
+  /** Right-click on a row: acts on the selection, selecting the row first when it is not in it. */
+  function rowMenu(event: MouseEvent, entry: DirEntry, index: number): void {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!selected.has(entry.name)) {
+      selected = new Set([entry.name]);
+      anchor = index;
+    }
+    list.focus({ preventScroll: true });
+    const names = selection.map((row) => row.name);
+    const single = names.length === 1;
+    const items: MenuItem[] = [];
+    if (single && (entry.kind === 'dir' || entry.kind === 'symlink')) {
+      items.push({ label: t('files.open'), icon: 'folder', onselect: () => openEntry(entry) });
+    }
+    items.push(
+      { label: t('files.download'), icon: 'download', onselect: () => void download(names, false) },
+      { label: t('files.downloadTo'), icon: 'folderDownload', onselect: () => void download(names, true) },
+    );
+    if (single) items.push({ label: t('files.rename'), icon: 'edit', separated: true, onselect: askRename });
+    items.push({ label: t('files.copyPath'), icon: 'copy', separated: !single, onselect: () => copyPath(entry.name) });
+    items.push({ label: t('common.delete'), icon: 'remove', danger: true, separated: true, onselect: askDelete });
+    menu = { x: event.clientX, y: event.clientY, items };
+  }
+
+  /** Right-click on empty space in the list. */
+  function listMenu(event: MouseEvent): void {
+    event.preventDefault();
+    if (!fsId) return;
+    menu = {
+      x: event.clientX,
+      y: event.clientY,
+      items: [
+        { label: t('files.newFolder'), icon: 'folderAdd', onselect: askMkdir },
+        { label: t('files.upload'), icon: 'upload', onselect: () => void pickUpload(false) },
+        { label: t('files.uploadFolder'), icon: 'folderUpload', onselect: () => void pickUpload(true) },
+        { label: t('files.refresh'), icon: 'refresh', separated: true, onselect: () => void refresh() },
+        { label: t('files.showHidden'), icon: showHidden ? 'eye' : 'eyeOff', onselect: toggleHidden },
+      ],
+    };
   }
 
   function openEntry(entry: DirEntry): void {
@@ -431,7 +480,7 @@
     <span class="time">{t('files.modified')}</span>
     <span class="mode">{t('files.mode')}</span>
   </div>
-  <div class="list" tabindex="0" role="listbox" aria-multiselectable="true" aria-label={label} bind:this={list} onkeydown={onListKeydown}>
+  <div class="list" tabindex="0" role="listbox" aria-multiselectable="true" aria-label={label} bind:this={list} onkeydown={onListKeydown} oncontextmenu={listMenu}>
     {#if !fsId && loading}
       <FilesSkeleton />
     {:else if shown.length === 0 && !loading && fsId}
@@ -447,6 +496,7 @@
         data-index={index}
         onclick={(event) => clickRow(event, index)}
         ondblclick={() => openEntry(entry)}
+        oncontextmenu={(event) => rowMenu(event, entry, index)}
         onkeydown={() => {}}
       >
         <span class="name">
@@ -495,6 +545,10 @@
     <div class="drop-hint"><Icon name="upload" size={20} />{t('files.dropHint', { path: cwd })}</div>
   {/if}
 </div>
+
+{#if menu}
+  <ContextMenu x={menu.x} y={menu.y} items={menu.items} onclose={() => (menu = null)} />
+{/if}
 
 {#if pending?.kind === 'mkdir' || pending?.kind === 'rename'}
   <Dialog title={pending.kind === 'mkdir' ? t('files.newFolder') : t('files.rename')} onclose={() => (pending = null)} width={380}>

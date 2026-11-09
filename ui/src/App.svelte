@@ -369,6 +369,9 @@
           onedit={(host) => (editing = host)}
           onquick={() => (quickOpen = true)}
           onlocal={() => run('tab.newLocal')}
+          onforwards={(host) => (forwardsHost = host)}
+          onnotice={showNotice}
+          onaction={run}
         />
       {/if}
     </main>

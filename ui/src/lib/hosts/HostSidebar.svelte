@@ -8,7 +8,8 @@
   import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
   import { forwardStatuses } from '../forwards/forwards.svelte';
   import { errorText, t } from '../i18n';
-  import { hostCreate, type HostEntry } from '../ipc';
+  import type { HostEntry } from '../ipc';
+  import { hostMenuItems } from './hostMenu';
 
   interface Props {
     onconnect: (host: HostEntry) => void;
@@ -29,27 +30,7 @@
     menu = { x: event.clientX, y: event.clientY, host };
   }
 
-  function menuItems(host: HostEntry): MenuItem[] {
-    return [
-      { label: t('host.connect'), icon: 'terminal', onselect: () => onconnect(host) },
-      { label: t('host.openFiles'), icon: 'files', onselect: () => onfiles(host) },
-      { label: t('host.forwards'), icon: 'forwards', onselect: () => onforwards(host) },
-      { label: t('host.edit'), icon: 'edit', separated: true, onselect: () => onedit(host) },
-      { label: t('host.duplicate'), icon: 'copy', onselect: () => void duplicate(host) },
-      { label: t('common.delete'), icon: 'remove', danger: true, separated: true, onselect: () => void remove(host) },
-    ];
-  }
-
-  /** Saves a copy of `host` without its stored secret. */
-  async function duplicate(host: HostEntry): Promise<void> {
-    try {
-      const { group, hostname, port, username, auth, route, tags } = host;
-      await hostCreate({ name: t('host.copyName', { name: host.name }), group, hostname, port, username, auth, route, tags }, null);
-      await hosts.refresh();
-    } catch (error) {
-      onnotice(errorText(error));
-    }
-  }
+  const menuItems = (host: HostEntry): MenuItem[] => hostMenuItems(host, { onconnect, onfiles, onforwards, onedit, onnotice });
 
   /** Describes how the host is reached, for the route badge; empty for direct connections. */
   function routeTitle(host: HostEntry): string {
@@ -57,12 +38,6 @@
     if (route.kind === 'jump') return t('host.via', { name: hosts.find(route.host)?.name ?? '?' });
     if (route.kind === 'proxy') return t('host.via', { name: `${route.protocol}://${route.host}:${route.port}` });
     return '';
-  }
-
-  async function remove(host: HostEntry): Promise<void> {
-    const confirmed = await ask({ title: t('host.delete'), message: t('host.confirmDelete', { name: host.name }), confirmLabel: t('common.delete'), danger: true });
-    if (!confirmed) return;
-    await hosts.remove(host.id).catch((error: unknown) => onnotice(errorText(error)));
   }
 
   async function unlock(): Promise<void> {
