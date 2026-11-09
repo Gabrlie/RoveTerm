@@ -38,23 +38,29 @@ fn handle(
     }
     let mut dav = dav.lock().unwrap();
     let path = path.trim_end_matches('/').to_owned();
+    // `/dav` is the server's root: it always exists.
+    let exists = |dav: &Dav, dir: &str| dir == "/dav" || dav.dirs.contains(dir);
     let parent = path
         .rsplit_once('/')
         .map(|(parent, _)| parent.to_owned())
         .unwrap_or_default();
     match method {
         "MKCOL" => {
-            if dav.dirs.contains(&path) {
+            if path == "/dav" {
+                // Like some hosted servers: the root cannot be created, even though it exists.
+                return reply(403, b"");
+            }
+            if exists(&dav, &path) {
                 return reply(405, b"");
             }
-            if parent != "/dav" && !dav.dirs.contains(&parent) {
+            if !exists(&dav, &parent) {
                 return reply(409, b"");
             }
             dav.dirs.insert(path);
             reply(201, b"")
         }
         "PUT" => {
-            if parent != "/dav" && !dav.dirs.contains(&parent) {
+            if !exists(&dav, &parent) {
                 return reply(409, b"");
             }
             dav.files.insert(path, body);
@@ -69,7 +75,7 @@ fn handle(
             None => reply(404, b""),
         },
         "PROPFIND" => {
-            if path != "/dav" && !dav.dirs.contains(&path) {
+            if !exists(&dav, &path) {
                 return reply(404, b"");
             }
             let prefix = format!("{path}/");
@@ -215,6 +221,19 @@ async fn two_devices_sync_through_webdav() {
     other.delete("scratch/x").await.unwrap();
     other.delete("scratch/x").await.unwrap();
     assert_eq!(other.get("scratch/x").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_missing_sync_folder_is_created() {
+    let root = serve().await;
+    let backend = WebDavBackend::new(&format!("{root}/RoveTerm"), "user", "pass").unwrap();
+    let key = create_space(&backend, "pw", fast()).await.unwrap();
+    let other = WebDavBackend::new(&format!("{root}/RoveTerm/"), "user", "pass").unwrap();
+    assert!(space_exists(&other).await.unwrap());
+    assert_eq!(
+        join_space(&other, "pw").await.unwrap().to_bytes(),
+        key.to_bytes()
+    );
 }
 
 #[tokio::test]

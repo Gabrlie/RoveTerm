@@ -132,27 +132,72 @@ impl WebDavBackend {
         SyncError::Backend(format!("unexpected response {}", response.status()))
     }
 
-    /// Creates `dir` and its parents unless known to exist.
+    fn method(name: &[u8]) -> Result<Method, SyncError> {
+        Method::from_bytes(name).map_err(|error| SyncError::Backend(error.to_string()))
+    }
+
+    fn is_created(&self, dir: &str) -> bool {
+        self.created
+            .lock()
+            .map(|created| created.contains(dir))
+            .unwrap_or(false)
+    }
+
+    fn mark_created(&self, dir: &str) {
+        if let Ok(mut created) = self.created.lock() {
+            created.insert(dir.to_owned());
+        }
+    }
+
+    /// Creates the configured directory if it does not exist yet. Checked with a `PROPFIND`
+    /// first: some servers refuse `MKCOL` on their root even when it exists.
+    async fn ensure_base(&self) -> Result<(), SyncError> {
+        if self.is_created("") {
+            return Ok(());
+        }
+        let response = self
+            .send(
+                Self::method(b"PROPFIND")?,
+                self.base.clone(),
+                Some(PROPFIND_BODY.as_bytes().to_vec()),
+                Some("0"),
+            )
+            .await?;
+        match response.status().as_u16() {
+            207 => {}
+            404 => {
+                let response = self
+                    .send(Self::method(b"MKCOL")?, self.base.clone(), None, None)
+                    .await?;
+                if !(response.status().is_success()
+                    || response.status() == StatusCode::METHOD_NOT_ALLOWED)
+                {
+                    return Err(Self::unexpected(&response));
+                }
+            }
+            _ => return Err(Self::unexpected(&response)),
+        }
+        self.mark_created("");
+        Ok(())
+    }
+
+    /// Creates `dir` (relative to the configured directory) and its parents unless known to
+    /// exist; an empty `dir` is the configured directory itself.
     async fn ensure_dir(&self, dir: &str) -> Result<(), SyncError> {
+        self.ensure_base().await?;
         let mut prefix = String::new();
-        for part in dir.split('/') {
+        for part in dir.split('/').filter(|part| !part.is_empty()) {
             prefix = if prefix.is_empty() {
                 part.to_owned()
             } else {
                 format!("{prefix}/{part}")
             };
-            if self
-                .created
-                .lock()
-                .map(|created| created.contains(&prefix))
-                .unwrap_or(false)
-            {
+            if self.is_created(&prefix) {
                 continue;
             }
             let response = self
                 .send(
-                    Method::from_bytes(b"MKCOL")
-                        .map_err(|error| SyncError::Backend(error.to_string()))?,
+                    Self::method(b"MKCOL")?,
                     self.url(&prefix, true)?,
                     None,
                     None,
@@ -164,9 +209,7 @@ impl WebDavBackend {
             {
                 return Err(Self::unexpected(&response));
             }
-            if let Ok(mut created) = self.created.lock() {
-                created.insert(prefix.clone());
-            }
+            self.mark_created(&prefix);
         }
         Ok(())
     }
@@ -257,8 +300,7 @@ impl SyncBackend for WebDavBackend {
         let url = self.url(dir, true)?;
         let response = self
             .send(
-                Method::from_bytes(b"PROPFIND")
-                    .map_err(|error| SyncError::Backend(error.to_string()))?,
+                Self::method(b"PROPFIND")?,
                 url.clone(),
                 Some(PROPFIND_BODY.as_bytes().to_vec()),
                 Some("1"),
@@ -308,9 +350,8 @@ impl SyncBackend for WebDavBackend {
 
     async fn put(&self, path: &str, data: &[u8]) -> Result<(), SyncError> {
         check_path(path)?;
-        if let Some((dir, _)) = path.rsplit_once('/') {
-            self.ensure_dir(dir).await?;
-        }
+        self.ensure_dir(path.rsplit_once('/').map_or("", |(dir, _)| dir))
+            .await?;
         let response = self
             .send(
                 Method::PUT,
