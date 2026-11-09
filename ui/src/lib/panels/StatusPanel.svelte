@@ -142,7 +142,44 @@
   {#if problem && !stats}
     <p class="muted">{problem}</p>
   {:else if !stats}
-    <p class="muted">{t('status.loading')}</p>
+    <!-- Skeleton: the cards' layout with placeholders where values will appear. -->
+    <div class="loading" aria-busy="true" aria-label={t('status.loading')}>
+      <section class="card">
+        <h4><Icon name="server" size={14} />{t('status.system')}</h4>
+        <dl class="facts">
+          {#each ['status.hostname', 'status.os', 'status.response', 'status.uptimeLabel'] as const as label (label)}
+            <div><dt>{t(label)}</dt><dd><span class="skeleton" style:width="70%"></span></dd></div>
+          {/each}
+          <div class="wide"><dt>{t('status.kernel')}</dt><dd><span class="skeleton" style:width="55%"></span></dd></div>
+        </dl>
+      </section>
+      <section class="card">
+        <h4><Icon name="terminal" size={14} />CPU</h4>
+        <div class="headline"><span class="skeleton" style:width="64px" style:height="24px"></span></div>
+        <div class="cores skeleton-cores">
+          {#each [0, 1, 2, 3] as index (index)}<span class="skeleton"></span>{/each}
+        </div>
+        <div class="row muted"><span>{t('status.load')}</span><span class="skeleton" style:width="90px"></span></div>
+      </section>
+      <section class="card">
+        <h4><Icon name="transfer" size={14} />{t('status.memory')}</h4>
+        {#each ['status.physical', 'status.swap'] as const as label (label)}
+          <div class="row"><span>{t(label)}</span><span class="skeleton" style:width="32px"></span></div>
+          <div class="bar"></div>
+          <span class="skeleton" style:width="45%"></span>
+        {/each}
+      </section>
+      <section class="card">
+        <h4><Icon name="forwards" size={14} />{t('status.network')}</h4>
+        {#each [0, 1, 2] as index (index)}<span class="skeleton net-skeleton"></span>{/each}
+      </section>
+      <section class="card">
+        <h4><Icon name="folder" size={14} />{t('status.disks')}</h4>
+        <div class="row"><span class="skeleton" style:width="30%"></span><span class="skeleton" style:width="32px"></span></div>
+        <div class="bar"></div>
+        <span class="skeleton" style:width="45%"></span>
+      </section>
+    </div>
   {:else}
     {@const mem = stats.mem_total - stats.mem_available}
     {@const swap = stats.swap_total - stats.swap_free}
@@ -291,6 +328,22 @@
   }
   .headline strong.hot {
     color: var(--danger);
+  }
+  .loading {
+    display: contents;
+  }
+  .skeleton-cores {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .skeleton-cores .skeleton {
+    width: 100%;
+    height: 54px;
+    border-radius: var(--radius-sm);
+  }
+  .net-skeleton {
+    width: 100%;
+    height: 22px;
+    border-radius: var(--radius-sm);
   }
   .cores {
     display: grid;
