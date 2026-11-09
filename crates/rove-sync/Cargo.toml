@@ -1,0 +1,28 @@
+[package]
+name = "rove-sync"
+description = "End-to-end encrypted, append-only multi-device sync for RoveTerm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+argon2 = "0.5"
+async-trait.workspace = true
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+getrandom = "0.3"
+hkdf = "0.12"
+hmac = "0.12"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "rt"] }
+tracing.workspace = true
+uuid.workspace = true
+zeroize = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }

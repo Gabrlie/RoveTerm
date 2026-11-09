@@ -45,6 +45,7 @@ Profile 是一组启用的插件加一份 TOML 配置。随应用交付的 profi
 | [rove-fs](subsystems/fs.md) | `FileSystem` seam 的定义；本地文件系统、传输队列 | `FsSessions`、`TransferQueue`、`LocalFs` |
 | [rove-vault](subsystems/vault.md) | 主机与凭据存储、字段级加密、设备主密钥 | `Vault`、`KeyCache` |
 | [rove-journal](subsystems/journal.md) | 持久事件日志 | `JournalStore` |
+| [rove-sync](subsystems/sync.md) | 端到端加密的多设备同步 | `SyncBackend`、`RecordStore`、`sync` |
 
 <a id="events"></a>
 

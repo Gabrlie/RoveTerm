@@ -11,4 +11,5 @@
 | [fs](fs.md) | `FileSystem` seam、本地文件系统、传输队列 |
 | [vault](vault.md) | 主机与凭据存储、设备主密钥、解锁 |
 | [journal](journal.md) | 持久事件日志 |
+| [sync](sync.md) | 端到端加密的多设备同步：空间、分段、HLC 合并 |
 | [ui](ui.md) | 前端结构、actions 表、i18n、设计 token |
