@@ -3,18 +3,20 @@
   import IconButton from '../ui/IconButton.svelte';
   import { hosts } from './hosts.svelte';
   import { vault } from '../vault/vault.svelte';
+  import { forwardStatuses } from '../forwards/forwards.svelte';
   import { errorText, t } from '../i18n';
   import type { HostEntry } from '../ipc';
 
   interface Props {
     onconnect: (host: HostEntry) => void;
     onfiles: (host: HostEntry) => void;
+    onforwards: (host: HostEntry) => void;
     onedit: (host: HostEntry | null) => void;
     onquick: () => void;
     onnotice: (message: string) => void;
   }
 
-  let { onconnect, onfiles, onedit, onquick, onnotice }: Props = $props();
+  let { onconnect, onfiles, onforwards, onedit, onquick, onnotice }: Props = $props();
 
   async function importConfig(): Promise<void> {
     try {
@@ -62,11 +64,19 @@
         <div class="host" role="button" tabindex="0" ondblclick={() => onconnect(host)} onkeydown={(event) => event.key === 'Enter' && onconnect(host)} title={`${host.username}@${host.hostname}:${host.port}`}>
           <Icon name="server" size={14} />
           <div class="text">
-            <span class="name">{host.name}</span>
+            <span class="name">
+              {host.name}
+              {#if forwardStatuses.running(host.id) > 0}
+                <span class="forwarding" title={t('forward.activeCount', { count: forwardStatuses.running(host.id) })}>
+                  <Icon name="forwards" size={11} />{forwardStatuses.running(host.id)}
+                </span>
+              {/if}
+            </span>
             <span class="address">{host.username}@{host.hostname}{host.port === 22 ? '' : `:${host.port}`}</span>
           </div>
           <div class="actions">
             <IconButton icon="files" label={t('host.openFiles')} small onclick={() => onfiles(host)} />
+            <IconButton icon="forwards" label={t('host.forwards')} small onclick={() => onforwards(host)} />
             <IconButton icon="edit" label={t('host.edit')} small onclick={() => onedit(host)} />
             <IconButton icon="remove" label={t('common.delete')} small danger onclick={() => remove(host)} />
           </div>
@@ -161,6 +171,15 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .forwarding {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: var(--space-1);
+    color: var(--accent);
+    font-size: var(--text-caption);
+    vertical-align: middle;
   }
   .address {
     font-size: var(--text-caption);

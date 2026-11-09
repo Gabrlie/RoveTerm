@@ -31,6 +31,10 @@ import eye from 'remixicon/icons/System/eye-line.svg?raw';
 import eyeOff from 'remixicon/icons/System/eye-off-line.svg?raw';
 import link from 'remixicon/icons/Editor/link.svg?raw';
 import clear from 'remixicon/icons/Editor/format-clear.svg?raw';
+import forwards from 'remixicon/icons/Arrows/arrow-left-right-line.svg?raw';
+import play from 'remixicon/icons/Media/play-line.svg?raw';
+import stop from 'remixicon/icons/Media/stop-line.svg?raw';
+import warning from 'remixicon/icons/System/error-warning-line.svg?raw';
 
 export const icons = {
   add,
@@ -65,6 +69,10 @@ export const icons = {
   eyeOff,
   link,
   clear,
+  forwards,
+  play,
+  stop,
+  warning,
 } as const;
 
 export type IconName = keyof typeof icons;

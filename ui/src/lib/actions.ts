@@ -18,6 +18,7 @@ export type ActionId =
   | 'host.new'
   | 'sidebar.toggle'
   | 'files.open'
+  | 'forward.manage'
   | `tab.goto${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
 
 export interface Action {
@@ -37,6 +38,7 @@ export const actions: Action[] = [
   { id: 'host.new', label: 'action.host.new', keys: ['App+N'] },
   { id: 'sidebar.toggle', label: 'action.sidebar.toggle', keys: ['App+B'] },
   { id: 'files.open', label: 'action.files.open', keys: ['App+O'] },
+  { id: 'forward.manage', label: 'action.forward.manage', keys: [] },
   { id: 'tab.close', label: 'action.tab.close', keys: ['App+W'] },
   { id: 'tab.next', label: 'action.tab.next', keys: ['Ctrl+Tab'] },
   { id: 'tab.prev', label: 'action.tab.prev', keys: ['Ctrl+Shift+Tab'] },

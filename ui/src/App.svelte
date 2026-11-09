@@ -8,6 +8,8 @@
   import PasswordPrompt from './lib/hosts/PasswordPrompt.svelte';
   import QuickConnect from './lib/hosts/QuickConnect.svelte';
   import HostKeyDialog from './lib/hosts/HostKeyDialog.svelte';
+  import ForwardsDialog from './lib/forwards/ForwardsDialog.svelte';
+  import { forwardStatuses } from './lib/forwards/forwards.svelte';
   import { hosts, needsPassword } from './lib/hosts/hosts.svelte';
   import { vault } from './lib/vault/vault.svelte';
   import { actionFor, type ActionId } from './lib/actions';
@@ -28,6 +30,7 @@
   let editing = $state<HostEntry | null | undefined>(undefined);
   let passwordRequest = $state<PasswordRequest | null>(null);
   let hostKeyPrompts = $state<HostKeyPrompt[]>([]);
+  let forwardsHost = $state<HostEntry | null>(null);
   let notice = $state('');
   let noticeTimer = 0;
 
@@ -146,6 +149,14 @@
       case 'files.open':
         if (!workspace.openFilesBesideFocused()) showNotice(t('files.noRemote'));
         break;
+      case 'forward.manage': {
+        const pane = workspace.focusedPane;
+        const hostId = pane ? hostIdOf(pane.target) : undefined;
+        const host = hostId ? hosts.find(hostId) : undefined;
+        if (host) forwardsHost = host;
+        else showNotice(t('forward.noHost'));
+        break;
+      }
       default:
         if (id.startsWith('tab.goto')) workspace.gotoTab(Number(id.slice('tab.goto'.length)) - 1);
     }
@@ -163,6 +174,7 @@
     workspace.openTab({ kind: 'local' });
     vault.init().catch((error: unknown) => console.warn('vault state unavailable', error));
     hosts.refresh().catch((error: unknown) => showNotice(errorText(error)));
+    forwardStatuses.start().catch((error: unknown) => console.warn('forward events unavailable', error));
     const unlisten = onHostKeyPrompt((prompt) => (hostKeyPrompts = [...hostKeyPrompts, prompt]));
     return () => void unlisten.then((stop) => stop());
   });
@@ -172,7 +184,7 @@
 
 <div class="app">
   {#if sidebarOpen}
-    <HostSidebar onconnect={connect} onfiles={openFiles} onedit={(host) => (editing = host)} onquick={() => (quickOpen = true)} onnotice={showNotice} />
+    <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onquick={() => (quickOpen = true)} onnotice={showNotice} />
   {/if}
   <div class="main">
     <TabBar onnew={() => run('tab.newLocal')} />
@@ -217,6 +229,10 @@
     onsubmit={submitPassword}
     onclose={() => (passwordRequest = null)}
   />
+{/if}
+
+{#if forwardsHost}
+  <ForwardsDialog host={forwardsHost} onclose={() => (forwardsHost = null)} />
 {/if}
 
 {#if hostKeyPrompts[0]}

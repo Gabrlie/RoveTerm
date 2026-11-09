@@ -269,3 +269,68 @@ export function transferClear(): Promise<void> {
 export function onTransferUpdate(handler: (update: TransferUpdate) => void): Promise<UnlistenFn> {
   return listen<TransferUpdate>('transfer-update', (event) => handler(event.payload));
 }
+
+export type ForwardId = string;
+
+export type ForwardSpec =
+  | { kind: 'local'; bind_host: string; bind_port: number; dest_host: string; dest_port: number }
+  | { kind: 'remote'; bind_host: string; bind_port: number; dest_host: string; dest_port: number }
+  | { kind: 'dynamic'; bind_host: string; bind_port: number };
+
+export interface ForwardDraft {
+  label: string;
+  spec: ForwardSpec;
+  auto_start: boolean;
+}
+
+export interface ForwardRule extends ForwardDraft {
+  id: ForwardId;
+  host_id: HostId;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ForwardStatus {
+  id: ForwardId;
+  host_id: HostId;
+  spec: ForwardSpec;
+  state: 'running' | 'stopped' | 'failed';
+  bound_port: number;
+  active: number;
+  total: number;
+  error: string | null;
+}
+
+export interface ForwardEntry extends ForwardRule {
+  status: ForwardStatus | null;
+  /** The local listener is reachable from other machines. */
+  public: boolean;
+}
+
+export function forwardList(hostId: HostId | null): Promise<ForwardEntry[]> {
+  return invoke('forward_list', { hostId });
+}
+
+export function forwardCreate(hostId: HostId, draft: ForwardDraft): Promise<ForwardEntry> {
+  return invoke('forward_create', { hostId, draft });
+}
+
+export function forwardUpdate(id: ForwardId, draft: ForwardDraft): Promise<ForwardEntry> {
+  return invoke('forward_update', { id, draft });
+}
+
+export function forwardDelete(id: ForwardId): Promise<void> {
+  return invoke('forward_delete', { id });
+}
+
+export function forwardStart(id: ForwardId, password: string | null, remember: boolean): Promise<ForwardStatus> {
+  return invoke('forward_start', { id, password, remember });
+}
+
+export function forwardStop(id: ForwardId): Promise<boolean> {
+  return invoke('forward_stop', { id });
+}
+
+export function onForwardUpdate(handler: (status: ForwardStatus) => void): Promise<UnlistenFn> {
+  return listen<ForwardStatus>('forward-update', (event) => handler(event.payload));
+}

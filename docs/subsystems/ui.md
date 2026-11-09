@@ -17,6 +17,7 @@
 | `src/lib/actions.ts` | actions 表：快捷键、命令面板的唯一来源 |
 | `src/lib/ui/` | 通用组件：`Icon`、`IconButton`、`Dialog`、`CommandPalette`；图标映射在 `icons.ts` |
 | `src/lib/files/` | SFTP 文件面板 `FileBrowser`、传输状态 `transfers.svelte.ts`、路径与格式化的纯函数 `format.ts` |
+| `src/lib/forwards/` | 端口转发对话框 `ForwardsDialog`、转发状态 `forwards.svelte.ts` |
 | `src/lib/hosts/` | 主机列表与搜索、主机编辑、快速连接、密码输入、host key 确认 |
 | `src/lib/vault/vault.svelte.ts` | vault 锁定状态，以及由用户操作触发的解锁和重置 |
 | `src/lib/i18n/` | 文案字典与 `t()`、`errorText()` |
@@ -54,6 +55,14 @@
 - 面板底部列出与该主机相关的传输（`transfer-update` 事件），显示进度并可取消；上传到当前目录的传输完成后自动刷新列表。
 - 是否显示隐藏文件保存在 `localStorage`，读写失败时按不显示处理。
 
+## 端口转发
+
+- 在主机栏中点主机的"端口转发"按钮，或在命令面板中运行"管理当前主机的端口转发"，打开该主机的转发对话框。
+- 对话框列出规则：类型（L / R / D）、地址、状态（运行中及连接数、失败原因、已停止），可以启动、停止、编辑、删除。修改规则会停止正在运行的转发。
+- 编辑器按类型显示字段和说明；本地或动态转发的监听地址不是回环地址时显示警告。勾选"自动启动"的规则在打开该主机的终端时启动。
+- 启动时需要密码（`ssh.credentials_required`）就在该规则下显示密码框，可以勾选记住密码。
+- `forwards.svelte.ts` 监听 `forward-update` 事件；主机栏在有运行中的转发时，在主机名旁显示转发数。
+
 ## 主机与凭据
 
 - 侧栏按分组列出主机，搜索时匹配名称、地址、用户名、分组和标签；双击或按 Enter 连接，悬停时显示编辑和删除按钮。
@@ -88,6 +97,7 @@
 | 新建主机 | `App+N` |
 | 显示或隐藏主机栏 | `App+B` |
 | 在终端旁打开文件面板 | `App+O` |
+| 管理当前主机的端口转发 | 无（命令面板） |
 
 ## 图标
 
