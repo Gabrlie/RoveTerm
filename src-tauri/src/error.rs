@@ -49,6 +49,8 @@ impl From<VaultError> for CommandError {
             VaultError::Locked(_) => "vault.locked",
             VaultError::HostNotFound(_) => "host.not_found",
             VaultError::ForwardNotFound(_) => "forward.not_found",
+            VaultError::KeyNotFound(_) => "key.not_found",
+            VaultError::KeyInUse(_) => "key.in_use",
             VaultError::Invalid(_) => "input.invalid",
             _ => "vault.error",
         };

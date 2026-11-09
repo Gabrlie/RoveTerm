@@ -235,10 +235,19 @@ async fn host_auth(
     host: &Host,
     typed: Option<Zeroizing<String>>,
 ) -> Result<AuthSpec, CommandError> {
+    if let AuthMethod::Key { key } = &host.auth {
+        state.ensure_unlocked().await?;
+        let secret = state.vault.ssh_key_secret(*key)?;
+        let stored = Secret::PrivateKey {
+            key: secret.private_key,
+            passphrase: secret.passphrase,
+        };
+        return Ok(AuthSpec::resolve(host, Some(stored), typed)?);
+    }
     let needs_stored_secret = match &host.auth {
         AuthMethod::Password => typed.is_none(),
         AuthMethod::PrivateKey | AuthMethod::KeyFile { .. } => true,
-        AuthMethod::Agent | AuthMethod::Interactive => false,
+        AuthMethod::Key { .. } | AuthMethod::Agent | AuthMethod::Interactive => false,
     };
     let stored = if needs_stored_secret && state.vault.has_secret(host.id)? {
         state.ensure_unlocked().await?;
@@ -282,6 +291,7 @@ fn remembered_secret(
             }),
             _ => None,
         },
-        AuthMethod::Agent | AuthMethod::Interactive => None,
+        // A typed passphrase for a library key is not stored; the library holds the key's own.
+        AuthMethod::Key { .. } | AuthMethod::Agent | AuthMethod::Interactive => None,
     })
 }

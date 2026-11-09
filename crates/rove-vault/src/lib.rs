@@ -7,6 +7,7 @@
 mod crypto;
 mod forward;
 mod key_cache;
+mod keys;
 mod model;
 mod prefs;
 mod store;
@@ -24,6 +25,7 @@ pub use key_cache::MemoryKeyCache;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use key_cache::OsKeyCache;
 pub use key_cache::{Interaction, KeyCache, KeyCacheError};
+pub use keys::{KeyDraft, KeyId, KeySecret, SshKey};
 pub use model::{
     AuthMethod, Host, HostDraft, HostId, HostKey, HostRoute, KnownHostStatus, ProxyProtocol, Secret,
 };
@@ -39,6 +41,12 @@ pub enum VaultError {
     /// No host with this id exists.
     #[error("host {0} not found")]
     HostNotFound(HostId),
+    /// No library key with this id exists.
+    #[error("key {0} not found")]
+    KeyNotFound(KeyId),
+    /// The key is still used by these hosts.
+    #[error("key is used by {}", .0.join(", "))]
+    KeyInUse(Vec<String>),
     /// No forwarding rule with this id exists.
     #[error("forward {0} not found")]
     ForwardNotFound(ForwardId),

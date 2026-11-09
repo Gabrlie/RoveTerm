@@ -100,7 +100,8 @@ pub enum AuthSpec {
 
 impl AuthSpec {
     /// Resolves credentials for `host` from its stored `secret` and an optional password typed by
-    /// the user. For key-based methods the typed value is a passphrase and takes precedence over
+    /// the user. For [`AuthMethod::Key`] the caller passes the library key as
+    /// [`Secret::PrivateKey`]. For key-based methods the typed value is a passphrase and takes precedence over
     /// a stored one. Returns [`SshError::CredentialsRequired`] when the user must be asked for a
     /// password first.
     pub fn resolve(
@@ -118,13 +119,15 @@ impl AuthSpec {
             (AuthMethod::Password | AuthMethod::Interactive, _, None) => {
                 Err(SshError::CredentialsRequired)
             }
-            (AuthMethod::PrivateKey, Some(Secret::PrivateKey { key, passphrase }), typed) => {
-                Ok(Self::PrivateKey {
-                    key,
-                    passphrase: typed.or(passphrase),
-                })
-            }
-            (AuthMethod::PrivateKey, _, _) => Err(SshError::Key(
+            (
+                AuthMethod::PrivateKey | AuthMethod::Key { .. },
+                Some(Secret::PrivateKey { key, passphrase }),
+                typed,
+            ) => Ok(Self::PrivateKey {
+                key,
+                passphrase: typed.or(passphrase),
+            }),
+            (AuthMethod::PrivateKey | AuthMethod::Key { .. }, _, _) => Err(SshError::Key(
                 "no private key is stored for this host".into(),
             )),
             (AuthMethod::KeyFile { path }, secret, typed) => Ok(Self::KeyFile {
@@ -444,6 +447,7 @@ mod tests {
             tags: Vec::new(),
             created_at: 0,
             updated_at: 0,
+            last_connected_at: None,
         }
     }
 

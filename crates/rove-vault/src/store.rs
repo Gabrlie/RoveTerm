@@ -11,12 +11,13 @@ use zeroize::Zeroizing;
 use crate::crypto::FieldCipher;
 use crate::model::now_millis;
 use crate::{
-    ForwardDraft, ForwardId, ForwardRule, Host, HostDraft, HostId, HostKey, HostRoute, Interaction,
-    KeyCache, KeyCacheError, KnownHostStatus, MasterKey, Preferences, Secret, VaultError,
+    AuthMethod, ForwardDraft, ForwardId, ForwardRule, Host, HostDraft, HostId, HostKey, HostRoute,
+    Interaction, KeyCache, KeyCacheError, KnownHostStatus, MasterKey, Preferences, Secret,
+    VaultError,
 };
 
 /// Version of the on-disk schema, stored in `PRAGMA user_version`. Only ever increases.
-pub const SCHEMA_VERSION: i32 = 4;
+pub const SCHEMA_VERSION: i32 = 5;
 
 /// Longest chain of jump hosts a route may form.
 pub const MAX_JUMP_DEPTH: usize = 4;
@@ -55,7 +56,7 @@ pub enum LockReason {
 /// Host, secret and known-host storage. Host metadata is always readable; secrets require the
 /// vault to be unlocked with the device master key.
 pub struct Vault {
-    conn: Mutex<Connection>,
+    pub(crate) conn: Mutex<Connection>,
     cipher: RwLock<Option<FieldCipher>>,
     state: RwLock<LockState>,
     key_cache: Arc<dyn KeyCache>,
@@ -175,6 +176,7 @@ impl Vault {
             let mut conn = self.conn.lock();
             let tx = conn.transaction()?;
             tx.execute("DELETE FROM host_secrets", [])?;
+            tx.execute("UPDATE ssh_keys SET sealed = NULL", [])?;
             tx.execute("DELETE FROM meta WHERE key = 'key_check'", [])?;
             tx.commit()?;
         }
@@ -190,7 +192,7 @@ impl Vault {
     pub fn list_hosts(&self) -> Result<Vec<Host>, VaultError> {
         let conn = self.conn.lock();
         let mut statement = conn.prepare(
-            "SELECT id, name, group_name, hostname, port, username, auth, tags, created_at, updated_at, route
+            "SELECT id, name, group_name, hostname, port, username, auth, tags, created_at, updated_at, route, last_connected_at
              FROM hosts ORDER BY group_name IS NOT NULL, group_name, name COLLATE NOCASE",
         )?;
         let rows = statement.query_map([], row_to_host)?;
@@ -202,7 +204,7 @@ impl Vault {
     pub fn host(&self, id: HostId) -> Result<Host, VaultError> {
         let conn = self.conn.lock();
         conn.query_row(
-            "SELECT id, name, group_name, hostname, port, username, auth, tags, created_at, updated_at, route
+            "SELECT id, name, group_name, hostname, port, username, auth, tags, created_at, updated_at, route, last_connected_at
              FROM hosts WHERE id = ?1",
             params![id.to_string()],
             row_to_host,
@@ -216,6 +218,7 @@ impl Vault {
         let draft = draft.validate()?;
         let id = HostId::new();
         self.check_route(id, &draft.route)?;
+        self.check_auth(&draft.auth)?;
         let now = now_millis();
         let host = Host {
             id,
@@ -229,6 +232,7 @@ impl Vault {
             tags: draft.tags,
             created_at: now,
             updated_at: now,
+            last_connected_at: None,
         };
         self.conn.lock().execute(
             "INSERT INTO hosts (id, name, group_name, hostname, port, username, auth, tags, created_at, updated_at, route)
@@ -256,6 +260,7 @@ impl Vault {
         let draft = draft.validate()?;
         let previous = self.host(id)?;
         self.check_route(id, &draft.route)?;
+        self.check_auth(&draft.auth)?;
         let now = now_millis();
         {
             let mut conn = self.conn.lock();
@@ -306,6 +311,23 @@ impl Vault {
             ],
         )?;
         tx.commit()?;
+        Ok(())
+    }
+
+    /// Records that host `id` was just connected to.
+    pub fn touch_host(&self, id: HostId) -> Result<(), VaultError> {
+        self.conn.lock().execute(
+            "UPDATE hosts SET last_connected_at = ?2 WHERE id = ?1",
+            params![id.to_string(), now_millis()],
+        )?;
+        Ok(())
+    }
+
+    /// Checks that a library key named by `auth` exists.
+    fn check_auth(&self, auth: &AuthMethod) -> Result<(), VaultError> {
+        if let AuthMethod::Key { key } = auth {
+            self.ssh_key(*key)?;
+        }
         Ok(())
     }
 
@@ -454,7 +476,7 @@ impl Vault {
         Ok(prefs)
     }
 
-    fn with_cipher<T>(
+    pub(crate) fn with_cipher<T>(
         &self,
         f: impl FnOnce(&FieldCipher) -> Result<T, VaultError>,
     ) -> Result<T, VaultError> {
@@ -619,6 +641,7 @@ fn row_to_host(row: &rusqlite::Row<'_>) -> rusqlite::Result<HostRow> {
             tags: serde_json::from_str(&tags)?,
             created_at: row.get(8)?,
             updated_at: row.get(9)?,
+            last_connected_at: row.get(11)?,
         })
     })())
 }
@@ -697,6 +720,24 @@ fn migrate(conn: &Connection) -> Result<(), VaultError> {
              ALTER TABLE hosts ADD COLUMN route TEXT NOT NULL DEFAULT '{"kind":"direct"}';
              PRAGMA user_version = 4;
              COMMIT;"#,
+        )?;
+    }
+    if version < 5 {
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE ssh_keys (
+                 id TEXT PRIMARY KEY,
+                 name TEXT NOT NULL,
+                 algorithm TEXT NOT NULL,
+                 public_key TEXT NOT NULL,
+                 fingerprint TEXT NOT NULL,
+                 sealed BLOB,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             ALTER TABLE hosts ADD COLUMN last_connected_at INTEGER;
+             PRAGMA user_version = 5;
+             COMMIT;",
         )?;
     }
     Ok(())

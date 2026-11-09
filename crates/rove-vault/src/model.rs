@@ -60,6 +60,11 @@ pub enum AuthMethod {
         /// Path to the private key file.
         path: String,
     },
+    /// A key from the key library.
+    Key {
+        /// The library key.
+        key: crate::KeyId,
+    },
     /// Keys offered by the running SSH agent.
     Agent,
     /// Ask for a password or keyboard-interactive responses at every connection.
@@ -124,6 +129,8 @@ pub struct Host {
     pub created_at: i64,
     /// Last modification time, Unix milliseconds.
     pub updated_at: i64,
+    /// Last successful connection, Unix milliseconds.
+    pub last_connected_at: Option<i64>,
 }
 
 /// Input for creating or updating a host. Validated by [`HostDraft::validate`].

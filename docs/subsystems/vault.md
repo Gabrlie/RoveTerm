@@ -40,9 +40,9 @@ pub trait KeyCache: Send + Sync {
 
 | 类型 | 说明 |
 |---|---|
-| `Host` | `id`、`name`、`group`、`hostname`、`port`、`username`、`auth`、`route`、`tags`、时间戳；不含任何秘密 |
+| `Host` | `id`、`name`、`group`、`hostname`、`port`、`username`、`auth`、`route`、`tags`、时间戳与最近连接时间 `last_connected_at`；不含任何秘密 |
 | `HostDraft` | 新建或修改主机的输入，由 `validate()` 去除空白并检查长度和字符 |
-| `AuthMethod` | `Password`、`PrivateKey`、`KeyFile { path }`、`Agent`、`Interactive` |
+| `AuthMethod` | `Password`、`PrivateKey`（每台主机单独保存的私钥）、`Key { key }`（密钥库中的密钥）、`KeyFile { path }`、`Agent`、`Interactive` |
 | `HostRoute` | `Direct`（默认）、`Jump { host }`（经另一台已保存主机跳转）、`Proxy { protocol, host, port }`（`http` 或 `socks5`，无认证） |
 | `Secret` | `Password`、`PrivateKey { key, passphrase }`、`Passphrase`；字段为 `Zeroizing<String>`，`Debug` 不输出内容 |
 | `HostKey` | 服务器公钥：算法、OpenSSH 单行格式、`SHA256:` 指纹 |
@@ -62,6 +62,8 @@ pub trait KeyCache: Send + Sync {
 
 `listens_publicly()` 判断本地监听地址是否对其他机器开放（非回环地址），UI 据此给出提示。
 
+密钥库保存具名的 SSH 密钥 `SshKey { id, name, algorithm, public_key, fingerprint, has_private }`，名称不区分大小写唯一。名称和公钥在锁定时可读；私钥和 passphrase（`KeySecret`）按记录绑定加密，读写需要解锁。vault 不解析密钥，调用方从私钥推出算法、公钥和指纹后通过 `KeyDraft` 传入。主机以 `AuthMethod::Key` 引用密钥，保存时检查密钥存在；仍被主机使用的密钥不能删除（`KeyInUse` 列出这些主机）。重置凭据时密钥条目保留，私钥被丢弃，`has_private` 变为 `false`，需重新导入。`touch_host` 记录最近一次成功连接的时间。
+
 偏好设置 `Preferences` 以一条记录保存，锁定时照常可读写；记录中缺少的字段取默认值，因此旧记录在新增字段后仍可读取。`set_preferences` 先经 `validate()` 校验：
 
 | 字段 | 默认值 | 校验 |
@@ -74,4 +76,4 @@ pub trait KeyCache: Send + Sync {
 
 ## 表结构
 
-`meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`、`forwards`（外键级联删除）、`preferences`。主机的路线以 JSON 存在 `hosts.route` 列。结构版本记录在 `PRAGMA user_version`，当前版本为 4；打开旧版本数据库时按版本依次迁移。
+`meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`、`forwards`（外键级联删除）、`preferences`、`ssh_keys`。主机的路线以 JSON 存在 `hosts.route` 列。结构版本记录在 `PRAGMA user_version`，当前版本为 5；打开旧版本数据库时按版本依次迁移。

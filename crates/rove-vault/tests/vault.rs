@@ -417,3 +417,75 @@ fn proxy_routes_round_trip() {
     assert_eq!(vault.list_hosts().unwrap()[0].route, route);
     assert_eq!(vault.host(host.id).unwrap().route, route);
 }
+
+fn key_draft(name: &str) -> KeyDraft {
+    KeyDraft {
+        name: name.into(),
+        algorithm: "ssh-ed25519".into(),
+        public_key: format!("ssh-ed25519 AAAA {name}"),
+        fingerprint: format!("SHA256:{name}"),
+        secret: KeySecret {
+            private_key: Zeroizing::new(format!("PRIVATE {name}")),
+            passphrase: None,
+        },
+    }
+}
+
+#[test]
+fn key_library_seals_private_keys_and_guards_keys_in_use() {
+    let (vault, _) = vault();
+    assert!(matches!(
+        vault.create_ssh_key(key_draft("work")),
+        Err(VaultError::Locked(_))
+    ));
+    vault.unlock();
+    let work = vault.create_ssh_key(key_draft(" work ")).unwrap();
+    assert_eq!(work.name, "work");
+    assert!(work.has_private);
+    assert!(matches!(
+        vault.create_ssh_key(key_draft("WORK")),
+        Err(VaultError::Invalid(_))
+    ));
+    assert_eq!(
+        vault.ssh_key_secret(work.id).unwrap().private_key.as_str(),
+        "PRIVATE  work "
+    );
+
+    let host = vault
+        .create_host(draft("db", AuthMethod::Key { key: work.id }))
+        .unwrap();
+    assert!(matches!(
+        vault.create_host(draft("x", AuthMethod::Key { key: KeyId::new() })),
+        Err(VaultError::KeyNotFound(_))
+    ));
+    assert!(matches!(
+        vault.delete_ssh_key(work.id),
+        Err(VaultError::KeyInUse(names)) if names == ["db"]
+    ));
+
+    let renamed = vault.rename_ssh_key(work.id, "laptop").unwrap();
+    assert_eq!(renamed.name, "laptop");
+    let replaced = vault.replace_ssh_key(work.id, key_draft("laptop")).unwrap();
+    assert_eq!(replaced.public_key, "ssh-ed25519 AAAA laptop");
+
+    vault.reset_secrets().unwrap();
+    let after_reset = vault.ssh_key(work.id).unwrap();
+    assert!(!after_reset.has_private);
+    assert!(matches!(
+        vault.ssh_key_secret(work.id),
+        Err(VaultError::Invalid(_))
+    ));
+
+    vault.delete_host(host.id).unwrap();
+    vault.delete_ssh_key(work.id).unwrap();
+    assert!(vault.list_ssh_keys().unwrap().is_empty());
+}
+
+#[test]
+fn touching_a_host_records_the_connection_time() {
+    let (vault, _) = vault();
+    let host = vault.create_host(draft("web", AuthMethod::Agent)).unwrap();
+    assert_eq!(host.last_connected_at, None);
+    vault.touch_host(host.id).unwrap();
+    assert!(vault.host(host.id).unwrap().last_connected_at.is_some());
+}
