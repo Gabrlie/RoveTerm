@@ -510,8 +510,24 @@ export function keyImport(name: string, privateKey: string, passphrase: string |
   return invoke('key_import', { name, privateKey, passphrase, publicKey });
 }
 
-export function keyReadFile(path: string): Promise<string> {
-  return invoke('key_read_file', { path });
+/** Both halves found from one chosen key file; see `key_load_file`. */
+export interface LoadedKey {
+  private_key: string | null;
+  public_key: string | null;
+  /** File name without `.pub`, as a suggested key name. */
+  name: string;
+  /** The private key file, or the chosen file when no private key was found. */
+  path: string;
+}
+
+/** Reads a private or public key file (detected from its text) and the other half next to it. */
+export function keyLoadFile(path: string): Promise<LoadedKey> {
+  return invoke('key_load_file', { path });
+}
+
+/** Default key files in `~/.ssh` on this device, most preferred first; empty on mobile. */
+export function keyDefaultFiles(): Promise<string[]> {
+  return invoke('key_default_files');
 }
 
 /** Renames a key; with `publicKey` replaces its public key; with `privateKey` replaces both halves. */

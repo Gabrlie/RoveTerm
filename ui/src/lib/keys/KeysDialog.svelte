@@ -2,6 +2,7 @@
   // The key library: list on the left, the selected key or a generate/import form on the right.
   import { onMount } from 'svelte';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
+  import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
   import Dialog from '../ui/Dialog.svelte';
   import Select from '../ui/Select.svelte';
   import Icon from '../ui/Icon.svelte';
@@ -13,7 +14,8 @@
     keyGenerate,
     keyImport,
     keyInstall,
-    keyReadFile,
+    keyDefaultFiles,
+    keyLoadFile,
     keyReveal,
     keyUpdate,
     type KeyType,
@@ -97,27 +99,53 @@
     }
   }
 
-  async function loadFile(): Promise<void> {
-    const path = await openDialog({ multiple: false, directory: false, title: t('keys.chooseFile') });
-    if (typeof path !== 'string') return;
-    try {
-      privateKey = await keyReadFile(path);
-      if (!name) name = path.split(/[\\/]/).pop() ?? '';
-    } catch (caught) {
-      error = errorText(caught);
-      return;
-    }
-    // OpenSSH keeps the public key next to the private one; use it when present.
-    if (!publicKey.trim()) {
-      publicKey = await keyReadFile(`${path}.pub`).catch(() => '');
+  let keyMenu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+
+  /** `~/.ssh/id_ed25519` for a path inside the user's `.ssh` directory. */
+  function shortPath(path: string): string {
+    const at = path.replace(/\\/g, '/').lastIndexOf('/.ssh/');
+    return at >= 0 ? `~${path.replace(/\\/g, '/').slice(at)}` : path;
+  }
+
+  /**
+   * Fills the form from the user's own keys: one default key in ~/.ssh is read directly, several
+   * are offered in a menu, and with none the file picker opens. The chosen file may hold either
+   * half; the other half is read from beside it.
+   */
+  async function loadKey(event: MouseEvent): Promise<void> {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const found = await keyDefaultFiles().catch(() => [] as string[]);
+    const [only] = found;
+    if (found.length === 1 && only) {
+      await applyKeyFile(only);
+    } else if (found.length > 1) {
+      keyMenu = {
+        x: rect.left,
+        y: rect.bottom + 4,
+        items: [
+          ...found.map((path) => ({ label: shortPath(path), icon: 'key' as const, onselect: () => void applyKeyFile(path) })),
+          { label: t('keys.chooseOther'), icon: 'folder' as const, separated: true, onselect: () => void chooseKeyFile() },
+        ],
+      };
+    } else {
+      await chooseKeyFile();
     }
   }
 
-  async function loadPublicFile(): Promise<void> {
-    const path = await openDialog({ multiple: false, directory: false, title: t('keys.choosePublicFile') });
-    if (typeof path !== 'string') return;
+  async function chooseKeyFile(): Promise<void> {
+    const path = await openDialog({ multiple: false, directory: false, title: t('keys.chooseFile') });
+    if (typeof path === 'string') await applyKeyFile(path);
+  }
+
+  async function applyKeyFile(path: string): Promise<void> {
+    error = '';
     try {
-      publicKey = (await keyReadFile(path)).trim();
+      const loaded = await keyLoadFile(path);
+      if (loaded.private_key) privateKey = loaded.private_key;
+      if (loaded.public_key) publicKey = loaded.public_key;
+      if (!name.trim()) name = loaded.name;
+      notice = t('keys.loadedFrom', { path: shortPath(loaded.path) });
+      if (!loaded.private_key) error = t('keys.publicOnly');
     } catch (caught) {
       error = errorText(caught);
     }
@@ -335,16 +363,13 @@
               <textarea rows="7" bind:value={privateKey} required spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
             </label>
             <div class="row-actions">
-              <button type="button" class="secondary" onclick={() => void loadFile()}>{t('keys.fromFile')}</button>
+              <button type="button" class="secondary" onclick={(event) => void loadKey(event)}>{t('keys.fromFile')}</button>
             </div>
             <label
               >{t('keys.publicKeyOptional')}
               <textarea rows="2" bind:value={publicKey} spellcheck="false" placeholder="ssh-ed25519 AAAA… comment"></textarea>
             </label>
             <p class="hint">{t('keys.publicHint')}</p>
-            <div class="row-actions">
-              <button type="button" class="secondary" onclick={() => void loadPublicFile()}>{t('keys.publicFromFile')}</button>
-            </div>
           {/if}
           <label
             >{mode === 'generate' ? t('keys.newPassphrase') : t('host.passphrase')}
@@ -363,6 +388,10 @@
     <button type="button" class="secondary" onclick={onclose}>{t('common.close')}</button>
   {/snippet}
 </Dialog>
+
+{#if keyMenu}
+  <ContextMenu x={keyMenu.x} y={keyMenu.y} items={keyMenu.items} onclose={() => (keyMenu = null)} />
+{/if}
 
 <style>
   .layout {

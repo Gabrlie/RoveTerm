@@ -123,25 +123,145 @@ pub async fn key_import(
     Ok(state.vault.create_ssh_key(draft)?)
 }
 
-/// Reads a private key file chosen by the user so its text can be reviewed before importing.
-#[tauri::command]
-pub async fn key_read_file(path: String) -> Result<String, CommandError> {
-    let path = Path::new(&path);
-    if !path.is_absolute() {
-        return Err(CommandError::new("input.invalid", "not an absolute path"));
+/// What a key file holds, judged from its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyFileKind {
+    /// OpenSSH, PEM or PuTTY private key.
+    Private,
+    /// One OpenSSH public key line.
+    Public,
+}
+
+fn classify(text: &str) -> Option<KeyFileKind> {
+    let text = text.trim();
+    if text.starts_with("-----BEGIN ") || text.starts_with("PuTTY-User-Key-File-") {
+        return Some(KeyFileKind::Private);
     }
+    let first = text.split_whitespace().next().unwrap_or_default();
+    let public_type = first.starts_with("ssh-")
+        || first.starts_with("ecdsa-sha2-")
+        || first.starts_with("sk-ssh-")
+        || first.starts_with("sk-ecdsa-");
+    (public_type && text.lines().count() == 1).then_some(KeyFileKind::Public)
+}
+
+/// Reads a key file of at most [`MAX_KEY_TEXT`] bytes.
+async fn read_key_text(path: &Path) -> Result<String, CommandError> {
     let metadata = tokio::fs::metadata(path)
         .await
         .map_err(|error| CommandError::new("fs.io", error.to_string()))?;
     if !metadata.is_file() || metadata.len() > MAX_KEY_TEXT as u64 {
         return Err(CommandError::new(
             "input.invalid",
-            "not a private key file (too large or not a file)",
+            "not a key file (too large or not a file)",
         ));
     }
     tokio::fs::read_to_string(path)
         .await
         .map_err(|error| CommandError::new("fs.io", error.to_string()))
+}
+
+/// The other half of a key pair, when its file exists and holds that kind of key.
+async fn partner(path: &Path, kind: KeyFileKind) -> Option<String> {
+    let text = read_key_text(path).await.ok()?;
+    (classify(&text) == Some(kind)).then_some(text)
+}
+
+/// Both halves found from one chosen file, for review before importing.
+#[derive(Debug, Serialize)]
+pub struct LoadedKey {
+    pub private_key: Option<String>,
+    pub public_key: Option<String>,
+    /// File name without `.pub`, as a suggested key name.
+    pub name: String,
+    /// The private key file, or the chosen file when no private key was found.
+    pub path: String,
+}
+
+/// Reads the key file at `path`, decides whether it is a private or a public key, and also reads
+/// the other half next to it (`<path>.pub` for a private key, `<path>` without `.pub` for a
+/// public one). Fails with `key.unrecognized` when the file is neither.
+#[tauri::command]
+pub async fn key_load_file(path: String) -> Result<LoadedKey, CommandError> {
+    let chosen = Path::new(&path);
+    if !chosen.is_absolute() {
+        return Err(CommandError::new("input.invalid", "not an absolute path"));
+    }
+    let text = read_key_text(chosen).await?;
+    let file_name = chosen
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match classify(&text) {
+        Some(KeyFileKind::Private) => {
+            let public = chosen.with_file_name(format!("{file_name}.pub"));
+            Ok(LoadedKey {
+                public_key: partner(&public, KeyFileKind::Public)
+                    .await
+                    .map(|key| key.trim().to_owned()),
+                private_key: Some(text),
+                name: file_name,
+                path,
+            })
+        }
+        Some(KeyFileKind::Public) => {
+            let stem = file_name
+                .strip_suffix(".pub")
+                .unwrap_or(&file_name)
+                .to_owned();
+            let private_path = chosen.with_file_name(&stem);
+            let private_key = if stem == file_name {
+                None
+            } else {
+                partner(&private_path, KeyFileKind::Private).await
+            };
+            Ok(LoadedKey {
+                path: if private_key.is_some() {
+                    private_path.to_string_lossy().into_owned()
+                } else {
+                    path
+                },
+                private_key,
+                public_key: Some(text.trim().to_owned()),
+                name: stem,
+            })
+        }
+        None => Err(CommandError::new(
+            "key.unrecognized",
+            "the file is neither a private nor a public SSH key",
+        )),
+    }
+}
+
+/// Default key files in `~/.ssh` that exist on this device, most preferred first. The app is not
+/// sandboxed on desktop, so these are read directly; mobile has no such directory.
+#[tauri::command]
+pub fn key_default_files(app: tauri::AppHandle) -> Vec<String> {
+    #[cfg(desktop)]
+    {
+        use tauri::Manager;
+        const NAMES: [&str; 5] = [
+            "id_ed25519",
+            "id_ecdsa",
+            "id_rsa",
+            "id_ed25519_sk",
+            "id_ecdsa_sk",
+        ];
+        let Ok(home) = app.path().home_dir() else {
+            return Vec::new();
+        };
+        NAMES
+            .iter()
+            .map(|name| home.join(".ssh").join(name))
+            .filter(|path| path.is_file())
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect()
+    }
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Vec::new()
+    }
 }
 
 /// Renames a key; with `public_key`, also replaces its public key (checked against the stored
@@ -242,4 +362,76 @@ pub async fn key_install(
         "key.install_failed",
         format!("exit {:?}: {}", output.code, stderr.trim()),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_key_files() {
+        assert_eq!(
+            classify(
+                "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Blbg==\n-----END OPENSSH PRIVATE KEY-----\n"
+            ),
+            Some(KeyFileKind::Private)
+        );
+        assert_eq!(
+            classify("PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\n"),
+            Some(KeyFileKind::Private)
+        );
+        assert_eq!(
+            classify("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA me@laptop\n"),
+            Some(KeyFileKind::Public)
+        );
+        assert_eq!(
+            classify("ecdsa-sha2-nistp256 AAAAE2VjZHNh"),
+            Some(KeyFileKind::Public)
+        );
+        assert_eq!(classify("ssh-rsa AAAA\nssh-rsa BBBB\n"), None);
+        assert_eq!(classify("Host example\n  User root\n"), None);
+        assert_eq!(classify(""), None);
+    }
+
+    #[tokio::test]
+    async fn loads_both_halves_from_either_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let private = dir.path().join("id_test");
+        std::fs::write(
+            &private,
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nx\n-----END OPENSSH PRIVATE KEY-----\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("id_test.pub"), "ssh-ed25519 AAAA me@host\n").unwrap();
+
+        let from_private = key_load_file(private.to_string_lossy().into_owned())
+            .await
+            .unwrap();
+        assert!(from_private.private_key.is_some());
+        assert_eq!(
+            from_private.public_key.as_deref(),
+            Some("ssh-ed25519 AAAA me@host")
+        );
+        assert_eq!(from_private.name, "id_test");
+
+        let from_public = key_load_file(
+            dir.path()
+                .join("id_test.pub")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .await
+        .unwrap();
+        assert!(from_public.private_key.is_some());
+        assert_eq!(from_public.name, "id_test");
+        assert_eq!(from_public.path, private.to_string_lossy());
+
+        let other = dir.path().join("notes.txt");
+        std::fs::write(&other, "hello").unwrap();
+        let error = key_load_file(other.to_string_lossy().into_owned())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "key.unrecognized");
+        assert!(key_load_file("relative/id_rsa".into()).await.is_err());
+    }
 }
