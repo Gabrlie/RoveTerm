@@ -103,7 +103,7 @@
   </div>
   <div class="search">
     <Icon name="search" size={14} />
-    <input bind:value={hosts.query} placeholder={t('host.search')} spellcheck="false" />
+    <input class="bare" bind:value={hosts.query} placeholder={t('host.search')} spellcheck="false" />
   </div>
   <div class="list">
     {#each hosts.grouped as [group, entries] (group ?? '')}

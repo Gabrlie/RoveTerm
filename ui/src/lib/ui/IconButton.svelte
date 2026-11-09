@@ -36,35 +36,43 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
+    width: var(--control-height);
+    height: var(--control-height);
     padding: 0;
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--fg-muted);
     cursor: pointer;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
   }
   .icon-button.small {
-    width: 22px;
-    height: 22px;
+    width: 24px;
+    height: 24px;
   }
   .icon-button:hover:not(:disabled) {
-    background: var(--bg-sunken);
+    background: var(--fill-hover);
     color: var(--fg);
   }
+  .icon-button:active:not(:disabled) {
+    background: var(--fill-pressed);
+  }
   .icon-button.active {
+    background: var(--accent-soft);
     color: var(--accent);
   }
   .icon-button.danger:hover:not(:disabled) {
+    background: var(--danger-soft);
     color: var(--danger);
   }
   .icon-button:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
+    outline: none;
+    box-shadow: var(--focus-ring);
   }
   .icon-button:disabled {
-    opacity: 0.4;
+    opacity: 0.35;
     cursor: default;
   }
 </style>

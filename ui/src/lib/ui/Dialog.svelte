@@ -58,25 +58,42 @@
     z-index: 30;
     display: grid;
     place-items: center;
-    background: color-mix(in srgb, var(--bg-sunken) 55%, transparent);
+    background: var(--overlay);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+    animation: fade var(--dur) var(--ease-out);
   }
   .dialog {
     max-height: 88vh;
     display: flex;
     flex-direction: column;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    box-shadow: 0 16px 40px rgb(0 0 0 / 0.2);
+    background: var(--material-popover);
+    backdrop-filter: var(--material-blur);
+    -webkit-backdrop-filter: var(--material-blur);
+    box-shadow: var(--glass-edge), var(--shadow-lg);
     outline: none;
+    animation: rise var(--dur-slow) var(--ease);
+  }
+  @keyframes fade {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.97);
+    }
   }
   header {
-    padding: var(--space-4) var(--space-4) var(--space-2);
+    padding: var(--space-5) var(--space-5) var(--space-2);
     font-size: var(--text-title);
     font-weight: 600;
+    letter-spacing: -0.01em;
   }
   .body {
-    padding: var(--space-2) var(--space-4);
+    padding: var(--space-2) var(--space-5);
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -86,33 +103,20 @@
     display: flex;
     justify-content: flex-end;
     gap: var(--space-2);
-    padding: var(--space-3) var(--space-4) var(--space-4);
+    padding: var(--space-4) var(--space-5) var(--space-5);
   }
   .dialog :global(label) {
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
+    gap: 5px;
     color: var(--fg-muted);
     font-size: var(--text-footnote);
-  }
-  .dialog :global(input),
-  .dialog :global(textarea) {
-    padding: 6px var(--space-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--bg);
-    color: var(--fg);
-    font: inherit;
+    font-weight: 500;
   }
   .dialog :global(textarea) {
     font-family: var(--font-mono);
     font-size: var(--text-footnote);
     resize: vertical;
-  }
-  .dialog :global(input:focus),
-  .dialog :global(textarea:focus) {
-    outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
-    outline-offset: -1px;
   }
   .dialog :global(.row) {
     display: flex;
@@ -126,35 +130,14 @@
     align-items: center;
     gap: var(--space-2);
     color: var(--fg);
+    font-weight: normal;
   }
   .dialog :global(.error) {
     margin: 0;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    background: var(--danger-soft);
     color: var(--danger);
     font-size: var(--text-footnote);
-  }
-  .dialog :global(button.primary),
-  .dialog :global(button.secondary) {
-    min-width: 76px;
-    padding: 6px var(--space-4);
-    border-radius: 999px;
-    font: inherit;
-    cursor: pointer;
-  }
-  .dialog :global(button.primary) {
-    border: none;
-    background: var(--accent);
-    color: #fff;
-  }
-  .dialog :global(button.primary.danger) {
-    background: var(--danger);
-  }
-  .dialog :global(button.secondary) {
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--fg);
-  }
-  .dialog :global(button:disabled) {
-    opacity: 0.5;
-    cursor: default;
   }
 </style>

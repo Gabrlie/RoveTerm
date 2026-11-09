@@ -40,7 +40,7 @@
 
 <div class="backdrop" role="presentation" onpointerdown={onclose}>
   <div class="palette" role="dialog" tabindex="-1" aria-label={t('action.palette.open')} onpointerdown={(event) => event.stopPropagation()}>
-    <input
+    <input class="bare"
       bind:this={input}
       bind:value={query}
       oninput={() => (selected = 0)}

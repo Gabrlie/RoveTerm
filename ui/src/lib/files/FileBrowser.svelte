@@ -394,7 +394,7 @@
     <IconButton icon="up" label={t('files.up')} small disabled={!fsId || parentPath(cwd) === null} onclick={goUp} />
     <IconButton icon="refresh" label={t('files.refresh')} small disabled={!fsId} onclick={() => void refresh()} />
     <form class="path" onsubmit={submitPath}>
-      <input bind:value={pathInput} spellcheck="false" disabled={!fsId} aria-label={t('files.path')} />
+      <input class="bare" bind:value={pathInput} spellcheck="false" disabled={!fsId} aria-label={t('files.path')} />
     </form>
     <IconButton icon="folderAdd" label={t('files.newFolder')} small disabled={!fsId} onclick={askMkdir} />
     <IconButton icon="upload" label={t('files.upload')} small disabled={!fsId} onclick={() => void pickUpload(false)} />

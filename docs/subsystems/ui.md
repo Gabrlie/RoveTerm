@@ -25,7 +25,8 @@
 | `src/lib/keys/` | 密钥库对话框 `KeysDialog` 与密钥列表 `keys.svelte.ts` |
 | `src/lib/settings/` | 偏好设置 `prefs.svelte.ts`（启动时在挂载前加载）与设置对话框 `SettingsDialog` |
 | `src/lib/i18n/` | 文案字典与 `t()`、`errorText()` |
-| `src/styles/tokens.css` | 设计 token：颜色、间距（4px 网格）、圆角、字号、字体 |
+| `src/styles/tokens.css` | 设计 token：表面与材质、细线、阴影、强调色派生、状态色、间距（4px 网格）、圆角、字号、字体、动效 |
+| `src/styles/controls.css` | 共享控件样式：按钮（`primary` / `secondary` / `plain`）、文本框、滚动条、分组表单（`form-group` / `form-row`） |
 | `src/styles/fonts.css`、`src/assets/fonts/` | 内置的 Symbols Nerd Font Mono 及其许可说明 |
 
 ## TermView
@@ -167,4 +168,11 @@
 
 ## 设计 token
 
-组件只读取 `tokens.css` 中的 CSS 变量，不写死颜色、间距和圆角。暗色主题跟随系统，也可以通过 `<html data-theme="light|dark">` 强制指定。
+组件只读取 `tokens.css` 中的 CSS 变量，不写死颜色、间距、圆角、阴影和动效时长。暗色主题跟随系统，也可以通过 `<html data-theme="light|dark">` 强制指定。
+
+- 表面分层：`--window`（窗口底色）之上是半透明材质 `--material-sidebar` / `--material-bar` / `--material-popover`，配合 `--material-blur` 做毛玻璃；内容区用不透明的 `--surface` / `--surface-raised`。WebKitGTK 接受但不绘制 `backdrop-filter`，所以 Linux 上 `<html data-blur="off">`，弹层材质改为不透明。
+- 分隔一律用半透明细线 `--separator`（常以 0.5px 的 `box-shadow` 绘制），`--border` 只给输入类控件描边。
+- 强调色只设 `--accent`，`--accent-hover`、`--accent-soft`、`--focus-ring` 等由 `color-mix()` 派生；状态色有 `--success` / `--warning` / `--danger` 及其 soft 版本。
+- `--shadow-sm|md|lg` 是多层柔和阴影，`--glass-edge` 是玻璃边缘高光；动效用 `--ease` 与 `--dur-fast|dur|dur-slow`，系统要求减少动效时时长为 0。
+- 旧名 `--bg`、`--bg-elevated`、`--bg-sunken` 暂作别名保留。
+- `controls.css` 的选择器都包在 `:where()` 里，没有优先级，组件自己的规则总能覆盖；自带外框的输入框（搜索框、路径栏）加 `class="bare"` 去掉文本框外观。开关用 `src/lib/ui/Switch.svelte`。

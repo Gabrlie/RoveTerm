@@ -46,7 +46,7 @@
   <header>
     <div class="search">
       <Icon name="search" size={15} />
-      <input bind:value={query} placeholder={t('host.search')} spellcheck="false" />
+      <input class="bare" bind:value={query} placeholder={t('host.search')} spellcheck="false" />
     </div>
     <button type="button" class="action" onclick={onquick}><Icon name="quickConnect" size={15} />{t('action.host.quickConnect')}</button>
     <button type="button" class="action" onclick={() => onedit(null)}><Icon name="add" size={15} />{t('host.new')}</button>

@@ -160,34 +160,47 @@
 {/if}
 
 <style>
+  /* Trigger looks like a macOS pop-up button; the list is a glass menu. */
   .select {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
     width: 100%;
-    padding: 6px var(--space-2);
-    border: 1px solid var(--border);
+    height: var(--control-height);
+    padding: 0 var(--space-1) 0 var(--space-2);
+    border: none;
     border-radius: var(--radius-sm);
-    background: var(--bg);
+    background: var(--surface-raised);
+    box-shadow:
+      0 0 0 0.5px var(--border),
+      0 0.5px 1.5px rgb(0 0 0 / 0.08);
     color: var(--fg);
     font: inherit;
     font-size: var(--text-body);
     text-align: left;
     cursor: pointer;
+    transition: box-shadow var(--dur-fast) var(--ease-out);
   }
   .select:focus-visible,
   .select.open {
-    outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
-    outline-offset: -1px;
+    outline: none;
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent),
+      var(--focus-ring);
   }
   .select:disabled {
-    opacity: 0.6;
+    opacity: 0.5;
     cursor: default;
   }
   .select :global(svg) {
     flex: none;
-    color: var(--fg-muted);
+    width: 18px;
+    height: 18px;
+    padding: 2px;
+    border-radius: var(--radius-xs);
+    background: var(--accent);
+    color: var(--accent-fg);
   }
   .value {
     overflow: hidden;
@@ -199,35 +212,45 @@
     z-index: 1000;
     max-height: 260px;
     margin: 0;
-    padding: var(--space-1);
+    padding: 5px;
     overflow-y: auto;
     list-style: none;
-    border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: var(--bg-elevated);
-    box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+    background: var(--material-popover);
+    backdrop-filter: var(--material-blur);
+    -webkit-backdrop-filter: var(--material-blur);
+    box-shadow: var(--glass-edge), var(--shadow-lg);
+    animation: pop var(--dur-fast) var(--ease-out);
   }
   .list.above {
     transform: translateY(-100%);
+    animation: none;
+  }
+  @keyframes pop {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
   }
   li {
     display: flex;
     align-items: center;
     gap: var(--space-1);
-    height: 30px;
+    height: 26px;
     padding: 0 var(--space-3) 0 var(--space-1);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-xs);
     color: var(--fg);
     font-size: var(--text-body);
     white-space: nowrap;
-    cursor: pointer;
+    cursor: default;
   }
   li.highlighted {
-    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    background: var(--accent);
+    color: var(--accent-fg);
   }
   .mark {
     display: inline-flex;
     width: 16px;
-    color: var(--accent);
+    color: inherit;
   }
 </style>

@@ -1,60 +1,166 @@
-/* Design tokens. Components read these variables and never hard-code colours, spacing or radii. */
+/* Design tokens. Components read these variables and never hard-code colours, spacing, radii,
+   shadows or timing. Surfaces are layered: the window, translucent materials (sidebar, bars,
+   popovers) blurred over it, and opaque content surfaces. Separators are translucent hairlines,
+   never solid borders. */
 :root {
-  --accent: #3b82f6;
-  --bg: #ffffff;
-  --bg-elevated: #f5f6f8;
-  --bg-sunken: #eceef2;
-  --fg: #1d2129;
-  --fg-muted: #6b7280;
-  --border: #dfe2e8;
-  --danger: #dc2626;
-  --term-bg: #fbfbfc;
-  --term-fg: #1d2129;
+  /* Accent: the only colour preferences change; everything accented derives from it. */
+  --accent: #007aff;
+  --accent-hover: color-mix(in srgb, var(--accent) 86%, #000);
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-softer: color-mix(in srgb, var(--accent) 8%, transparent);
+  --accent-fg: #fff;
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 38%, transparent);
+
+  /* Surfaces. */
+  --window: #e9e9ec;
+  --material-sidebar: rgb(232 232 236 / 0.78);
+  --material-bar: rgb(244 244 246 / 0.82);
+  --material-popover: rgb(246 246 248 / 0.93);
+  --material-blur: blur(24px) saturate(180%);
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --overlay: rgb(0 0 0 / 0.2);
+  --fill: rgb(0 0 0 / 0.045);
+  --fill-hover: rgb(0 0 0 / 0.06);
+  --fill-pressed: rgb(0 0 0 / 0.1);
+  --separator: rgb(0 0 0 / 0.08);
+  --border: rgb(0 0 0 / 0.13);
+  --glass-edge: inset 0 0.5px 0 rgb(255 255 255 / 0.75), 0 0 0 0.5px rgb(0 0 0 / 0.1);
+
+  /* Text. */
+  --fg: #1d1d1f;
+  --fg-muted: #6e6e73;
+  --fg-subtle: #a1a1a6;
+
+  /* Status. */
+  --success: #1f9d55;
+  --warning: #c27c0e;
+  --danger: #e0352b;
+  --success-soft: color-mix(in srgb, var(--success) 14%, transparent);
+  --warning-soft: color-mix(in srgb, var(--warning) 14%, transparent);
+  --danger-soft: color-mix(in srgb, var(--danger) 12%, transparent);
+
+  /* Terminal area; the colour scheme itself comes from the terminal theme. */
+  --term-bg: #ffffff;
+  --term-fg: #1d1d1f;
+
+  /* Elevation. */
+  --shadow-sm: 0 0.5px 1px rgb(0 0 0 / 0.1), 0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow-md: 0 1px 3px rgb(0 0 0 / 0.07), 0 6px 16px rgb(0 0 0 / 0.07);
+  --shadow-lg: 0 0 0 0.5px rgb(0 0 0 / 0.12), 0 8px 24px rgb(0 0 0 / 0.12), 0 28px 64px rgb(0 0 0 / 0.16);
+
+  /* Legacy names, kept as aliases while components migrate. */
+  --bg: var(--surface);
+  --bg-elevated: var(--surface-raised);
+  --bg-sunken: var(--fill);
 
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
+  --space-5: 20px;
   --space-6: 24px;
+  --space-8: 32px;
 
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
 
-  --font-ui: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  /* List rows and toolbar controls. */
+  --row-height: 30px;
+  --control-height: 28px;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui,
+    'PingFang SC', 'Microsoft YaHei UI', 'Noto Sans CJK SC', sans-serif;
   --font-mono: 'JetBrains Mono', 'Cascadia Mono', 'SF Mono', Menlo, Consolas, 'Noto Sans Mono CJK SC', monospace;
   --text-caption: 11px;
   --text-footnote: 12px;
   --text-body: 13px;
   --text-title: 15px;
+  --text-large: 20px;
+
+  /* Motion: a soft deceleration close to the system's spring animations. */
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 320ms;
 
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --bg: #17181c;
-    --bg-elevated: #1f2126;
-    --bg-sunken: #121316;
-    --fg: #e6e8ec;
-    --fg-muted: #9aa1ad;
-    --border: #2c2f36;
-    --term-bg: #121316;
-    --term-fg: #e6e8ec;
+    --window: #1b1b1d;
+    --material-sidebar: rgb(38 38 42 / 0.74);
+    --material-bar: rgb(34 34 37 / 0.82);
+    --material-popover: rgb(44 44 48 / 0.92);
+    --surface: #1e1e20;
+    --surface-raised: #2a2a2d;
+    --overlay: rgb(0 0 0 / 0.42);
+    --fill: rgb(255 255 255 / 0.06);
+    --fill-hover: rgb(255 255 255 / 0.08);
+    --fill-pressed: rgb(255 255 255 / 0.13);
+    --separator: rgb(255 255 255 / 0.08);
+    --border: rgb(255 255 255 / 0.14);
+    --glass-edge: inset 0 0.5px 0 rgb(255 255 255 / 0.12), 0 0 0 0.5px rgb(0 0 0 / 0.5);
+    --fg: #f2f2f4;
+    --fg-muted: #98989f;
+    --fg-subtle: #636366;
+    --accent: #0a84ff;
+    --success: #32d74b;
+    --warning: #ffb340;
+    --danger: #ff453a;
+    --term-bg: #1a1a1c;
+    --term-fg: #f2f2f4;
+    --shadow-sm: 0 0.5px 1px rgb(0 0 0 / 0.4), 0 1px 2px rgb(0 0 0 / 0.25);
+    --shadow-md: 0 1px 3px rgb(0 0 0 / 0.35), 0 6px 16px rgb(0 0 0 / 0.3);
+    --shadow-lg: 0 0 0 0.5px rgb(0 0 0 / 0.6), 0 8px 24px rgb(0 0 0 / 0.35), 0 28px 64px rgb(0 0 0 / 0.45);
     color-scheme: dark;
   }
 }
 
 :root[data-theme='dark'] {
-  --bg: #17181c;
-  --bg-elevated: #1f2126;
-  --bg-sunken: #121316;
-  --fg: #e6e8ec;
-  --fg-muted: #9aa1ad;
-  --border: #2c2f36;
-  --term-bg: #121316;
-  --term-fg: #e6e8ec;
+  --window: #1b1b1d;
+  --material-sidebar: rgb(38 38 42 / 0.74);
+  --material-bar: rgb(34 34 37 / 0.82);
+  --material-popover: rgb(44 44 48 / 0.92);
+  --surface: #1e1e20;
+  --surface-raised: #2a2a2d;
+  --overlay: rgb(0 0 0 / 0.42);
+  --fill: rgb(255 255 255 / 0.06);
+  --fill-hover: rgb(255 255 255 / 0.08);
+  --fill-pressed: rgb(255 255 255 / 0.13);
+  --separator: rgb(255 255 255 / 0.08);
+  --border: rgb(255 255 255 / 0.14);
+  --glass-edge: inset 0 0.5px 0 rgb(255 255 255 / 0.12), 0 0 0 0.5px rgb(0 0 0 / 0.5);
+  --fg: #f2f2f4;
+  --fg-muted: #98989f;
+  --fg-subtle: #636366;
+  --accent: #0a84ff;
+  --success: #32d74b;
+  --warning: #ffb340;
+  --danger: #ff453a;
+  --term-bg: #1a1a1c;
+  --term-fg: #f2f2f4;
+  --shadow-sm: 0 0.5px 1px rgb(0 0 0 / 0.4), 0 1px 2px rgb(0 0 0 / 0.25);
+  --shadow-md: 0 1px 3px rgb(0 0 0 / 0.35), 0 6px 16px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 0 0 0.5px rgb(0 0 0 / 0.6), 0 8px 24px rgb(0 0 0 / 0.35), 0 28px 64px rgb(0 0 0 / 0.45);
   color-scheme: dark;
+}
+
+:root[data-blur='off'] {
+  --material-popover: color-mix(in srgb, var(--surface-raised) 95%, var(--fg));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur: 0ms;
+    --dur-slow: 0ms;
+  }
 }
 
 * {
@@ -66,8 +172,15 @@ body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: var(--bg);
+  background: var(--window);
   color: var(--fg);
   font-family: var(--font-ui);
   font-size: var(--text-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
