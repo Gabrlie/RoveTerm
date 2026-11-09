@@ -22,6 +22,8 @@
   let { sidebarOpen, rightOpen, bottomOpen, onaction }: Props = $props();
 
   let bar = $state<HTMLElement>();
+  /** The menu titles: clicks there switch menus instead of closing them. */
+  let titles = $state<HTMLElement>();
   let open = $state<{ id: string; x: number; y: number } | null>(null);
   let maximized = $state(false);
   let unlistenResize: (() => void) | undefined;
@@ -85,7 +87,7 @@
 <header class="titlebar" class:mac={isMac} bind:this={bar} data-tauri-drag-region>
   {#if !isMac}
     <span class="mark" aria-hidden="true"><Icon name="terminal" size={15} /></span>
-    <nav class="menus" aria-label={t('menu.bar')}>
+    <nav class="menus" aria-label={t('menu.bar')} bind:this={titles}>
       {#each MENUS as menu (menu.id)}
         <button
           type="button"
@@ -134,7 +136,7 @@
   {@const menu = MENUS.find((candidate) => candidate.id === open?.id)}
   {#if menu}
     {#key menu.id}
-      <ContextMenu x={open.x} y={open.y} items={items(menu)} owner={bar} onstep={step} onclose={() => (open = null)} />
+      <ContextMenu x={open.x} y={open.y} items={items(menu)} owner={titles} onstep={step} onclose={() => (open = null)} />
     {/key}
   {/if}
 {/if}
