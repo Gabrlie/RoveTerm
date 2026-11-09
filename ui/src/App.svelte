@@ -20,10 +20,11 @@
   import { forwardStatuses } from './lib/forwards/forwards.svelte';
   import { hosts, needsPassword } from './lib/hosts/hosts.svelte';
   import { vault } from './lib/vault/vault.svelte';
-  import { actionFor, type ActionId } from './lib/actions';
+  import { actionFor, isMac, type ActionId } from './lib/actions';
+  import { isActionId, nativeMenuLabels, nativeMenus } from './lib/menu';
   import { terminals } from './lib/terminal/registry';
   import { HOME_TAB, workspace, type PaneTarget } from './lib/workspace/workspace.svelte';
-  import { onHostKeyPrompt, workspaceLoad, workspaceSave, type CredentialKind, type HostEntry, type HostKeyPrompt } from './lib/ipc';
+  import { menuSet, onHostKeyPrompt, onMenuAction, workspaceLoad, workspaceSave, type CredentialKind, type HostEntry, type HostKeyPrompt } from './lib/ipc';
   import { parseSnapshot } from './lib/workspace/snapshot';
   import { errorText, t } from './lib/i18n';
   import type { PaneId } from './lib/layout/layout';
@@ -199,6 +200,19 @@
       workspace.reopen(request.paneId, password, remember, request.override ? 'password' : 'natural');
     }
   }
+
+  // macOS: the menu bar follows the interface language; its items run actions here.
+  $effect(() => {
+    if (!isMac) return;
+    menuSet(nativeMenus(), nativeMenuLabels()).catch((error: unknown) => console.warn('menu bar unavailable', error));
+  });
+  $effect(() => {
+    if (!isMac) return;
+    const pending = onMenuAction((id) => {
+      if (isActionId(id)) run(id);
+    });
+    return () => void pending.then((unlisten) => unlisten());
+  });
 
   function run(id: ActionId): void {
     switch (id) {

@@ -3,6 +3,7 @@
 pub mod forward;
 pub mod host;
 pub mod keys;
+pub mod menu;
 pub mod monitor;
 pub mod prefs;
 pub mod session;

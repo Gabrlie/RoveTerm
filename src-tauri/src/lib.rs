@@ -129,6 +129,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(boot)
+        .on_menu_event(commands::menu::on_event)
         .invoke_handler(tauri::generate_handler![
             commands::session::session_open_local,
             commands::session::session_open_ssh,
@@ -179,6 +180,7 @@ pub fn run() {
             commands::snippets::snippet_update,
             commands::snippets::snippet_delete,
             commands::window::window_set_material,
+            commands::menu::menu_set,
             commands::workspace::workspace_save,
             commands::workspace::workspace_load,
             commands::prefs::prefs_get,

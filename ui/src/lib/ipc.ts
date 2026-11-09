@@ -613,3 +613,39 @@ export function workspaceLoad(): Promise<object | null> {
 export function windowSetMaterial(enabled: boolean): Promise<boolean> {
   return invoke('window_set_material', { enabled });
 }
+
+/** A menu as sent to the macOS menu bar; see `MenuSpec` in src-tauri. */
+export interface NativeMenu {
+  label: string;
+  items: ({ kind: 'action'; id: string; label: string } | { kind: 'separator' })[];
+}
+
+/** Texts of the system-provided macOS menu items, in the interface language. */
+export interface NativeMenuLabels {
+  about: string;
+  settings: string;
+  hide: string;
+  hide_others: string;
+  show_all: string;
+  quit: string;
+  edit: string;
+  undo: string;
+  redo: string;
+  cut: string;
+  copy: string;
+  paste: string;
+  select_all: string;
+  window: string;
+  minimize: string;
+  zoom: string;
+}
+
+/** Installs the macOS menu bar; a no-op elsewhere. */
+export function menuSet(menus: NativeMenu[], labels: NativeMenuLabels): Promise<void> {
+  return invoke('menu_set', { menus, labels });
+}
+
+/** Action ids of chosen macOS menu items. */
+export function onMenuAction(handler: (id: string) => void): Promise<UnlistenFn> {
+  return listen<string>('menu-action', (event) => handler(event.payload));
+}

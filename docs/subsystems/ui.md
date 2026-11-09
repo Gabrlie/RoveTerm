@@ -190,7 +190,7 @@
 - 窗口材质：启动时调用 `window_set_material`（`src/lib/ui/window.ts`），macOS 26 及以上用 Liquid Glass，更早的 macOS 用侧栏毛玻璃（vibrancy），Windows 11 用 Mica；Windows 10、Linux 和移动端返回 `false`，保持不透明。生效时 `<html data-material="on">`，`--window` 变为透明，侧栏和工具栏只做淡色叠加，内容区和终端仍不透明。窗口为此在 `tauri.macos.conf.json` / `tauri.windows.conf.json` 中设为 `transparent`。
 - 窗口顶部是 `TitleBar`（`src/lib/layout/TitleBar.svelte`，高 38px），空白处带 `data-tauri-drag-region`，可拖动、双击最大化；右侧是侧栏、底部面板、右侧面板三个布局开关。
   - Windows 与 Linux 不用系统标题栏（`decorations: false`，见 `tauri.windows.conf.json` / `tauri.linux.conf.json`）：左侧是 `menu.ts` 定义的文字菜单，点击展开、展开时指向其他菜单名即切换、左右方向键在菜单间移动；最右侧是自绘的最小化、最大化/还原、关闭按钮，最大化状态随窗口缩放更新。Windows 11 悬停最大化按钮时的贴靠布局弹窗因此不可用。
-  - macOS 使用覆盖式标题栏（`titleBarStyle: Overlay`，隐藏标题），红绿灯画在标题栏左侧（`trafficLightPosition` 为 16, 19），标题栏左侧留出 80px，不显示文字菜单。
+  - macOS 使用覆盖式标题栏（`titleBarStyle: Overlay`，隐藏标题），红绿灯画在标题栏左侧（`trafficLightPosition` 为 16, 19），标题栏左侧留出 80px，不显示文字菜单。菜单进入系统菜单栏：界面启动和切换语言时调用 `menu_set`，传入 `nativeMenus()`（`menu.ts` 中除编辑外的菜单，文字为当前语言）和系统项文字；应用菜单含关于、设置、隐藏、退出，编辑菜单使用系统预定义项（保证输入框原生复制粘贴），另有窗口菜单。选中动作项时后端发出 `menu-action` 事件，界面核对是动作表中的 id 后执行。原生菜单项不设快捷键，按键仍由动作表处理，避免与自定义绑定冲突或重复触发。
 - 分隔一律用半透明细线 `--separator`（常以 0.5px 的 `box-shadow` 绘制），`--border` 只给输入类控件描边。
 - 强调色只设 `--accent`，`--accent-hover`、`--accent-soft`、`--focus-ring` 等由 `color-mix()` 派生；状态色有 `--success` / `--warning` / `--danger` 及其 soft 版本。
 - `--shadow-sm|md|lg` 是多层柔和阴影，`--glass-edge` 是玻璃边缘高光；动效用 `--ease` 与 `--dur-fast|dur|dur-slow`，系统要求减少动效时时长为 0。
