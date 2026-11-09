@@ -8,6 +8,7 @@
 | [session](session.md) | `TerminalSession` seam、`SessionManager`、输出合并与回放 |
 | [pty](pty.md) | 本地 PTY 会话 |
 | [ssh](ssh.md) | SSH 认证、host key、连接池、ssh_config 与快速连接 |
+| [fs](fs.md) | `FileSystem` seam、本地文件系统、传输队列 |
 | [vault](vault.md) | 主机与凭据存储、设备主密钥、解锁 |
 | [journal](journal.md) | 持久事件日志 |
 | [ui](ui.md) | 前端结构、actions 表、i18n、设计 token |

@@ -11,7 +11,7 @@ src-tauri/     应用外壳：按 profile 组装插件，把 Tauri 命令翻译�
   │
 rove-kernel    Context：服务注册表 + 事件总线 + Disposer + Profile
   │
-插件 crate     rove-session / rove-pty / rove-ssh / rove-vault / rove-journal ……
+插件 crate     rove-session / rove-pty / rove-ssh / rove-fs / rove-vault / rove-journal ……
 ```
 
 Rust 侧不依赖 UI：所有核心 crate 都能脱离 Tauri 单独测试，headless profile（`rove` CLI，用于 MCP / ACP 模式）复用同一套插件。
@@ -42,6 +42,7 @@ Profile 是一组启用的插件加一份 TOML 配置。随应用交付的 profi
 | [rove-session](subsystems/session.md) | `TerminalSession` seam 的定义；会话表、输出合并、回放缓冲 | `SessionManager` |
 | [rove-pty](subsystems/pty.md) | 本地 PTY 会话 | `LocalTerminals` |
 | [rove-ssh](subsystems/ssh.md) | SSH 认证、host key 校验、连接复用、ssh_config | `SshConnector` |
+| [rove-fs](subsystems/fs.md) | `FileSystem` seam 的定义；本地文件系统、传输队列 | `FsSessions`、`TransferQueue`、`LocalFs` |
 | [rove-vault](subsystems/vault.md) | 主机与凭据存储、字段级加密、设备主密钥 | `Vault`、`KeyCache` |
 | [rove-journal](subsystems/journal.md) | 持久事件日志 | `JournalStore` |
 
@@ -84,7 +85,7 @@ src-tauri 的 OutputSink → ipc::Channel → TermView.write(Uint8Array)
 | `TerminalSession` | rove-session | rove-pty、rove-ssh | `SessionManager`、AI 终端工具 |
 | `KeyCache` | rove-vault | 系统钥匙串（`keyring`）、Android Keystore | `Vault` 解锁 |
 | `JournalStore` | rove-journal | SQLite | `SessionManager`、会话恢复、审计 |
-| `FileSystem` | rove-session | 本地、SFTP | SFTP 面板、ACP `fs/*`、MCP 文件工具 |
+| `FileSystem` | rove-fs | 本地、SFTP | 传输队列、SFTP 面板、ACP `fs/*`、MCP 文件工具 |
 | `SyncBackend` | rove-sync | WebDAV、S3、Gist、自建服务 | 同步引擎 |
 | `Policy` | rove-ai | 规则策略、模型审阅 | `exec/pre`、`fs/pre`、`tool/pre` 拦截器 |
 
@@ -111,5 +112,6 @@ src-tauri 的 OutputSink → ipc::Channel → TermView.write(Uint8Array)
 | 新增需要持久化的事实 | 定义新的 Journal 事件类型，从日志回放 |
 | 观察进行中的工作 | 监听对应的 Live 事件 |
 | 限制或审计某项能力 | 在该能力的 waterfall 事件上注册拦截器 |
+| 新增一种文件来源 | 实现 `FileSystem`，打开后放入 `FsSessions`；传输和文件面板无需改动（[fs](subsystems/fs.md)） |
 | 新增凭据缓存方式 | 实现 `KeyCache` 并在 profile 中替换 |
 | 新增一个插件 | 实现 `Plugin`，在 profile 中启用（[cookbook](cookbook/adding-a-plugin.md)） |
