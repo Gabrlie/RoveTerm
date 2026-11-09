@@ -50,6 +50,7 @@ import keyboard from 'lucide-static/icons/keyboard.svg?raw';
 import info from 'lucide-static/icons/info.svg?raw';
 import pulse from 'lucide-static/icons/activity.svg?raw';
 import paste from 'lucide-static/icons/clipboard.svg?raw';
+import cloud from 'lucide-static/icons/cloud.svg?raw';
 import minimize from 'lucide-static/icons/minus.svg?raw';
 import maximize from 'lucide-static/icons/square.svg?raw';
 import restore from 'lucide-static/icons/copy.svg?raw';
@@ -106,6 +107,7 @@ export const icons = {
   info,
   pulse,
   paste,
+  cloud,
   minimize,
   maximize,
   restore,

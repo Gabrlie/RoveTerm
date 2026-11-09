@@ -681,3 +681,40 @@ export function menuSet(menus: NativeMenu[], labels: NativeMenuLabels): Promise<
 export function onMenuAction(handler: (id: string) => void): Promise<UnlistenFn> {
   return listen<string>('menu-action', (event) => handler(event.payload));
 }
+
+/** Where a sync space lives; see `SyncTarget` in src-tauri. */
+export type SyncTarget = { kind: 'folder'; path: string };
+
+export interface SyncStatus {
+  configured: boolean;
+  target: SyncTarget | null;
+  /** The sync key is on this device and the vault is unlocked. */
+  ready: boolean;
+  device: string | null;
+  /** Records this device has synced. */
+  records: number;
+}
+
+/** What one sync round did. */
+export interface SyncReport {
+  segments: number;
+  applied: number;
+  pushed: number;
+}
+
+export function syncStatus(): Promise<SyncStatus> {
+  return invoke('sync_status');
+}
+
+/** Creates a space at `target` (`create`) or joins the one there, then syncs once. */
+export function syncSetup(target: SyncTarget, password: string, create: boolean): Promise<SyncReport> {
+  return invoke('sync_setup', { target, password, create });
+}
+
+export function syncNow(): Promise<SyncReport> {
+  return invoke('sync_now');
+}
+
+export function syncDisable(): Promise<void> {
+  return invoke('sync_disable');
+}

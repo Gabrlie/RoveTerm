@@ -34,6 +34,8 @@ pub struct AppState {
     /// Local PTY provider.
     #[cfg(desktop)]
     pub pty: Arc<rove_pty::LocalTerminals>,
+    /// Held while a sync round runs, so rounds never overlap.
+    pub sync_lock: tokio::sync::Mutex<()>,
     /// Plugin runtime and app-level registrations; taken on exit to unload plugins in order.
     pub lifetime: Mutex<Option<(Runtime, Vec<Disposer>)>>,
 }
@@ -54,6 +56,7 @@ impl AppState {
             journal: ctx.require::<dyn rove_journal::JournalStore>()?,
             #[cfg(desktop)]
             pty: ctx.require::<rove_pty::LocalTerminals>()?,
+            sync_lock: tokio::sync::Mutex::new(()),
             lifetime: Mutex::new(Some((runtime, Vec::new()))),
         })
     }

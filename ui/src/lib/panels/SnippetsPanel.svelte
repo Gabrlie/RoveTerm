@@ -1,6 +1,6 @@
 <script lang="ts">
   // Saved commands. "Insert" types a snippet into the focused terminal; "Run" also presses Enter.
-  import { onMount } from 'svelte';
+  import { sync } from '../sync/sync.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import Icon from '../ui/Icon.svelte';
   import { ask } from '../ui/confirm.svelte';
@@ -94,7 +94,11 @@
     queueMicrotask(() => node.focus());
   }
 
-  onMount(() => void load());
+  // Reload after a sync round brought in changes (and on first show).
+  $effect(() => {
+    void sync.generation;
+    void load();
+  });
 </script>
 
 <div class="snippets">

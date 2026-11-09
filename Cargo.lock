@@ -4145,6 +4145,7 @@ dependencies = [
  "rove-pty",
  "rove-session",
  "rove-ssh",
+ "rove-sync",
  "rove-vault",
  "serde",
  "serde_json",
@@ -4157,6 +4158,7 @@ dependencies = [
  "toml 1.2.1+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "windows-version",
  "zeroize",
 ]

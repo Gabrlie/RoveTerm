@@ -19,6 +19,7 @@
   import { forwardStatuses } from './lib/forwards/forwards.svelte';
   import { hosts, needsPassword } from './lib/hosts/hosts.svelte';
   import { vault } from './lib/vault/vault.svelte';
+  import { sync } from './lib/sync/sync.svelte';
   import { actionFor, isMac, type ActionId } from './lib/actions';
   import { isActionId, nativeMenuLabels, nativeMenus } from './lib/menu';
   import { terminals } from './lib/terminal/registry';
@@ -309,6 +310,16 @@
     event.stopPropagation();
     run(id);
   }
+
+  // Sync runs once the vault is unlocked (the sync key is sealed with the device key), then
+  // every few minutes.
+  let syncStarted = false;
+  $effect(() => {
+    if (vault.unlocked && !syncStarted) {
+      syncStarted = true;
+      sync.startAuto();
+    }
+  });
 
   // Session restore: reopen the last workspace once, then record changes (debounced).
   let restored = $state(false);
