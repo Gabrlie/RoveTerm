@@ -494,7 +494,9 @@ impl Runner {
         dst: &str,
     ) -> Result<(), FsError> {
         let fs = request.dst.as_ref();
-        let dir = fs.parent(dst).ok_or_else(|| FsError::InvalidPath(dst.to_owned()))?;
+        let dir = fs
+            .parent(dst)
+            .ok_or_else(|| FsError::InvalidPath(dst.to_owned()))?;
         let name: String = basename(dst).chars().take(100).collect();
         let temp = fs.join(&dir, &format!(".{name}.{}.part", self.update.id));
         let result = match self.copy(request, src, &temp).await {

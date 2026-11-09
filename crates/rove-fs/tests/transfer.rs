@@ -304,7 +304,9 @@ async fn remove_all_removes_a_directory_link_but_not_its_target() {
     let top_link = root.path().join("top-link");
     std::os::unix::fs::symlink(&target, &top_link).unwrap();
 
-    remove_all(&LocalFs, &top_link.to_string_lossy()).await.unwrap();
+    remove_all(&LocalFs, &top_link.to_string_lossy())
+        .await
+        .unwrap();
     assert!(!top_link.exists() && std::fs::symlink_metadata(&top_link).is_err());
     remove_all(&LocalFs, &tree.to_string_lossy()).await.unwrap();
     assert!(!tree.exists());

@@ -140,4 +140,27 @@ async fn uploads_and_downloads_through_the_transfer_queue() {
         std::fs::read(back.join("project/README")).unwrap(),
         b"readme"
     );
+
+    // Overwriting an existing remote file replaces it through the temporary file.
+    std::fs::write(tree.join("README"), b"updated").unwrap();
+    let again = queue.enqueue(TransferRequest {
+        src: Arc::new(LocalFs),
+        src_path: tree.join("README").to_string_lossy().into_owned(),
+        dst: sftp.clone(),
+        dst_dir: sftp.join(&home, "project"),
+        conflict: Conflict::Overwrite,
+        tag: "overwrite".into(),
+    });
+    let replaced = wait(again).await;
+    assert_eq!(replaced.state, TransferState::Done, "{:?}", replaced.error);
+    assert_eq!(
+        std::fs::read(remote.path().join("project/README")).unwrap(),
+        b"updated"
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(remote.path().join("project"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".part"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
 }
