@@ -81,7 +81,6 @@
     font-size: var(--text-footnote);
   }
   .dialog :global(input),
-  .dialog :global(select),
   .dialog :global(textarea) {
     padding: 6px var(--space-2);
     border: 1px solid var(--border);
@@ -96,7 +95,6 @@
     resize: vertical;
   }
   .dialog :global(input:focus),
-  .dialog :global(select:focus),
   .dialog :global(textarea:focus) {
     outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
     outline-offset: -1px;

@@ -1,6 +1,7 @@
 <script lang="ts">
   // Create or edit a host. The draft stays in the form when saving fails (for example a denied unlock).
   import Dialog from '../ui/Dialog.svelte';
+  import Select from '../ui/Select.svelte';
   import { hostCreate, hostUpdate, type AuthMethod, type HostDraft, type HostEntry, type Secret } from '../ipc';
   import { errorText, t } from '../i18n';
   import { hosts } from './hosts.svelte';
@@ -85,13 +86,16 @@
     </div>
     <label
       >{t('host.auth')}
-      <select bind:value={method}>
-        <option value="password">{t('host.auth.password')}</option>
-        <option value="private_key">{t('host.auth.privateKey')}</option>
-        <option value="key_file">{t('host.auth.keyFile')}</option>
-        <option value="agent">{t('host.auth.agent')}</option>
-        <option value="interactive">{t('host.auth.interactive')}</option>
-      </select>
+      <Select
+        bind:value={method}
+        options={[
+          { value: 'password', label: t('host.auth.password') },
+          { value: 'private_key', label: t('host.auth.privateKey') },
+          { value: 'key_file', label: t('host.auth.keyFile') },
+          { value: 'agent', label: t('host.auth.agent') },
+          { value: 'interactive', label: t('host.auth.interactive') },
+        ]}
+      />
     </label>
     {#if method === 'password'}
       <label

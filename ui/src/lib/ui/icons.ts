@@ -16,6 +16,8 @@ import quickConnect from 'remixicon/icons/Weather/flashlight-line.svg?raw';
 import command from 'remixicon/icons/Development/command-line.svg?raw';
 import more from 'remixicon/icons/System/more-2-line.svg?raw';
 import chevron from 'remixicon/icons/Arrows/arrow-right-s-line.svg?raw';
+import chevronDown from 'remixicon/icons/Arrows/arrow-down-s-line.svg?raw';
+import check from 'remixicon/icons/System/check-line.svg?raw';
 import folder from 'remixicon/icons/Document/folder-line.svg?raw';
 import file from 'remixicon/icons/Document/file-line.svg?raw';
 import folderAdd from 'remixicon/icons/Document/folder-add-line.svg?raw';
@@ -54,6 +56,8 @@ export const icons = {
   command,
   more,
   chevron,
+  chevronDown,
+  check,
   folder,
   file,
   folderAdd,

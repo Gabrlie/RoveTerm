@@ -4,6 +4,7 @@
   import Dialog from '../ui/Dialog.svelte';
   import Icon from '../ui/Icon.svelte';
   import IconButton from '../ui/IconButton.svelte';
+  import Select from '../ui/Select.svelte';
   import {
     forwardCreate,
     forwardDelete,
@@ -210,11 +211,15 @@
     <form id="forward-form" class="editor" class:separated={rules.length > 0} onsubmit={save}>
       <label
         >{t('forward.kind')}
-        <select value={kind} onchange={(event) => changeKind(event.currentTarget.value as Kind)}>
-          <option value="local">{t('forward.kind.local')}</option>
-          <option value="remote">{t('forward.kind.remote')}</option>
-          <option value="dynamic">{t('forward.kind.dynamic')}</option>
-        </select>
+        <Select
+          value={kind}
+          onchange={changeKind}
+          options={[
+            { value: 'local', label: t('forward.kind.local') },
+            { value: 'remote', label: t('forward.kind.remote') },
+            { value: 'dynamic', label: t('forward.kind.dynamic') },
+          ]}
+        />
       </label>
       <p class="hint">{t(`forward.hint.${kind}`)}</p>
       <div class="row">

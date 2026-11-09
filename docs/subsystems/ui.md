@@ -105,6 +105,8 @@
 
 界面图标只使用 Remix Icon 4.8.0（Apache-2.0）的 `-line` 样式，在 `src/lib/ui/icons.ts` 中按含义命名后通过 `?raw` 导入。4.9 及以后的版本改用了另一种许可证，升级前需要先核对许可证。只有图标的按钮统一使用 `IconButton`，`label` 同时作为提示文字和无障碍名称。
 
+下拉选择统一使用 `src/lib/ui/Select.svelte`，不直接写原生 `<select>`：它按主题 token 绘制，列表以固定定位弹出，不会被对话框的滚动区域裁剪；支持方向键、Home/End、Enter 选择，Escape 只关闭列表。
+
 ## i18n
 
 - `en.ts` 是源字典，定义 `MessageKey`；其他语言实现 `Messages` 类型，缺键会在类型检查时报错。
