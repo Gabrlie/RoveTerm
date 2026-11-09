@@ -317,6 +317,7 @@ fn version_one_databases_migrate_to_the_current_schema() {
     let hosts = vault.list_hosts().unwrap();
     assert_eq!(hosts.len(), 1);
     assert_eq!(hosts[0].route, HostRoute::Direct);
+    assert_eq!(hosts[0].os, None);
     let old_key = HostKey {
         algorithm: "ssh-ed25519".into(),
         public_key: "ssh-ed25519 OLD".into(),
@@ -532,6 +533,48 @@ fn touching_a_host_records_the_connection_time() {
     assert_eq!(host.last_connected_at, None);
     vault.touch_host(host.id).unwrap();
     assert!(vault.host(host.id).unwrap().last_connected_at.is_some());
+}
+
+#[test]
+fn host_os_is_stored_validated_and_cleared() {
+    let (vault, _) = vault();
+    let host = vault.create_host(draft("web", AuthMethod::Agent)).unwrap();
+    assert_eq!(host.os, None);
+    let ubuntu = HostOs {
+        id: "ubuntu".into(),
+        like: vec!["debian".into()],
+        name: " Ubuntu 24.04.4 LTS\u{7}".into(),
+    };
+    vault.set_host_os(host.id, Some(ubuntu)).unwrap();
+    let stored = vault.host(host.id).unwrap().os.unwrap();
+    assert_eq!(stored.id, "ubuntu");
+    assert_eq!(stored.like, ["debian"]);
+    assert_eq!(stored.name, "Ubuntu 24.04.4 LTS");
+    for bad in ["", "Ubuntu", "a b", &"x".repeat(33)] {
+        let os = HostOs {
+            id: bad.into(),
+            like: Vec::new(),
+            name: String::new(),
+        };
+        assert!(
+            matches!(
+                vault.set_host_os(host.id, Some(os)),
+                Err(VaultError::Invalid(_))
+            ),
+            "{bad}"
+        );
+    }
+    // Editing the host keeps the detected system.
+    vault
+        .update_host(host.id, draft("web2", AuthMethod::Agent))
+        .unwrap();
+    assert!(vault.host(host.id).unwrap().os.is_some());
+    vault.set_host_os(host.id, None).unwrap();
+    assert_eq!(vault.host(host.id).unwrap().os, None);
+    assert!(matches!(
+        vault.set_host_os(HostId::new(), None),
+        Err(VaultError::HostNotFound(_))
+    ));
 }
 
 #[test]

@@ -12,12 +12,12 @@ use crate::crypto::FieldCipher;
 use crate::model::now_millis;
 use crate::{
     AuthMethod, DevicePrefs, ForwardDraft, ForwardId, ForwardRule, Host, HostDraft, HostId,
-    HostKey, HostRoute, Interaction, KeyCache, KeyCacheError, KnownHostStatus, MasterKey,
+    HostKey, HostOs, HostRoute, Interaction, KeyCache, KeyCacheError, KnownHostStatus, MasterKey,
     Preferences, Secret, VaultError,
 };
 
 /// Version of the on-disk schema, stored in `PRAGMA user_version`. Only ever increases.
-pub const SCHEMA_VERSION: i32 = 7;
+pub const SCHEMA_VERSION: i32 = 8;
 
 /// Longest chain of jump hosts a route may form.
 pub const MAX_JUMP_DEPTH: usize = 4;
@@ -192,7 +192,7 @@ impl Vault {
     pub fn list_hosts(&self) -> Result<Vec<Host>, VaultError> {
         let conn = self.conn.lock();
         let mut statement = conn.prepare(
-            "SELECT id, name, group_name, hostname, port, username, auth, tags, created_at, updated_at, route, last_connected_at
+            "SELECT id, name, group_name, hostname, port, username, auth, tags, created_at, updated_at, route, last_connected_at, os
              FROM hosts ORDER BY group_name IS NOT NULL, group_name, name COLLATE NOCASE",
         )?;
         let rows = statement.query_map([], row_to_host)?;
@@ -204,7 +204,7 @@ impl Vault {
     pub fn host(&self, id: HostId) -> Result<Host, VaultError> {
         let conn = self.conn.lock();
         conn.query_row(
-            "SELECT id, name, group_name, hostname, port, username, auth, tags, created_at, updated_at, route, last_connected_at
+            "SELECT id, name, group_name, hostname, port, username, auth, tags, created_at, updated_at, route, last_connected_at, os
              FROM hosts WHERE id = ?1",
             params![id.to_string()],
             row_to_host,
@@ -233,6 +233,7 @@ impl Vault {
             created_at: now,
             updated_at: now,
             last_connected_at: None,
+            os: None,
         };
         self.conn.lock().execute(
             "INSERT INTO hosts (id, name, group_name, hostname, port, username, auth, tags, created_at, updated_at, route)
@@ -320,6 +321,22 @@ impl Vault {
             "UPDATE hosts SET last_connected_at = ?2 WHERE id = ?1",
             params![id.to_string(), now_millis()],
         )?;
+        Ok(())
+    }
+
+    /// Records the operating system detected on host `id`, or forgets it with `None`.
+    pub fn set_host_os(&self, id: HostId, os: Option<HostOs>) -> Result<(), VaultError> {
+        let json = match os {
+            Some(os) => Some(serde_json::to_string(&os.validate()?)?),
+            None => None,
+        };
+        let updated = self.conn.lock().execute(
+            "UPDATE hosts SET os = ?2 WHERE id = ?1",
+            params![id.to_string(), json],
+        )?;
+        if updated == 0 {
+            return Err(VaultError::HostNotFound(id));
+        }
         Ok(())
     }
 
@@ -678,6 +695,11 @@ fn row_to_host(row: &rusqlite::Row<'_>) -> rusqlite::Result<HostRow> {
             created_at: row.get(8)?,
             updated_at: row.get(9)?,
             last_connected_at: row.get(11)?,
+            // Display-only and written by this crate; a record that no longer parses is dropped
+            // rather than hiding the host.
+            os: row
+                .get::<_, Option<String>>(12)?
+                .and_then(|json| serde_json::from_str(&json).ok()),
         })
     })())
 }
@@ -810,6 +832,14 @@ fn migrate(conn: &Connection) -> Result<(), VaultError> {
              DROP TABLE known_hosts;
              ALTER TABLE known_hosts_v7 RENAME TO known_hosts;
              PRAGMA user_version = 7;
+             COMMIT;",
+        )?;
+    }
+    if version < 8 {
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE hosts ADD COLUMN os TEXT;
+             PRAGMA user_version = 8;
              COMMIT;",
         )?;
     }

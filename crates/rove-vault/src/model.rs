@@ -131,6 +131,49 @@ pub struct Host {
     pub updated_at: i64,
     /// Last successful connection, Unix milliseconds.
     pub last_connected_at: Option<i64>,
+    /// Operating system detected on the last connection; `None` until detected.
+    #[serde(default)]
+    pub os: Option<HostOs>,
+}
+
+/// The operating system of a host, as `/etc/os-release` (or `uname`) reports it. Identifies the
+/// system for display only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostOs {
+    /// `ID`, such as `ubuntu`; `macos` or `freebsd` from `uname`.
+    pub id: String,
+    /// `ID_LIKE`, most specific first, such as `["rhel", "fedora"]`.
+    #[serde(default)]
+    pub like: Vec<String>,
+    /// `PRETTY_NAME`, such as `Ubuntu 24.04.4 LTS`; may be empty.
+    #[serde(default)]
+    pub name: String,
+}
+
+impl HostOs {
+    /// Checks the identifiers (lowercase letters, digits, `.`, `_`, `-`; 1–32 characters; at most
+    /// 8 `like` entries) and trims the name to 100 characters of printable text.
+    pub fn validate(mut self) -> Result<Self, VaultError> {
+        let slug = |value: &str| {
+            !value.is_empty()
+                && value.len() <= 32
+                && value.chars().all(|c| {
+                    c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-')
+                })
+        };
+        if !slug(&self.id) || self.like.len() > 8 || !self.like.iter().all(|like| slug(like)) {
+            return Err(VaultError::Invalid("invalid operating system id".into()));
+        }
+        self.name = self
+            .name
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(100)
+            .collect::<String>()
+            .trim()
+            .to_owned();
+        Ok(self)
+    }
 }
 
 /// Input for creating or updating a host. Validated by [`HostDraft::validate`].

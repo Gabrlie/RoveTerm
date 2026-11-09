@@ -40,7 +40,8 @@ pub trait KeyCache: Send + Sync {
 
 | 类型 | 说明 |
 |---|---|
-| `Host` | `id`、`name`、`group`、`hostname`、`port`、`username`、`auth`、`route`、`tags`、时间戳与最近连接时间 `last_connected_at`；不含任何秘密 |
+| `Host` | `id`、`name`、`group`、`hostname`、`port`、`username`、`auth`、`route`、`tags`、时间戳与最近连接时间 `last_connected_at`、检测到的系统 `os`；不含任何秘密 |
+| `HostOs` | `id`（os-release 的 `ID`，或由 `uname` 得出的 `macos`、`freebsd`）、`like`（`ID_LIKE`）、`name`（`PRETTY_NAME`）；只用于显示，`set_host_os` 写入前校验 id 为不超过 32 字符的小写短名，名称截到 100 个可打印字符 |
 | `HostDraft` | 新建或修改主机的输入，由 `validate()` 去除空白并检查长度和字符 |
 | `AuthMethod` | `Password`、`PrivateKey`（每台主机单独保存的私钥）、`Key { key }`（密钥库中的密钥）、`KeyFile { path }`、`Agent`、`Interactive` |
 | `HostRoute` | `Direct`（默认）、`Jump { host }`（经另一台已保存主机跳转）、`Proxy { protocol, host, port }`（`http` 或 `socks5`，无认证） |
@@ -93,4 +94,4 @@ pub trait KeyCache: Send + Sync {
 
 ## 表结构
 
-`meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`、`forwards`（外键级联删除）、`preferences`、`ssh_keys`、`snippets`。主机的路线以 JSON 存在 `hosts.route` 列。结构版本记录在 `PRAGMA user_version`，当前版本为 7；打开旧版本数据库时按版本依次迁移。
+`meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`、`forwards`（外键级联删除）、`preferences`、`ssh_keys`、`snippets`。主机的路线和检测到的系统分别以 JSON 存在 `hosts.route`、`hosts.os` 列；`os` 无法解析时按未检测处理。编辑主机不会清除 `os`。结构版本记录在 `PRAGMA user_version`，当前版本为 8；打开旧版本数据库时按版本依次迁移。

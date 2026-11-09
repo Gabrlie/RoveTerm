@@ -28,7 +28,8 @@ pub use key_cache::OsKeyCache;
 pub use key_cache::{Interaction, KeyCache, KeyCacheError};
 pub use keys::{KeyDraft, KeyId, KeySecret, SshKey};
 pub use model::{
-    AuthMethod, Host, HostDraft, HostId, HostKey, HostRoute, KnownHostStatus, ProxyProtocol, Secret,
+    AuthMethod, Host, HostDraft, HostId, HostKey, HostOs, HostRoute, KnownHostStatus,
+    ProxyProtocol, Secret,
 };
 pub use prefs::{
     Accent, AppearancePrefs, Bell, ConflictChoice, CursorStyle, DevicePrefs, FilePrefs, Language,

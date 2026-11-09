@@ -519,6 +519,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             last_connected_at: None,
+            os: None,
         }
     }
 
