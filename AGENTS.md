@@ -9,7 +9,7 @@ crates/      Rust 核心 crate，rove-<name>，每个 crate 负责一个 seam �
   rove-kernel/    Context、服务注册、事件总线、Disposer、Profile
   rove-session/   终端会话管理、输出合并、回放缓冲
   rove-pty/       本地 PTY Transport
-  rove-ssh/       SSH Transport、连接复用、known_hosts、ssh_config、SFTP
+  rove-ssh/       SSH Transport、连接复用、known_hosts、ssh_config、SFTP、端口转发
   rove-fs/        FileSystem seam、本地文件系统、传输队列
   rove-vault/     凭据加密存储
   rove-journal/   持久事件日志

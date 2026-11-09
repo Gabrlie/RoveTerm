@@ -1,6 +1,6 @@
 # ssh
 
-`rove-ssh` 提供 `SshConnector` 服务：SSH 认证、host key 校验，以及在连接上打开 PTY shell 和 SFTP 会话。
+`rove-ssh` 提供 `SshConnector` 和 `Forwards` 服务：SSH 认证、host key 校验，在连接上打开 PTY shell 和 SFTP 会话，以及端口转发。
 
 ## 类型
 
@@ -9,7 +9,7 @@
 | `SshTarget` | `hostname`、`port`、`username`，以及可选的 `host_id` 和标题；`address()` 返回 `user@host:port`，IPv6 地址加方括号 |
 | `AuthSpec` | `Password`、`PrivateKey { key, passphrase }`、`KeyFile { path, passphrase }`、`Agent` |
 | `SshConnection` | 已认证的连接；`open_shell(size)` 打开 PTY shell channel，`open_sftp()` 打开 SFTP 会话 |
-| `SshError` | `Connect`、`Timeout`、`HostKey(HostKeyRejection)`、`AuthFailed`、`CredentialsRequired`、`Key`、`Agent`、`Channel`、`Sftp`、`Protocol` |
+| `SshError` | `Connect`、`Timeout`、`HostKey(HostKeyRejection)`、`AuthFailed`、`CredentialsRequired`、`Key`、`Agent`、`Channel`、`ForwardBind`、`ForwardRejected`、`Sftp`、`Protocol` |
 
 ## 凭据解析
 
@@ -61,6 +61,22 @@
 - 读写使用 `russh-sftp` 的流水线请求（默认各 16 个并发请求），单个请求超时 10 秒。
 - SFTP 状态码映射为 `FsError`：`NoSuchFile` → `NotFound`，`PermissionDenied` → `PermissionDenied`，`OpUnsupported` → `Unsupported`，连接丢失 → `Closed`，其余 → `Io`。
 - `list` 过滤掉服务器返回的 `.` 和 `..`；`label()` 是 `user@host:port`。
+
+## 端口转发
+
+`Forwards` 按转发规则 ID（`ForwardId`）运行转发，规则的内容 `ForwardSpec` 来自 [vault](vault.md)。`start(id, host_id, connection, spec)` 在给定的共享连接上启动：
+
+| 类型 | 做法 |
+|---|---|
+| `local` | 在本机 `bind_host:bind_port` 监听；每个连接打开一个 `direct-tcpip` channel 到 `dest_host:dest_port` |
+| `dynamic` | 在本机监听 SOCKS5（无认证，只支持 `CONNECT`）；按客户端请求的目标打开 `direct-tcpip`，目标不可达时回复 host unreachable |
+| `remote` | 发送 `tcpip-forward`，请求服务器监听；服务器打开的 `forwarded-tcpip` channel 按（地址, 端口）查路由，连接本机的 `dest_host:dest_port`；没有匹配路由的 channel 被拒绝 |
+
+- 每个运行中的转发持有一个 channel 租约，每条转发中的连接再各持有一个，连接在转发停止前不会因空闲而断开。
+- 本地端口被占用时返回 `ForwardBind`，服务器拒绝远程监听时返回 `ForwardRejected`，此时不登记转发。没有用户等待结果的调用方（自动启动）用 `record_failure` 登记一条 `failed` 状态，让 UI 能看到错误。
+- `ForwardStatus { id, host_id, spec, state, bound_port, active, total, error }` 是 Live 事件。`bound_port` 是实际监听的端口（远程转发请求端口 0 时由服务器分配）。状态在启动、停止、失败时发出；连接计数每秒最多发出一次。
+- 监督任务每秒检查一次连接；连接关闭时状态变为 `failed`，监听关闭，条目保留到再次 `start` 或 `stop`。
+- `stop` 立即关闭监听和全部转发中的连接，远程转发会发送 `cancel-tcpip-forward`。重复 `start` 一个运行中的转发直接返回当前状态。
 
 ## 快速连接
 

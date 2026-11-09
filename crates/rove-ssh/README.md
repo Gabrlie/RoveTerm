@@ -1,6 +1,6 @@
 # rove-ssh
 
-SSH Provider：认证、host key 校验，打开 PTY shell channel，以及 `FileSystem` seam 的 SFTP 实现。参考见 [docs/subsystems/ssh.md](../../docs/subsystems/ssh.md)。
+SSH Provider：认证、host key 校验，打开 PTY shell channel，`FileSystem` seam 的 SFTP 实现，以及端口转发。参考见 [docs/subsystems/ssh.md](../../docs/subsystems/ssh.md)。
 
 ## 契约
 
@@ -12,6 +12,7 @@ SSH Provider：认证、host key 校验，打开 PTY shell channel，以及 `Fil
 - `open_live` 只在已有存活连接时打开 channel，不需要凭据；没有存活连接时返回 `None`。应用在解析凭据之前先调用它，因此在已连接的主机上分屏不会再次索取密码。
 - `SshConnector::connect` 建立不进入连接池的独立连接；`live` 返回存活的共享连接，不会新建。
 - `SshConnection::open_sftp` 打开 SFTP 会话 `SftpFs`（实现 `rove_fs::FileSystem`）。会话和终端一样持有 channel 租约；服务器不提供 `sftp` 子系统时返回 `SshError::Sftp`。
+- `Forwards` 在共享连接上运行 local、remote、dynamic（SOCKS5）转发；运行中的转发持有 channel 租约，连接关闭时状态变为 `failed`。状态变化通过 Live 事件 `ForwardStatus` 广播。
 - `AuthSpec` 中的秘密材料在 drop 时清零。密码认证失败后，会用同一个密码尝试 keyboard-interactive。
 - `AuthSpec::resolve` 根据主机的认证方式、已存凭据和用户输入的密码确定凭据；需要先向用户索取密码时返回 `CredentialsRequired`。
 
@@ -31,4 +32,5 @@ SSH Provider：认证、host key 校验，打开 PTY shell channel，以及 `Fil
 
 - 暂不支持 OpenSSH 证书认证、GSSAPI。
 - 私钥支持 OpenSSH 和 PEM 格式，暂不支持 PuTTY 的 `.ppk` 格式。
+- 动态转发只支持 SOCKS5 的无认证 `CONNECT`，不支持 SOCKS4、UDP 和 BIND；连接断开后转发不会自动重连。
 - ssh_config 解析忽略 `Match` 块和 `Include` 指令；`ProxyJump` 会被解析出来，但还没有接入连接流程。

@@ -41,7 +41,7 @@ Profile 是一组启用的插件加一份 TOML 配置。随应用交付的 profi
 | [rove-kernel](subsystems/kernel.md) | 服务注册、事件总线、Disposer、Profile、插件运行时 | `Context` |
 | [rove-session](subsystems/session.md) | `TerminalSession` seam 的定义；会话表、输出合并、回放缓冲 | `SessionManager` |
 | [rove-pty](subsystems/pty.md) | 本地 PTY 会话 | `LocalTerminals` |
-| [rove-ssh](subsystems/ssh.md) | SSH 认证、host key 校验、连接复用、ssh_config、SFTP | `SshConnector` |
+| [rove-ssh](subsystems/ssh.md) | SSH 认证、host key 校验、连接复用、ssh_config、SFTP、端口转发 | `SshConnector`、`Forwards` |
 | [rove-fs](subsystems/fs.md) | `FileSystem` seam 的定义；本地文件系统、传输队列 | `FsSessions`、`TransferQueue`、`LocalFs` |
 | [rove-vault](subsystems/vault.md) | 主机与凭据存储、字段级加密、设备主密钥 | `Vault`、`KeyCache` |
 | [rove-journal](subsystems/journal.md) | 持久事件日志 | `JournalStore` |

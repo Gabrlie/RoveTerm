@@ -18,6 +18,7 @@ use russh::{ChannelMsg, ChannelWriteHalf, Disconnect};
 use russh_sftp::client::SftpSession;
 use tokio::sync::mpsc;
 
+use crate::forward::RemoteRoutes;
 use crate::{AuthSpec, HostKeyRejection, HostKeyVerifier, SftpFs, SshError, SshTarget};
 
 const OUTPUT_QUEUE: usize = 256;
@@ -41,6 +42,7 @@ struct ClientHandler {
     port: u16,
     verifier: Arc<dyn HostKeyVerifier>,
     rejection: Arc<Mutex<Option<HostKeyRejection>>>,
+    routes: Arc<RemoteRoutes>,
 }
 
 fn host_key(key: &russh::keys::PublicKey) -> Result<HostKey, HostKeyRejection> {
@@ -81,6 +83,35 @@ impl client::Handler for ClientHandler {
             }
         }
     }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        match self.routes.resolve(connected_address, connected_port) {
+            Some(route) => {
+                reply.accept().await;
+                tokio::spawn(route.serve(channel));
+            }
+            None => {
+                tracing::debug!(
+                    connected_address,
+                    connected_port,
+                    "unexpected forwarded connection"
+                );
+                reply
+                    .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                    .await;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// An authenticated SSH connection. Cloneable handles share the same TCP connection; channels opened
@@ -92,6 +123,7 @@ pub struct SshConnection {
     idle_generation: AtomicU64,
     retired: AtomicBool,
     idle_timeout: Option<Duration>,
+    routes: Arc<RemoteRoutes>,
 }
 
 impl SshConnection {
@@ -120,11 +152,13 @@ impl SshConnection {
             ..Default::default()
         });
         let rejection = Arc::new(Mutex::new(None));
+        let routes = Arc::new(RemoteRoutes::default());
         let handler = ClientHandler {
             hostname: target.hostname.clone(),
             port: target.port,
             verifier,
             rejection: rejection.clone(),
+            routes: routes.clone(),
         };
         let mut handle = match client::connect_stream(config, stream, handler).await {
             Ok(handle) => handle,
@@ -143,6 +177,7 @@ impl SshConnection {
             idle_generation: AtomicU64::new(0),
             retired: AtomicBool::new(false),
             idle_timeout: options.idle_timeout,
+            routes,
         })
     }
 
@@ -269,6 +304,57 @@ impl SshConnection {
             .await
             .map_err(|error| SshError::Sftp(error.to_string()))?;
         Ok(SftpFs::new(session, self.target.address(), lease))
+    }
+
+    /// Opens a `direct-tcpip` channel to `host:port` as seen from the server. The lease keeps the
+    /// connection open while the stream is in use.
+    pub(crate) async fn open_direct_tcpip(
+        self: &Arc<Self>,
+        host: &str,
+        port: u16,
+        originator_address: &str,
+        originator_port: u16,
+    ) -> Result<(russh::Channel<client::Msg>, ChannelLease), SshError> {
+        let channel = self
+            .handle
+            .channel_open_direct_tcpip(
+                host,
+                u32::from(port),
+                originator_address,
+                u32::from(originator_port),
+            )
+            .await
+            .map_err(channel_error)?;
+        Ok((channel, self.lease()))
+    }
+
+    /// Asks the server to listen on `address:port`. Returns the allocated port, or 0 when the
+    /// server confirmed the requested port without naming it.
+    pub(crate) async fn request_remote_forward(
+        &self,
+        address: &str,
+        port: u32,
+    ) -> Result<u32, SshError> {
+        self.handle
+            .tcpip_forward(address, port)
+            .await
+            .map_err(|error| SshError::ForwardRejected(format!("{address}:{port}: {error}")))
+    }
+
+    /// Asks the server to stop listening on `address:port`.
+    pub(crate) async fn cancel_remote_forward(
+        &self,
+        address: &str,
+        port: u32,
+    ) -> Result<(), SshError> {
+        self.handle
+            .cancel_tcpip_forward(address, port)
+            .await
+            .map_err(|error| SshError::Protocol(error.to_string()))
+    }
+
+    pub(crate) fn remote_routes(&self) -> &RemoteRoutes {
+        &self.routes
     }
 
     /// Ends the connection.

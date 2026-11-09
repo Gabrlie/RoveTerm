@@ -5,9 +5,11 @@
 //! `docs/subsystems/ssh.md`.
 
 mod connection;
+mod forward;
 mod hostkey;
 mod pool;
 mod sftp;
+mod socks;
 mod sshconfig;
 
 use std::sync::Arc;
@@ -20,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 pub use connection::{ConnectOptions, SshConnection};
+pub use forward::{ForwardState, ForwardStatus, Forwards};
 pub use hostkey::{
     HostKeyAnswer, HostKeyPrompt, HostKeyPrompts, HostKeyRejection, HostKeyVerifier, VaultVerifier,
 };
@@ -154,6 +157,12 @@ pub enum SshError {
     /// Opening or configuring a channel failed.
     #[error("channel error: {0}")]
     Channel(String),
+    /// A local forward could not listen on its address.
+    #[error("cannot listen: {0}")]
+    ForwardBind(String),
+    /// The server refused to listen for a remote forward.
+    #[error("server refused remote forward: {0}")]
+    ForwardRejected(String),
     /// The SFTP subsystem is unavailable or failed to start.
     #[error("sftp error: {0}")]
     Sftp(String),
@@ -372,6 +381,7 @@ impl Plugin for SshPlugin {
         Ok(vec![
             ctx.provide(prompts)?,
             ctx.provide(Arc::new(SshConnector::new(&config, verifier)))?,
+            ctx.provide(Arc::new(Forwards::new(ctx.events().clone())))?,
         ])
     }
 }
