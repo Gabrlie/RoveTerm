@@ -32,6 +32,7 @@
 
 - 输出通过 IPC Channel 到达：`ArrayBuffer` 直接写入 xterm；`{ progress }` 消息由 `connectLog.ts` 格式化为一行连接日志（连接、握手、host key、逐个凭据的尝试与拒绝、认证成功）写入终端；`{ exit }` 消息在终端中显示退出提示，并调用 `onexit`。
 - 输入通过 `onData` 调用 `sessionWrite`；会话打开之前的输入会被丢弃。
+- 面板在连接完成前被关闭时，稍后返回的会话立即由 `sessionClose` 关闭，之后到达的输出和错误都被忽略，不会留下后台会话。
 - 容器尺寸变化经 `ResizeObserver` 和 `requestAnimationFrame` 合并后调用 `fit`，行列数变化时才调用 `sessionResize`。
 - macOS、Windows 和 Android 上按需动态加载 WebGL 渲染器；Linux 桌面（WebKitGTK）在同时存在多个 GL 上下文时，较早的 WebGL 终端不再重绘，因此使用 DOM 渲染器。WebGL 上下文丢失时退回 DOM 渲染器并立即重绘。
 - 每次 `fit` 之后重绘可见区域，避免画布尺寸变化后留白。

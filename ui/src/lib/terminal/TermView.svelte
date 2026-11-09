@@ -7,6 +7,7 @@
   import { Unicode11Addon } from '@xterm/addon-unicode11';
   import { WebLinksAddon } from '@xterm/addon-web-links';
   import {
+    sessionClose,
     sessionResize,
     sessionWrite,
     type ExitStatus,
@@ -57,7 +58,7 @@
   }
 
   function handleOutput(message: OutputMessage): void {
-    if (!term) return;
+    if (!term || destroyed) return;
     if (message instanceof ArrayBuffer) {
       term.write(new Uint8Array(message));
       return;
@@ -183,12 +184,19 @@
     media.addEventListener('change', applyTheme);
 
     try {
-      sessionId = await open(lastSize, handleOutput);
+      const opened = await open(lastSize, handleOutput);
+      // The pane was closed while connecting: nothing owns this session, so end it.
+      if (destroyed) {
+        sessionClose(opened).catch((error: unknown) => console.warn('closing orphaned session failed', error));
+        return;
+      }
+      sessionId = opened;
       onsession?.(sessionId);
       // The container may have changed size while the session was opening.
       refit();
       if (active) term.focus();
     } catch (error) {
+      if (destroyed) return;
       term.write(`\x1b[31m${t('terminal.openFailed', { message: errorText(error) })}\x1b[0m\r\n`);
       onerror?.(error);
     }
