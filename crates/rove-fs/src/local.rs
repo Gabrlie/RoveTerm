@@ -51,6 +51,12 @@ impl FileSystem for LocalFs {
         "local".into()
     }
 
+    /// The default file systems of macOS (APFS) and Windows (NTFS) ignore case; a
+    /// case-sensitive volume there only costs an unneeded rename between concurrent transfers.
+    fn folds_case(&self) -> bool {
+        cfg!(any(target_os = "macos", target_os = "windows"))
+    }
+
     async fn home(&self) -> Result<String, FsError> {
         std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))

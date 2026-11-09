@@ -112,8 +112,15 @@ pub type FsWriter = Box<dyn AsyncWrite + Send + Unpin>;
 /// and split them with [`FileSystem::parent`], never by hand.
 #[async_trait]
 pub trait FileSystem: Send + Sync {
-    /// Short label for display, such as `local` or `user@host:22`.
+    /// Short label for display, such as `local` or `user@host:22`. Two file systems with the
+    /// same label are the same tree: the transfer queue keys destinations by it.
     fn label(&self) -> String;
+
+    /// Whether names differing only in letter case refer to the same entry (macOS and Windows
+    /// defaults). Such paths count as one destination in the transfer queue.
+    fn folds_case(&self) -> bool {
+        false
+    }
 
     /// Returns the starting directory (the login or user home directory).
     async fn home(&self) -> Result<String, FsError>;

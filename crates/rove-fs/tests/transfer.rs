@@ -464,3 +464,105 @@ async fn overwrite_never_replaces_a_directory_with_a_file_or_back() {
     names.sort();
     assert_eq!(names, ["data", "logs"]);
 }
+
+/// A local directory that behaves like a case-insensitive volume: every path below `root` is
+/// stored lowercased.
+struct CaseFolding {
+    root: String,
+}
+
+impl CaseFolding {
+    fn fold(&self, path: &str) -> String {
+        match path.strip_prefix(&self.root) {
+            Some(rest) => format!("{}{}", self.root, rest.to_lowercase()),
+            None => path.to_owned(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl FileSystem for CaseFolding {
+    fn label(&self) -> String {
+        "folding".into()
+    }
+    fn folds_case(&self) -> bool {
+        true
+    }
+    async fn home(&self) -> Result<String, rove_fs::FsError> {
+        Ok(self.root.clone())
+    }
+    async fn list(&self, path: &str) -> Result<Vec<rove_fs::DirEntry>, rove_fs::FsError> {
+        LocalFs.list(&self.fold(path)).await
+    }
+    async fn stat(&self, path: &str) -> Result<rove_fs::Metadata, rove_fs::FsError> {
+        LocalFs.stat(&self.fold(path)).await
+    }
+    async fn lstat(&self, path: &str) -> Result<rove_fs::Metadata, rove_fs::FsError> {
+        LocalFs.lstat(&self.fold(path)).await
+    }
+    async fn mkdir(&self, path: &str) -> Result<(), rove_fs::FsError> {
+        LocalFs.mkdir(&self.fold(path)).await
+    }
+    async fn remove_file(&self, path: &str) -> Result<(), rove_fs::FsError> {
+        LocalFs.remove_file(&self.fold(path)).await
+    }
+    async fn remove_dir(&self, path: &str) -> Result<(), rove_fs::FsError> {
+        LocalFs.remove_dir(&self.fold(path)).await
+    }
+    async fn rename(&self, from: &str, to: &str) -> Result<(), rove_fs::FsError> {
+        LocalFs.rename(&self.fold(from), &self.fold(to)).await
+    }
+    async fn set_permissions(&self, path: &str, mode: u32) -> Result<(), rove_fs::FsError> {
+        LocalFs.set_permissions(&self.fold(path), mode).await
+    }
+    async fn open_read(&self, path: &str) -> Result<rove_fs::FsReader, rove_fs::FsError> {
+        LocalFs.open_read(&self.fold(path)).await
+    }
+    async fn open_write(&self, path: &str) -> Result<rove_fs::FsWriter, rove_fs::FsError> {
+        LocalFs.open_write(&self.fold(path)).await
+    }
+    fn join(&self, dir: &str, name: &str) -> String {
+        LocalFs.join(dir, name)
+    }
+    fn parent(&self, path: &str) -> Option<String> {
+        LocalFs.parent(path)
+    }
+}
+
+#[tokio::test]
+async fn concurrent_names_differing_in_case_do_not_collide_on_a_folding_volume() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let folding: Arc<dyn FileSystem> = Arc::new(CaseFolding {
+        root: dst.path().to_string_lossy().into_owned(),
+    });
+    let (queue, mut rx) = queue(TransferConfig::default());
+    let mut ids = Vec::new();
+    for (name, content) in [("Report.bin", 1u8), ("report.bin", 2u8)] {
+        let file = src.path().join(name);
+        std::fs::write(&file, vec![content; 2_000_000]).unwrap();
+        let mut request = request(&file, dst.path(), Conflict::Rename);
+        request.dst = folding.clone();
+        ids.push(queue.enqueue(request));
+    }
+    let mut finished = std::collections::HashMap::new();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while finished.len() < ids.len() {
+            let update = rx.recv().await.unwrap();
+            if ids.contains(&update.id) && update.state.is_final() {
+                finished.insert(update.id, update);
+            }
+        }
+    })
+    .await
+    .expect("transfers finished in time");
+    for done in finished.values() {
+        assert_eq!(done.state, TransferState::Done, "{:?}", done.error);
+    }
+    let mut firsts: Vec<u8> = std::fs::read_dir(dst.path())
+        .unwrap()
+        .map(|entry| std::fs::read(entry.unwrap().path()).unwrap()[0])
+        .collect();
+    firsts.sort();
+    assert_eq!(firsts, [1, 2]);
+}

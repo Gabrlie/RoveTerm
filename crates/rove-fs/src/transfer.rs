@@ -178,8 +178,9 @@ pub struct TransferQueue {
     reserved: Reserved,
 }
 
-/// Destination paths claimed by running transfers, as (file system label, path). Two transfers
-/// never pick the same top-level destination, so "rename" cannot make them overwrite each other.
+/// Destination paths claimed by running transfers, as (file system label, path), the path
+/// lowercased on file systems that fold case. Two transfers never pick the same top-level
+/// destination, so "rename" cannot make them overwrite each other.
 type Reserved = Arc<Mutex<std::collections::HashSet<(String, String)>>>;
 
 /// Releases a reserved destination when the transfer ends.
@@ -418,7 +419,12 @@ impl Runner {
     /// Claims `path` on the destination for this transfer; `None` when another running transfer
     /// holds it.
     fn reserve(&self, request: &TransferRequest, path: &str) -> Option<Reservation> {
-        let key = (request.dst.label(), path.to_owned());
+        let path = if request.dst.folds_case() {
+            path.to_lowercase()
+        } else {
+            path.to_owned()
+        };
+        let key = (request.dst.label(), path);
         self.reserved
             .lock()
             .insert(key.clone())
