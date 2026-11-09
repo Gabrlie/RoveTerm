@@ -73,7 +73,7 @@
     display: flex;
     align-items: center;
     gap: 2px;
-    height: 44px;
+    height: 40px;
     padding: 0 var(--space-2);
     background: var(--material-bar);
     backdrop-filter: var(--material-blur);

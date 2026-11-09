@@ -350,9 +350,9 @@
     <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onnotice={showNotice} onsettings={() => (settingsOpen = true)} />
   {/if}
   <div class="main">
-    <TabBar onnew={() => workspace.activate(HOME_TAB)} />
     <div class="workarea">
     <div class="center">
+    <TabBar onnew={() => workspace.activate(HOME_TAB)} />
     <main class="stage">
       {#each workspace.tabs as tab (tab.id)}
         <PaneGrid
@@ -454,10 +454,14 @@
     display: flex;
     flex-direction: column;
   }
+  /* The sidebar, the work area and the right panel float as rounded cards over the window
+     background (and its system material), separated by narrow gaps. */
   .body {
     flex: 1;
     min-height: 0;
     display: flex;
+    gap: var(--gap-panel);
+    padding: 0 var(--gap-panel) var(--gap-panel);
   }
   .main {
     flex: 1;
@@ -469,12 +473,17 @@
     flex: 1;
     min-height: 0;
     display: flex;
+    gap: var(--gap-panel);
   }
   .center {
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    box-shadow: var(--panel-shadow);
+    overflow: hidden;
   }
   .stage {
     position: relative;
@@ -490,6 +499,11 @@
     flex: none;
     min-height: 0;
     min-width: 0;
+  }
+  .right {
+    border-radius: var(--radius-lg);
+    box-shadow: var(--panel-shadow);
+    overflow: hidden;
   }
   /* Panel edges: a hairline with a wider invisible grip around it. */
   .edge {
@@ -513,15 +527,27 @@
     top: -3px;
     bottom: -3px;
   }
+  /* Between the work area and the right panel the edge is the gap itself; the line shows only
+     while hovering. */
   .edge.vertical {
-    width: 1px;
+    width: var(--gap-panel);
+    margin: 0 calc(-1 * var(--gap-panel));
+    background: transparent;
     cursor: col-resize;
   }
   .edge.vertical::before {
-    top: 0;
-    bottom: 0;
-    left: -3px;
-    right: -3px;
+    top: var(--space-3);
+    bottom: var(--space-3);
+    left: calc(50% - 1px);
+    width: 2px;
+    border-radius: 1px;
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  .edge.vertical:hover {
+    background: transparent;
+  }
+  .edge.vertical:hover::before {
+    background: var(--accent);
   }
   .edge:hover {
     background: var(--accent);

@@ -156,10 +156,12 @@
     flex: none;
     display: flex;
     flex-direction: column;
+    border-radius: var(--radius-lg);
     background: var(--material-sidebar);
     backdrop-filter: var(--material-blur);
     -webkit-backdrop-filter: var(--material-blur);
-    box-shadow: inset -1px 0 0 var(--separator);
+    box-shadow: var(--panel-shadow);
+    overflow: hidden;
   }
   .search {
     display: flex;

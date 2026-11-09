@@ -12,9 +12,9 @@
   --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 38%, transparent);
 
   /* Surfaces. */
-  --window: #e9e9ec;
-  --material-sidebar: rgb(232 232 236 / 0.78);
-  --material-bar: rgb(244 244 246 / 0.82);
+  --window: #e3e3e8;
+  --material-sidebar: rgb(247 247 249 / 0.84);
+  --material-bar: rgb(248 248 250 / 0.9);
   --material-popover: rgb(246 246 248 / 0.93);
   --material-blur: blur(24px) saturate(180%);
   --surface: #ffffff;
@@ -78,6 +78,10 @@
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-pill: 999px;
+
+  /* Floating panels: the gap between them and the window edge, and their outline. */
+  --gap-panel: 6px;
+  --panel-shadow: 0 0 0 1px var(--separator), 0 1px 3px rgb(0 0 0 / 0.06);
 
   /* List rows and toolbar controls. */
   --row-height: calc(30px * var(--ui-scale));
