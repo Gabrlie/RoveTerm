@@ -1,8 +1,8 @@
 <script lang="ts">
   // The home tab: saved hosts as cards, most recently connected first, plus the ways to start
   // something new.
+  import HostIcon from '../hosts/HostIcon.svelte';
   import Icon from '../ui/Icon.svelte';
-  import Avatar from '../ui/Avatar.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import { hosts } from '../hosts/hosts.svelte';
   import { forwardStatuses } from '../forwards/forwards.svelte';
@@ -100,7 +100,7 @@
           oncontextmenu={(event) => hostMenu(event, host)}
           title={hostAddress(host)}
         >
-          <Avatar name={host.name} size={38} />
+          <HostIcon os={host.os} size={38} />
           <div class="text">
             <span class="name">
               <span class="label">{host.name}</span>

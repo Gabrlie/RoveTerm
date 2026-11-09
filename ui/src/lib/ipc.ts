@@ -137,6 +137,22 @@ export interface Host extends HostDraft {
   updated_at: number;
   /** Last successful connection, Unix milliseconds. */
   last_connected_at: number | null;
+  /** Operating system detected on a connection; see `HostOs` in rove-vault. */
+  os: HostOs | null;
+}
+
+export interface HostOs {
+  /** os-release `ID`, or `macos` / `freebsd` from uname. */
+  id: string;
+  /** os-release `ID_LIKE`, most specific first. */
+  like: string[];
+  /** os-release `PRETTY_NAME`; may be empty. */
+  name: string;
+}
+
+/** Detects the system of saved host `id` over its open connection; null when none is open. */
+export function hostDetectOs(id: HostId): Promise<HostOs | null> {
+  return invoke('host_detect_os', { id });
 }
 
 export interface HostEntry extends Host {

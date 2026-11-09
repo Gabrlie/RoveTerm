@@ -1,6 +1,6 @@
 <script lang="ts">
+  import HostIcon from './HostIcon.svelte';
   import Icon from '../ui/Icon.svelte';
-  import Avatar from '../ui/Avatar.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import { hosts } from './hosts.svelte';
   import { vault } from '../vault/vault.svelte';
@@ -73,7 +73,7 @@
           }}
           title={hostAddress(host)}
         >
-          <Avatar name={host.name} />
+          <HostIcon os={host.os} />
           <div class="text">
             <span class="name">
               <span class="label">{host.name}</span>

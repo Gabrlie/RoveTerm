@@ -1,0 +1,105 @@
+// Logos of operating systems for host icons, from Simple Icons (CC0; all 24 × 24). Looked up by
+// the os-release `ID`, then by each `ID_LIKE` entry, so derivatives fall back to their parent.
+import {
+  siAlibabacloud,
+  siAlmalinux,
+  siAlpinelinux,
+  siApple,
+  siArchlinux,
+  siArtixlinux,
+  siCentos,
+  siDebian,
+  siDeepin,
+  siElementary,
+  siEndeavouros,
+  siFedora,
+  siFreebsd,
+  siGarudalinux,
+  siGentoo,
+  siKalilinux,
+  siLinux,
+  siLinuxmint,
+  siManjaro,
+  siMxlinux,
+  siNetbsd,
+  siNixos,
+  siOpenbsd,
+  siOpensuse,
+  siOpenwrt,
+  siPopos,
+  siRaspberrypi,
+  siRedhat,
+  siRockylinux,
+  siSlackware,
+  siSolus,
+  siUbuntu,
+  siVoidlinux,
+  siZorin,
+} from 'simple-icons';
+import type { HostOs } from '../ipc';
+
+export interface OsIcon {
+  /** SVG path in a 24 × 24 box. */
+  path: string;
+  /** Brand colour, `#rrggbb`. */
+  color: string;
+  /** Whether the brand colour is light enough to need a dark logo. */
+  light: boolean;
+}
+
+const BY_ID: Record<string, { path: string; hex: string }> = {
+  ubuntu: siUbuntu,
+  debian: siDebian,
+  centos: siCentos,
+  fedora: siFedora,
+  rhel: siRedhat,
+  rocky: siRockylinux,
+  almalinux: siAlmalinux,
+  arch: siArchlinux,
+  artix: siArtixlinux,
+  alpine: siAlpinelinux,
+  opensuse: siOpensuse,
+  'opensuse-leap': siOpensuse,
+  'opensuse-tumbleweed': siOpensuse,
+  suse: siOpensuse,
+  sles: siOpensuse,
+  linuxmint: siLinuxmint,
+  kali: siKalilinux,
+  gentoo: siGentoo,
+  nixos: siNixos,
+  manjaro: siManjaro,
+  raspbian: siRaspberrypi,
+  pop: siPopos,
+  elementary: siElementary,
+  endeavouros: siEndeavouros,
+  garuda: siGarudalinux,
+  void: siVoidlinux,
+  slackware: siSlackware,
+  zorin: siZorin,
+  mx: siMxlinux,
+  solus: siSolus,
+  deepin: siDeepin,
+  openwrt: siOpenwrt,
+  alinux: siAlibabacloud,
+  freebsd: siFreebsd,
+  openbsd: siOpenbsd,
+  netbsd: siNetbsd,
+  macos: siApple,
+  linux: siLinux,
+};
+
+/** Relative luminance of `#rrggbb` above which white would not stand out. */
+function isLight(hex: string): boolean {
+  const [r, g, b] = [0, 2, 4].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255);
+  return 0.2126 * (r ?? 0) + 0.7152 * (g ?? 0) + 0.0722 * (b ?? 0) > 0.62;
+}
+
+/** The logo for `os`, or null for an unknown or undetected system. */
+export function osIcon(os: HostOs | null): OsIcon | null {
+  if (!os) return null;
+  for (const id of [os.id, ...os.like]) {
+    const icon = BY_ID[id];
+    if (icon) return { path: icon.path, color: `#${icon.hex}`, light: isLight(icon.hex) };
+  }
+  return null;
+}

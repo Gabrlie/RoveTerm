@@ -121,7 +121,7 @@
 
 ## 主机与凭据
 
-- 主机前的头像（`src/lib/ui/Avatar.svelte`）取名称的首字母，颜色由名称稳定地选自系统色板 `--sys-*`（`src/lib/ui/avatar.ts`），侧栏和主页共用。
+- 主机前是系统图标 `HostIcon`（`src/lib/hosts/HostIcon.svelte`）：品牌色圆角方块上的白色标志（浅色品牌色用深色标志），按 os-release 的 `ID` 再按 `ID_LIKE` 在 `osIcons.ts` 中查找，来源见同目录 `OS-ICONS.md`；未检测或不认识的系统显示灰色方块加服务器图标，悬停显示 `PRETTY_NAME`。保存的主机在本次运行中第一次建立终端会话时调用 `host_detect_os` 检测一次（`hosts.connected`）。侧栏和主页共用。
 - 主机名下一行显示连接路线与用户名（`src/lib/hosts/route.ts`）：`SSH · root`、`经 bastion · root`、`SOCKS5 代理 · root`；地址不在列表中出现，只在悬停提示里显示，避免截图或共享屏幕时暴露。侧栏与主页相同。
 - 侧栏按分组列出主机，搜索时匹配名称、地址、用户名、分组和标签；双击或按 Enter 连接。悬停时只显示"连接"和"更多"两个按钮，右键、"更多"或 ContextMenu 键打开菜单：连接、浏览文件、端口转发、编辑、复制主机（不复制已保存的凭据）、删除。
 - 经跳板机或代理连接的主机在名称后显示小图标，悬停提示经由的跳板机或代理，不占用地址那一行。

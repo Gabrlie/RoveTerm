@@ -1,5 +1,5 @@
 // Saved hosts, refreshed after every change.
-import { hostDelete, hostImportSshConfig, hostList, type HostEntry, type ImportReport } from '../ipc';
+import { hostDelete, hostDetectOs, hostImportSshConfig, hostList, type HostEntry, type ImportReport } from '../ipc';
 
 class HostStore {
   items = $state<HostEntry[]>([]);
@@ -21,6 +21,21 @@ class HostStore {
 
   async refresh(): Promise<void> {
     this.items = await hostList();
+  }
+
+  /** Hosts whose system was detected since the app started. */
+  private detected = new Set<string>();
+
+  /**
+   * Called when a terminal of saved host `id` connected: refreshes the list (the backend recorded
+   * the connection time) and, once per run for each host, detects its system for the icon.
+   */
+  async connected(id: string): Promise<void> {
+    if (!this.detected.has(id)) {
+      this.detected.add(id);
+      await hostDetectOs(id).catch((error: unknown) => console.info('system detection skipped', error));
+    }
+    await this.refresh();
   }
 
   async remove(id: string): Promise<void> {

@@ -142,8 +142,7 @@
             active={visible && tab.focused === id}
             onsession={(sessionId) => {
               workspace.attached(id, sessionId);
-              // The backend recorded the connection time; the home page sorts by it.
-              if (pane.target.kind === 'ssh') hosts.refresh().catch((error: unknown) => console.warn('host refresh failed', error));
+              if (pane.target.kind === 'ssh') hosts.connected(pane.target.hostId).catch((error: unknown) => console.warn('host refresh failed', error));
             }}
             onexit={(status) => onExit(pane, status.code)}
             ontitle={(title) => workspace.retitle(id, title)}
