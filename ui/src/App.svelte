@@ -15,14 +15,14 @@
   import { actionFor, type ActionId } from './lib/actions';
   import { terminals } from './lib/terminal/registry';
   import { workspace, type PaneTarget } from './lib/workspace/workspace.svelte';
-  import { onHostKeyPrompt, type HostEntry, type HostKeyPrompt } from './lib/ipc';
+  import { onHostKeyPrompt, type CredentialKind, type HostEntry, type HostKeyPrompt } from './lib/ipc';
   import { errorText, t } from './lib/i18n';
   import type { PaneId } from './lib/layout/layout';
 
   type PasswordRequest =
     | { kind: 'host'; host: HostEntry }
     | { kind: 'files'; host: HostEntry }
-    | { kind: 'pane'; paneId: PaneId; title: string; allowRemember: boolean };
+    | { kind: 'pane'; paneId: PaneId; title: string; secret: CredentialKind; allowRemember: boolean };
 
   let paletteOpen = $state(false);
   let sidebarOpen = $state(true);
@@ -67,7 +67,13 @@
     return undefined;
   }
 
-  function requestPaneCredentials(paneId: PaneId): void {
+  /** Whether what the user types for `host` can be stored: a password for password hosts, a passphrase for key hosts. */
+  function canRemember(host: HostEntry | undefined, secret: CredentialKind): boolean {
+    const method = host?.auth.method;
+    return secret === 'password' ? method === 'password' : method === 'key_file' || method === 'private_key';
+  }
+
+  function requestPaneCredentials(paneId: PaneId, secret: CredentialKind): void {
     const pane = workspace.panes[paneId];
     if (!pane || pane.target.kind === 'local') return;
     const hostId = hostIdOf(pane.target);
@@ -76,7 +82,8 @@
       kind: 'pane',
       paneId,
       title: pane.title,
-      allowRemember: host?.auth.method === 'password',
+      secret,
+      allowRemember: canRemember(host, secret),
     };
   }
 
@@ -221,11 +228,13 @@
 {/if}
 
 {#if passwordRequest}
+  {@const secret = passwordRequest.kind === 'pane' ? passwordRequest.secret : 'password'}
   <PasswordPrompt
-    title={t('host.passwordFor', {
+    {secret}
+    title={t(secret === 'password' ? 'host.passwordFor' : 'host.passphraseFor', {
       address: passwordRequest.kind === 'pane' ? passwordRequest.title : `${passwordRequest.host.username}@${passwordRequest.host.hostname}`,
     })}
-    allowRemember={passwordRequest.kind === 'pane' ? passwordRequest.allowRemember : passwordRequest.host.auth.method === 'password'}
+    allowRemember={passwordRequest.kind === 'pane' ? passwordRequest.allowRemember : canRemember(passwordRequest.host, 'password')}
     onsubmit={submitPassword}
     onclose={() => (passwordRequest = null)}
   />

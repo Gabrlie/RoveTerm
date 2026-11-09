@@ -98,11 +98,8 @@ where
             let auth = host_auth(state, &host, password.clone()).await?;
             let connection = state.ssh.shared(&target, &auth).await?;
             let value = op(connection).await?;
-            if *remember
-                && let Some(password) = password
-                && matches!(host.auth, AuthMethod::Password)
-            {
-                remember_password(state, *host_id, password.clone()).await;
+            if *remember && let Some(typed) = password {
+                remember_typed(state, &host, typed.clone()).await;
             }
             Ok(value)
         }
@@ -178,15 +175,39 @@ async fn host_auth(
     Ok(AuthSpec::resolve(host, stored, typed)?)
 }
 
-async fn remember_password(state: &AppState, host_id: HostId, password: Zeroizing<String>) {
+/// Stores what the user typed for `host` after a successful login: a password for password
+/// hosts, a passphrase for key hosts. Agent and interactive hosts store nothing.
+async fn remember_typed(state: &AppState, host: &Host, typed: Zeroizing<String>) {
     let saved = match state.ensure_unlocked().await {
-        Ok(()) => state
-            .vault
-            .set_secret(host_id, &Secret::Password { password })
-            .map_err(CommandError::from),
+        Ok(()) => remembered_secret(state, host, typed).and_then(|secret| match secret {
+            Some(secret) => state
+                .vault
+                .set_secret(host.id, &secret)
+                .map_err(CommandError::from),
+            None => Ok(()),
+        }),
         Err(error) => Err(error),
     };
     if let Err(error) = saved {
-        tracing::warn!(code = error.code, "could not remember password");
+        tracing::warn!(code = error.code, "could not remember the typed credential");
     }
+}
+
+fn remembered_secret(
+    state: &AppState,
+    host: &Host,
+    typed: Zeroizing<String>,
+) -> Result<Option<Secret>, CommandError> {
+    Ok(match &host.auth {
+        AuthMethod::Password => Some(Secret::Password { password: typed }),
+        AuthMethod::KeyFile { .. } => Some(Secret::Passphrase { passphrase: typed }),
+        AuthMethod::PrivateKey => match state.vault.secret(host.id)? {
+            Some(Secret::PrivateKey { key, .. }) => Some(Secret::PrivateKey {
+                key,
+                passphrase: Some(typed),
+            }),
+            _ => None,
+        },
+        AuthMethod::Agent | AuthMethod::Interactive => None,
+    })
 }

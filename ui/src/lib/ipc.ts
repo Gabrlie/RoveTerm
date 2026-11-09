@@ -16,6 +16,16 @@ export function isCommandError(value: unknown): value is CommandError {
   return typeof value === 'object' && value !== null && 'code' in value && 'message' in value;
 }
 
+/** What a connection attempt needs from the user, or `null` when `error` is not a credential request. */
+export type CredentialKind = 'password' | 'passphrase';
+
+export function credentialKindOf(error: unknown): CredentialKind | null {
+  if (!isCommandError(error)) return null;
+  if (error.code === 'ssh.credentials_required') return 'password';
+  if (error.code === 'ssh.passphrase_required') return 'passphrase';
+  return null;
+}
+
 export interface ExitStatus {
   code: number | null;
   signal: string | null;

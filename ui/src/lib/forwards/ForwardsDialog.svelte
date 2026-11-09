@@ -11,7 +11,8 @@
     forwardStart,
     forwardStop,
     forwardUpdate,
-    isCommandError,
+    credentialKindOf,
+    type CredentialKind,
     type ForwardDraft,
     type ForwardEntry,
     type ForwardSpec,
@@ -43,6 +44,7 @@
   let autoStart = $state(false);
   /** Rule waiting for a password before it can start. */
   let needsPassword = $state<string | null>(null);
+  let secretKind = $state<CredentialKind>('password');
   let password = $state('');
   let remember = $state(false);
 
@@ -110,8 +112,10 @@
       needsPassword = null;
       password = '';
     } catch (caught) {
-      if (isCommandError(caught) && caught.code === 'ssh.credentials_required') {
+      const kind = credentialKindOf(caught);
+      if (kind) {
         needsPassword = rule.id;
+        secretKind = kind;
       } else {
         error = errorText(caught);
       }
@@ -182,9 +186,9 @@
           </span>
           {#if needsPassword === rule.id}
             <form class="password" onsubmit={submitPassword}>
-              <input type="password" bind:value={password} placeholder={t('host.password')} autocomplete="current-password" />
-              {#if host.auth.method === 'password'}
-                <label class="check"><input type="checkbox" bind:checked={remember} />{t('host.rememberPassword')}</label>
+              <input type="password" bind:value={password} placeholder={secretKind === 'password' ? t('host.password') : t('host.passphrase')} autocomplete="off" />
+              {#if secretKind === 'password' ? host.auth.method === 'password' : host.auth.method === 'key_file' || host.auth.method === 'private_key'}
+                <label class="check"><input type="checkbox" bind:checked={remember} />{secretKind === 'password' ? t('host.rememberPassword') : t('host.rememberPassphrase')}</label>
               {/if}
               <button type="submit" class="secondary">{t('forward.start')}</button>
             </form>

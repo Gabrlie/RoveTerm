@@ -7,16 +7,21 @@
   import { workspace, type PaneState, type Tab } from '../workspace/workspace.svelte';
   import { sessionOpenLocal, sessionOpenQuick, sessionOpenSsh, type OutputMessage, type TermSize } from '../ipc';
   import type { Divider, PaneId } from './layout';
-  import { isCommandError } from '../ipc';
+  import { credentialKindOf, type CredentialKind } from '../ipc';
 
   interface Props {
     tab: Tab;
     visible: boolean;
     /** Called when a pane needs a password before it can connect. */
-    oncredentials: (paneId: PaneId) => void;
+    oncredentials: (paneId: PaneId, kind: CredentialKind) => void;
   }
 
   let { tab, visible, oncredentials }: Props = $props();
+
+  function credentialRequest(id: PaneId, error: unknown): void {
+    const kind = credentialKindOf(error);
+    if (kind) oncredentials(id, kind);
+  }
 
   let grid: HTMLDivElement;
   const views: Record<PaneId, TermView> = $state({});
@@ -108,7 +113,7 @@
             active={visible && tab.focused === id}
             {visible}
             onopened={() => workspace.opened(id)}
-            onerror={(error) => isCommandError(error) && error.code === 'ssh.credentials_required' && oncredentials(id)}
+            onerror={(error) => credentialRequest(id, error)}
           />
         {:else}
           <TermView
@@ -118,7 +123,7 @@
             onsession={(sessionId) => workspace.attached(id, sessionId)}
             onexit={(status) => onExit(pane, status.code)}
             ontitle={(title) => workspace.retitle(id, title)}
-            onerror={(error) => isCommandError(error) && error.code === 'ssh.credentials_required' && oncredentials(id)}
+            onerror={(error) => credentialRequest(id, error)}
           />
         {/if}
       </div>
