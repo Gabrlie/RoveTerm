@@ -105,6 +105,11 @@
     return days > 0 ? t('status.uptimeDays', { days, hours }) : t('status.uptimeHours', { hours, minutes });
   }
 
+  /** Names of the segments in the order of {@link latency}: one per jump host, then the target. */
+  function segmentNames(count: number): string {
+    return [...Array<string>(count - 1).fill(t('status.segmentJump')), t('status.segmentTarget')].join(' + ');
+  }
+
   /** Segment latencies as `12+85`: one decimal below 10 ms. */
   function latency(segments: number[]): string {
     return segments.map((us) => (us < 10_000 ? (us / 1000).toFixed(1) : Math.round(us / 1000).toString())).join('+');
@@ -146,7 +151,7 @@
       <dl class="facts">
         <div><dt>{t('status.hostname')}</dt><dd>{stats.hostname}</dd></div>
         <div><dt>{t('status.os')}</dt><dd>{stats.os || stats.kernel.split(' ')[0]}</dd></div>
-        <div title={stats.latency_us.length > 1 ? t('status.latencySegments') : undefined}><dt>{t('status.response')}</dt><dd>{t('status.ms', { n: latency(stats.latency_us) })}</dd></div>
+        <div title={stats.latency_us.length > 1 ? t('status.latencySegments') : undefined}><dt>{t('status.response')}{#if stats.latency_us.length > 1}<small class="parts">{t('status.segments', { names: segmentNames(stats.latency_us.length) })}</small>{/if}</dt><dd>{t('status.ms', { n: latency(stats.latency_us) })}</dd></div>
         <div><dt>{t('status.uptimeLabel')}</dt><dd>{uptime(stats.uptime_secs)}</dd></div>
         <div class="wide"><dt>{t('status.kernel')}</dt><dd>{stats.kernel}</dd></div>
       </dl>
@@ -261,6 +266,11 @@
   }
   .facts dt {
     color: var(--fg-muted);
+    font-size: var(--text-caption);
+  }
+  .parts {
+    margin-left: 2px;
+    color: var(--fg-subtle);
     font-size: var(--text-caption);
   }
   .facts dd {
