@@ -110,7 +110,7 @@
     gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
     color: var(--fg-muted);
-    box-shadow: inset 0 -0.5px 0 var(--separator);
+    box-shadow: inset 0 -1px 0 var(--separator);
   }
   input {
     flex: 1;

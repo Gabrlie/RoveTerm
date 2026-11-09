@@ -95,7 +95,7 @@
     background: var(--material-bar);
     backdrop-filter: var(--material-blur);
     -webkit-backdrop-filter: var(--material-blur);
-    box-shadow: inset 0 -0.5px 0 var(--separator);
+    box-shadow: inset 0 -1px 0 var(--separator);
     overflow-x: auto;
     scrollbar-width: none;
   }

@@ -43,7 +43,7 @@
     height: 32px;
     padding: 0 var(--space-2) 0 var(--space-3);
     background: var(--material-bar);
-    box-shadow: inset 0 -0.5px 0 var(--separator);
+    box-shadow: inset 0 -1px 0 var(--separator);
   }
   .title {
     flex: 1;

@@ -348,7 +348,7 @@
   }
   .editor.separated {
     padding-top: var(--space-3);
-    box-shadow: inset 0 0.5px 0 var(--separator);
+    box-shadow: inset 0 1px 0 var(--separator);
   }
   .hint {
     margin: calc(-1 * var(--space-2)) 0 0;

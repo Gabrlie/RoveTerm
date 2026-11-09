@@ -547,7 +547,7 @@
     height: 38px;
     padding: 0 var(--space-2);
     background: var(--material-bar);
-    box-shadow: inset 0 -0.5px 0 var(--separator);
+    box-shadow: inset 0 -1px 0 var(--separator);
   }
   .path {
     flex: 1;
@@ -590,7 +590,7 @@
     color: var(--fg-muted);
     font-size: var(--text-caption);
     font-weight: 600;
-    box-shadow: inset 0 -0.5px 0 var(--separator);
+    box-shadow: inset 0 -1px 0 var(--separator);
   }
   .list {
     flex: 1;
@@ -663,7 +663,7 @@
   }
   .transfers {
     background: var(--material-bar);
-    box-shadow: inset 0 0.5px 0 var(--separator);
+    box-shadow: inset 0 1px 0 var(--separator);
   }
   .transfers-head {
     display: flex;
@@ -741,7 +741,7 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    box-shadow: inset 0 0.5px 0 var(--separator);
+    box-shadow: inset 0 1px 0 var(--separator);
   }
   .status.error {
     color: var(--danger);

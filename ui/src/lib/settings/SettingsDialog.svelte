@@ -69,8 +69,8 @@
     height: min(560px, 68vh);
     margin: 0 calc(-1 * var(--space-5));
     box-shadow:
-      inset 0 0.5px 0 var(--separator),
-      inset 0 -0.5px 0 var(--separator);
+      inset 0 1px 0 var(--separator),
+      inset 0 -1px 0 var(--separator);
   }
   nav {
     flex: 0 0 184px;
@@ -78,7 +78,7 @@
     flex-direction: column;
     gap: 2px;
     padding: var(--space-3) var(--space-2);
-    box-shadow: inset -0.5px 0 0 var(--separator);
+    box-shadow: inset -1px 0 0 var(--separator);
     overflow-y: auto;
   }
   nav button {

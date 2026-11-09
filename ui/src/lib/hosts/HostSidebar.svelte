@@ -180,7 +180,7 @@
     background: var(--material-sidebar);
     backdrop-filter: var(--material-blur);
     -webkit-backdrop-filter: var(--material-blur);
-    box-shadow: inset -0.5px 0 0 var(--separator);
+    box-shadow: inset -1px 0 0 var(--separator);
   }
   .toolbar {
     display: flex;
@@ -321,7 +321,7 @@
     align-items: center;
     justify-content: space-between;
     padding: var(--space-2);
-    box-shadow: inset 0 0.5px 0 var(--separator);
+    box-shadow: inset 0 1px 0 var(--separator);
   }
   .vault {
     display: flex;

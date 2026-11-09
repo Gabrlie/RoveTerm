@@ -158,7 +158,7 @@
   padding: var(--space-2) var(--space-3);
 }
 .form-row + .form-row {
-  box-shadow: inset 0 0.5px 0 var(--separator);
+  box-shadow: inset 0 1px 0 var(--separator);
 }
 .form-row > .form-label {
   flex: 1;
