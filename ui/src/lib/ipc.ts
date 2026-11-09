@@ -94,6 +94,14 @@ export type AuthMethod =
   | { method: 'agent' }
   | { method: 'interactive' };
 
+export type ProxyProtocol = 'http' | 'socks5';
+
+/** How the connection to a host is made; see `HostRoute` in rove-vault. */
+export type HostRoute =
+  | { kind: 'direct' }
+  | { kind: 'jump'; host: HostId }
+  | { kind: 'proxy'; protocol: ProxyProtocol; host: string; port: number };
+
 export interface HostDraft {
   name: string;
   group: string | null;
@@ -101,6 +109,7 @@ export interface HostDraft {
   port: number;
   username: string;
   auth: AuthMethod;
+  route: HostRoute;
   tags: string[];
 }
 

@@ -2,13 +2,14 @@
   // Create or edit a host. The draft stays in the form when saving fails (for example a denied unlock).
   import Dialog from '../ui/Dialog.svelte';
   import Select from '../ui/Select.svelte';
-  import { hostCreate, hostUpdate, type AuthMethod, type HostDraft, type HostEntry, type Secret } from '../ipc';
+  import { hostCreate, hostUpdate, type AuthMethod, type HostDraft, type HostEntry, type HostRoute, type Secret } from '../ipc';
   import { errorText, t } from '../i18n';
   import { hosts } from './hosts.svelte';
 
   let { host, onclose }: { host: HostEntry | null; onclose: () => void } = $props();
 
   type Method = AuthMethod['method'];
+  type RouteKind = 'direct' | 'jump' | 'http' | 'socks5';
 
   // svelte-ignore state_referenced_locally
   const initial = host;
@@ -22,12 +23,38 @@
   let password = $state('');
   let privateKey = $state('');
   let passphrase = $state('');
+  const initialRoute = initial?.route ?? { kind: 'direct' };
+  let routeKind = $state<RouteKind>(initialRoute.kind === 'proxy' ? initialRoute.protocol : initialRoute.kind);
+  let jumpHost = $state(initialRoute.kind === 'jump' ? initialRoute.host : '');
+  let proxyHost = $state(initialRoute.kind === 'proxy' ? initialRoute.host : '127.0.0.1');
+  let proxyPort = $state<number | null>(initialRoute.kind === 'proxy' ? initialRoute.port : null);
+  /** Hosts this host may jump through: every other saved host. */
+  const jumpOptions = hosts.items
+    .filter((candidate) => candidate.id !== initial?.id)
+    .map((candidate) => ({ value: candidate.id, label: `${candidate.name} (${candidate.username}@${candidate.hostname})` }));
   let error = $state('');
   let saving = $state(false);
   const hasSecret = initial?.has_secret ?? false;
 
   function auth(): AuthMethod {
     return method === 'key_file' ? { method, path: keyPath.trim() } : ({ method } as AuthMethod);
+  }
+
+  // Picking "jump" preselects the first candidate so the drop-down never shows an empty value.
+  $effect(() => {
+    if (routeKind === 'jump' && !jumpHost && jumpOptions[0]) jumpHost = jumpOptions[0].value;
+  });
+
+  function route(): HostRoute {
+    switch (routeKind) {
+      case 'jump':
+        return { kind: 'jump', host: jumpHost };
+      case 'http':
+      case 'socks5':
+        return { kind: 'proxy', protocol: routeKind, host: proxyHost.trim(), port: Number(proxyPort ?? 0) };
+      default:
+        return { kind: 'direct' };
+    }
   }
 
   function secret(): Secret | null {
@@ -49,6 +76,10 @@
       error = t('host.privateKeyRequired');
       return;
     }
+    if (routeKind === 'jump' && !jumpHost) {
+      error = t('host.jumpRequired');
+      return;
+    }
     const draft: HostDraft = {
       name,
       group: group.trim() || null,
@@ -56,6 +87,7 @@
       port: Number(port),
       username,
       auth: auth(),
+      route: route(),
       tags: initial?.tags ?? [],
     };
     saving = true;
@@ -112,6 +144,31 @@
       <label>{t('host.keyPath')}<input bind:value={keyPath} required spellcheck="false" /></label>
       <label>{t('host.passphrase')}<input type="password" bind:value={passphrase} placeholder={hasSecret ? t('host.keepSecret') : ''} autocomplete="new-password" /></label>
     {/if}
+    <label
+      >{t('host.route')}
+      <Select
+        bind:value={routeKind}
+        options={[
+          { value: 'direct', label: t('host.route.direct') },
+          { value: 'jump', label: t('host.route.jump') },
+          { value: 'http', label: t('host.route.http') },
+          { value: 'socks5', label: t('host.route.socks5') },
+        ]}
+      />
+    </label>
+    {#if routeKind === 'jump'}
+      {#if jumpOptions.length > 0}
+        <label>{t('host.jumpHost')}<Select bind:value={jumpHost} options={jumpOptions} /></label>
+        <p class="hint">{t('host.jumpHint')}</p>
+      {:else}
+        <p class="hint">{t('host.jumpNone')}</p>
+      {/if}
+    {:else if routeKind !== 'direct'}
+      <div class="row">
+        <label>{t('host.proxyHost')}<input bind:value={proxyHost} required spellcheck="false" autocomplete="off" /></label>
+        <label class="port">{t('host.port')}<input type="number" min="1" max="65535" bind:value={proxyPort} required /></label>
+      </div>
+    {/if}
     {#if error}<p class="error">{error}</p>{/if}
   </form>
   {#snippet actions()}
@@ -128,5 +185,10 @@
   }
   .port {
     flex: 0 0 96px !important;
+  }
+  .hint {
+    margin: calc(-1 * var(--space-2)) 0 0;
+    color: var(--fg-muted);
+    font-size: var(--text-footnote);
   }
 </style>

@@ -19,6 +19,14 @@
 
   let { onconnect, onfiles, onforwards, onedit, onquick, onnotice, onsettings }: Props = $props();
 
+  /** Suffix naming how the host is reached, empty for direct connections. */
+  function routeNote(host: HostEntry): string {
+    const { route } = host;
+    if (route.kind === 'jump') return ` · ${t('host.via', { name: hosts.find(route.host)?.name ?? '?' })}`;
+    if (route.kind === 'proxy') return ` · ${t('host.via', { name: `${route.host}:${route.port}` })}`;
+    return '';
+  }
+
   async function importConfig(): Promise<void> {
     try {
       const report = await hosts.importSshConfig();
@@ -73,7 +81,7 @@
                 </span>
               {/if}
             </span>
-            <span class="address">{host.username}@{host.hostname}{host.port === 22 ? '' : `:${host.port}`}</span>
+            <span class="address">{host.username}@{host.hostname}{host.port === 22 ? '' : `:${host.port}`}{routeNote(host)}</span>
           </div>
           <div class="actions">
             <IconButton icon="files" label={t('host.openFiles')} small onclick={() => onfiles(host)} />

@@ -26,7 +26,7 @@ export function t(key: MessageKey, params: Record<string, string | number> = {})
 
 /** Localizes a command error by its code, falling back to the generic message. */
 /** Codes whose backend message names the cause (a path, an OS error) and is shown after the text. */
-const DETAILED = new Set(['ssh.key', 'ssh.agent', 'ssh.connect', 'ssh.protocol', 'ssh.sftp', 'fs.io']);
+const DETAILED = new Set(['ssh.key', 'ssh.agent', 'ssh.connect', 'ssh.protocol', 'ssh.sftp', 'ssh.proxy', 'ssh.jump', 'ssh.jump_host', 'fs.io']);
 
 export function errorText(error: unknown): string {
   if (isCommandError(error)) {
