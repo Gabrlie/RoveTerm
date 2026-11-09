@@ -243,6 +243,33 @@ pub async fn transfer_download(
     ))
 }
 
+/// Returns which of `names` already exist in `local_dir` (or the system download directory), so
+/// the user can choose how to resolve the clash before downloading.
+#[tauri::command]
+pub async fn transfer_local_clashes(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    names: Vec<String>,
+    local_dir: Option<String>,
+) -> Result<Vec<String>, CommandError> {
+    check_count(&names)?;
+    let dir = match local_dir {
+        Some(dir) => local_path(&dir)?.to_owned(),
+        None => download_dir(&app)?,
+    };
+    let mut clashes = Vec::new();
+    for name in names {
+        rove_fs::validate_name(&name)?;
+        let path = state.local_fs.join(&dir, &name);
+        match state.local_fs.stat(&path).await {
+            Ok(_) => clashes.push(name),
+            Err(rove_fs::FsError::NotFound(_)) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(clashes)
+}
+
 /// The platform download directory; falls back to an existing `~/Downloads` where the platform
 /// reports none (Linux without `user-dirs.dirs`).
 fn download_dir(app: &AppHandle) -> Result<String, CommandError> {

@@ -61,7 +61,7 @@
 - `FileBrowser` 挂载时调用 `sftp_open`，卸载时调用 `sftp_close`。需要密码时走与终端相同的 `ssh.credentials_required` → 密码框 → `workspace.reopen` 流程。
 - 双击目录进入，双击文件下载到系统下载目录；路径栏可以直接输入路径。单击选择，Ctrl/⌘ 单击多选，Shift 单击连选。
 - 列表获得焦点时：方向键移动选择，Enter 打开，Backspace 返回上级，Delete 删除，F2 重命名，Ctrl/⌘+A 全选。
-- 上传通过系统文件选择框（`tauri-plugin-dialog`，只授予 `dialog:allow-open`），或把文件从系统拖到面板上。上传时若当前目录已有同名项，询问替换、保留两者还是跳过；下载总是自动改名，不覆盖本地文件。
+- 上传通过系统文件选择框（`tauri-plugin-dialog`，只授予 `dialog:allow-open`），或把文件从系统拖到面板上。上传时若当前目录已有同名项、下载时若本地目标目录已有同名项（由 `transfer_local_clashes` 检查），都询问替换、保留两者还是跳过。
 - 面板底部列出与该主机相关的传输（`transfer-update` 事件），显示进度并可取消；上传到当前目录的传输完成后自动刷新列表。
 - 是否显示隐藏文件保存在 `localStorage`，读写失败时按不显示处理。
 

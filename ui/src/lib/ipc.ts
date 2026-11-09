@@ -326,6 +326,11 @@ export function transferDownload(id: FsId, remotePaths: string[], localDir: stri
   return invoke('transfer_download', { id, remotePaths, localDir, conflict });
 }
 
+/** Which of `names` already exist in `localDir` (or the system download directory). */
+export function transferLocalClashes(names: string[], localDir: string | null): Promise<string[]> {
+  return invoke('transfer_local_clashes', { names, localDir });
+}
+
 export function transferList(): Promise<TransferUpdate[]> {
   return invoke('transfer_list');
 }

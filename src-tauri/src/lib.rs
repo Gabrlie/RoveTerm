@@ -137,6 +137,7 @@ pub fn run() {
             commands::sftp::sftp_close,
             commands::sftp::transfer_upload,
             commands::sftp::transfer_download,
+            commands::sftp::transfer_local_clashes,
             commands::sftp::transfer_list,
             commands::sftp::transfer_cancel,
             commands::sftp::transfer_clear,

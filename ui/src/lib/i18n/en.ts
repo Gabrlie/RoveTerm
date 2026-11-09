@@ -52,6 +52,7 @@ export const en = {
   'action.palette.open': 'Command palette',
   'action.settings.open': 'Settings',
   'host.delete': 'Delete host',
+  'files.downloadConflictBody': 'These items already exist in the download folder: {names}',
   'hostkey.route': 'Route',
   'home.title': 'Home',
   'action.panel.right': 'Toggle status and snippets panel',

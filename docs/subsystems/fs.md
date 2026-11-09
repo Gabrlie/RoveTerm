@@ -41,6 +41,7 @@ enqueue(TransferRequest) → TransferId，状态 queued
 | 命令 | 作用 |
 |---|---|
 | `sftp_open(host_id \| address, password, remember)` | 获取连接的方式和打开终端相同，返回 `{ id, label, home }` |
+| `transfer_local_clashes` | 返回待下载的名称中哪些已存在于本地目标目录（默认为系统下载目录），界面据此询问替换、保留两者或跳过 |
 | `sftp_list` / `sftp_mkdir` / `sftp_rename` / `sftp_remove` | 浏览和修改远程目录；`sftp_remove` 递归删除，拒绝删除根目录 |
 | `sftp_close` | 从 `FsSessions` 移除；进行中的传输不受影响 |
 | `transfer_upload` / `transfer_download` | 为每个路径排一个传输；下载目录缺省时使用系统下载目录，系统未配置时退回已存在的 `~/Downloads` |

@@ -16,6 +16,7 @@
     sftpRemove,
     sftpRename,
     transferDownload,
+    transferLocalClashes,
     transferUpload,
     type Conflict,
     type DirEntry,
@@ -46,7 +47,8 @@
     | { kind: 'mkdir' }
     | { kind: 'rename'; entry: DirEntry }
     | { kind: 'delete'; names: string[] }
-    | { kind: 'conflict'; paths: string[]; clashes: string[] };
+    | { kind: 'conflict'; paths: string[]; clashes: string[] }
+    | { kind: 'downloadConflict'; names: string[]; dir: string | null; clashes: string[] };
 
   const HIDDEN_KEY = 'files.showHidden';
 
@@ -174,7 +176,19 @@
       dir = picked;
     }
     try {
-      await transferDownload(fsId, names.map((name) => joinPath(cwd, name)), dir, 'rename');
+      const clashes = await transferLocalClashes(names, dir);
+      if (clashes.length > 0) pending = { kind: 'downloadConflict', names, dir, clashes };
+      else await startDownload(names, dir, 'rename');
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  async function startDownload(names: string[], dir: string | null, conflict: Conflict): Promise<void> {
+    pending = null;
+    if (!fsId) return;
+    try {
+      await transferDownload(fsId, names.map((name) => joinPath(cwd, name)), dir, conflict);
       info(t('files.downloading', { count: names.length }));
       transfersOpen = true;
     } catch (error) {
@@ -486,6 +500,17 @@
       <button type="button" class="secondary" onclick={() => void upload(request.paths, 'skip')}>{t('files.skip')}</button>
       <button type="button" class="secondary" onclick={() => void upload(request.paths, 'rename')}>{t('files.keepBoth')}</button>
       <button type="button" class="primary" onclick={() => void upload(request.paths, 'overwrite')}>{t('files.overwrite')}</button>
+    {/snippet}
+  </Dialog>
+{:else if pending?.kind === 'downloadConflict'}
+  {@const request = pending}
+  <Dialog title={t('files.conflictTitle')} onclose={() => (pending = null)} width={440}>
+    <p class="message">{t('files.downloadConflictBody', { names: request.clashes.slice(0, 5).join(', ') })}</p>
+    {#snippet actions()}
+      <button type="button" class="secondary" onclick={() => (pending = null)}>{t('common.cancel')}</button>
+      <button type="button" class="secondary" onclick={() => void startDownload(request.names, request.dir, 'skip')}>{t('files.skip')}</button>
+      <button type="button" class="secondary" onclick={() => void startDownload(request.names, request.dir, 'rename')}>{t('files.keepBoth')}</button>
+      <button type="button" class="primary" onclick={() => void startDownload(request.names, request.dir, 'overwrite')}>{t('files.overwrite')}</button>
     {/snippet}
   </Dialog>
 {/if}
