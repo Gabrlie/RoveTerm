@@ -615,7 +615,8 @@
     cursor: default;
     user-select: none;
   }
-  .entry:nth-child(even of .entry) {
+  /* Stripes only plain rows: `nth-child(… of …)` outranks the hover and selection rules. */
+  .entry:nth-child(even of .entry):not(:hover, .selected) {
     background: color-mix(in srgb, var(--fill) 55%, transparent);
   }
   .entry:hover {
