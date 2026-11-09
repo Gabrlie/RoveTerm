@@ -238,7 +238,8 @@ async fn server_status_samples_this_linux_machine() {
     let stats = rove_ssh::sample_server(&connection).await.unwrap();
     assert!(stats.cores >= 1);
     assert!(stats.mem_total > stats.mem_available);
-    assert!(stats.cpu_total > stats.cpu_idle);
-    assert!(stats.disk_total >= stats.disk_used);
+    assert!(stats.cpu.total > stats.cpu.idle);
+    assert!(!stats.cpus.is_empty());
+    assert!(stats.disks.iter().any(|disk| disk.mount == "/"));
     assert!(!stats.hostname.is_empty());
 }

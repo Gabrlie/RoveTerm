@@ -34,7 +34,7 @@ pub use keys::{
     KeyInfo, KeyType, authorize_command, check_public_key, describe as describe_key,
     generate as generate_key,
 };
-pub use monitor::{ServerStats, sample as sample_server};
+pub use monitor::{CpuTimes, Disk, NetInterface, ServerStats, sample as sample_server};
 pub use progress::{AuthKind, ConnectStep, Progress};
 pub use sftp::SftpFs;
 pub use sshconfig::{
