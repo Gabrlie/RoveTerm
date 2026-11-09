@@ -1,11 +1,12 @@
 //! Obtains an authenticated SSH connection for a command: reuses the live shared connection when
-//! there is one, otherwise resolves credentials (vault secret, typed password, SSH agent) and
-//! connects.
+//! there is one, otherwise resolves credentials (vault secret, typed password, SSH agent), follows
+//! the host's route (proxy or jump hosts) and connects.
 
+use std::pin::Pin;
 use std::sync::Arc;
 
-use rove_ssh::{AuthSpec, SshConnection, SshError, SshTarget, parse_quick_connect};
-use rove_vault::{AuthMethod, Host, HostId, Secret};
+use rove_ssh::{AuthSpec, SshConnection, SshError, SshTarget, Via, parse_quick_connect};
+use rove_vault::{AuthMethod, Host, HostId, HostRoute, MAX_JUMP_DEPTH, Secret};
 use zeroize::Zeroizing;
 
 use crate::error::CommandError;
@@ -96,7 +97,8 @@ where
                 return Ok(value);
             }
             let auth = host_auth(state, &host, password.clone()).await?;
-            let connection = state.ssh.shared(&target, &auth).await?;
+            let via = route(state, &host, 0).await?;
+            let connection = state.ssh.shared_via(&target, &auth, &via).await?;
             let value = op(connection).await?;
             if *remember && let Some(typed) = password {
                 remember_typed(state, &host, typed.clone()).await;
@@ -153,6 +155,78 @@ where
         }
         Err(error) => Err(error.into()),
     }
+}
+
+type RouteFuture<'a> = Pin<Box<dyn Future<Output = Result<Via, CommandError>> + Send + 'a>>;
+
+/// Returns how to reach `host`: directly, through its proxy, or through the shared connection to
+/// its jump host, which is connected first when needed. `depth` counts the jump hosts already
+/// followed.
+fn route<'a>(state: &'a AppState, host: &'a Host, depth: usize) -> RouteFuture<'a> {
+    Box::pin(async move {
+        match &host.route {
+            HostRoute::Direct => Ok(Via::Direct),
+            HostRoute::Proxy {
+                protocol,
+                host: proxy,
+                port,
+            } => Ok(Via::Proxy {
+                protocol: *protocol,
+                host: proxy.clone(),
+                port: *port,
+            }),
+            HostRoute::Jump { host: jump_id } => {
+                if depth >= MAX_JUMP_DEPTH {
+                    return Err(CommandError::new(
+                        "input.invalid",
+                        format!("more than {MAX_JUMP_DEPTH} jump hosts"),
+                    ));
+                }
+                let jump = state.vault.host(*jump_id)?;
+                let connection = jump_connection(state, &jump, depth + 1)
+                    .await
+                    .map_err(|error| jump_error(&jump, error))?;
+                Ok(Via::Jump(connection))
+            }
+        }
+    })
+}
+
+/// The shared connection to a jump host. Jump hosts authenticate without asking: a stored
+/// secret, a key file or the SSH agent.
+async fn jump_connection(
+    state: &AppState,
+    jump: &Host,
+    depth: usize,
+) -> Result<Arc<SshConnection>, CommandError> {
+    let target = SshTarget::from_host(jump);
+    if let Some(connection) = state.ssh.live(&target).await {
+        return Ok(connection);
+    }
+    let auth = host_auth(state, jump, None).await?;
+    let via = route(state, jump, depth).await?;
+    Ok(state.ssh.shared_via(&target, &auth, &via).await?)
+}
+
+/// Names the jump host in a failure to reach it; the code becomes `ssh.jump_host`. A failure of
+/// a jump host further along keeps its own name.
+fn jump_error(jump: &Host, error: CommandError) -> CommandError {
+    if error.code == "ssh.jump_host" {
+        return error;
+    }
+    let reason = match error.code {
+        "ssh.credentials_required" | "ssh.passphrase_required" => {
+            "needs a saved password or an unencrypted key".to_owned()
+        }
+        _ => error.message,
+    };
+    CommandError::new(
+        "ssh.jump_host",
+        format!(
+            "{} ({}@{}): {reason}",
+            jump.name, jump.username, jump.hostname
+        ),
+    )
 }
 
 /// Resolves credentials for a saved host, unlocking the vault only when a stored secret is needed.
