@@ -29,6 +29,8 @@ pub struct AppState {
     pub transfers: Arc<TransferQueue>,
     /// This device's file system.
     pub local_fs: Arc<LocalFs>,
+    /// Durable event journal.
+    pub journal: Arc<dyn rove_journal::JournalStore>,
     /// Local PTY provider.
     #[cfg(desktop)]
     pub pty: Arc<rove_pty::LocalTerminals>,
@@ -49,6 +51,7 @@ impl AppState {
             fs_sessions: ctx.require::<FsSessions>()?,
             transfers: ctx.require::<TransferQueue>()?,
             local_fs: ctx.require::<LocalFs>()?,
+            journal: ctx.require::<dyn rove_journal::JournalStore>()?,
             #[cfg(desktop)]
             pty: ctx.require::<rove_pty::LocalTerminals>()?,
             lifetime: Mutex::new(Some((runtime, Vec::new()))),

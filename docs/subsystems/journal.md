@@ -33,3 +33,7 @@ pub trait JournalStore: Send + Sync {
 ## 写入路径
 
 `Recorder` 订阅 Live 事件，把记录放进队列，由 `journal-writer` 线程依次追加。表结构为单表 `events`，并对 `(session_id, seq)` 建了索引。
+
+## 工作区快照
+
+应用命令 `workspace_save(snapshot)` 把界面的标签与分屏布局作为 `ui/workspace` 记录追加到 journal（必须是对象，序列化后不超过 256 KiB，面板只以主机 id 引用已保存主机，不含秘密）；`workspace_load()` 返回最新一条，没有时返回 `null`。快照的结构由界面定义（[ui](ui.md)）。

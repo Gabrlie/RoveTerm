@@ -9,3 +9,4 @@ pub mod session;
 pub mod sftp;
 pub mod snippets;
 pub mod vault;
+pub mod workspace;
