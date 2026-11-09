@@ -79,7 +79,9 @@ fn check_id(id: &str) -> Result<(), CommandError> {
     if valid {
         Ok(())
     } else {
-        Err(invalid("menu action ids must be 1-64 letters, digits or dots"))
+        Err(invalid(
+            "menu action ids must be 1-64 letters, digits or dots",
+        ))
     }
 }
 
@@ -154,7 +156,10 @@ fn install(app: &AppHandle, menus: &[MenuSpec], labels: &NativeLabels) -> tauri:
         .item(&action("settings.open", &labels.settings)?)
         .separator()
         .item(&PredefinedMenuItem::hide(app, Some(&labels.hide))?)
-        .item(&PredefinedMenuItem::hide_others(app, Some(&labels.hide_others))?)
+        .item(&PredefinedMenuItem::hide_others(
+            app,
+            Some(&labels.hide_others),
+        )?)
         .item(&PredefinedMenuItem::show_all(app, Some(&labels.show_all))?)
         .separator()
         .item(&PredefinedMenuItem::quit(app, Some(&labels.quit))?)
@@ -166,7 +171,10 @@ fn install(app: &AppHandle, menus: &[MenuSpec], labels: &NativeLabels) -> tauri:
         .item(&PredefinedMenuItem::cut(app, Some(&labels.cut))?)
         .item(&PredefinedMenuItem::copy(app, Some(&labels.copy))?)
         .item(&PredefinedMenuItem::paste(app, Some(&labels.paste))?)
-        .item(&PredefinedMenuItem::select_all(app, Some(&labels.select_all))?)
+        .item(&PredefinedMenuItem::select_all(
+            app,
+            Some(&labels.select_all),
+        )?)
         .build()?;
     let mut bar = MenuBuilder::new(app).item(&app_menu).item(&edit);
     for menu in menus {
