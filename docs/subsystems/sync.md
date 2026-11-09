@@ -20,6 +20,7 @@
 | `Change` | 一条变更：记录类型、记录 id、`Hlc`、内容（`None` 表示删除） |
 | `SyncState` | 本设备 id、时钟、下一个分段序号、每台其他设备已读到的序号、每条记录的已知状态（指纹、时间戳、是否已删除） |
 | `SyncBackend` | `list` / `get` / `put` / `delete` 整个文件；`FolderBackend` 用本机目录实现，写入先写临时文件再改名 |
+| `WebDavBackend` | WebDAV 服务器上的目录：`PROPFIND`（Depth 1）列目录，`GET` / `PUT` / `DELETE` 读写删除，写入前用 `MKCOL` 逐级创建目录（405 视为已存在），基本认证；要求 https（回环地址可用 http），TLS 使用 rustls + ring 与系统证书 |
 
 ## 一轮同步
 

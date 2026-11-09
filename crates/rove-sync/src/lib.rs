@@ -8,12 +8,14 @@ mod crypto;
 mod engine;
 mod hlc;
 mod space;
+mod webdav;
 
 pub use backend::{FolderBackend, MAX_FILE, SyncBackend, check_path};
 pub use crypto::{KdfParams, SyncKey};
 pub use engine::{COMPACT_AFTER, Change, Known, Record, RecordStore, Report, SyncState, sync};
 pub use hlc::{Clock, Hlc};
 pub use space::{MANIFEST, create_space, join_space, space_exists};
+pub use webdav::WebDavBackend;
 
 /// Errors of the sync engine and its backends.
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +29,9 @@ pub enum SyncError {
     /// Sealed data did not open: the wrong key, or it was altered or moved.
     #[error("sync data was altered or sealed with another key")]
     Rejected,
+    /// The storage refused the credentials.
+    #[error("the sync storage refused the user name or password")]
+    Unauthorized,
     /// The sync password does not open the space.
     #[error("wrong sync password")]
     WrongPassword,
