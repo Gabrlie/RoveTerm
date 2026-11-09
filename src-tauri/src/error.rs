@@ -70,6 +70,8 @@ impl From<SshError> for CommandError {
             SshError::PassphraseRequired => "ssh.passphrase_required",
             SshError::Agent(_) => "ssh.agent",
             SshError::Sftp(_) => "ssh.sftp",
+            SshError::Proxy(_) => "ssh.proxy",
+            SshError::Jump(_) => "ssh.jump",
             SshError::ForwardBind(_) => "ssh.forward_bind",
             SshError::ForwardRejected(_) => "ssh.forward_rejected",
             SshError::Channel(_) | SshError::Protocol(_) => "ssh.protocol",

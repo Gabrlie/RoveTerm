@@ -46,3 +46,25 @@ fn imports_hosts_and_skips_existing() {
     );
     assert_eq!(imported.tags, ["ssh-config"]);
 }
+
+#[test]
+fn proxy_jump_aliases_become_jump_routes() {
+    use rove_vault::HostRoute;
+    let vault = Vault::open_in_memory(Arc::new(MemoryKeyCache::default())).unwrap();
+    // The jump host is declared after the host that uses it.
+    let config = "Host db\n  HostName 10.0.0.5\n  ProxyJump bastion\n\n\
+                  Host web\n  HostName 10.0.0.6\n  ProxyJump ops@gate:2222\n\n\
+                  Host bastion\n  HostName bastion.example\n";
+    let report = import_ssh_config(&vault, config, Path::new("/home/me"), "me").unwrap();
+    assert_eq!(report.created, ["db", "web", "bastion"]);
+    let hosts = vault.list_hosts().unwrap();
+    let find = |name: &str| hosts.iter().find(|host| host.name == name).unwrap();
+    assert_eq!(
+        find("db").route,
+        HostRoute::Jump {
+            host: find("bastion").id
+        }
+    );
+    assert_eq!(find("web").route, HostRoute::Direct);
+    assert_eq!(find("bastion").route, HostRoute::Direct);
+}

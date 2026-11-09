@@ -17,6 +17,7 @@ SSH Provider：认证、host key 校验，打开 PTY shell channel，`FileSystem
 - `AuthSpec::resolve` 根据主机的认证方式、已存凭据和用户输入的密码或 passphrase 确定凭据；需要先向用户索取密码时返回 `CredentialsRequired`，私钥已加密而缺少正确 passphrase 时连接返回 `PassphraseRequired`。
 - `Agent` 方式在 agent 之后回退到 `~/.ssh` 下的默认密钥文件，与 OpenSSH 一致。
 
+- `SshConnector::shared_via` 按 `Via` 建立传输：直连、HTTP / SOCKS5 代理（无认证），或经跳板连接的 `direct-tcpip` channel；跳板连接在派生连接存在期间保持打开。
 - `parse_quick_connect` 解析快速连接字符串；`parse_ssh_config` 解析 OpenSSH 客户端配置；`import_ssh_config` 把配置中的主机写入 vault，跳过用户名、主机名、端口都相同的已有主机。
 
 ## 配置（`[plugin.ssh]`）

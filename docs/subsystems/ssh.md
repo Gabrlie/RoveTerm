@@ -9,7 +9,8 @@
 | `SshTarget` | `hostname`、`port`、`username`，以及可选的 `host_id` 和标题；`address()` 返回 `user@host:port`，IPv6 地址加方括号 |
 | `AuthSpec` | `Password`、`PrivateKey { key, passphrase }`、`KeyFile { path, passphrase }`、`Agent { passphrase }` |
 | `SshConnection` | 已认证的连接；`open_shell(size)` 打开 PTY shell channel，`open_sftp()` 打开 SFTP 会话 |
-| `SshError` | `Connect`、`Timeout`、`HostKey(HostKeyRejection)`、`AuthFailed`、`CredentialsRequired`、`Key`、`PassphraseRequired`、`Agent`、`Channel`、`ForwardBind`、`ForwardRejected`、`Sftp`、`Protocol` |
+| `Via` | 建立传输的方式：`Direct`、`Proxy { protocol, host, port }`、`Jump(Arc<SshConnection>)` |
+| `SshError` | `Connect`、`Timeout`、`HostKey(HostKeyRejection)`、`AuthFailed`、`CredentialsRequired`、`Key`、`PassphraseRequired`、`Agent`、`Channel`、`ForwardBind`、`ForwardRejected`、`Proxy`、`Jump`、`Sftp`、`Protocol` |
 
 ## 凭据解析
 
@@ -45,12 +46,20 @@
 
 `SshConnector` 按 (小写主机名, 端口, 用户名) 维护连接池：
 
-- `shared(target, auth)` 返回该目标的存活连接；没有时用 `auth` 新建。每个目标有一把异步锁，并发请求只会建立一条连接。
+- `shared(target, auth)` 返回该目标的存活连接；没有时用 `auth` 直连新建。`shared_via(target, auth, via)` 按 `via` 建立传输。每个目标有一把异步锁，并发请求只会建立一条连接。
 - `live(target)` 返回存活连接，不需要凭据；没有时返回 `None`。`open_live(target, size)` 在它之上打开 shell。
 - `open_terminal` 在共享连接上打开 channel；如果复用的连接打开 channel 失败，丢弃它并重连一次。
 - `evict(target, connection)` 在该连接仍是共享连接时把它移出连接池，已打开的 channel 不受影响。
 - 每个打开的 channel 持有一个租约。最后一个租约释放后，启动一个 `idle_disconnect_secs` 的计时器；期间连接被再次取出或打开新 channel，计时作废，否则断开连接。
 - `live_connections()` 返回存活连接数；`disconnect_all()` 用于退出应用时断开全部连接。
+
+## 跳板机与代理
+
+`connect_timeout_secs` 覆盖建立传输的全过程，包括代理握手和跳板通道：
+
+- `Proxy`：先连代理，再用 HTTP `CONNECT` 或 SOCKS5 `CONNECT`（不认证，目标名称交给代理解析）打开到目标的隧道。代理拒绝或协议不符时返回带原因的 `Proxy`。HTTP 响应头逐字节读取，不会吞掉随后的 SSH 版本行。
+- `Jump`：在跳板连接上打开 `direct-tcpip` channel，在其上进行 SSH 握手。新连接持有跳板连接的一个租约，因此跳板连接在新连接存在期间（包括其空闲计时）不会断开。跳板机无法连到目标时返回 `Jump`。
+- host key 按目标的主机名和端口校验，与是否经过跳板无关。
 
 <a id="sftp"></a>
 
@@ -95,4 +104,4 @@
 
 `parse_ssh_config` 为 `Host` 行中每个不含通配符的别名生成一条 `SshConfigHost`。每个字段按 OpenSSH 的首次匹配规则取值：按文件顺序遍历所有与该别名匹配的块（包括 `Host *`、带 `!` 的排除模式，以及第一个 `Host` 行之前的全局设置），采用第一个出现的值。读取的字段有 `HostName`、`Port`、`User`、`IdentityFile`（取第一个）和 `ProxyJump`；`Match` 块和 `Include` 指令被忽略。
 
-`import_ssh_config(vault, text, home, default_user)` 的转换规则：有 `IdentityFile` 时认证方式为 `KeyFile`，并把 `~` 展开为 `home`；否则为 `Agent`。缺少 `User` 时使用 `default_user`，导入的主机带 `ssh-config` 标签。用户名、主机名（不区分大小写）、端口都相同的已有主机会被跳过。
+`import_ssh_config(vault, text, home, default_user)` 的转换规则：有 `IdentityFile` 时认证方式为 `KeyFile`，并把 `~` 展开为 `home`；否则为 `Agent`。`ProxyJump` 的最后一跳是本次导入的别名或已有主机的名称时，设为经该主机跳转；带 `user@`、端口的跳板写法不导入。缺少 `User` 时使用 `default_user`，导入的主机带 `ssh-config` 标签。用户名、主机名（不区分大小写）、端口都相同的已有主机会被跳过。

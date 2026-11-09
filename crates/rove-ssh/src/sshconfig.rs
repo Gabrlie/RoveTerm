@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use rove_vault::{AuthMethod, HostDraft, Vault, VaultError};
+use rove_vault::{AuthMethod, HostDraft, HostId, HostRoute, Vault, VaultError};
 use serde::Serialize;
 
 /// A parsed quick-connect string.
@@ -256,7 +256,9 @@ pub struct ImportReport {
 /// Saves the hosts of an OpenSSH config file into the vault.
 ///
 /// `IdentityFile` becomes [`AuthMethod::KeyFile`] with `~` expanded against `home`; otherwise the
-/// host uses the SSH agent. A missing `User` falls back to `default_user`.
+/// host uses the SSH agent. A missing `User` falls back to `default_user`. `ProxyJump` becomes a
+/// jump route when its last hop names a host alias saved by this import or an existing host's
+/// name; other jump specifications are left out.
 pub fn import_ssh_config(
     vault: &Vault,
     text: &str,
@@ -269,6 +271,12 @@ pub fn import_ssh_config(
         .map(|host| (host.hostname.to_ascii_lowercase(), host.port, host.username))
         .collect();
     let mut report = ImportReport::default();
+    let mut by_name: std::collections::HashMap<String, HostId> = vault
+        .list_hosts()?
+        .into_iter()
+        .map(|host| (host.name, host.id))
+        .collect();
+    let mut jumps: Vec<(HostId, HostDraft, String)> = Vec::new();
     for entry in parse_ssh_config(text) {
         let username = entry
             .user
@@ -285,19 +293,39 @@ pub fn import_ssh_config(
             },
             None => AuthMethod::Agent,
         };
-        vault.create_host(HostDraft {
+        let draft = HostDraft {
             name: entry.alias.clone(),
             group: None,
             hostname: entry.hostname,
             port,
             username,
             auth,
-            route: rove_vault::HostRoute::Direct,
+            route: HostRoute::Direct,
             tags: vec!["ssh-config".into()],
-        })?;
+        };
+        let host = vault.create_host(draft.clone())?;
+        by_name.insert(entry.alias.clone(), host.id);
+        if let Some(jump) = entry.proxy_jump.as_deref().and_then(last_jump_alias) {
+            jumps.push((host.id, draft, jump.to_owned()));
+        }
         report.created.push(entry.alias);
     }
+    for (id, draft, jump) in jumps {
+        let Some(&jump_id) = by_name.get(&jump) else {
+            continue;
+        };
+        let route = HostRoute::Jump { host: jump_id };
+        if let Err(error) = vault.update_host(id, HostDraft { route, ..draft }) {
+            tracing::debug!(%error, %jump, "jump host not applied");
+        }
+    }
     Ok(report)
+}
+
+/// The last hop of a `ProxyJump` list when it is a bare alias (no `user@` or `:port`).
+fn last_jump_alias(spec: &str) -> Option<&str> {
+    let last = spec.rsplit(',').next()?.trim();
+    (!last.is_empty() && !last.contains(['@', ':', '/'])).then_some(last)
 }
 
 fn expand_home(path: &str, home: &Path) -> String {

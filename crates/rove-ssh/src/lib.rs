@@ -9,6 +9,7 @@ mod forward;
 mod hostkey;
 mod keys;
 mod pool;
+mod proxy;
 mod sftp;
 mod socks;
 mod sshconfig;
@@ -22,7 +23,7 @@ use rove_vault::{AuthMethod, Host, Secret, Vault};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-pub use connection::{ConnectOptions, SshConnection};
+pub use connection::{ConnectOptions, SshConnection, Via};
 pub use forward::{ForwardState, ForwardStatus, Forwards};
 pub use hostkey::{
     HostKeyAnswer, HostKeyPrompt, HostKeyPrompts, HostKeyRejection, HostKeyVerifier, VaultVerifier,
@@ -175,6 +176,12 @@ pub enum SshError {
     /// The server refused to listen for a remote forward.
     #[error("server refused remote forward: {0}")]
     ForwardRejected(String),
+    /// The proxy refused or failed to open a tunnel.
+    #[error("proxy error: {0}")]
+    Proxy(String),
+    /// The jump host could not open a tunnel to the destination.
+    #[error("jump host could not reach the destination: {0}")]
+    Jump(String),
     /// The SFTP subsystem is unavailable or failed to start.
     #[error("sftp error: {0}")]
     Sftp(String),
@@ -259,23 +266,44 @@ impl SshConnector {
         }
     }
 
-    /// Connects and authenticates to `target` on a new, unshared connection.
+    /// Connects directly and authenticates to `target` on a new, unshared connection.
     pub async fn connect(
         &self,
         target: &SshTarget,
         auth: &AuthSpec,
     ) -> Result<Arc<SshConnection>, SshError> {
-        SshConnection::connect(target, auth, self.verifier.clone(), &self.options)
+        self.connect_via(target, auth, &Via::Direct).await
+    }
+
+    /// Connects to `target` along `via` on a new, unshared connection.
+    pub async fn connect_via(
+        &self,
+        target: &SshTarget,
+        auth: &AuthSpec,
+        via: &Via,
+    ) -> Result<Arc<SshConnection>, SshError> {
+        SshConnection::connect(target, auth, via, self.verifier.clone(), &self.options)
             .await
             .map(Arc::new)
     }
 
-    /// Returns the shared connection to `target`, connecting with `auth` when none is live.
-    /// `auth` is ignored when a live connection is reused.
+    /// Returns the shared connection to `target`, connecting directly with `auth` when none is
+    /// live. `auth` is ignored when a live connection is reused.
     pub async fn shared(
         &self,
         target: &SshTarget,
         auth: &AuthSpec,
+    ) -> Result<Arc<SshConnection>, SshError> {
+        self.shared_via(target, auth, &Via::Direct).await
+    }
+
+    /// Returns the shared connection to `target`, connecting along `via` with `auth` when none is
+    /// live. `auth` and `via` are ignored when a live connection is reused.
+    pub async fn shared_via(
+        &self,
+        target: &SshTarget,
+        auth: &AuthSpec,
+        via: &Via,
     ) -> Result<Arc<SshConnection>, SshError> {
         let slot = self.pool.slot(pool::PoolKey::of(target));
         let mut guard = slot.connection.lock().await;
@@ -283,7 +311,7 @@ impl SshConnector {
             connection.touch();
             return Ok(connection.clone());
         }
-        let connection = self.connect(target, auth).await?;
+        let connection = self.connect_via(target, auth, via).await?;
         *guard = Some(connection.clone());
         Ok(connection)
     }

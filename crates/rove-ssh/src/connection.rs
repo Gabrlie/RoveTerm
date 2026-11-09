@@ -24,6 +24,75 @@ use crate::{AuthSpec, HostKeyRejection, HostKeyVerifier, SftpFs, SshError, SshTa
 
 const OUTPUT_QUEUE: usize = 256;
 
+/// How the transport to a server is established.
+pub enum Via {
+    /// A TCP connection to the server.
+    Direct,
+    /// A TCP connection to a proxy, which then opens a tunnel to the server.
+    Proxy {
+        /// Proxy protocol.
+        protocol: rove_vault::ProxyProtocol,
+        /// Proxy host.
+        host: String,
+        /// Proxy port.
+        port: u16,
+    },
+    /// A `direct-tcpip` channel on an authenticated connection to a jump host. The new connection
+    /// keeps the jump connection alive while it exists.
+    Jump(Arc<SshConnection>),
+}
+
+/// The byte stream an SSH session runs over.
+trait Transport: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> Transport for T {}
+
+async fn tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, SshError> {
+    let stream = tokio::net::TcpStream::connect((host, port))
+        .await
+        .map_err(|error| SshError::Connect(error.to_string()))?;
+    if let Err(error) = stream.set_nodelay(true) {
+        tracing::debug!(%error, "set_nodelay failed");
+    }
+    Ok(stream)
+}
+
+/// Opens the transport to `target` along `via`. A jump returns the lease that keeps the jump
+/// connection open.
+async fn open_transport(
+    target: &SshTarget,
+    via: &Via,
+) -> Result<(Box<dyn Transport>, Option<ChannelLease>), SshError> {
+    match via {
+        Via::Direct => Ok((Box::new(tcp(&target.hostname, target.port).await?), None)),
+        Via::Proxy {
+            protocol,
+            host,
+            port,
+        } => {
+            let mut stream = tcp(host, *port).await?;
+            match protocol {
+                rove_vault::ProxyProtocol::Http => {
+                    crate::proxy::http_connect(&mut stream, &target.hostname, target.port).await?
+                }
+                rove_vault::ProxyProtocol::Socks5 => {
+                    crate::proxy::socks5_connect(&mut stream, &target.hostname, target.port).await?
+                }
+            }
+            Ok((Box::new(stream), None))
+        }
+        Via::Jump(jump) => {
+            let (channel, lease) = jump
+                .open_direct_tcpip(&target.hostname, target.port, "127.0.0.1", 0)
+                .await
+                .map_err(|error| match error {
+                    SshError::Channel(reason) => SshError::Jump(reason),
+                    other => other,
+                })?;
+            Ok((Box::new(channel.into_stream()), Some(lease)))
+        }
+    }
+}
+
 /// Timing parameters for a connection.
 #[derive(Debug, Clone)]
 pub struct ConnectOptions {
@@ -125,27 +194,25 @@ pub struct SshConnection {
     retired: AtomicBool,
     idle_timeout: Option<Duration>,
     routes: Arc<RemoteRoutes>,
+    /// Keeps the jump connection open while this connection exists.
+    _tunnel: Option<ChannelLease>,
 }
 
 impl SshConnection {
-    /// Connects to `target`, verifies the host key with `verifier`, and authenticates with `auth`.
+    /// Connects to `target` along `via`, verifies the host key with `verifier`, and authenticates
+    /// with `auth`. `connect_timeout` covers opening the transport, including proxy and jump
+    /// handshakes.
     pub async fn connect(
         target: &SshTarget,
         auth: &AuthSpec,
+        via: &Via,
         verifier: Arc<dyn HostKeyVerifier>,
         options: &ConnectOptions,
     ) -> Result<Self, SshError> {
-        let address = (target.hostname.as_str(), target.port);
-        let stream = tokio::time::timeout(
-            options.connect_timeout,
-            tokio::net::TcpStream::connect(address),
-        )
-        .await
-        .map_err(|_| SshError::Timeout)?
-        .map_err(|error| SshError::Connect(error.to_string()))?;
-        if let Err(error) = stream.set_nodelay(true) {
-            tracing::debug!(%error, "set_nodelay failed");
-        }
+        let (stream, tunnel) =
+            tokio::time::timeout(options.connect_timeout, open_transport(target, via))
+                .await
+                .map_err(|_| SshError::Timeout)??;
         let config = Arc::new(client::Config {
             keepalive_interval: Some(options.keepalive_interval),
             keepalive_max: options.keepalive_max,
@@ -179,6 +246,7 @@ impl SshConnection {
             retired: AtomicBool::new(false),
             idle_timeout: options.idle_timeout,
             routes,
+            _tunnel: tunnel,
         })
     }
 
