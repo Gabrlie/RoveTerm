@@ -7,4 +7,5 @@ pub mod monitor;
 pub mod prefs;
 pub mod session;
 pub mod sftp;
+pub mod snippets;
 pub mod vault;
