@@ -19,7 +19,7 @@ pub trait JournalStore: Send + Sync {
 | `session_id` | 所属会话，可为空 |
 | `payload` | JSON 负载 |
 
-`JournalQuery` 可以按 `after_seq`、`session_id`、`kind` 过滤，并用 `limit` 限制条数（默认 1000）。
+`JournalQuery` 可以按 `after_seq`、`session_id`、`kind` 过滤，并用 `limit` 限制条数（默认 1000）。结果默认按 `seq` 升序；`newest_first` 改为降序，配合 `limit: Some(1)` 读取某类事件的最新一条。
 
 ## 记录的事件
 

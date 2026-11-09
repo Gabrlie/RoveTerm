@@ -93,7 +93,11 @@ impl JournalStore for SqliteJournal {
             sql.push_str(" AND kind = ?");
             values.push(Value::Text(kind.clone()));
         }
-        sql.push_str(" ORDER BY seq LIMIT ?");
+        sql.push_str(if query.newest_first {
+            " ORDER BY seq DESC LIMIT ?"
+        } else {
+            " ORDER BY seq LIMIT ?"
+        });
         values.push(Value::Integer(i64::from(
             query.limit.unwrap_or(DEFAULT_LIMIT),
         )));

@@ -102,3 +102,21 @@ fn recorder_persists_session_lifecycle() {
     assert_eq!(records[0].payload["info"]["kind"], "local");
     assert_eq!(records[1].payload["status"]["code"], 0);
 }
+
+#[test]
+fn newest_first_reads_the_latest_record_of_a_kind() {
+    let journal = SqliteJournal::open_in_memory().unwrap();
+    journal.append(record("ui/layout", None)).unwrap();
+    journal.append(record("other", None)).unwrap();
+    let last = journal.append(record("ui/layout", None)).unwrap();
+    let latest = journal
+        .read(&JournalQuery {
+            kind: Some("ui/layout".into()),
+            limit: Some(1),
+            newest_first: true,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(latest.len(), 1);
+    assert_eq!(latest[0].seq, last);
+}

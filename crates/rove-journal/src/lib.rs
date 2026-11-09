@@ -52,6 +52,9 @@ pub struct JournalQuery {
     pub kind: Option<String>,
     /// Maximum number of records; absent means 1000.
     pub limit: Option<u32>,
+    /// Return the newest records first (descending `seq`), for example to read the latest record
+    /// of a kind with `limit: Some(1)`.
+    pub newest_first: bool,
 }
 
 /// Errors returned by journal stores.
@@ -76,7 +79,8 @@ pub trait JournalStore: Send + Sync {
     /// Appends `record` and returns its sequence number.
     fn append(&self, record: NewRecord) -> Result<i64, JournalError>;
 
-    /// Returns records matching `query` in ascending sequence order.
+    /// Returns records matching `query` in ascending sequence order, or descending with
+    /// [`JournalQuery::newest_first`].
     fn read(&self, query: &JournalQuery) -> Result<Vec<JournalRecord>, JournalError>;
 }
 
