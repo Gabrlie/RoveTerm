@@ -124,6 +124,9 @@ pub trait FileSystem: Send + Sync {
     /// Returns metadata of `path`, following symlinks.
     async fn stat(&self, path: &str) -> Result<Metadata, FsError>;
 
+    /// Returns metadata of `path` itself: a symlink reports [`EntryKind::Symlink`].
+    async fn lstat(&self, path: &str) -> Result<Metadata, FsError>;
+
     /// Creates the directory `path`; its parent must exist.
     async fn mkdir(&self, path: &str) -> Result<(), FsError>;
 
@@ -189,19 +192,18 @@ pub fn validate_name(name: &str) -> Result<(), FsError> {
     }
 }
 
-/// Removes `path` and, when it is a directory, everything below it. Symlinks are removed, not
-/// followed.
+/// Removes `path` and, when it is a directory, everything below it. Symlinks, including links to
+/// directories, are removed themselves; what they point to is never touched.
 pub async fn remove_all(fs: &dyn FileSystem, path: &str) -> Result<(), FsError> {
-    // Depth-first with an explicit stack: (path, children already removed).
-    let mut stack = vec![(path.to_owned(), false)];
-    let top_is_dir = match fs.list(path).await {
-        Ok(_) => true,
-        Err(FsError::NotFound(_)) => return Err(FsError::NotFound(path.to_owned())),
-        Err(_) => false,
-    };
-    if !top_is_dir {
-        return fs.remove_file(path).await;
+    match fs.lstat(path).await?.kind {
+        EntryKind::Dir => {}
+        EntryKind::Symlink => return remove_link(fs, path).await,
+        _ => return fs.remove_file(path).await,
     }
+    // Depth-first with an explicit stack: (path, children already removed). Children are
+    // classified by their listing entries, which describe the entries themselves, not link
+    // targets.
+    let mut stack = vec![(path.to_owned(), false)];
     while let Some((dir, expanded)) = stack.pop() {
         if expanded {
             fs.remove_dir(&dir).await?;
@@ -210,14 +212,23 @@ pub async fn remove_all(fs: &dyn FileSystem, path: &str) -> Result<(), FsError> 
         stack.push((dir.clone(), true));
         for entry in fs.list(&dir).await? {
             let child = fs.join(&dir, &entry.name);
-            if entry.metadata.kind == EntryKind::Dir {
-                stack.push((child, false));
-            } else {
-                fs.remove_file(&child).await?;
+            match entry.metadata.kind {
+                EntryKind::Dir => stack.push((child, false)),
+                EntryKind::Symlink => remove_link(fs, &child).await?,
+                _ => fs.remove_file(&child).await?,
             }
         }
     }
     Ok(())
+}
+
+/// Removes a symlink itself. Windows removes links to directories with `remove_dir`, which on
+/// other systems refuses links, so both are tried.
+async fn remove_link(fs: &dyn FileSystem, path: &str) -> Result<(), FsError> {
+    match fs.remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(error) => fs.remove_dir(path).await.map_err(|_| error),
+    }
 }
 
 /// Registers [`FsSessions`], [`TransferQueue`] and a [`LocalFs`].

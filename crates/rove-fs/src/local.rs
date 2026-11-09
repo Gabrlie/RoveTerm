@@ -81,6 +81,13 @@ impl FileSystem for LocalFs {
             .map_err(|error| FsError::from_io(&error, path))
     }
 
+    async fn lstat(&self, path: &str) -> Result<Metadata, FsError> {
+        tokio::fs::symlink_metadata(path)
+            .await
+            .map(|meta| metadata(&meta))
+            .map_err(|error| FsError::from_io(&error, path))
+    }
+
     async fn mkdir(&self, path: &str) -> Result<(), FsError> {
         tokio::fs::create_dir(path)
             .await

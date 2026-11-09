@@ -5,7 +5,8 @@
 ## 契约
 
 - 路径是 Provider 自己语法下的绝对路径字符串；拼接和取父目录只用 `FileSystem::join` / `parent`。远程路径按 POSIX 处理，本地路径按平台处理。
-- `list` 不返回 `.` 和 `..`，不跟随符号链接；`stat` 跟随符号链接。
+- `list` 不返回 `.` 和 `..`，不跟随符号链接；`stat` 跟随符号链接，`lstat` 不跟随。
+- `remove_all` 递归删除目录；符号链接（包括指向目录的链接）只删除链接本身，从不进入其目标。
 - `open_write` 创建或截断文件；调用方必须 `shutdown` 写入流，才算写完并关闭文件。
 - `FsSessions` 只持有引用：移除一个条目后，正在运行的传输仍然持有它，传输结束后 Provider 才关闭。
 - `TransferQueue` 同时运行的传输数不超过 `max_concurrent`，其余为 `queued`。每个传输把一个文件或目录复制到目标目录下：

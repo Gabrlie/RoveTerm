@@ -177,3 +177,23 @@ async fn remove_all_deletes_a_tree() {
             .is_empty()
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn remove_all_removes_a_directory_link_but_not_its_target() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("real");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::write(target.join("keep.txt"), b"keep").unwrap();
+    let tree = root.path().join("tree");
+    std::fs::create_dir(&tree).unwrap();
+    std::os::unix::fs::symlink(&target, tree.join("inner-link")).unwrap();
+    let top_link = root.path().join("top-link");
+    std::os::unix::fs::symlink(&target, &top_link).unwrap();
+
+    remove_all(&LocalFs, &top_link.to_string_lossy()).await.unwrap();
+    assert!(!top_link.exists() && std::fs::symlink_metadata(&top_link).is_err());
+    remove_all(&LocalFs, &tree.to_string_lossy()).await.unwrap();
+    assert!(!tree.exists());
+    assert_eq!(std::fs::read(target.join("keep.txt")).unwrap(), b"keep");
+}

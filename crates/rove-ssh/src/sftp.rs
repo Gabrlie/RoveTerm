@@ -101,6 +101,14 @@ impl FileSystem for SftpFs {
             .map_err(|error| fs_error(error, path))
     }
 
+    async fn lstat(&self, path: &str) -> Result<Metadata, FsError> {
+        self.session
+            .symlink_metadata(path)
+            .await
+            .map(|attrs| metadata(&attrs))
+            .map_err(|error| fs_error(error, path))
+    }
+
     async fn mkdir(&self, path: &str) -> Result<(), FsError> {
         self.session
             .create_dir(path)
