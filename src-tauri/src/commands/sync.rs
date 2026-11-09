@@ -174,6 +174,16 @@ fn write_local(
     Ok(vault.set_sync_local(Some(&local))?)
 }
 
+/// The state a set-up round starts from. Re-entering the password for the space this device
+/// already syncs with keeps its device id and history; otherwise every local record would look
+/// new, win over newer edits from other devices, and the old segments would be orphaned.
+fn initial_state(previous: Option<Local>, target: &SyncTarget, create: bool) -> SyncState {
+    match previous {
+        Some(local) if !create && local.target == *target => local.state,
+        _ => SyncState::new(&uuid::Uuid::now_v7().to_string()),
+    }
+}
+
 /// Reports whether and how sync is set up on this device.
 #[tauri::command]
 pub fn sync_status(state: State<'_, AppState>) -> Result<SyncStatus, CommandError> {
@@ -239,8 +249,8 @@ pub async fn sync_setup(
         rove_sync::join_space(backend.as_ref(), &password).await
     }
     .map_err(sync_error)?;
-    let mut sync_state = SyncState::new(&uuid::Uuid::now_v7().to_string());
     let _guard = state.sync_lock.lock().await;
+    let mut sync_state = initial_state(read_local(&state.vault)?, &target, create);
     let report = rove_sync::sync(
         backend.as_ref(),
         &key,
@@ -290,4 +300,39 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<Report, CommandError
 pub async fn sync_disable(state: State<'_, AppState>) -> Result<(), CommandError> {
     let _guard = state.sync_lock.lock().await;
     Ok(state.vault.set_sync_local(None)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn local(target: SyncTarget, device: &str) -> Local {
+        Local {
+            target,
+            state: SyncState::new(device),
+            key: None,
+            secret: None,
+        }
+    }
+
+    #[test]
+    fn rejoining_the_same_space_keeps_the_device_state() {
+        let folder = SyncTarget::Folder {
+            path: "/sync".into(),
+        };
+        let other = SyncTarget::WebDav {
+            url: "https://dav.example/sync".into(),
+            username: "me".into(),
+        };
+        let kept = initial_state(Some(local(folder.clone(), "device-1")), &folder, false);
+        assert_eq!(kept.device, "device-1");
+        // Another target, a new space, or no previous setup each start fresh.
+        for (previous, target, create) in [
+            (Some(local(folder.clone(), "device-1")), &other, false),
+            (Some(local(folder.clone(), "device-1")), &folder, true),
+            (None, &folder, false),
+        ] {
+            assert_ne!(initial_state(previous, target, create).device, "device-1");
+        }
+    }
 }
