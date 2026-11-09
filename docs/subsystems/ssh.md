@@ -1,6 +1,6 @@
 # ssh
 
-`rove-ssh` 提供 `SshConnector` 服务：SSH 认证、host key 校验，以及在连接上打开 PTY shell。
+`rove-ssh` 提供 `SshConnector` 服务：SSH 认证、host key 校验，以及在连接上打开 PTY shell 和 SFTP 会话。
 
 ## 类型
 
@@ -8,8 +8,8 @@
 |---|---|
 | `SshTarget` | `hostname`、`port`、`username`，以及可选的 `host_id` 和标题；`address()` 返回 `user@host:port`，IPv6 地址加方括号 |
 | `AuthSpec` | `Password`、`PrivateKey { key, passphrase }`、`KeyFile { path, passphrase }`、`Agent` |
-| `SshConnection` | 已认证的连接；`open_shell(size)` 打开 PTY shell channel |
-| `SshError` | `Connect`、`Timeout`、`HostKey(HostKeyRejection)`、`AuthFailed`、`CredentialsRequired`、`Key`、`Agent`、`Channel`、`Protocol` |
+| `SshConnection` | 已认证的连接；`open_shell(size)` 打开 PTY shell channel，`open_sftp()` 打开 SFTP 会话 |
+| `SshError` | `Connect`、`Timeout`、`HostKey(HostKeyRejection)`、`AuthFailed`、`CredentialsRequired`、`Key`、`Agent`、`Channel`、`Sftp`、`Protocol` |
 
 ## 凭据解析
 
@@ -44,10 +44,22 @@
 `SshConnector` 按 (小写主机名, 端口, 用户名) 维护连接池：
 
 - `shared(target, auth)` 返回该目标的存活连接；没有时用 `auth` 新建。每个目标有一把异步锁，并发请求只会建立一条连接。
-- `open_live(target, size)` 只使用存活连接，不需要凭据；没有存活连接时返回 `None`。
+- `live(target)` 返回存活连接，不需要凭据；没有时返回 `None`。`open_live(target, size)` 在它之上打开 shell。
 - `open_terminal` 在共享连接上打开 channel；如果复用的连接打开 channel 失败，丢弃它并重连一次。
 - 每个打开的 channel 持有一个租约。最后一个租约释放后，启动一个 `idle_disconnect_secs` 的计时器；期间连接被再次取出或打开新 channel，计时作废，否则断开连接。
 - `live_connections()` 返回存活连接数；`disconnect_all()` 用于退出应用时断开全部连接。
+
+<a id="sftp"></a>
+
+## SFTP
+
+`SshConnection::open_sftp` 在连接上开一个 session channel，请求 `sftp` 子系统并等待服务器确认，然后在 channel 流上初始化 `russh-sftp` 客户端，得到实现 [`FileSystem`](fs.md) 的 `SftpFs`。
+
+- `SftpFs` 持有一个 channel 租约，和终端一样让连接保持打开；drop 时关闭 SFTP 会话并释放租约。
+- 服务器拒绝子系统时返回 `SshError::Sftp`。
+- 读写使用 `russh-sftp` 的流水线请求（默认各 16 个并发请求），单个请求超时 10 秒。
+- SFTP 状态码映射为 `FsError`：`NoSuchFile` → `NotFound`，`PermissionDenied` → `PermissionDenied`，`OpUnsupported` → `Unsupported`，连接丢失 → `Closed`，其余 → `Io`。
+- `list` 过滤掉服务器返回的 `.` 和 `..`；`label()` 是 `user@host:port`。
 
 ## 快速连接
 

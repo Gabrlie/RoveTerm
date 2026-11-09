@@ -11,9 +11,11 @@ async-trait.workspace = true
 bytes.workspace = true
 parking_lot.workspace = true
 rove-kernel = { path = "../rove-kernel" }
+rove-fs = { path = "../rove-fs" }
 rove-session = { path = "../rove-session" }
 rove-vault = { path = "../rove-vault" }
 russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh-sftp = "3.0.1"
 serde.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "net", "time", "sync", "macros"] }
@@ -23,6 +25,8 @@ zeroize = "1"
 
 [dev-dependencies]
 devsshd = { path = "../../tools/devsshd" }
+tempfile = "3"
+tokio-util.workspace = true
 rove-vault = { path = "../rove-vault", features = ["memory-key-cache"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }

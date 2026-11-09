@@ -1,6 +1,6 @@
 # rove-ssh
 
-SSH 终端 Provider：认证、host key 校验，以及打开 PTY shell channel。参考见 [docs/subsystems/ssh.md](../../docs/subsystems/ssh.md)。
+SSH Provider：认证、host key 校验，打开 PTY shell channel，以及 `FileSystem` seam 的 SFTP 实现。参考见 [docs/subsystems/ssh.md](../../docs/subsystems/ssh.md)。
 
 ## 契约
 
@@ -10,7 +10,8 @@ SSH 终端 Provider：认证、host key 校验，以及打开 PTY shell channel�
 - 连接上最后一个终端关闭后，连接再空闲 `idle_disconnect_secs` 秒才断开；期间有新终端打开则取消断开。
 - 复用的连接打开 channel 失败时，丢弃这条连接并重连一次。
 - `open_live` 只在已有存活连接时打开 channel，不需要凭据；没有存活连接时返回 `None`。应用在解析凭据之前先调用它，因此在已连接的主机上分屏不会再次索取密码。
-- `SshConnector::connect` 建立不进入连接池的独立连接。
+- `SshConnector::connect` 建立不进入连接池的独立连接；`live` 返回存活的共享连接，不会新建。
+- `SshConnection::open_sftp` 打开 SFTP 会话 `SftpFs`（实现 `rove_fs::FileSystem`）。会话和终端一样持有 channel 租约；服务器不提供 `sftp` 子系统时返回 `SshError::Sftp`。
 - `AuthSpec` 中的秘密材料在 drop 时清零。密码认证失败后，会用同一个密码尝试 keyboard-interactive。
 - `AuthSpec::resolve` 根据主机的认证方式、已存凭据和用户输入的密码确定凭据；需要先向用户索取密码时返回 `CredentialsRequired`。
 

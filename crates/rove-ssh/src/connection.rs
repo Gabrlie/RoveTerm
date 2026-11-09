@@ -15,9 +15,10 @@ use rove_vault::HostKey;
 use russh::client::{self, Handle};
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{ChannelMsg, ChannelWriteHalf, Disconnect};
+use russh_sftp::client::SftpSession;
 use tokio::sync::mpsc;
 
-use crate::{AuthSpec, HostKeyRejection, HostKeyVerifier, SshError, SshTarget};
+use crate::{AuthSpec, HostKeyRejection, HostKeyVerifier, SftpFs, SshError, SshTarget};
 
 const OUTPUT_QUEUE: usize = 256;
 
@@ -160,7 +161,12 @@ impl SshConnection {
         self.idle_generation.fetch_add(1, Ordering::SeqCst);
     }
 
-    fn lease(self: &Arc<Self>) -> ChannelLease {
+    /// Returns the target this connection was made to.
+    pub fn target(&self) -> &SshTarget {
+        &self.target
+    }
+
+    pub(crate) fn lease(self: &Arc<Self>) -> ChannelLease {
         self.channels.fetch_add(1, Ordering::SeqCst);
         self.idle_generation.fetch_add(1, Ordering::SeqCst);
         ChannelLease {
@@ -234,6 +240,35 @@ impl SshConnection {
                 title: self.target.title.clone().unwrap_or(address),
             },
         })
+    }
+
+    /// Opens an SFTP session on a new channel. The session keeps the connection open until dropped.
+    pub async fn open_sftp(self: &Arc<Self>) -> Result<SftpFs, SshError> {
+        let mut channel = self
+            .handle
+            .channel_open_session()
+            .await
+            .map_err(channel_error)?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(channel_error)?;
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::Success) => break,
+                Some(ChannelMsg::Failure | ChannelMsg::Close) | None => {
+                    return Err(SshError::Sftp(
+                        "the server does not offer the sftp subsystem".into(),
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+        let lease = self.lease();
+        let session = SftpSession::new(channel.into_stream())
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        Ok(SftpFs::new(session, self.target.address(), lease))
     }
 
     /// Ends the connection.
@@ -396,7 +431,7 @@ struct SshTerminal {
 
 /// Counts an open channel. When the last lease of a connection drops, the connection is
 /// disconnected after its idle timeout unless a new channel opens first.
-struct ChannelLease {
+pub(crate) struct ChannelLease {
     connection: Arc<SshConnection>,
 }
 

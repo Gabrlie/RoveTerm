@@ -7,6 +7,7 @@
 mod connection;
 mod hostkey;
 mod pool;
+mod sftp;
 mod sshconfig;
 
 use std::sync::Arc;
@@ -22,6 +23,7 @@ pub use connection::{ConnectOptions, SshConnection};
 pub use hostkey::{
     HostKeyAnswer, HostKeyPrompt, HostKeyPrompts, HostKeyRejection, HostKeyVerifier, VaultVerifier,
 };
+pub use sftp::SftpFs;
 pub use sshconfig::{
     ImportReport, QuickTarget, SshConfigHost, import_ssh_config, parse_quick_connect,
     parse_ssh_config,
@@ -152,6 +154,9 @@ pub enum SshError {
     /// Opening or configuring a channel failed.
     #[error("channel error: {0}")]
     Channel(String),
+    /// The SFTP subsystem is unavailable or failed to start.
+    #[error("sftp error: {0}")]
+    Sftp(String),
     /// Any other protocol failure.
     #[error("ssh protocol error: {0}")]
     Protocol(String),
@@ -262,6 +267,17 @@ impl SshConnector {
         Ok(connection)
     }
 
+    /// Returns the live shared connection to `target`, if any, without connecting.
+    pub async fn live(&self, target: &SshTarget) -> Option<Arc<SshConnection>> {
+        let slot = self.pool.slot(pool::PoolKey::of(target));
+        let guard = slot.connection.lock().await;
+        let connection = guard
+            .as_ref()
+            .filter(|connection| !connection.is_closed())?;
+        connection.touch();
+        Some(connection.clone())
+    }
+
     /// Opens a PTY shell on the live shared connection to `target` without credentials. Returns
     /// `Ok(None)` when no live connection exists or it can no longer open channels; the caller then
     /// resolves credentials and uses [`SshConnector::open_terminal`].
@@ -270,16 +286,8 @@ impl SshConnector {
         target: &SshTarget,
         size: TermSize,
     ) -> Result<Option<OpenedTerminal>, SshError> {
-        let slot = self.pool.slot(pool::PoolKey::of(target));
-        let connection = {
-            let guard = slot.connection.lock().await;
-            match guard.as_ref().filter(|connection| !connection.is_closed()) {
-                Some(connection) => {
-                    connection.touch();
-                    connection.clone()
-                }
-                None => return Ok(None),
-            }
+        let Some(connection) = self.live(target).await else {
+            return Ok(None);
         };
         match connection.open_shell(size).await {
             Ok(opened) => Ok(Some(opened)),

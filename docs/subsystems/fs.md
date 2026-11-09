@@ -7,7 +7,7 @@
 | 角色 | 实现 |
 |---|---|
 | Definition | `FileSystem` trait、`DirEntry` / `Metadata` / `FsError` |
-| Provider | `LocalFs`（rove-fs）、`SftpFs`（rove-ssh） |
+| Provider | `LocalFs`（rove-fs）、`SftpFs`（[rove-ssh](ssh.md#sftp)） |
 | Consumer | `TransferQueue`、`src-tauri` 的 `sftp_*` 命令、之后的 ACP `fs/*` 和 MCP 文件工具 |
 
 ## 服务
