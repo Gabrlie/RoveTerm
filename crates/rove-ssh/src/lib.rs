@@ -313,18 +313,23 @@ impl SshConnector {
             Ok(opened) => Ok(opened),
             Err(SshError::Channel(reason)) => {
                 tracing::debug!(%reason, "reused ssh connection failed; reconnecting");
-                let slot = self.pool.slot(pool::PoolKey::of(target));
-                let mut guard = slot.connection.lock().await;
-                if guard
-                    .as_ref()
-                    .is_some_and(|current| Arc::ptr_eq(current, &connection))
-                {
-                    guard.take();
-                }
-                drop(guard);
+                self.evict(target, &connection).await;
                 self.shared(target, auth).await?.open_shell(size).await
             }
             Err(error) => Err(error),
+        }
+    }
+
+    /// Removes `connection` from the pool if it is still the shared connection to `target`, so the
+    /// next request connects anew. Channels already open on it are unaffected.
+    pub async fn evict(&self, target: &SshTarget, connection: &Arc<SshConnection>) {
+        let slot = self.pool.slot(pool::PoolKey::of(target));
+        let mut guard = slot.connection.lock().await;
+        if guard
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, connection))
+        {
+            guard.take();
         }
     }
 

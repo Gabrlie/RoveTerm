@@ -3,12 +3,10 @@
 use std::sync::Arc;
 
 use rove_session::{SessionId, SessionSummary, TermSize};
-use rove_ssh::{AuthSpec, SshError, SshTarget, parse_quick_connect};
-use rove_vault::{AuthMethod, HostId, Secret};
 use tauri::State;
 use tauri::ipc::{Channel, InvokeResponseBody, Response};
-use zeroize::Zeroizing;
 
+use crate::connect::{Source, with_connection};
 use crate::error::CommandError;
 use crate::sink::ChannelSink;
 use crate::state::AppState;
@@ -65,43 +63,11 @@ pub async fn session_open_ssh(
     rows: u16,
 ) -> Result<SessionId, CommandError> {
     let size = TermSize::new(cols, rows)?;
-    let host_id: HostId = host_id.parse()?;
-    let host = state.vault.host(host_id)?;
-    let target = SshTarget::from_host(&host);
-    if let Some(opened) = state.ssh.open_live(&target, size).await? {
-        return Ok(state
-            .sessions
-            .attach(opened, Arc::new(ChannelSink(on_output))));
-    }
-    let typed = password.map(Zeroizing::new);
-    let needs_stored_secret = match &host.auth {
-        AuthMethod::Password => typed.is_none(),
-        AuthMethod::PrivateKey | AuthMethod::KeyFile { .. } => true,
-        AuthMethod::Agent | AuthMethod::Interactive => false,
-    };
-    let stored = if needs_stored_secret && state.vault.has_secret(host_id)? {
-        state.ensure_unlocked().await?;
-        state.vault.secret(host_id)?
-    } else {
-        None
-    };
-    let auth = AuthSpec::resolve(&host, stored, typed.clone())?;
-    let opened = state.ssh.open_terminal(&target, &auth, size).await?;
-    if remember
-        && let Some(password) = typed
-        && matches!(host.auth, AuthMethod::Password)
-    {
-        let saved = match state.ensure_unlocked().await {
-            Ok(()) => state
-                .vault
-                .set_secret(host_id, &Secret::Password { password })
-                .map_err(CommandError::from),
-            Err(error) => Err(error),
-        };
-        if let Err(error) = saved {
-            tracing::warn!(code = error.code, "could not remember password");
-        }
-    }
+    let source = Source::from_args(Some(host_id), None, password, remember)?;
+    let opened = with_connection(&state, &source, |connection| async move {
+        connection.open_shell(size).await
+    })
+    .await?;
     Ok(state
         .sessions
         .attach(opened, Arc::new(ChannelSink(on_output))))
@@ -118,41 +84,14 @@ pub async fn session_open_quick(
     rows: u16,
 ) -> Result<SessionId, CommandError> {
     let size = TermSize::new(cols, rows)?;
-    let quick = parse_quick_connect(&address)
-        .map_err(|message| CommandError::new("input.invalid", message))?;
-    let target = SshTarget {
-        username: quick.username.unwrap_or_else(default_user),
-        hostname: quick.hostname,
-        port: quick.port.unwrap_or(22),
-        host_id: None,
-        title: None,
-    };
-    if password.is_none()
-        && let Some(opened) = state.ssh.open_live(&target, size).await?
-    {
-        return Ok(state
-            .sessions
-            .attach(opened, Arc::new(ChannelSink(on_output))));
-    }
-    let auth = match password {
-        Some(password) => AuthSpec::Password(Zeroizing::new(password)),
-        None => AuthSpec::Agent,
-    };
-    let opened = match state.ssh.open_terminal(&target, &auth, size).await {
-        Err(SshError::Agent(_) | SshError::AuthFailed) if matches!(auth, AuthSpec::Agent) => {
-            return Err(SshError::CredentialsRequired.into());
-        }
-        result => result?,
-    };
+    let source = Source::from_args(None, Some(address), password, false)?;
+    let opened = with_connection(&state, &source, |connection| async move {
+        connection.open_shell(size).await
+    })
+    .await?;
     Ok(state
         .sessions
         .attach(opened, Arc::new(ChannelSink(on_output))))
-}
-
-fn default_user() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .unwrap_or_else(|_| "root".into())
 }
 
 /// Sends input to a session.

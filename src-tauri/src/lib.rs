@@ -1,6 +1,7 @@
 //! RoveTerm application shell: assembles the profile's plugins and exposes them to the WebView.
 
 mod commands;
+mod connect;
 mod error;
 mod profile;
 mod sink;
