@@ -155,6 +155,9 @@ pub fn run() {
             commands::vault::vault_status,
             commands::vault::vault_unlock,
             commands::vault::vault_reset_secrets,
+            commands::prefs::prefs_get,
+            commands::prefs::prefs_set,
+            commands::prefs::fonts_monospace,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the Tauri application");

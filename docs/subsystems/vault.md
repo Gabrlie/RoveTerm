@@ -67,6 +67,8 @@ pub trait KeyCache: Send + Sync {
 | `terminal.font_size` | 13 | 8–32 |
 | `terminal.line_height` | 1.15 | 1.0–2.0 |
 
+应用通过 `prefs_get` / `prefs_set` 命令读写偏好设置；`fonts_monospace` 用 fontdb 列出本机已安装的等宽字体族（去重、按名称排序），供字体选择使用，移动端返回空列表。
+
 ## 表结构
 
 `meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`、`forwards`（外键级联删除）、`preferences`。结构版本记录在 `PRAGMA user_version`，当前版本为 3；打开旧版本数据库时按版本依次迁移。

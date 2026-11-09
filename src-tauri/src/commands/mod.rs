@@ -2,6 +2,7 @@
 
 pub mod forward;
 pub mod host;
+pub mod prefs;
 pub mod session;
 pub mod sftp;
 pub mod vault;
