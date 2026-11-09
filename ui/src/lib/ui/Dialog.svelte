@@ -1,6 +1,13 @@
+<script lang="ts" module>
+  /** Open dialogs, innermost last; Escape closes only the innermost one. */
+  const stack: symbol[] = [];
+</script>
+
 <script lang="ts">
-  // Modal sheet. The first focusable field receives focus so typing works without a click.
-  import type { Snippet } from 'svelte';
+  // Modal sheet. The first focusable field receives focus so typing works without a click; closing
+  // returns focus to whatever had it before (usually a terminal). Escape is handled on the window,
+  // so it still works after the focused element inside the dialog disappears.
+  import { onMount, type Snippet } from 'svelte';
 
   interface Props {
     title: string;
@@ -12,21 +19,29 @@
 
   let { title, onclose, children, actions, width = 440 }: Props = $props();
   let panel: HTMLDivElement;
+  const id = Symbol('dialog');
 
-  $effect(() => {
+  onMount(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    stack.push(id);
     const first = panel.querySelector<HTMLElement>('input, select, textarea, button:not(.close)');
     first?.focus();
+    return () => {
+      stack.splice(stack.indexOf(id), 1);
+      if (previous?.isConnected) previous.focus();
+    };
   });
 
   function onKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
-      event.stopPropagation();
-      onclose();
-    }
+    if (event.key !== 'Escape' || stack.at(-1) !== id || event.defaultPrevented) return;
+    event.preventDefault();
+    onclose();
   }
 </script>
 
-<div class="backdrop" role="presentation" onkeydown={onKeydown}>
+<svelte:window onkeydown={onKeydown} />
+
+<div class="backdrop" role="presentation">
   <div class="dialog" role="dialog" aria-modal="true" aria-label={title} tabindex="-1" style:width="min({width}px, 92vw)" bind:this={panel}>
     <header>{title}</header>
     <div class="body">{@render children()}</div>
