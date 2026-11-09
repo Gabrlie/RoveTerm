@@ -1,8 +1,10 @@
 <script lang="ts">
   // Server status of the focused pane's remote, sampled every few seconds over its live
-  // connection. CPU usage and throughput come from the difference between two samples.
+  // connection, shown as cards: system, CPU, memory, network, disks. Usage and rates come from
+  // the difference between two samples.
   import { onDestroy } from 'svelte';
-  import { isCommandError, serverStats, type RemoteSource, type ServerStats } from '../ipc';
+  import Icon from '../ui/Icon.svelte';
+  import { isCommandError, serverStats, type CpuTimes, type RemoteSource, type ServerStats } from '../ipc';
   import { errorText, t } from '../i18n';
   import { formatSize } from '../files/format';
 
@@ -10,14 +12,25 @@
 
   /** Time between samples. */
   const INTERVAL_MS = 3000;
+  /** Interfaces shown before the list collapses. */
+  const INTERFACES_SHOWN = 6;
 
   let stats = $state<ServerStats | null>(null);
   let previous: { stats: ServerStats; at: number } | null = null;
   let cpu = $state<number | null>(null);
-  let rates = $state<{ rx: number; tx: number } | null>(null);
+  let cores = $state<number[]>([]);
+  let rates = $state<Record<string, { rx: number; tx: number }>>({});
+  let showAllInterfaces = $state(false);
   let problem = $state<string | null>(null);
   let timer = 0;
   let stopped = false;
+
+  function usage(now: CpuTimes, before: CpuTimes | undefined): number | null {
+    if (!before) return null;
+    const total = now.total - before.total;
+    const idle = now.idle - before.idle;
+    return total > 0 ? Math.min(100, Math.max(0, ((total - idle) / total) * 100)) : null;
+  }
 
   async function sample(): Promise<void> {
     try {
@@ -25,11 +38,18 @@
       if (stopped) return;
       const now = Date.now();
       if (previous) {
-        const total = next.cpu_total - previous.stats.cpu_total;
-        const idle = next.cpu_idle - previous.stats.cpu_idle;
-        cpu = total > 0 ? Math.min(100, Math.max(0, ((total - idle) / total) * 100)) : null;
+        const before = previous.stats;
+        cpu = usage(next.cpu, before.cpu);
+        cores = next.cpus.map((core, index) => usage(core, before.cpus[index]) ?? 0);
         const seconds = (now - previous.at) / 1000;
-        rates = seconds > 0 ? { rx: Math.max(0, (next.net_rx - previous.stats.net_rx) / seconds), tx: Math.max(0, (next.net_tx - previous.stats.net_tx) / seconds) } : null;
+        const nextRates: Record<string, { rx: number; tx: number }> = {};
+        for (const net of next.interfaces) {
+          const old = before.interfaces.find((candidate) => candidate.name === net.name);
+          if (old && seconds > 0) {
+            nextRates[net.name] = { rx: Math.max(0, (net.rx - old.rx) / seconds), tx: Math.max(0, (net.tx - old.tx) / seconds) };
+          }
+        }
+        rates = nextRates;
       }
       previous = { stats: next, at: now };
       stats = next;
@@ -78,6 +98,17 @@
     const minutes = Math.floor((seconds % 3600) / 60);
     return days > 0 ? t('status.uptimeDays', { days, hours }) : t('status.uptimeHours', { hours, minutes });
   }
+
+  function rate(bytes: number | undefined): string {
+    return bytes === undefined ? '…' : `${formatSize(Math.round(bytes))}/s`;
+  }
+
+  /** Interfaces, busiest first. */
+  const interfaces = $derived(
+    [...(stats?.interfaces ?? [])].sort(
+      (a, b) => (rates[b.name]?.rx ?? 0) + (rates[b.name]?.tx ?? 0) - ((rates[a.name]?.rx ?? 0) + (rates[a.name]?.tx ?? 0)),
+    ),
+  );
 </script>
 
 <div class="status">
@@ -86,32 +117,77 @@
   {:else if !stats}
     <p class="muted">{t('status.loading')}</p>
   {:else}
-    <div class="head">
-      <strong>{stats.hostname}</strong>
-      <span class="muted">{stats.kernel}</span>
-      <span class="muted">{t('status.uptime', { value: uptime(stats.uptime_secs) })}</span>
-    </div>
-
     {@const mem = stats.mem_total - stats.mem_available}
     {@const swap = stats.swap_total - stats.swap_free}
-    <section>
-      <div class="row"><span>{t('status.cpu')}</span><span>{cpu === null ? '…' : `${cpu.toFixed(0)}%`} · {t('status.cores', { n: stats.cores })}</span></div>
-      <div class="bar"><div class="fill" class:hot={(cpu ?? 0) > 85} style:width="{cpu ?? 0}%"></div></div>
-      <div class="row muted"><span>{t('status.load')}</span><span>{stats.load.map((value) => value.toFixed(2)).join('  ')}</span></div>
+    <section class="card">
+      <h4><Icon name="server" size={14} />{t('status.system')}</h4>
+      <dl class="facts">
+        <div><dt>{t('status.hostname')}</dt><dd>{stats.hostname}</dd></div>
+        <div><dt>{t('status.os')}</dt><dd>{stats.os || stats.kernel.split(' ')[0]}</dd></div>
+        <div><dt>{t('status.response')}</dt><dd>{t('status.ms', { n: stats.sample_ms })}</dd></div>
+        <div><dt>{t('status.uptimeLabel')}</dt><dd>{uptime(stats.uptime_secs)}</dd></div>
+        <div class="wide"><dt>{t('status.kernel')}</dt><dd>{stats.kernel}</dd></div>
+      </dl>
     </section>
-    <section>
-      <div class="row"><span>{t('status.memory')}</span><span>{formatSize(mem)} / {formatSize(stats.mem_total)}</span></div>
+
+    <section class="card">
+      <h4><Icon name="terminal" size={14} />CPU <span class="aside">{t('status.cores', { n: stats.cores })}</span></h4>
+      <div class="headline">
+        <strong class:hot={(cpu ?? 0) > 85}>{cpu === null ? '…' : `${cpu.toFixed(0)}%`}</strong>
+        <span class="muted">{t('status.average')}</span>
+      </div>
+      {#if cores.length > 0}
+        <div class="cores" title={t('status.perCore')}>
+          {#each cores as value, index (index)}
+            <div class="core" title={`CPU ${index}: ${value.toFixed(0)}%`}>
+              <div class="core-fill" class:hot={value > 85} style:height="{Math.max(value, 2)}%"></div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+      <div class="row muted"><span>{t('status.load')}</span><span class="mono">{stats.load.map((value) => value.toFixed(2)).join('  ')}</span></div>
+    </section>
+
+    <section class="card">
+      <h4><Icon name="transfer" size={14} />{t('status.memory')}</h4>
+      <div class="row"><span>{t('status.physical')}</span><span class="value">{percent(mem, stats.mem_total).toFixed(0)}%</span></div>
       <div class="bar"><div class="fill" class:hot={percent(mem, stats.mem_total) > 90} style:width="{percent(mem, stats.mem_total)}%"></div></div>
-      {#if stats.swap_total > 0}
-        <div class="row muted"><span>{t('status.swap')}</span><span>{formatSize(swap)} / {formatSize(stats.swap_total)}</span></div>
+      <div class="muted mono">{formatSize(mem)} / {formatSize(stats.mem_total)}</div>
+      <div class="row"><span>{t('status.swap')}</span><span class="value">{percent(swap, stats.swap_total).toFixed(0)}%</span></div>
+      <div class="bar"><div class="fill" style:width="{percent(swap, stats.swap_total)}%"></div></div>
+      <div class="muted mono">{formatSize(swap)} / {formatSize(stats.swap_total)}</div>
+    </section>
+
+    <section class="card">
+      <h4><Icon name="forwards" size={14} />{t('status.network')}</h4>
+      {#each showAllInterfaces ? interfaces : interfaces.slice(0, INTERFACES_SHOWN) as net (net.name)}
+        <div class="net">
+          <span class="name mono" title={net.name}>{net.name}</span>
+          <span class="up mono">↑ {rate(rates[net.name]?.tx)}</span>
+          <span class="down mono">↓ {rate(rates[net.name]?.rx)}</span>
+        </div>
+      {:else}
+        <p class="muted">{t('status.noInterfaces')}</p>
+      {/each}
+      {#if interfaces.length > INTERFACES_SHOWN}
+        <button type="button" class="more" onclick={() => (showAllInterfaces = !showAllInterfaces)}>
+          {showAllInterfaces ? t('status.showLess') : t('status.showAll', { n: interfaces.length })}
+        </button>
       {/if}
     </section>
-    <section>
-      <div class="row"><span>{t('status.disk')}</span><span>{formatSize(stats.disk_used)} / {formatSize(stats.disk_total)}</span></div>
-      <div class="bar"><div class="fill" class:hot={percent(stats.disk_used, stats.disk_total) > 90} style:width="{percent(stats.disk_used, stats.disk_total)}%"></div></div>
-    </section>
-    <section>
-      <div class="row"><span>{t('status.network')}</span><span>{rates ? `↓ ${formatSize(rates.rx)}/s  ↑ ${formatSize(rates.tx)}/s` : '…'}</span></div>
+
+    <section class="card">
+      <h4><Icon name="folder" size={14} />{t('status.disks')}</h4>
+      {#each stats.disks as disk (disk.filesystem)}
+        {@const used = percent(disk.used, disk.total)}
+        <div class="disk" title={disk.filesystem}>
+          <div class="row"><span class="mono name">{disk.mount}</span><span class="value" class:danger={used > 90}>{used.toFixed(0)}%</span></div>
+          <div class="bar"><div class="fill" class:hot={used > 90} style:width="{used}%"></div></div>
+          <div class="muted mono">{formatSize(disk.used)} / {formatSize(disk.total)}</div>
+        </div>
+      {:else}
+        <p class="muted">{t('status.noDisks')}</p>
+      {/each}
     </section>
     {#if problem}<p class="muted">{problem}</p>{/if}
   {/if}
@@ -121,33 +197,107 @@
   .status {
     display: flex;
     flex-direction: column;
-    gap: var(--space-4);
-    padding: var(--space-3);
+    gap: var(--space-2);
+    padding: var(--space-2);
     font-size: var(--text-footnote);
     color: var(--fg);
   }
-  .head {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    overflow-wrap: anywhere;
-  }
-  .head strong {
-    font-size: var(--text-body);
-  }
-  section {
+  .card {
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+  }
+  h4 {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin: 0 0 var(--space-1);
+    font-size: var(--text-body);
+  }
+  h4 :global(svg) {
+    color: var(--accent);
+  }
+  .aside {
+    margin-left: auto;
+    color: var(--fg-muted);
+    font-weight: normal;
+    font-size: var(--text-footnote);
+  }
+  .facts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2);
+    margin: 0;
+  }
+  .facts .wide {
+    grid-column: 1 / -1;
+  }
+  .facts dt {
+    color: var(--fg-muted);
+    font-size: var(--text-caption);
+  }
+  .facts dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .headline {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+  }
+  .headline strong {
+    color: var(--accent);
+    font-size: 22px;
+  }
+  .headline strong.hot {
+    color: var(--danger);
+  }
+  .cores {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(10px, 1fr));
+    gap: 3px;
+    height: 36px;
+    margin: var(--space-1) 0;
+  }
+  .core {
+    position: relative;
+    height: 100%;
+    border-radius: 2px;
+    background: var(--bg-sunken);
+    overflow: hidden;
+  }
+  .core-fill {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--accent);
+    transition: height 0.4s ease;
   }
   .row {
     display: flex;
     justify-content: space-between;
     gap: var(--space-2);
   }
+  .value {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .value.danger,
+  .hot {
+    color: var(--danger);
+  }
   .muted {
     margin: 0;
     color: var(--fg-muted);
+  }
+  .mono {
+    font-family: var(--font-mono);
+    font-size: var(--text-caption);
   }
   .bar {
     height: 6px;
@@ -163,5 +313,42 @@
   }
   .fill.hot {
     background: var(--danger);
+  }
+  .net {
+    display: grid;
+    grid-template-columns: minmax(4em, 1fr) auto auto;
+    gap: var(--space-2);
+    align-items: center;
+    padding: 3px var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--bg-sunken);
+  }
+  .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .up {
+    color: #16a34a;
+  }
+  .down {
+    color: var(--accent);
+  }
+  .disk {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .disk + .disk {
+    margin-top: var(--space-2);
+  }
+  .more {
+    align-self: flex-start;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    cursor: pointer;
   }
 </style>

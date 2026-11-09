@@ -472,23 +472,41 @@ export function keyInstall(id: KeyId, hostId: HostId, password: string | null, p
 
 // Server status
 
+export interface CpuTimes {
+  total: number;
+  idle: number;
+}
+
+export interface Disk {
+  filesystem: string;
+  mount: string;
+  total: number;
+  used: number;
+}
+
+export interface NetInterface {
+  name: string;
+  rx: number;
+  tx: number;
+}
+
 /** One status sample; counters are cumulative. See `ServerStats` in rove-ssh. */
 export interface ServerStats {
   load: [number, number, number];
-  cpu_total: number;
-  cpu_idle: number;
+  cpu: CpuTimes;
+  cpus: CpuTimes[];
   cores: number;
   mem_total: number;
   mem_available: number;
   swap_total: number;
   swap_free: number;
-  disk_total: number;
-  disk_used: number;
+  disks: Disk[];
   uptime_secs: number;
-  net_rx: number;
-  net_tx: number;
+  interfaces: NetInterface[];
   kernel: string;
   hostname: string;
+  os: string;
+  sample_ms: number;
 }
 
 export function serverStats(source: RemoteSource): Promise<ServerStats> {
