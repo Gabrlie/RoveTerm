@@ -91,6 +91,23 @@ fn default_user() -> String {
         .unwrap_or_else(|_| "root".into())
 }
 
+/// Builds the target of a saved host, with its route identity taken from the jump hosts as they
+/// are configured now (see [`rove_ssh::route_key`]). Every saved-host target goes through here so
+/// the connection pool and known hosts see the same identity.
+pub fn host_target(state: &AppState, host: &Host) -> Result<SshTarget, CommandError> {
+    let mut jumps: Vec<Host> = Vec::new();
+    let mut next = host.route.clone();
+    while let HostRoute::Jump { host: id } = next {
+        if jumps.len() >= MAX_JUMP_DEPTH {
+            break;
+        }
+        let jump = state.vault.host(id)?;
+        next = jump.route.clone();
+        jumps.push(jump);
+    }
+    Ok(SshTarget::from_host(host, &jumps))
+}
+
 /// Builds the target of a quick-connect string.
 pub fn quick_target(address: &str) -> Result<SshTarget, CommandError> {
     let quick = parse_quick_connect(address)
@@ -128,7 +145,7 @@ where
             remember,
         } => {
             let host = state.vault.host(*host_id)?;
-            let target = SshTarget::from_host(&host);
+            let target = host_target(state, &host)?;
             let value = match try_live(state, &target, &op).await? {
                 Some(value) => value,
                 None => {
@@ -260,7 +277,7 @@ async fn jump_connection(
     depth: usize,
     progress: Option<Progress>,
 ) -> Result<Arc<SshConnection>, CommandError> {
-    let target = SshTarget::from_host(jump);
+    let target = host_target(state, jump)?;
     if let Some(connection) = state.ssh.live(&target).await {
         return Ok(connection);
     }

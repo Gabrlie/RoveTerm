@@ -6,7 +6,7 @@
 
 | 类型 | 说明 |
 |---|---|
-| `SshTarget` | `hostname`、`port`、`username`、`route`（路线标识：直连为空，否则为代理地址或跳板机 id），以及可选的 `host_id` 和标题；`address()` 返回 `user@host:port`，IPv6 地址加方括号 |
+| `SshTarget` | `hostname`、`port`、`username`、`route`（路线标识：直连为空；经跳板机时由每一跳实际的 `用户@地址:端口` 依次组成，末端是代理地址，见 `route_key`），以及可选的 `host_id` 和标题；`address()` 返回 `user@host:port`，IPv6 地址加方括号 |
 | `AuthSpec` | `Password`、`PrivateKey { key, passphrase }`、`KeyFile { path, passphrase }`、`Agent { passphrase }` |
 | `SshConnection` | 已认证的连接；`open_shell(size)` 打开 PTY shell channel，`open_sftp()` 打开 SFTP 会话 |
 | `Via` | 建立传输的方式：`Direct`、`Proxy { protocol, host, port }`、`Jump(Arc<SshConnection>)` |
@@ -64,6 +64,8 @@
 - host key 按（主机名, 端口, 路线）校验和保存：经不同跳板机或代理到达的同地址服务器各有各的可信指纹，不会被当成指纹变化；确认框显示路线。
 
 打开终端时，应用把连接步骤以 `{ "progress": ConnectStep }` 消息先于终端输出发到会话的输出 channel，跳板机的步骤也包含在内。用户输入的值默认按主机认证方式解释（密码或 passphrase）；`password_kind = "password"` 表示对密钥主机改用密码登录，这种密码不会被记住。成功连接已保存主机后调用 `touch_host`。
+
+已保存主机的目标统一由 `host_target` 按当前的跳板链生成：跳板机被改成指向另一台服务器或另一条路线后，路线标识随之改变，旧连接不会被复用，主机指纹也按新路线重新确认。
 
 应用连接已保存主机时（`src-tauri/src/connect.rs`）先解析目标的凭据，再沿 `HostRoute` 逐级取得跳板机的共享连接（已有存活连接时直接复用），最后经最近一跳连接目标。跳板机只能用已保存的密码、未加密的密钥或 agent 认证，不会弹框询问；连不上跳板机时返回 `ssh.jump_host`，消息中注明是哪台跳板机及原因。
 

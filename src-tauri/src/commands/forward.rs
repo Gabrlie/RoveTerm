@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use rove_ssh::{ForwardState, ForwardStatus, Forwards, SshTarget};
+use rove_ssh::{ForwardState, ForwardStatus, Forwards};
 use rove_vault::{ForwardDraft, ForwardId, ForwardRule, HostId};
 use serde::Serialize;
 use tauri::State;
@@ -138,10 +138,15 @@ pub async fn autostart(state: &AppState, host_id: HostId) {
     if pending.is_empty() {
         return;
     }
-    let target = match state.vault.host(host_id) {
-        Ok(host) => SshTarget::from_host(&host),
+    let target = match state
+        .vault
+        .host(host_id)
+        .map_err(CommandError::from)
+        .and_then(|host| crate::connect::host_target(state, &host))
+    {
+        Ok(target) => target,
         Err(error) => {
-            tracing::warn!(%error, "loading host for auto-start failed");
+            tracing::warn!(code = error.code, message = %error.message, "loading host for auto-start failed");
             return;
         }
     };

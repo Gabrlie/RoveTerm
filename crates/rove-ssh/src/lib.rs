@@ -70,25 +70,42 @@ impl SshTarget {
         }
     }
 
-    /// Builds the target of a saved host.
-    pub fn from_host(host: &Host) -> Self {
+    /// Builds the target of a saved host. `jumps` is its current jump chain, nearest jump host
+    /// first (empty unless the host uses a jump route); see [`route_key`].
+    pub fn from_host(host: &Host, jumps: &[Host]) -> Self {
         Self {
             hostname: host.hostname.clone(),
             port: host.port,
             username: host.username.clone(),
             host_id: Some(host.id.to_string()),
             title: Some(host.name.clone()),
-            route: route_key(&host.route),
+            route: route_key(&host.route, jumps),
         }
     }
 }
 
-/// The pool identity of a saved host's route. A jump host is named by id: its own route is part
-/// of its identity.
-fn route_key(route: &rove_vault::HostRoute) -> String {
+/// The route identity of a saved host: built from where each hop actually goes (user, address,
+/// port of every jump host, and the proxy at the end), never from record ids, so editing a jump
+/// host to point elsewhere changes the identity and old connections are not reused. A chain
+/// shorter than the route needs yields an identity that matches nothing else.
+pub fn route_key(route: &rove_vault::HostRoute, jumps: &[Host]) -> String {
     match route {
         rove_vault::HostRoute::Direct => String::new(),
-        rove_vault::HostRoute::Jump { host } => format!("jump:{host}"),
+        rove_vault::HostRoute::Jump { host } => match jumps.split_first() {
+            Some((jump, rest)) => {
+                let hop = format!(
+                    "via {}@{}:{}",
+                    jump.username,
+                    jump.hostname.to_ascii_lowercase(),
+                    jump.port
+                );
+                match route_key(&jump.route, rest) {
+                    further if further.is_empty() => hop,
+                    further => format!("{hop} > {further}"),
+                }
+            }
+            None => format!("via unresolved {host}"),
+        },
         rove_vault::HostRoute::Proxy {
             protocol,
             host,
@@ -560,23 +577,48 @@ mod tests {
     }
 
     #[test]
-    fn saved_hosts_behind_different_jump_hosts_have_different_routes() {
+    fn route_identity_follows_where_the_jump_hosts_go() {
         let direct = host(AuthMethod::Agent);
-        let jumped = |jump: HostId| Host {
-            route: rove_vault::HostRoute::Jump { host: jump },
+        let jump_id = HostId::new();
+        let target = Host {
+            route: rove_vault::HostRoute::Jump { host: jump_id },
             ..host(AuthMethod::Agent)
         };
-        let a = SshTarget::from_host(&jumped(HostId::new()));
-        let b = SshTarget::from_host(&jumped(HostId::new()));
-        assert_eq!(SshTarget::from_host(&direct).route, "");
-        assert_ne!(a.route, b.route);
-        assert_eq!(a.address(), b.address());
+        let bastion = |hostname: &str| Host {
+            id: jump_id,
+            hostname: hostname.into(),
+            ..host(AuthMethod::Agent)
+        };
+        assert_eq!(SshTarget::from_host(&direct, &[]).route, "");
+        let before = SshTarget::from_host(&target, &[bastion("bastion-a")]);
+        // The same jump host record edited to point at another server.
+        let after = SshTarget::from_host(&target, &[bastion("bastion-b")]);
+        assert_eq!(before.route, "via u@bastion-a:22");
+        assert_ne!(before.route, after.route);
+        // A jump host that itself goes through a proxy.
+        let proxied = Host {
+            route: rove_vault::HostRoute::Proxy {
+                protocol: rove_vault::ProxyProtocol::Socks5,
+                host: "Proxy.lan".into(),
+                port: 1080,
+            },
+            ..bastion("bastion-a")
+        };
+        assert_eq!(
+            SshTarget::from_host(&target, &[proxied]).route,
+            "via u@bastion-a:22 > proxy:socks5://proxy.lan:1080"
+        );
+        assert!(
+            SshTarget::from_host(&target, &[])
+                .route
+                .starts_with("via unresolved")
+        );
     }
 
     #[test]
     fn address_brackets_ipv6() {
         assert_eq!(
-            SshTarget::from_host(&host(AuthMethod::Agent)).address(),
+            SshTarget::from_host(&host(AuthMethod::Agent), &[]).address(),
             "u@[::1]:22"
         );
     }

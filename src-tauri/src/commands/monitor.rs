@@ -2,10 +2,10 @@
 
 use std::time::Duration;
 
-use rove_ssh::{ServerStats, SshTarget, sample_server};
+use rove_ssh::{ServerStats, sample_server};
 use tauri::State;
 
-use crate::connect::quick_target;
+use crate::connect::{host_target, quick_target};
 use crate::error::CommandError;
 use crate::state::AppState;
 
@@ -22,7 +22,7 @@ pub async fn server_stats(
     address: Option<String>,
 ) -> Result<ServerStats, CommandError> {
     let target = match (host_id, address) {
-        (Some(id), None) => SshTarget::from_host(&state.vault.host(id.parse()?)?),
+        (Some(id), None) => host_target(&state, &state.vault.host(id.parse()?)?)?,
         (None, Some(address)) => quick_target(&address)?,
         _ => {
             return Err(CommandError::new(
