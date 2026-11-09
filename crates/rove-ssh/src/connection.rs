@@ -20,9 +20,23 @@ use tokio::sync::mpsc;
 
 use crate::forward::RemoteRoutes;
 use crate::keys;
+use crate::progress::{AuthKind, ConnectStep, Progress, Steps};
 use crate::{AuthSpec, HostKeyRejection, HostKeyVerifier, SftpFs, SshError, SshTarget};
 
 const OUTPUT_QUEUE: usize = 256;
+
+/// Result of [`SshConnection::exec`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExecOutput {
+    /// Standard output, at most the requested limit.
+    pub stdout: Vec<u8>,
+    /// Standard error, at most the requested limit.
+    pub stderr: Vec<u8>,
+    /// Exit status, when the server sent one.
+    pub code: Option<i32>,
+    /// Some output was discarded because it exceeded the limit.
+    pub truncated: bool,
+}
 
 /// How the transport to a server is established.
 pub enum Via {
@@ -40,6 +54,27 @@ pub enum Via {
     /// A `direct-tcpip` channel on an authenticated connection to a jump host. The new connection
     /// keeps the jump connection alive while it exists.
     Jump(Arc<SshConnection>),
+}
+
+impl Via {
+    /// Describes a proxy or jump host for progress reports; `None` when direct.
+    fn describe(&self) -> Option<String> {
+        match self {
+            Self::Direct => None,
+            Self::Proxy {
+                protocol,
+                host,
+                port,
+            } => {
+                let scheme = match protocol {
+                    rove_vault::ProxyProtocol::Http => "http",
+                    rove_vault::ProxyProtocol::Socks5 => "socks5",
+                };
+                Some(format!("{scheme}://{host}:{port}"))
+            }
+            Self::Jump(jump) => Some(jump.target().address()),
+        }
+    }
 }
 
 /// The byte stream an SSH session runs over.
@@ -113,6 +148,7 @@ struct ClientHandler {
     verifier: Arc<dyn HostKeyVerifier>,
     rejection: Arc<Mutex<Option<HostKeyRejection>>>,
     routes: Arc<RemoteRoutes>,
+    steps: Steps,
 }
 
 fn host_key(key: &russh::keys::PublicKey) -> Result<HostKey, HostKeyRejection> {
@@ -146,7 +182,13 @@ impl client::Handler for ClientHandler {
             Err(rejection) => Err(rejection),
         };
         match verdict {
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                self.steps.emit(ConnectStep::HostKeyAccepted {
+                    algorithm: key.algorithm().as_str().to_owned(),
+                    fingerprint: key.fingerprint(HashAlg::Sha256).to_string(),
+                });
+                Ok(true)
+            }
             Err(rejection) => {
                 *self.rejection.lock() = Some(rejection);
                 Ok(false)
@@ -208,7 +250,13 @@ impl SshConnection {
         via: &Via,
         verifier: Arc<dyn HostKeyVerifier>,
         options: &ConnectOptions,
+        progress: Option<Progress>,
     ) -> Result<Self, SshError> {
+        let steps = Steps(progress);
+        steps.emit(ConnectStep::Connecting {
+            address: target.address(),
+            via: via.describe(),
+        });
         let (stream, tunnel) =
             tokio::time::timeout(options.connect_timeout, open_transport(target, via))
                 .await
@@ -227,7 +275,9 @@ impl SshConnection {
             verifier,
             rejection: rejection.clone(),
             routes: routes.clone(),
+            steps: steps.clone(),
         };
+        steps.emit(ConnectStep::Handshake);
         let mut handle = match client::connect_stream(config, stream, handler).await {
             Ok(handle) => handle,
             Err(error) => {
@@ -237,7 +287,7 @@ impl SshConnection {
                 });
             }
         };
-        authenticate(&mut handle, target, auth).await?;
+        authenticate(&mut handle, target, auth, &steps).await?;
         Ok(Self {
             handle,
             target: target.clone(),
@@ -375,6 +425,49 @@ impl SshConnection {
         Ok(SftpFs::new(session, self.target.address(), lease))
     }
 
+    /// Runs `command` on the server without a PTY and collects its output. Output beyond `limit`
+    /// bytes per stream is discarded; [`ExecOutput::truncated`] tells. The caller bounds the time.
+    pub async fn exec(
+        self: &Arc<Self>,
+        command: &str,
+        limit: usize,
+    ) -> Result<ExecOutput, SshError> {
+        let mut channel = self
+            .handle
+            .channel_open_session()
+            .await
+            .map_err(channel_error)?;
+        let _lease = self.lease();
+        channel.exec(true, command).await.map_err(channel_error)?;
+        let mut output = ExecOutput::default();
+        // Appends what fits; returns `true` when something was dropped.
+        let append = |buffer: &mut Vec<u8>, data: &[u8]| {
+            let room = limit.saturating_sub(buffer.len());
+            buffer.extend_from_slice(&data[..data.len().min(room)]);
+            data.len() > room
+        };
+        let mut truncated = false;
+        while let Some(message) = channel.wait().await {
+            match message {
+                ChannelMsg::Data { data } => truncated |= append(&mut output.stdout, &data),
+                ChannelMsg::ExtendedData { data, ext: 1 } => {
+                    truncated |= append(&mut output.stderr, &data)
+                }
+                ChannelMsg::ExitStatus { exit_status } => {
+                    output.code = i32::try_from(exit_status).ok();
+                }
+                ChannelMsg::Failure => {
+                    return Err(SshError::Channel(
+                        "the server refused to run the command".into(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        output.truncated = truncated;
+        Ok(output)
+    }
+
     /// Opens a `direct-tcpip` channel to `host:port` as seen from the server. The lease keeps the
     /// connection open while the stream is in use.
     pub(crate) async fn open_direct_tcpip(
@@ -446,42 +539,70 @@ async fn authenticate(
     handle: &mut Handle<ClientHandler>,
     target: &SshTarget,
     auth: &AuthSpec,
+    steps: &Steps,
 ) -> Result<(), SshError> {
     let user = target.username.clone();
     let protocol = |error: russh::Error| SshError::Protocol(error.to_string());
     let success = match auth {
         AuthSpec::Password(password) => {
+            steps.emit(ConnectStep::Trying {
+                method: AuthKind::Password,
+                label: None,
+            });
             let result = handle
                 .authenticate_password(user.clone(), password.as_str())
                 .await
                 .map_err(protocol)?;
-            result.success() || keyboard_interactive(handle, &user, password).await?
+            if result.success() {
+                true
+            } else {
+                steps.emit(ConnectStep::Rejected {
+                    method: AuthKind::Password,
+                    label: None,
+                });
+                keyboard_interactive(handle, &user, password, steps).await?
+            }
         }
         AuthSpec::PrivateKey { key, passphrase } => {
             let key = keys::decode(key, passphrase.as_deref().map(String::as_str))?;
-            publickey(handle, user, key).await?
+            publickey(handle, user, key, None, steps).await?
         }
         AuthSpec::KeyFile { path, passphrase } => {
             let key = keys::load(path, passphrase.as_deref().map(String::as_str))?;
-            publickey(handle, user, key).await?
+            publickey(handle, user, key, Some(path.clone()), steps).await?
         }
         AuthSpec::Agent { passphrase } => {
-            agent_then_defaults(handle, user, passphrase.as_deref().map(String::as_str)).await?
+            agent_then_defaults(
+                handle,
+                user,
+                passphrase.as_deref().map(String::as_str),
+                steps,
+            )
+            .await?
         }
     };
     if success {
+        steps.emit(ConnectStep::Authenticated);
         Ok(())
     } else {
         Err(SshError::AuthFailed)
     }
 }
 
+/// Offers one private key. `label` names it in progress reports; `None` uses its comment.
 async fn publickey(
     handle: &mut Handle<ClientHandler>,
     user: String,
     key: russh::keys::PrivateKey,
+    label: Option<String>,
+    steps: &Steps,
 ) -> Result<bool, SshError> {
     let protocol = |error: russh::Error| SshError::Protocol(error.to_string());
+    let label = label.unwrap_or_else(|| key_label(key.public_key()));
+    steps.emit(ConnectStep::Trying {
+        method: AuthKind::PublicKey,
+        label: Some(label.clone()),
+    });
     let hash = handle
         .best_supported_rsa_hash()
         .await
@@ -491,16 +612,41 @@ async fn publickey(
         .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
         .await
         .map_err(protocol)?;
+    if !result.success() {
+        steps.emit(ConnectStep::Rejected {
+            method: AuthKind::PublicKey,
+            label: Some(label),
+        });
+    }
     Ok(result.success())
+}
+
+/// Names a public key by its comment, else its algorithm and fingerprint.
+fn key_label(key: &russh::keys::PublicKey) -> String {
+    let comment = AsRef::<str>::as_ref(key.comment()).trim();
+    if comment.is_empty() {
+        format!(
+            "{} {}",
+            key.algorithm().as_str(),
+            key.fingerprint(HashAlg::Sha256)
+        )
+    } else {
+        comment.to_owned()
+    }
 }
 
 async fn keyboard_interactive(
     handle: &mut Handle<ClientHandler>,
     user: &str,
     password: &zeroize::Zeroizing<String>,
+    steps: &Steps,
 ) -> Result<bool, SshError> {
     use russh::client::KeyboardInteractiveAuthResponse as Response;
     let protocol = |error: russh::Error| SshError::Protocol(error.to_string());
+    steps.emit(ConnectStep::Trying {
+        method: AuthKind::KeyboardInteractive,
+        label: None,
+    });
     let mut response = handle
         .authenticate_keyboard_interactive_start(user, None::<String>)
         .await
@@ -509,7 +655,7 @@ async fn keyboard_interactive(
     for _ in 0..3 {
         match response {
             Response::Success => return Ok(true),
-            Response::Failure { .. } => return Ok(false),
+            Response::Failure { .. } => break,
             Response::InfoRequest { prompts, .. } => {
                 let answers = prompts.iter().map(|_| password.to_string()).collect();
                 response = handle
@@ -519,6 +665,10 @@ async fn keyboard_interactive(
             }
         }
     }
+    steps.emit(ConnectStep::Rejected {
+        method: AuthKind::KeyboardInteractive,
+        label: None,
+    });
     Ok(false)
 }
 
@@ -529,17 +679,24 @@ async fn agent_then_defaults(
     handle: &mut Handle<ClientHandler>,
     user: String,
     passphrase: Option<&str>,
+    steps: &Steps,
 ) -> Result<bool, SshError> {
-    let agent_error = match agent(handle, user.clone()).await {
+    let agent_error = match agent(handle, user.clone(), steps).await {
         Ok(true) => return Ok(true),
         Ok(false) => None,
-        Err(SshError::Agent(reason)) => Some(reason),
+        Err(SshError::Agent(reason)) => {
+            steps.emit(ConnectStep::AgentUnavailable {
+                reason: reason.clone(),
+            });
+            Some(reason)
+        }
         Err(error) => return Err(error),
     };
     let home = std::env::home_dir();
     let defaults = keys::default_keys(home.as_deref(), passphrase);
-    for key in defaults.keys {
-        if publickey(handle, user.clone(), key).await? {
+    for (path, key) in defaults.keys {
+        let label = Some(path.display().to_string());
+        if publickey(handle, user.clone(), key, label, steps).await? {
             return Ok(true);
         }
     }
@@ -553,23 +710,31 @@ async fn agent_then_defaults(
 }
 
 #[cfg(unix)]
-async fn agent(handle: &mut Handle<ClientHandler>, user: String) -> Result<bool, SshError> {
+async fn agent(
+    handle: &mut Handle<ClientHandler>,
+    user: String,
+    steps: &Steps,
+) -> Result<bool, SshError> {
     let agent_error = |error: russh::keys::Error| SshError::Agent(error.to_string());
     let mut agent = russh::keys::agent::client::AgentClient::connect_env()
         .await
         .map_err(agent_error)?;
-    agent_try_keys(handle, user, &mut agent).await
+    agent_try_keys(handle, user, &mut agent, steps).await
 }
 
 #[cfg(windows)]
-async fn agent(handle: &mut Handle<ClientHandler>, user: String) -> Result<bool, SshError> {
+async fn agent(
+    handle: &mut Handle<ClientHandler>,
+    user: String,
+    steps: &Steps,
+) -> Result<bool, SshError> {
     use russh::keys::agent::client::AgentClient;
     let agent_error = |error: russh::keys::Error| SshError::Agent(error.to_string());
     match AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent").await {
-        Ok(mut agent) => agent_try_keys(handle, user, &mut agent).await,
+        Ok(mut agent) => agent_try_keys(handle, user, &mut agent, steps).await,
         Err(_) => {
             let mut agent = AgentClient::connect_pageant().await.map_err(agent_error)?;
-            agent_try_keys(handle, user, &mut agent).await
+            agent_try_keys(handle, user, &mut agent, steps).await
         }
     }
 }
@@ -578,6 +743,7 @@ async fn agent_try_keys<S>(
     handle: &mut Handle<ClientHandler>,
     user: String,
     agent: &mut russh::keys::agent::client::AgentClient<S>,
+    steps: &Steps,
 ) -> Result<bool, SshError>
 where
     S: russh::keys::agent::client::AgentStream + Send + Unpin + 'static,
@@ -596,6 +762,11 @@ where
         let russh::keys::agent::AgentIdentity::PublicKey { key, .. } = identity else {
             continue;
         };
+        let label = Some(key_label(&key));
+        steps.emit(ConnectStep::Trying {
+            method: AuthKind::Agent,
+            label: label.clone(),
+        });
         let result = handle
             .authenticate_publickey_with(user.clone(), key, hash, agent)
             .await
@@ -603,6 +774,10 @@ where
         if result.success() {
             return Ok(true);
         }
+        steps.emit(ConnectStep::Rejected {
+            method: AuthKind::Agent,
+            label,
+        });
     }
     Ok(false)
 }

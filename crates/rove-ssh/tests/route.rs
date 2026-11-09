@@ -57,7 +57,7 @@ async fn jump_host_tunnels_to_the_destination() {
 
     let hop = bastion
         .connector
-        .connect_via(&target_of(&inner), &demo(), &Via::Jump(jump.clone()))
+        .connect_via(&target_of(&inner), &demo(), &Via::Jump(jump.clone()), None)
         .await
         .unwrap();
     // The tunnel counts as a channel of the jump connection.
@@ -82,7 +82,7 @@ async fn jump_host_reports_an_unreachable_destination() {
     };
     let result = bastion
         .connector
-        .connect_via(&target, &demo(), &Via::Jump(jump))
+        .connect_via(&target, &demo(), &Via::Jump(jump), None)
         .await;
     assert!(
         matches!(result, Err(SshError::Jump(_))),
@@ -127,7 +127,7 @@ async fn http_proxy_route_reaches_the_server() {
     };
     let connection = harness
         .connector
-        .connect_via(&harness.target(), &demo(), &via)
+        .connect_via(&harness.target(), &demo(), &via, None)
         .await
         .unwrap();
     let output = shell(&connection, b"echo http-ok; exit\n").await;
@@ -164,10 +164,66 @@ async fn socks5_proxy_route_reaches_the_server() {
     };
     let connection = bastion
         .connector
-        .connect_via(&target_of(&inner), &demo(), &via)
+        .connect_via(&target_of(&inner), &demo(), &via, None)
         .await
         .unwrap();
     let output = shell(&connection, b"echo socks-ok; exit\n").await;
     assert!(output.contains("socks-ok"), "{output}");
     forwards.stop(id);
+}
+
+#[tokio::test]
+async fn progress_reports_each_step_and_the_rejected_credential() {
+    use rove_ssh::{AuthKind, ConnectStep};
+    let harness = Harness::new(DevConfig::demo()).await;
+    let steps = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let sink = steps.clone();
+    let progress: rove_ssh::Progress = Arc::new(move |step| sink.lock().push(step));
+
+    let wrong = AuthSpec::Password(Zeroizing::new("nope".into()));
+    let result = harness
+        .connector
+        .connect_via(
+            &harness.target(),
+            &wrong,
+            &Via::Direct,
+            Some(progress.clone()),
+        )
+        .await;
+    assert!(matches!(result, Err(SshError::AuthFailed)));
+    {
+        let seen = steps.lock();
+        assert!(matches!(seen[0], ConnectStep::Connecting { via: None, .. }));
+        assert_eq!(seen[1], ConnectStep::Handshake);
+        assert!(matches!(seen[2], ConnectStep::HostKeyAccepted { .. }));
+        assert!(seen.contains(&ConnectStep::Rejected {
+            method: AuthKind::Password,
+            label: None
+        }));
+        assert!(!seen.contains(&ConnectStep::Authenticated));
+    }
+    steps.lock().clear();
+    harness
+        .connector
+        .connect_via(&harness.target(), &demo(), &Via::Direct, Some(progress))
+        .await
+        .unwrap();
+    assert_eq!(steps.lock().last(), Some(&ConnectStep::Authenticated));
+}
+
+#[tokio::test]
+async fn exec_collects_output_status_and_truncates() {
+    let harness = Harness::new(DevConfig::demo()).await;
+    let connection = harness.connect().await;
+    let output = connection
+        .exec("echo out; echo err >&2; exit 3", 1024)
+        .await
+        .unwrap();
+    assert_eq!(output.stdout, b"out\n");
+    assert_eq!(output.stderr, b"err\n");
+    assert_eq!(output.code, Some(3));
+    assert!(!output.truncated);
+    let long = connection.exec("seq 1 1000", 16).await.unwrap();
+    assert_eq!(long.stdout.len(), 16);
+    assert!(long.truncated);
 }

@@ -98,7 +98,7 @@ where
             }
             let auth = host_auth(state, &host, password.clone()).await?;
             let via = route(state, &host, 0).await?;
-            let connection = state.ssh.shared_via(&target, &auth, &via).await?;
+            let connection = state.ssh.shared_via(&target, &auth, &via, None).await?;
             let value = op(connection).await?;
             if *remember && let Some(typed) = password {
                 remember_typed(state, &host, typed.clone()).await;
@@ -205,7 +205,7 @@ async fn jump_connection(
     }
     let auth = host_auth(state, jump, None).await?;
     let via = route(state, jump, depth).await?;
-    Ok(state.ssh.shared_via(&target, &auth, &via).await?)
+    Ok(state.ssh.shared_via(&target, &auth, &via, None).await?)
 }
 
 /// Names the jump host in a failure to reach it; the code becomes `ssh.jump_host`. A failure of

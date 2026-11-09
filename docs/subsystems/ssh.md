@@ -10,6 +10,8 @@
 | `AuthSpec` | `Password`、`PrivateKey { key, passphrase }`、`KeyFile { path, passphrase }`、`Agent { passphrase }` |
 | `SshConnection` | 已认证的连接；`open_shell(size)` 打开 PTY shell channel，`open_sftp()` 打开 SFTP 会话 |
 | `Via` | 建立传输的方式：`Direct`、`Proxy { protocol, host, port }`、`Jump(Arc<SshConnection>)` |
+| `ConnectStep` | 连接过程的步骤：`Connecting`、`Handshake`、`HostKeyAccepted`、`AgentUnavailable`、`Trying` / `Rejected { method, label }`、`Authenticated` |
+| `ExecOutput` | `exec` 的结果：`stdout`、`stderr`、`code`、`truncated` |
 | `SshError` | `Connect`、`Timeout`、`HostKey(HostKeyRejection)`、`AuthFailed`、`CredentialsRequired`、`Key`、`PassphraseRequired`、`Agent`、`Channel`、`ForwardBind`、`ForwardRejected`、`Proxy`、`Jump`、`Sftp`、`Protocol` |
 
 ## 凭据解析
@@ -62,6 +64,17 @@
 - host key 按目标的主机名和端口校验，与是否经过跳板无关。
 
 应用连接已保存主机时（`src-tauri/src/connect.rs`）先解析目标的凭据，再沿 `HostRoute` 逐级取得跳板机的共享连接（已有存活连接时直接复用），最后经最近一跳连接目标。跳板机只能用已保存的密码、未加密的密钥或 agent 认证，不会弹框询问；连不上跳板机时返回 `ssh.jump_host`，消息中注明是哪台跳板机及原因。
+
+## 连接过程
+
+`connect_via` / `shared_via` 接收可选的 `Progress` 回调，按发生顺序报告 `ConnectStep`。每次提交凭据前报告 `Trying`，被拒绝时报告 `Rejected`：`label` 是密钥文件路径，或密钥注释（为空时是算法和指纹）。认证全部失败时最后一步是 `Rejected`，界面据此显示停在哪一步。
+
+## 执行命令与密钥
+
+- `SshConnection::exec(command, limit)` 在不分配 PTY 的 session channel 上运行命令，分别收集 stdout 和 stderr，每路最多 `limit` 字节，超出部分丢弃并置 `truncated`；超时由调用方控制。
+- `generate_key(kind, comment, passphrase)` 生成 Ed25519、ECDSA P-256 或 RSA 3072 密钥，返回 OpenSSH 格式文本，提供 passphrase 时加密。
+- `describe_key(private, passphrase)` 解析私钥，返回算法、带注释的 OpenSSH 公钥行和 `SHA256:` 指纹。
+- `authorize_command(public_key)` 生成把公钥追加到 `~/.ssh/authorized_keys` 的命令（已存在则不重复），只保留算法和密钥数据，注释不会进入 shell。
 
 <a id="sftp"></a>
 

@@ -412,9 +412,10 @@ impl russh::server::Handler for Client {
                 .await;
             let code = match output {
                 Ok(output) => {
-                    let mut combined = output.stdout;
-                    combined.extend_from_slice(&output.stderr);
-                    let _ = handle.data(channel, combined).await;
+                    let _ = handle.data(channel, output.stdout).await;
+                    if !output.stderr.is_empty() {
+                        let _ = handle.extended_data(channel, 1, output.stderr).await;
+                    }
                     output
                         .status
                         .code()

@@ -4035,6 +4035,7 @@ dependencies = [
  "bytes",
  "devsshd",
  "parking_lot",
+ "rand",
  "rove-fs",
  "rove-kernel",
  "rove-session",

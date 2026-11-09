@@ -47,8 +47,8 @@ pub(crate) fn load(path: &str, passphrase: Option<&str>) -> Result<PrivateKey, S
 
 /// Outcome of loading the default identities.
 pub(crate) struct DefaultKeys {
-    /// Keys that decoded.
-    pub keys: Vec<PrivateKey>,
+    /// Keys that decoded, with their files.
+    pub keys: Vec<(PathBuf, PrivateKey)>,
     /// At least one default identity exists but is encrypted and `passphrase` did not open it.
     pub locked: bool,
 }
@@ -69,12 +69,106 @@ pub(crate) fn default_keys(home: Option<&Path>, passphrase: Option<&str>) -> Def
             continue;
         }
         match load(&path.to_string_lossy(), passphrase) {
-            Ok(key) => found.keys.push(key),
+            Ok(key) => found.keys.push((path, key)),
             Err(SshError::PassphraseRequired) => found.locked = true,
             Err(error) => tracing::debug!(%error, path = %path.display(), "skipping identity"),
         }
     }
     found
+}
+
+/// Algorithm of a generated key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyType {
+    /// Ed25519, the default.
+    Ed25519,
+    /// ECDSA on NIST P-256.
+    EcdsaP256,
+    /// RSA, 3072 bits, for servers without Ed25519 support.
+    Rsa3072,
+}
+
+/// Public facts derived from a private key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyInfo {
+    /// Algorithm name, for example `ssh-ed25519`.
+    pub algorithm: String,
+    /// Public key in OpenSSH single-line form, with the private key's comment.
+    pub public_key: String,
+    /// `SHA256:` fingerprint.
+    pub fingerprint: String,
+}
+
+/// Decodes `private_key` and derives its public facts; see [`decode`] for the errors.
+pub fn describe(private_key: &str, passphrase: Option<&str>) -> Result<KeyInfo, SshError> {
+    let key = decode(private_key, passphrase)?;
+    let public = key.public_key();
+    Ok(KeyInfo {
+        algorithm: public.algorithm().as_str().to_owned(),
+        public_key: public
+            .to_openssh()
+            .map_err(|error| SshError::Key(error.to_string()))?,
+        fingerprint: public.fingerprint(russh::keys::HashAlg::Sha256).to_string(),
+    })
+}
+
+/// Generates a key and returns it in OpenSSH form, encrypted when `passphrase` is given.
+pub fn generate(
+    kind: KeyType,
+    comment: &str,
+    passphrase: Option<&str>,
+) -> Result<zeroize::Zeroizing<String>, SshError> {
+    use russh::keys::ssh_key::{Algorithm, EcdsaCurve, LineEnding};
+    let key_error = |error: russh::keys::ssh_key::Error| SshError::Key(error.to_string());
+    let mut rng = rand::rng();
+    let mut key = match kind {
+        KeyType::Ed25519 => PrivateKey::random(&mut rng, Algorithm::Ed25519),
+        KeyType::EcdsaP256 => PrivateKey::random(
+            &mut rng,
+            Algorithm::Ecdsa {
+                curve: EcdsaCurve::NistP256,
+            },
+        ),
+        KeyType::Rsa3072 => {
+            let keypair = russh::keys::ssh_key::private::RsaKeypair::random(&mut rng, 3072)
+                .map_err(key_error)?;
+            Ok(PrivateKey::from(keypair))
+        }
+    }
+    .map_err(key_error)?;
+    key.set_comment(comment);
+    if let Some(passphrase) = passphrase.filter(|passphrase| !passphrase.is_empty()) {
+        key = key.encrypt(&mut rng, passphrase).map_err(key_error)?;
+    }
+    key.to_openssh(LineEnding::LF)
+        .map(|text| zeroize::Zeroizing::new(text.to_string()))
+        .map_err(key_error)
+}
+
+/// Builds a shell command that adds `public_key` to `~/.ssh/authorized_keys` once, creating the
+/// directory and file with private permissions. Only the algorithm and key data are used; the
+/// comment is dropped, so nothing from it reaches the shell.
+pub fn authorize_command(public_key: &str) -> Result<String, SshError> {
+    let parsed = russh::keys::PublicKey::from_openssh(public_key)
+        .map_err(|error| SshError::Key(format!("invalid public key: {error}")))?;
+    let mut bare = parsed.clone();
+    bare.set_comment("");
+    let line = bare
+        .to_openssh()
+        .map_err(|error| SshError::Key(error.to_string()))?;
+    let line = line.trim();
+    // Algorithm names and base64 only; anything else would need quoting.
+    if !line
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '+' | '/' | '=' | '-' | '.' | '@'))
+    {
+        return Err(SshError::Key("unexpected characters in public key".into()));
+    }
+    Ok(format!(
+        "umask 077 && mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys && \
+         (grep -qF '{line}' ~/.ssh/authorized_keys || printf '%s\\n' '{line}' >> ~/.ssh/authorized_keys)"
+    ))
 }
 
 #[cfg(test)]
@@ -133,6 +227,36 @@ mod tests {
 
         let found = default_keys(None, None);
         assert!(found.keys.is_empty() && !found.locked);
+    }
+
+    #[test]
+    fn generated_keys_describe_and_open_with_their_passphrase() {
+        for kind in [KeyType::Ed25519, KeyType::EcdsaP256] {
+            let text = generate(kind, "me@laptop", Some("pw")).unwrap();
+            assert!(matches!(
+                describe(&text, None),
+                Err(SshError::PassphraseRequired)
+            ));
+            let info = describe(&text, Some("pw")).unwrap();
+            assert!(
+                info.public_key.ends_with("me@laptop"),
+                "{}",
+                info.public_key
+            );
+            assert!(info.fingerprint.starts_with("SHA256:"));
+        }
+        let plain = generate(KeyType::Ed25519, "", None).unwrap();
+        assert_eq!(describe(&plain, None).unwrap().algorithm, "ssh-ed25519");
+    }
+
+    #[test]
+    fn authorize_command_drops_the_comment() {
+        let text = generate(KeyType::Ed25519, "x'; rm -rf ~ #", None).unwrap();
+        let public = describe(&text, None).unwrap().public_key;
+        let command = authorize_command(&public).unwrap();
+        assert!(!command.contains("rm -rf"), "{command}");
+        assert!(command.contains("ssh-ed25519 AAAA"));
+        assert!(authorize_command("ssh-ed25519 not-base64'").is_err());
     }
 
     #[test]
