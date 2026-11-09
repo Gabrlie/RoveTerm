@@ -1,124 +1,142 @@
 <script lang="ts">
-  // Preferences editor. Changes apply when saved; the preview shows the draft font.
-  import { onMount } from 'svelte';
+  // Preferences, grouped like the system settings: sections on the left, grouped rows on the
+  // right. Every change applies and is stored at once.
   import Dialog from '../ui/Dialog.svelte';
-  import Select from '../ui/Select.svelte';
-  import { fontsMonospace } from '../ipc';
-  import { errorText, t } from '../i18n';
-  import { prefs, terminalFontStack } from './prefs.svelte';
+  import Icon from '../ui/Icon.svelte';
+  import type { IconName } from '../ui/icons';
+  import { t, type MessageKey } from '../i18n';
+  import { settingsError } from './edit.svelte';
+  import AppearanceSettings from './sections/AppearanceSettings.svelte';
+  import TerminalSettings from './sections/TerminalSettings.svelte';
+  import FilesSettings from './sections/FilesSettings.svelte';
+  import StatusSettings from './sections/StatusSettings.svelte';
+  import ShortcutsSettings from './sections/ShortcutsSettings.svelte';
+  import AboutSettings from './sections/AboutSettings.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
 
-  /** Powerline and Nerd Font code points shown in the preview. */
-  const GLYPH = {
-    arrow: '\ue0b0',
-    branch: '\ue0a0',
-    folder: '\uf07c',
-    check: '\uf00c',
-    apple: '\uf179',
-    linux: '\uf17c',
-    windows: '\uf17a',
-  };
+  type Section = 'appearance' | 'terminal' | 'files' | 'status' | 'shortcuts' | 'about';
 
-  const current = prefs.value.terminal;
-  let fontFamily = $state(current.font_family);
-  let fontSize = $state(current.font_size);
-  let lineHeight = $state(current.line_height);
-  let installed = $state<string[]>([]);
-  let error = $state('');
-  let saving = $state(false);
+  const SECTIONS: { id: Section; label: MessageKey; icon: IconName; tint: string }[] = [
+    { id: 'appearance', label: 'settings.section.appearance', icon: 'palette', tint: 'blue' },
+    { id: 'terminal', label: 'settings.section.terminal', icon: 'terminal', tint: 'graphite' },
+    { id: 'files', label: 'settings.section.files', icon: 'folder', tint: 'teal' },
+    { id: 'status', label: 'settings.section.status', icon: 'pulse', tint: 'green' },
+    { id: 'shortcuts', label: 'settings.section.shortcuts', icon: 'keyboard', tint: 'orange' },
+    { id: 'about', label: 'settings.section.about', icon: 'info', tint: 'purple' },
+  ];
 
-  const fontOptions = $derived([
-    { value: '', label: t('settings.fontDefault') },
-    // Keep a saved family selectable even when it is no longer installed.
-    ...[...new Set([...(fontFamily ? [fontFamily] : []), ...installed])]
-      .sort((a, b) => a.localeCompare(b))
-      .map((family) => ({ value: family, label: family })),
-  ]);
-
-  async function save(event: SubmitEvent): Promise<void> {
-    event.preventDefault();
-    saving = true;
-    error = '';
-    try {
-      await prefs.save({
-        ...prefs.value,
-        terminal: { ...prefs.value.terminal, font_family: fontFamily, font_size: Number(fontSize), line_height: Number(lineHeight) },
-      });
-      onclose();
-    } catch (caught) {
-      error = errorText(caught);
-    } finally {
-      saving = false;
-    }
-  }
-
-  onMount(() => {
-    fontsMonospace()
-      .then((families) => (installed = families))
-      .catch((caught: unknown) => console.warn('font list unavailable', caught));
-  });
+  let section = $state<Section>('appearance');
+  settingsError.text = '';
 </script>
 
-<Dialog title={t('settings.title')} {onclose} width={480}>
-  <form id="settings-form" onsubmit={save}>
-    <h3>{t('settings.terminal')}</h3>
-    <label>{t('settings.fontFamily')}<Select bind:value={fontFamily} options={fontOptions} /></label>
-    <div class="row">
-      <label>{t('settings.fontSize')}<input type="number" min="8" max="32" step="1" bind:value={fontSize} required /></label>
-      <label>{t('settings.lineHeight')}<input type="number" min="1" max="2" step="0.05" bind:value={lineHeight} required /></label>
+<Dialog title={t('settings.title')} {onclose} width={780}>
+  <div class="settings">
+    <nav aria-label={t('settings.title')}>
+      {#each SECTIONS as entry (entry.id)}
+        <button type="button" class:active={section === entry.id} aria-current={section === entry.id ? 'page' : undefined} onclick={() => (section = entry.id)}>
+          <span class="glyph" style:--tint="var(--sys-{entry.tint})"><Icon name={entry.icon} size={13} /></span>
+          {t(entry.label)}
+        </button>
+      {/each}
+    </nav>
+    <div class="pane">
+      <h2>{t(SECTIONS.find((entry) => entry.id === section)?.label ?? 'settings.title')}</h2>
+      {#if section === 'appearance'}
+        <AppearanceSettings />
+      {:else if section === 'terminal'}
+        <TerminalSettings />
+      {:else if section === 'files'}
+        <FilesSettings />
+      {:else if section === 'status'}
+        <StatusSettings />
+      {:else if section === 'shortcuts'}
+        <ShortcutsSettings />
+      {:else}
+        <AboutSettings />
+      {/if}
     </div>
-    <p class="hint">{t('settings.fontHint')}</p>
-    <div class="preview" aria-label={t('settings.preview')} style:font-family={terminalFontStack(fontFamily)} style:font-size="{fontSize}px" style:line-height={lineHeight}>
-      <div><span class="seg a"> user@host </span><span class="sep a">{GLYPH.arrow}</span><span class="seg b"> {GLYPH.folder} ~/projects </span><span class="sep b">{GLYPH.arrow}</span> {GLYPH.branch} main {GLYPH.check}</div>
-      <div>0O 1lI {'{}'} [] =&gt; 中文 {GLYPH.apple} {GLYPH.linux} {GLYPH.windows}</div>
-    </div>
-    {#if error}<p class="error">{error}</p>{/if}
-  </form>
+  </div>
   {#snippet actions()}
-    <button type="button" class="secondary" onclick={onclose}>{t('common.cancel')}</button>
-    <button type="submit" class="primary" form="settings-form" disabled={saving}>{t('common.save')}</button>
+    {#if settingsError.text}<p class="error problem">{settingsError.text}</p>{/if}
+    <button type="button" class="primary" onclick={onclose}>{t('settings.done')}</button>
   {/snippet}
 </Dialog>
 
 <style>
-  form {
+  .settings {
+    display: flex;
+    height: min(560px, 68vh);
+    margin: 0 calc(-1 * var(--space-5));
+    box-shadow:
+      inset 0 0.5px 0 var(--separator),
+      inset 0 -0.5px 0 var(--separator);
+  }
+  nav {
+    flex: 0 0 184px;
     display: flex;
     flex-direction: column;
-    gap: var(--space-3);
+    gap: 2px;
+    padding: var(--space-3) var(--space-2);
+    box-shadow: inset -0.5px 0 0 var(--separator);
+    overflow-y: auto;
   }
-  h3 {
-    margin: 0;
-    color: var(--fg);
-    font-size: var(--text-body);
-    font-weight: 600;
-  }
-  .hint {
-    margin: calc(-1 * var(--space-1)) 0 0;
-    color: var(--fg-muted);
-    font-size: var(--text-footnote);
-  }
-  .preview {
-    padding: var(--space-2) var(--space-3);
+  nav button {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 30px;
+    padding: 0 var(--space-2);
+    border: none;
     border-radius: var(--radius-sm);
-    background: var(--term-bg);
-    color: var(--term-fg);
-    white-space: pre;
-    overflow: hidden;
+    background: transparent;
+    color: var(--fg);
+    font: inherit;
+    text-align: left;
+    cursor: default;
   }
-  .seg.a {
+  nav button:hover:not(.active) {
+    background: var(--fill-hover);
+  }
+  nav button.active {
     background: var(--accent);
+    color: var(--accent-fg);
+  }
+  .glyph {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+    background: linear-gradient(to bottom, color-mix(in srgb, var(--tint) 80%, #fff), var(--tint));
     color: #fff;
+    box-shadow: 0 0.5px 1px rgb(0 0 0 / 0.15);
   }
-  .sep.a {
-    color: var(--accent);
-    background: var(--fg-muted);
+  .pane {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-5) var(--space-6);
+    overflow-y: auto;
+    background: color-mix(in srgb, var(--fill) 50%, transparent);
   }
-  .seg.b {
-    background: var(--fg-muted);
-    color: var(--bg);
+  h2 {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-large);
+    font-weight: 700;
+    letter-spacing: -0.01em;
   }
-  .sep.b {
-    color: var(--fg-muted);
+  /* Groups keep their height; the pane scrolls instead. */
+  .pane > :global(*) {
+    flex-shrink: 0;
+  }
+  .pane :global(.section-label) {
+    margin-top: var(--space-3);
+  }
+  .problem {
+    flex: 1;
+    margin-right: auto;
   }
 </style>

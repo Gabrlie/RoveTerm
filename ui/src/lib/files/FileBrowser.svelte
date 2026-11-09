@@ -27,6 +27,8 @@
   import { errorText, t } from '../i18n';
   import { baseName, formatMode, formatSize, formatTime, joinPath, normalizePath, parentPath, sortEntries } from './format';
   import { isFinal, transfers } from './transfers.svelte';
+  import { prefs } from '../settings/prefs.svelte';
+  import { editPrefs } from '../settings/edit.svelte';
 
   interface Props {
     source: RemoteSource;
@@ -50,8 +52,6 @@
     | { kind: 'conflict'; fs: FsId; paths: string[]; dir: string; clashes: string[] }
     | { kind: 'downloadConflict'; fs: FsId; paths: string[]; dir: string | null; clashes: string[] };
 
-  const HIDDEN_KEY = 'files.showHidden';
-
   let fsId = $state<FsId | null>(null);
   let label = $state('');
   let cwd = $state('');
@@ -61,7 +61,7 @@
   let status = $state<{ error: boolean; text: string } | null>(null);
   let selected = $state<Set<string>>(new Set());
   let anchor = -1;
-  let showHidden = $state(readHiddenPreference());
+  const showHidden = $derived(prefs.value.files.show_hidden);
   let dropping = $state(false);
   let pending = $state<Pending | null>(null);
   let nameInput = $state('');
@@ -80,21 +80,14 @@
   );
   const running = $derived(related.filter((row) => !isFinal(row)).length);
 
-  function readHiddenPreference(): boolean {
-    try {
-      return localStorage.getItem(HIDDEN_KEY) === '1';
-    } catch {
-      return false;
-    }
+  function toggleHidden(): void {
+    void editPrefs((draft) => (draft.files.show_hidden = !draft.files.show_hidden));
   }
 
-  function toggleHidden(): void {
-    showHidden = !showHidden;
-    try {
-      localStorage.setItem(HIDDEN_KEY, showHidden ? '1' : '0');
-    } catch {
-      // Preference is a convenience; storage may be unavailable.
-    }
+  /** The stored answer to a name clash, or `null` to ask. */
+  function defaultConflict(): Conflict | null {
+    const choice = prefs.value.files.default_conflict;
+    return choice === 'ask' ? null : choice;
   }
 
   function fail(error: unknown): void {
@@ -189,7 +182,7 @@
     if (!fsId || names.length === 0) return;
     const fs = fsId;
     const paths = names.map((name) => joinPath(cwd, name));
-    let dir: string | null = null;
+    let dir: string | null = prefs.device.download_dir || null;
     if (ask) {
       const picked = await openDialog({ directory: true, multiple: false });
       if (typeof picked !== 'string') return;
@@ -197,8 +190,8 @@
     }
     try {
       const clashes = await transferLocalClashes(names, dir);
-      if (clashes.length > 0) pending = { kind: 'downloadConflict', fs, paths, dir, clashes };
-      else await startDownload(fs, paths, dir, 'rename');
+      if (clashes.length > 0 && !defaultConflict()) pending = { kind: 'downloadConflict', fs, paths, dir, clashes };
+      else await startDownload(fs, paths, dir, defaultConflict() ?? 'rename');
     } catch (error) {
       fail(error);
     }
@@ -227,8 +220,8 @@
     const dir = cwd;
     const existing = new Set(entries.map((entry) => entry.name));
     const clashes = paths.map(baseName).filter((name) => existing.has(name));
-    if (clashes.length > 0) pending = { kind: 'conflict', fs, paths, dir, clashes };
-    else void upload(fs, paths, dir, 'rename');
+    if (clashes.length > 0 && !defaultConflict()) pending = { kind: 'conflict', fs, paths, dir, clashes };
+    else void upload(fs, paths, dir, defaultConflict() ?? 'rename');
   }
 
   async function upload(fs: FsId, paths: string[], dir: string, conflict: Conflict): Promise<void> {
@@ -255,12 +248,15 @@
   }
 
   function askDelete(): void {
-    if (selection.length > 0) pending = { kind: 'delete', names: selection.map((entry) => entry.name) };
+    if (selection.length === 0) return;
+    const request: Pending = { kind: 'delete', names: selection.map((entry) => entry.name) };
+    if (prefs.value.files.confirm_delete) pending = request;
+    else void confirmPending(undefined, request);
   }
 
-  async function confirmPending(event?: SubmitEvent): Promise<void> {
+  /** Carries out `action` (the open dialog's by default). */
+  async function confirmPending(event?: SubmitEvent, action: Pending | null = pending): Promise<void> {
     event?.preventDefault();
-    const action = pending;
     if (!fsId || !action) return;
     const name = nameInput.trim();
     try {

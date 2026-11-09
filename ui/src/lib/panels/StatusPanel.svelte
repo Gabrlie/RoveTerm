@@ -8,12 +8,11 @@
   import { isCommandError, serverStats, type CpuTimes, type RemoteSource, type ServerStats } from '../ipc';
   import { errorText, t } from '../i18n';
   import { formatSize } from '../files/format';
+  import { prefs } from '../settings/prefs.svelte';
 
   let { source, visible }: { source: RemoteSource; visible: boolean } = $props();
 
-  /** Time between samples. */
-  const INTERVAL_MS = 3000;
-  /** Samples kept per core: two minutes. */
+  /** Samples kept per core: two minutes at the default interval. */
   const HISTORY = 40;
   /** Interfaces shown before the list collapses. */
   const INTERFACES_SHOWN = 6;
@@ -78,7 +77,7 @@
     timer = window.setTimeout(async () => {
       await sample();
       schedule();
-    }, INTERVAL_MS);
+    }, prefs.value.status.interval_secs * 1000);
   }
 
   // Sample immediately when shown, then on a timer while visible.

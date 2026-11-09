@@ -43,6 +43,11 @@ import panelBottom from 'remixicon/icons/Design/layout-bottom-line.svg?raw';
 import home from 'remixicon/icons/Buildings/home-4-line.svg?raw';
 import sidebar from 'remixicon/icons/Design/layout-left-line.svg?raw';
 import copy from 'remixicon/icons/Document/file-copy-line.svg?raw';
+import palette from 'remixicon/icons/Design/palette-line.svg?raw';
+import keyboard from 'remixicon/icons/Device/keyboard-line.svg?raw';
+import info from 'remixicon/icons/System/information-line.svg?raw';
+import pulse from 'remixicon/icons/Health & Medical/pulse-line.svg?raw';
+import paste from 'remixicon/icons/Document/clipboard-line.svg?raw';
 
 export const icons = {
   add,
@@ -89,6 +94,11 @@ export const icons = {
   panelRight,
   panelBottom,
   copy,
+  palette,
+  keyboard,
+  info,
+  pulse,
+  paste,
 } as const;
 
 export type IconName = keyof typeof icons;

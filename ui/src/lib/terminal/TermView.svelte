@@ -20,6 +20,7 @@
   import { formatStep } from './connectLog';
   import { isAppShortcut } from '../actions';
   import { prefs, SYMBOL_FONT } from '../settings/prefs.svelte';
+  import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
 
   interface Props {
     open: (size: TermSize, onOutput: (message: OutputMessage) => void) => Promise<SessionId>;
@@ -42,6 +43,11 @@
   /** Connection steps are on screen; the first terminal output replaces them. */
   let showingLog = false;
   let lastSize: TermSize = { cols: 0, rows: 0 };
+  /** Where the right-click menu is open, if it is. */
+  let menu = $state<{ x: number; y: number } | null>(null);
+  /** The bell flashes the view. */
+  let ringing = $state(false);
+  let bellTimer = 0;
   const media = matchMedia('(prefers-color-scheme: dark)');
 
   /** Moves keyboard focus into the terminal. */
@@ -57,6 +63,38 @@
   /** Sends text as if typed, honouring bracketed paste mode. */
   export function paste(text: string): void {
     term?.paste(text);
+  }
+
+  function copySelection(): void {
+    const text = term?.getSelection();
+    if (text) navigator.clipboard.writeText(text).catch((error: unknown) => console.warn('copy failed', error));
+  }
+
+  function pasteClipboard(): void {
+    navigator.clipboard
+      .readText()
+      .then((text) => term?.paste(text))
+      .catch((error: unknown) => console.warn('paste failed', error));
+  }
+
+  const menuItems = (): MenuItem[] => [
+    { label: t('terminal.menu.copy'), icon: 'copy', onselect: copySelection },
+    { label: t('terminal.menu.paste'), icon: 'paste', onselect: pasteClipboard },
+    { label: t('terminal.menu.selectAll'), separated: true, onselect: () => term?.selectAll() },
+    { label: t('terminal.menu.clear'), icon: 'clear', onselect: () => term?.clear() },
+  ];
+
+  function onContextMenu(event: MouseEvent): void {
+    event.preventDefault();
+    if (prefs.value.terminal.right_click === 'paste') pasteClipboard();
+    else menu = { x: event.clientX, y: event.clientY };
+  }
+
+  function ring(): void {
+    if (prefs.value.terminal.bell !== 'visual') return;
+    ringing = true;
+    clearTimeout(bellTimer);
+    bellTimer = window.setTimeout(() => (ringing = false), 160);
   }
 
   function handleOutput(message: OutputMessage): void {
@@ -151,6 +189,15 @@
     applyTheme();
   });
 
+  // Applies cursor and scrollback preferences to a running terminal.
+  $effect(() => {
+    const { cursor_style: cursorStyle, cursor_blink: cursorBlink, scrollback } = prefs.value.terminal;
+    if (!term) return;
+    term.options.cursorStyle = cursorStyle;
+    term.options.cursorBlink = cursorBlink;
+    term.options.scrollback = scrollback;
+  });
+
   // Applies preference changes to a running terminal.
   $effect(() => {
     const { font_size: fontSize, line_height: lineHeight } = prefs.value.terminal;
@@ -167,16 +214,17 @@
   });
 
   onMount(async () => {
-    const { font_size: fontSize, line_height: lineHeight } = prefs.value.terminal;
+    const { font_size: fontSize, line_height: lineHeight, cursor_style: cursorStyle, cursor_blink: cursorBlink, scrollback } = prefs.value.terminal;
     await loadFonts(fontSize);
     if (destroyed) return;
     term = new Terminal({
       allowProposedApi: true,
-      cursorBlink: true,
+      cursorBlink,
+      cursorStyle,
       fontFamily: prefs.terminalFontFamily,
       fontSize,
       lineHeight,
-      scrollback: 5000,
+      scrollback,
       theme: currentTheme(),
     });
     fit = new FitAddon();
@@ -195,6 +243,10 @@
       if (sessionId) sessionWrite(sessionId, data).catch((error: unknown) => console.warn('write failed', error));
     });
     term.onTitleChange((title) => ontitle?.(title));
+    term.onBell(ring);
+    term.onSelectionChange(() => {
+      if (prefs.value.terminal.copy_on_select) copySelection();
+    });
     observer = new ResizeObserver(scheduleRefit);
     observer.observe(container);
     media.addEventListener('change', applyTheme);
@@ -228,6 +280,7 @@
   onDestroy(() => {
     destroyed = true;
     cancelAnimationFrame(frame);
+    clearTimeout(bellTimer);
     observer?.disconnect();
     media.removeEventListener('change', applyTheme);
     term?.dispose();
@@ -235,10 +288,14 @@
 
 </script>
 
-<div class="term" bind:this={container}></div>
+<div class="term" class:ringing bind:this={container} oncontextmenu={onContextMenu} role="presentation"></div>
+{#if menu}
+  <ContextMenu x={menu.x} y={menu.y} items={menuItems()} onclose={() => (menu = null)} />
+{/if}
 
 <style>
   .term {
+    position: relative;
     width: 100%;
     height: 100%;
     padding: var(--space-1) 0 0 var(--space-2);
@@ -247,6 +304,14 @@
   }
   .term :global(.xterm) {
     height: 100%;
+  }
+  /* Visual bell: a brief accent wash over the view. */
+  .term.ringing::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    pointer-events: none;
   }
   .term :global(.xterm-viewport) {
     background: transparent !important;
