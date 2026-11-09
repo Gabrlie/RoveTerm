@@ -4019,6 +4019,7 @@ dependencies = [
 name = "roveterm"
 version = "0.1.0"
 dependencies = [
+ "rove-fs",
  "rove-journal",
  "rove-kernel",
  "rove-pty",

@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use rove_fs::{FsSessions, LocalFs, TransferQueue};
 use rove_kernel::{Disposer, Runtime};
 use rove_session::SessionManager;
 use rove_ssh::{HostKeyPrompts, SshConnector};
@@ -20,6 +21,12 @@ pub struct AppState {
     pub ssh: Arc<SshConnector>,
     /// Pending host key confirmations.
     pub prompts: Arc<HostKeyPrompts>,
+    /// Open file systems (SFTP sessions).
+    pub fs_sessions: Arc<FsSessions>,
+    /// File transfer queue.
+    pub transfers: Arc<TransferQueue>,
+    /// This device's file system.
+    pub local_fs: Arc<LocalFs>,
     /// Local PTY provider.
     #[cfg(desktop)]
     pub pty: Arc<rove_pty::LocalTerminals>,
@@ -36,6 +43,9 @@ impl AppState {
             vault: ctx.require::<Vault>()?,
             ssh: ctx.require::<SshConnector>()?,
             prompts: ctx.require::<HostKeyPrompts>()?,
+            fs_sessions: ctx.require::<FsSessions>()?,
+            transfers: ctx.require::<TransferQueue>()?,
+            local_fs: ctx.require::<LocalFs>()?,
             #[cfg(desktop)]
             pty: ctx.require::<rove_pty::LocalTerminals>()?,
             lifetime: Mutex::new(Some((runtime, Vec::new()))),

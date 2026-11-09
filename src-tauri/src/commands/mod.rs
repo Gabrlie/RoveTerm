@@ -2,4 +2,5 @@
 
 pub mod host;
 pub mod session;
+pub mod sftp;
 pub mod vault;

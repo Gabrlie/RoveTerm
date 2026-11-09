@@ -1,5 +1,6 @@
 //! Structured errors returned to the WebView.
 
+use rove_fs::FsError;
 use rove_kernel::KernelError;
 use rove_session::SessionError;
 use rove_ssh::{HostKeyRejection, SshError};
@@ -78,6 +79,22 @@ impl From<SshError> for CommandError {
             message: error.to_string(),
             detail,
         }
+    }
+}
+
+impl From<FsError> for CommandError {
+    fn from(error: FsError) -> Self {
+        let code = match &error {
+            FsError::NotFound(_) => "fs.not_found",
+            FsError::PermissionDenied(_) => "fs.permission_denied",
+            FsError::AlreadyExists(_) => "fs.already_exists",
+            FsError::Unsupported(_) => "fs.unsupported",
+            FsError::InvalidPath(_) => "input.invalid",
+            FsError::Closed => "fs.closed",
+            FsError::Cancelled => "fs.cancelled",
+            FsError::Io(_) => "fs.io",
+        };
+        Self::new(code, error.to_string())
     }
 }
 

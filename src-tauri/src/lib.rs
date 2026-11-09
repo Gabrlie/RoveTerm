@@ -19,6 +19,8 @@ use crate::state::AppState;
 const HOSTKEY_PROMPT_EVENT: &str = "hostkey-prompt";
 /// Event name of vault lock-state changes made outside a command.
 const VAULT_STATE_EVENT: &str = "vault-state";
+/// Event name of forwarded [`TransferUpdate`](rove_fs::TransferUpdate)s.
+const TRANSFER_EVENT: &str = "transfer-update";
 
 fn data_dir(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
     if let Some(dir) = std::env::var_os("ROVETERM_DATA_DIR") {
@@ -58,8 +60,15 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             tracing::error!(%error, "forwarding host key prompt failed");
         }
     });
+    let handle = app.handle().clone();
+    let transfers = ctx.events().on::<rove_fs::TransferUpdate>(move |update| {
+        if let Err(error) = handle.emit(TRANSFER_EVENT, update) {
+            tracing::error!(%error, "forwarding transfer update failed");
+        }
+    });
     if let Some((_, disposers)) = state.lifetime.lock().expect("lifetime lock").as_mut() {
         disposers.push(forward);
+        disposers.push(transfers);
         disposers.extend(host_services);
     }
 
@@ -77,6 +86,8 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
 fn shutdown(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
+    state.transfers.cancel_all();
+    state.fs_sessions.clear();
     tauri::async_runtime::block_on(async {
         state.sessions.close_all().await;
         state.ssh.disconnect_all().await;
@@ -107,6 +118,17 @@ pub fn run() {
             commands::session::session_close,
             commands::session::session_reattach,
             commands::session::session_list,
+            commands::sftp::sftp_open,
+            commands::sftp::sftp_list,
+            commands::sftp::sftp_mkdir,
+            commands::sftp::sftp_rename,
+            commands::sftp::sftp_remove,
+            commands::sftp::sftp_close,
+            commands::sftp::transfer_upload,
+            commands::sftp::transfer_download,
+            commands::sftp::transfer_list,
+            commands::sftp::transfer_cancel,
+            commands::sftp::transfer_clear,
             commands::host::host_list,
             commands::host::host_create,
             commands::host::host_update,

@@ -33,3 +33,17 @@ enqueue(TransferRequest) → TransferId，状态 queued
 ## 路径
 
 远程路径一律按 POSIX 处理（`posix_join`、`posix_parent`）。本地路径由 `LocalFs` 按平台语法拼接。从 IPC 传入的单个文件名先经 `validate_name` 校验，拒绝空名、`.`、`..` 和包含分隔符的名称。
+
+## 应用命令
+
+`src-tauri/src/commands/sftp.rs` 把 seam 暴露给 WebView。所有命令只接受 `FsId` 和路径字符串，Provider 留在 Rust 侧。
+
+| 命令 | 作用 |
+|---|---|
+| `sftp_open(host_id \| address, password, remember)` | 获取连接的方式和打开终端相同，返回 `{ id, label, home }` |
+| `sftp_list` / `sftp_mkdir` / `sftp_rename` / `sftp_remove` | 浏览和修改远程目录；`sftp_remove` 递归删除，拒绝删除根目录 |
+| `sftp_close` | 从 `FsSessions` 移除；进行中的传输不受影响 |
+| `transfer_upload` / `transfer_download` | 为每个路径排一个传输；下载目录缺省时使用系统下载目录，系统未配置时退回已存在的 `~/Downloads` |
+| `transfer_list` / `transfer_cancel` / `transfer_clear` | 查询、取消、清除已结束的传输 |
+
+`TransferUpdate` 以 `transfer-update` 事件转发给 WebView。远程路径必须是绝对 POSIX 路径，本地路径必须是绝对路径，单次最多 1000 个路径；新文件名经 `validate_name` 校验。
