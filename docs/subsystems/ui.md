@@ -82,6 +82,7 @@
 - 绑定中的 `App` 在 macOS 上展开为 `Meta`（⌘），在其他平台展开为 `Ctrl+Shift`，因此普通的 Ctrl+字母总是交给 shell。
 - 按键匹配使用物理按键（`event.code`），不受键盘布局和 Shift 的影响。
 - 窗口在捕获阶段分发动作；终端通过 `isAppShortcut` 把这些按键让给应用。
+- 标记了 `yieldsToTextField` 的动作（复制、粘贴）在终端以外的输入框获得焦点时不触发，交给浏览器的原生编辑行为。
 - `setOverrides` 用来替换用户自定义的绑定。
 
 | 动作 | 默认绑定 |

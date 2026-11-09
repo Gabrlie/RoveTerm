@@ -28,6 +28,8 @@ export interface Action {
   keys: string[];
   /** Hidden from the command palette. */
   hidden?: boolean;
+  /** Left to the browser while a text field outside the terminal has focus, as copy and paste are. */
+  yieldsToTextField?: boolean;
 }
 
 export const isMac = /Mac|iPhone|iPad/.test(navigator.platform) || navigator.userAgent.includes('Mac OS');
@@ -46,8 +48,8 @@ export const actions: Action[] = [
   { id: 'pane.splitDown', label: 'action.pane.splitDown', keys: ['App+E'] },
   { id: 'pane.focusNext', label: 'action.pane.focusNext', keys: ['App+]'] },
   { id: 'pane.focusPrev', label: 'action.pane.focusPrev', keys: ['App+['] },
-  { id: 'terminal.copy', label: 'action.terminal.copy', keys: ['App+C'] },
-  { id: 'terminal.paste', label: 'action.terminal.paste', keys: ['App+V'] },
+  { id: 'terminal.copy', label: 'action.terminal.copy', keys: ['App+C'], yieldsToTextField: true },
+  { id: 'terminal.paste', label: 'action.terminal.paste', keys: ['App+V'], yieldsToTextField: true },
   { id: 'palette.open', label: 'action.palette.open', keys: ['App+P'] },
   ...([1, 2, 3, 4, 5, 6, 7, 8, 9] as const).map(
     (n): Action => ({ id: `tab.goto${n}`, label: 'action.tab.goto', keys: [`App+${n}`], hidden: true }),
@@ -106,9 +108,24 @@ function buildIndex(): Map<string, ActionId> {
 
 let index = buildIndex();
 
+const byId = new Map(actions.map((action) => [action.id, action]));
+
+const NON_TEXT_INPUTS = new Set(['button', 'checkbox', 'color', 'file', 'radio', 'range', 'reset', 'submit']);
+
+/** `true` for an editable text control other than the terminal's own input element. */
+export function isTextField(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.classList.contains('xterm-helper-textarea')) return false;
+  if (target instanceof HTMLTextAreaElement) return true;
+  if (target instanceof HTMLInputElement) return !NON_TEXT_INPUTS.has(target.type);
+  return target.isContentEditable;
+}
+
 /** Returns the action bound to `event`, if any. */
 export function actionFor(event: KeyboardEvent): ActionId | undefined {
-  return index.get(eventBinding(event));
+  const id = index.get(eventBinding(event));
+  if (id && byId.get(id)?.yieldsToTextField && isTextField(event.target)) return undefined;
+  return id;
 }
 
 /** `true` when the terminal must not receive `event` because the app handles it. */
