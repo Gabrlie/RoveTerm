@@ -47,8 +47,8 @@
     | { kind: 'mkdir' }
     | { kind: 'rename'; entry: DirEntry }
     | { kind: 'delete'; names: string[] }
-    | { kind: 'conflict'; paths: string[]; clashes: string[] }
-    | { kind: 'downloadConflict'; names: string[]; dir: string | null; clashes: string[] };
+    | { kind: 'conflict'; fs: FsId; paths: string[]; dir: string; clashes: string[] }
+    | { kind: 'downloadConflict'; fs: FsId; paths: string[]; dir: string | null; clashes: string[] };
 
   const HIDDEN_KEY = 'files.showHidden';
 
@@ -167,8 +167,12 @@
     else void download([entry.name], false);
   }
 
+  /** Remote paths and the file session are fixed when the action starts, so navigating while a
+   *  dialog is open cannot change what is transferred. */
   async function download(names: string[], ask: boolean): Promise<void> {
     if (!fsId || names.length === 0) return;
+    const fs = fsId;
+    const paths = names.map((name) => joinPath(cwd, name));
     let dir: string | null = null;
     if (ask) {
       const picked = await openDialog({ directory: true, multiple: false });
@@ -177,19 +181,18 @@
     }
     try {
       const clashes = await transferLocalClashes(names, dir);
-      if (clashes.length > 0) pending = { kind: 'downloadConflict', names, dir, clashes };
-      else await startDownload(names, dir, 'rename');
+      if (clashes.length > 0) pending = { kind: 'downloadConflict', fs, paths, dir, clashes };
+      else await startDownload(fs, paths, dir, 'rename');
     } catch (error) {
       fail(error);
     }
   }
 
-  async function startDownload(names: string[], dir: string | null, conflict: Conflict): Promise<void> {
+  async function startDownload(fs: FsId, paths: string[], dir: string | null, conflict: Conflict): Promise<void> {
     pending = null;
-    if (!fsId) return;
     try {
-      await transferDownload(fsId, names.map((name) => joinPath(cwd, name)), dir, conflict);
-      info(t('files.downloading', { count: names.length }));
+      await transferDownload(fs, paths, dir, conflict);
+      info(t('files.downloading', { count: paths.length }));
       transfersOpen = true;
     } catch (error) {
       fail(error);
@@ -204,17 +207,18 @@
 
   function startUpload(paths: string[]): void {
     if (!fsId || paths.length === 0) return;
+    const fs = fsId;
+    const dir = cwd;
     const existing = new Set(entries.map((entry) => entry.name));
     const clashes = paths.map(baseName).filter((name) => existing.has(name));
-    if (clashes.length > 0) pending = { kind: 'conflict', paths, clashes };
-    else void upload(paths, 'rename');
+    if (clashes.length > 0) pending = { kind: 'conflict', fs, paths, dir, clashes };
+    else void upload(fs, paths, dir, 'rename');
   }
 
-  async function upload(paths: string[], conflict: Conflict): Promise<void> {
+  async function upload(fs: FsId, paths: string[], dir: string, conflict: Conflict): Promise<void> {
     pending = null;
-    if (!fsId) return;
     try {
-      await transferUpload(fsId, paths, cwd, conflict);
+      await transferUpload(fs, paths, dir, conflict);
       info(t('files.uploading', { count: paths.length }));
       transfersOpen = true;
     } catch (error) {
@@ -497,9 +501,9 @@
     <p class="message">{t('files.conflictBody', { names: request.clashes.slice(0, 5).join(', ') })}</p>
     {#snippet actions()}
       <button type="button" class="secondary" onclick={() => (pending = null)}>{t('common.cancel')}</button>
-      <button type="button" class="secondary" onclick={() => void upload(request.paths, 'skip')}>{t('files.skip')}</button>
-      <button type="button" class="secondary" onclick={() => void upload(request.paths, 'rename')}>{t('files.keepBoth')}</button>
-      <button type="button" class="primary" onclick={() => void upload(request.paths, 'overwrite')}>{t('files.overwrite')}</button>
+      <button type="button" class="secondary" onclick={() => void upload(request.fs, request.paths, request.dir, 'skip')}>{t('files.skip')}</button>
+      <button type="button" class="secondary" onclick={() => void upload(request.fs, request.paths, request.dir, 'rename')}>{t('files.keepBoth')}</button>
+      <button type="button" class="primary" onclick={() => void upload(request.fs, request.paths, request.dir, 'overwrite')}>{t('files.overwrite')}</button>
     {/snippet}
   </Dialog>
 {:else if pending?.kind === 'downloadConflict'}
@@ -508,9 +512,9 @@
     <p class="message">{t('files.downloadConflictBody', { names: request.clashes.slice(0, 5).join(', ') })}</p>
     {#snippet actions()}
       <button type="button" class="secondary" onclick={() => (pending = null)}>{t('common.cancel')}</button>
-      <button type="button" class="secondary" onclick={() => void startDownload(request.names, request.dir, 'skip')}>{t('files.skip')}</button>
-      <button type="button" class="secondary" onclick={() => void startDownload(request.names, request.dir, 'rename')}>{t('files.keepBoth')}</button>
-      <button type="button" class="primary" onclick={() => void startDownload(request.names, request.dir, 'overwrite')}>{t('files.overwrite')}</button>
+      <button type="button" class="secondary" onclick={() => void startDownload(request.fs, request.paths, request.dir, 'skip')}>{t('files.skip')}</button>
+      <button type="button" class="secondary" onclick={() => void startDownload(request.fs, request.paths, request.dir, 'rename')}>{t('files.keepBoth')}</button>
+      <button type="button" class="primary" onclick={() => void startDownload(request.fs, request.paths, request.dir, 'overwrite')}>{t('files.overwrite')}</button>
     {/snippet}
   </Dialog>
 {/if}
