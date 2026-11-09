@@ -276,7 +276,7 @@ impl Vault {
         Ok(serde_json::from_slice(&plaintext)?)
     }
 
-    fn seal_key(&self, id: KeyId, secret: &KeySecret) -> Result<Vec<u8>, VaultError> {
+    pub(crate) fn seal_key(&self, id: KeyId, secret: &KeySecret) -> Result<Vec<u8>, VaultError> {
         let plaintext = Zeroizing::new(serde_json::to_vec(secret)?);
         self.with_cipher(|cipher| cipher.seal(&plaintext, &key_aad(id)))
     }

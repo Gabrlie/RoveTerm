@@ -638,3 +638,149 @@ fn known_hosts_are_separate_per_route() {
         KnownHostStatus::Mismatch { .. }
     ));
 }
+
+fn unlocked() -> Vault {
+    let (vault, _) = vault();
+    assert_eq!(vault.try_unlock(), LockState::Unlocked);
+    vault
+}
+
+fn as_changes(records: Vec<SyncRecord>) -> Vec<SyncChange> {
+    records
+        .into_iter()
+        .map(|record| SyncChange {
+            kind: record.kind.into(),
+            id: record.id,
+            body: Some(record.body),
+        })
+        .collect()
+}
+
+#[test]
+fn sync_records_round_trip_into_another_vault() {
+    let source = unlocked();
+    let bastion = source
+        .create_host(draft("bastion.example", AuthMethod::Password))
+        .unwrap();
+    source.set_secret(bastion.id, &password("hunter2")).unwrap();
+    let key = source.create_ssh_key(key_draft("laptop")).unwrap();
+    let mut inner = draft("inner.example", AuthMethod::Key { key: key.id });
+    inner.route = HostRoute::Jump { host: bastion.id };
+    let inner = source.create_host(inner).unwrap();
+    source
+        .create_forward(
+            inner.id,
+            ForwardDraft {
+                label: "db".into(),
+                spec: ForwardSpec::Local {
+                    bind_host: "127.0.0.1".into(),
+                    bind_port: 15432,
+                    dest_host: "db.internal".into(),
+                    dest_port: 5432,
+                },
+                auto_start: false,
+            },
+        )
+        .unwrap();
+    source
+        .create_snippet(SnippetDraft {
+            name: "logs".into(),
+            command: "journalctl -f".into(),
+        })
+        .unwrap();
+    let mut prefs = Preferences::default();
+    prefs.terminal.font_size = 16;
+    source.set_preferences(prefs).unwrap();
+
+    // Children listed before their parents still apply: the vault orders them.
+    let mut changes = as_changes(source.sync_records().unwrap());
+    changes.reverse();
+    let target = unlocked();
+    target.apply_sync(&changes).unwrap();
+
+    let normalize = |vault: &Vault| {
+        let mut records = vault.sync_records().unwrap();
+        records.sort_by(|a, b| (a.kind, &a.id).cmp(&(b.kind, &b.id)));
+        records
+    };
+    assert_eq!(normalize(&target), normalize(&source));
+    assert_eq!(
+        target.secret(bastion.id).unwrap(),
+        Some(password("hunter2"))
+    );
+    assert_eq!(
+        target.ssh_key_secret(key.id).unwrap().private_key.as_str(),
+        "PRIVATE laptop"
+    );
+    assert_eq!(target.preferences().unwrap().terminal.font_size, 16);
+
+    // Deleting the parent host removes its forward and secret too.
+    target
+        .apply_sync(&[SyncChange {
+            kind: "host".into(),
+            id: inner.id.to_string(),
+            body: None,
+        }])
+        .unwrap();
+    assert!(target.host(inner.id).is_err());
+    assert!(target.list_forwards(None).unwrap().is_empty());
+}
+
+#[test]
+fn sync_needs_an_unlocked_vault_and_validates_bodies() {
+    let (locked, _) = vault();
+    assert!(matches!(locked.sync_records(), Err(VaultError::Locked(_))));
+    let target = unlocked();
+    let bad = SyncChange {
+        kind: "snippet".into(),
+        id: "0190a0b0-0000-7000-8000-000000000009".into(),
+        body: Some(serde_json::json!({ "name": "logs", "command": "  ", "created_at": 0 })),
+    };
+    assert!(target.apply_sync(&[bad]).is_err());
+    let unknown = SyncChange {
+        kind: "from-the-future".into(),
+        id: "x".into(),
+        body: Some(serde_json::json!({})),
+    };
+    target.apply_sync(&[unknown]).unwrap();
+}
+
+#[test]
+fn sync_settings_keep_the_key_sealed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.db");
+    let cache = Arc::new(MemoryKeyCache::default());
+    {
+        let vault = Vault::open(&path, cache.clone()).unwrap();
+        assert_eq!(vault.try_unlock(), LockState::Unlocked);
+        assert_eq!(vault.sync_local().unwrap(), None);
+        let local = SyncLocal {
+            target: serde_json::json!({ "kind": "folder", "path": "/sync" }),
+            state: serde_json::json!({ "device": "d1" }),
+            key: Some(Zeroizing::new([9u8; 32])),
+        };
+        vault.set_sync_local(Some(&local)).unwrap();
+        // The key is not stored in the clear.
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let stored: String = conn
+            .query_row(
+                "SELECT value FROM preferences WHERE key = 'sync'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!stored.contains(&"09".repeat(32)));
+    }
+    let vault = Vault::open(&path, cache).unwrap();
+    // Locked: settings readable, key not.
+    let locked = vault.sync_local().unwrap().unwrap();
+    assert_eq!(locked.key, None);
+    assert_eq!(locked.target["path"], "/sync");
+    assert_eq!(vault.try_unlock(), LockState::Unlocked);
+    assert_eq!(
+        vault.sync_local().unwrap().unwrap().key.unwrap().as_slice(),
+        &[9u8; 32]
+    );
+    vault.set_sync_local(None).unwrap();
+    assert_eq!(vault.sync_local().unwrap(), None);
+}

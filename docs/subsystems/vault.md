@@ -92,6 +92,15 @@ pub trait KeyCache: Send + Sync {
 
 应用通过 `prefs_get` / `prefs_set` 和 `device_prefs_get` / `device_prefs_set` 命令读写偏好设置，后者同时把 `max_transfers` 应用到传输队列（启动时也会应用）；`fonts_monospace` 用 fontdb 列出本机已安装的等宽字体族（去重、按名称排序），供字体选择使用，移动端返回空列表。
 
+
+## 同步
+
+`src/sync.rs` 是 vault 一侧的同步接口，不涉及同步协议（见 [sync](sync.md)）：
+
+- `sync_records()` 列出全部可同步记录（种类 `prefs`、`host`、`key`、`host_secret`、`forward`、`snippet`，内容为 JSON）：主机不含连接时间，含检测到的系统；凭据与私钥为明文 JSON，交给同步引擎密封后才离开本机。需要已解锁，否则凭据会看似被删除并把删除扩散到其他设备。
+- `apply_sync(changes)` 写入来自其他设备的变更：先按父到子的顺序写入新增和修改，再按子到父删除；内容像本地编辑一样校验，引用的主机不存在时跳过对应的凭据与转发，未知种类忽略。密钥缺少私钥时保留本机已有的私钥。
+- `sync_local()` / `set_sync_local()` 读写本机的同步设置（后端位置、同步状态、同步密钥），存在 `preferences` 表的 `sync` 记录中，不参与同步；同步密钥用设备主密钥密封，锁定时读出为空。
+
 ## 表结构
 
 `meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`、`forwards`（外键级联删除）、`preferences`、`ssh_keys`、`snippets`。主机的路线和检测到的系统分别以 JSON 存在 `hosts.route`、`hosts.os` 列；`os` 无法解析时按未检测处理。编辑主机不会清除 `os`。结构版本记录在 `PRAGMA user_version`，当前版本为 8；打开旧版本数据库时按版本依次迁移。

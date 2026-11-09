@@ -12,6 +12,7 @@ mod model;
 mod prefs;
 mod snippets;
 mod store;
+mod sync;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -37,6 +38,7 @@ pub use prefs::{
 };
 pub use snippets::{Snippet, SnippetDraft, SnippetId};
 pub use store::{LockReason, LockState, MAX_JUMP_DEPTH, SCHEMA_VERSION, Vault};
+pub use sync::{SYNC_KINDS, SyncChange, SyncLocal, SyncRecord};
 
 /// Errors returned by the vault.
 #[derive(Debug, thiserror::Error)]
