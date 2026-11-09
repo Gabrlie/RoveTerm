@@ -48,7 +48,7 @@ pub trait KeyCache: Send + Sync {
 | `HostKey` | 服务器公钥：算法、OpenSSH 单行格式、`SHA256:` 指纹 |
 | `KnownHostStatus` | `Trusted`、`Unknown`、`Mismatch { expected_algorithm, expected_fingerprint }` |
 
-每台主机最多一条凭据。known_hosts 按（小写主机名, 端口）记录一把受信任的公钥。
+每台主机最多一条凭据。known_hosts 按（小写主机名, 端口, 路线）记录一把受信任的公钥，直连的路线为空字符串。
 
 保存主机时校验路线：代理地址与端口由 `HostDraft::validate` 检查；跳板机必须是另一台已存在的主机，沿跳板链不能回到自身，链长不超过 `MAX_JUMP_DEPTH`（4）。删除主机时，以它为跳板的主机改为直连。
 
@@ -81,4 +81,4 @@ pub trait KeyCache: Send + Sync {
 
 ## 表结构
 
-`meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`、`forwards`（外键级联删除）、`preferences`、`ssh_keys`、`snippets`。主机的路线以 JSON 存在 `hosts.route` 列。结构版本记录在 `PRAGMA user_version`，当前版本为 6；打开旧版本数据库时按版本依次迁移。
+`meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`、`forwards`（外键级联删除）、`preferences`、`ssh_keys`、`snippets`。主机的路线以 JSON 存在 `hosts.route` 列。结构版本记录在 `PRAGMA user_version`，当前版本为 7；打开旧版本数据库时按版本依次迁移。

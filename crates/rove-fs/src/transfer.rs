@@ -496,7 +496,9 @@ impl Runner {
         dst: &str,
     ) -> Result<(), FsError> {
         let fs = request.dst.as_ref();
-        let dir = fs.parent(dst).ok_or_else(|| FsError::InvalidPath(dst.to_owned()))?;
+        let dir = fs
+            .parent(dst)
+            .ok_or_else(|| FsError::InvalidPath(dst.to_owned()))?;
         let name: String = basename(dst).chars().take(100).collect();
         let temp = fs.join(&dir, &format!(".{name}.{}.part", self.update.id));
         let keep_mode = match fs.stat(dst).await {
@@ -520,7 +522,12 @@ impl Runner {
     /// Moves `temp` to `dst` without ever deleting `dst` while it is the only copy. When rename
     /// refuses an existing target (SFTP version 3), `dst` is first moved aside to `backup`, then
     /// `temp` takes its place and the backup is removed; if that fails the backup is moved back.
-    async fn replace(fs: &dyn FileSystem, temp: &str, dst: &str, backup: &str) -> Result<(), FsError> {
+    async fn replace(
+        fs: &dyn FileSystem,
+        temp: &str,
+        dst: &str,
+        backup: &str,
+    ) -> Result<(), FsError> {
         let first = match fs.rename(temp, dst).await {
             Ok(()) => return Ok(()),
             Err(error) => error,

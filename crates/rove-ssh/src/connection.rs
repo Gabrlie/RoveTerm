@@ -145,6 +145,7 @@ pub struct ConnectOptions {
 struct ClientHandler {
     hostname: String,
     port: u16,
+    route: String,
     verifier: Arc<dyn HostKeyVerifier>,
     rejection: Arc<Mutex<Option<HostKeyRejection>>>,
     routes: Arc<RemoteRoutes>,
@@ -178,7 +179,11 @@ impl client::Handler for ClientHandler {
             }
         };
         let verdict = match host_key(key) {
-            Ok(key) => self.verifier.verify(&self.hostname, self.port, &key).await,
+            Ok(key) => {
+                self.verifier
+                    .verify(&self.hostname, self.port, &self.route, &key)
+                    .await
+            }
             Err(rejection) => Err(rejection),
         };
         match verdict {
@@ -272,6 +277,7 @@ impl SshConnection {
         let handler = ClientHandler {
             hostname: target.hostname.clone(),
             port: target.port,
+            route: target.route.clone(),
             verifier,
             rejection: rejection.clone(),
             routes: routes.clone(),

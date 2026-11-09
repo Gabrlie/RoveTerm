@@ -54,6 +54,7 @@ export const zhCN: Messages = {
   'action.palette.open': '命令面板',
   'action.settings.open': '设置',
   'host.delete': '删除主机',
+  'hostkey.route': '路线',
   'home.title': '主页',
   'action.panel.right': '显示或隐藏状态与快捷指令面板',
   'action.panel.bottom': '显示或隐藏文件面板',

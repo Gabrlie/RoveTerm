@@ -19,6 +19,10 @@
     <dd>{prompt.key.algorithm}</dd>
     <dt>{t('hostkey.fingerprint')}</dt>
     <dd class="fingerprint">{prompt.key.fingerprint}</dd>
+    {#if prompt.route}
+      <dt>{t('hostkey.route')}</dt>
+      <dd class="fingerprint">{prompt.route}</dd>
+    {/if}
   </dl>
   {#snippet actions()}
     <button type="button" class="secondary" onclick={() => answer('reject')}>{t('hostkey.reject')}</button>

@@ -34,11 +34,13 @@ pub enum HostKeyRejection {
 /// Decides whether to trust a server's host key. Called once per new connection.
 #[async_trait]
 pub trait HostKeyVerifier: Send + Sync {
-    /// Returns `Ok(())` to continue the handshake.
+    /// Returns `Ok(())` to continue the handshake. `route` identifies how the server is reached
+    /// ([`crate::SshTarget::route`]); the same address on different routes is a different server.
     async fn verify(
         &self,
         hostname: &str,
         port: u16,
+        route: &str,
         key: &HostKey,
     ) -> Result<(), HostKeyRejection>;
 }
@@ -53,6 +55,8 @@ pub struct HostKeyPrompt {
     pub hostname: String,
     /// Target port.
     pub port: u16,
+    /// Route identity; empty for a direct connection.
+    pub route: String,
     /// The presented key.
     pub key: HostKey,
 }
@@ -90,6 +94,7 @@ impl HostKeyPrompts {
         &self,
         hostname: &str,
         port: u16,
+        route: &str,
         key: &HostKey,
     ) -> Result<HostKeyAnswer, HostKeyRejection> {
         let request_id = Uuid::now_v7().to_string();
@@ -99,6 +104,7 @@ impl HostKeyPrompts {
             request_id: request_id.clone(),
             hostname: hostname.to_owned(),
             port,
+            route: route.to_owned(),
             key: key.clone(),
         });
         let answer = tokio::time::timeout(self.timeout, rx).await;
@@ -138,12 +144,13 @@ impl HostKeyVerifier for VaultVerifier {
         &self,
         hostname: &str,
         port: u16,
+        route: &str,
         key: &HostKey,
     ) -> Result<(), HostKeyRejection> {
         let storage = |error: rove_vault::VaultError| HostKeyRejection::Storage(error.to_string());
         match self
             .vault
-            .check_host_key(hostname, port, key)
+            .check_host_key(hostname, port, route, key)
             .map_err(storage)?
         {
             KnownHostStatus::Trusted => Ok(()),
@@ -154,10 +161,10 @@ impl HostKeyVerifier for VaultVerifier {
                 expected_fingerprint,
                 presented_fingerprint: key.fingerprint.clone(),
             }),
-            KnownHostStatus::Unknown => match self.prompts.ask(hostname, port, key).await? {
+            KnownHostStatus::Unknown => match self.prompts.ask(hostname, port, route, key).await? {
                 HostKeyAnswer::Trust => self
                     .vault
-                    .trust_host_key(hostname, port, key)
+                    .trust_host_key(hostname, port, route, key)
                     .map_err(storage),
                 HostKeyAnswer::Reject => Err(HostKeyRejection::Declined),
             },

@@ -222,9 +222,50 @@ async fn declined_host_key_aborts_and_is_not_remembered() {
     assert_eq!(
         harness
             .vault
-            .check_host_key("127.0.0.1", harness.target().port, &probe)
+            .check_host_key("127.0.0.1", harness.target().port, "", &probe)
             .unwrap(),
         rove_vault::KnownHostStatus::Unknown
+    );
+}
+
+#[tokio::test]
+async fn host_keys_of_other_routes_do_not_conflict() {
+    let harness = Harness::new(DevConfig::demo()).await;
+    // A different server with the same address was trusted directly.
+    let other = devsshd::generate_key();
+    let recorded = HostKey {
+        algorithm: "ssh-ed25519".into(),
+        public_key: other.public_key().to_openssh().unwrap(),
+        fingerprint: other
+            .public_key()
+            .fingerprint(Default::default())
+            .to_string(),
+    };
+    harness
+        .vault
+        .trust_host_key("127.0.0.1", harness.target().port, "", &recorded)
+        .unwrap();
+    let (_answer, prompts) = harness.auto_answer(HostKeyAnswer::Trust);
+    let behind_jump = SshTarget {
+        route: "jump:demo@bastion:22/".into(),
+        ..harness.target()
+    };
+    let (output, _) = run_shell(
+        &harness.connector,
+        &behind_jump,
+        &password("demo"),
+        b"echo routed; exit\n",
+    )
+    .await;
+    assert!(output.contains("routed"), "{output}");
+    // Unknown on this route: asked once and remembered for it, the direct record untouched.
+    assert_eq!(prompts.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        harness
+            .vault
+            .check_host_key("127.0.0.1", harness.target().port, "", &recorded)
+            .unwrap(),
+        rove_vault::KnownHostStatus::Trusted
     );
 }
 
@@ -242,7 +283,7 @@ async fn changed_host_key_is_rejected_without_prompt() {
     };
     harness
         .vault
-        .trust_host_key("127.0.0.1", harness.target().port, &recorded)
+        .trust_host_key("127.0.0.1", harness.target().port, "", &recorded)
         .unwrap();
     let (_answer, prompts) = harness.auto_answer(HostKeyAnswer::Trust);
     let result = harness

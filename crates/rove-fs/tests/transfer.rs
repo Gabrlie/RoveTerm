@@ -226,7 +226,9 @@ impl FileSystem for Hostile {
     }
     async fn rename(&self, from: &str, to: &str) -> Result<(), rove_fs::FsError> {
         if self.rename_fails && from.ends_with(".part") {
-            return Err(rove_fs::FsError::Io(format!("injected rename failure: {from}")));
+            return Err(rove_fs::FsError::Io(format!(
+                "injected rename failure: {from}"
+            )));
         }
         LocalFs.rename(from, to).await
     }

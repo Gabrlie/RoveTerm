@@ -17,7 +17,7 @@ use crate::{
 };
 
 /// Version of the on-disk schema, stored in `PRAGMA user_version`. Only ever increases.
-pub const SCHEMA_VERSION: i32 = 6;
+pub const SCHEMA_VERSION: i32 = 7;
 
 /// Longest chain of jump hosts a route may form.
 pub const MAX_JUMP_DEPTH: usize = 4;
@@ -542,19 +542,23 @@ impl Vault {
         Ok(())
     }
 
-    /// Compares `key` with the trusted key recorded for `hostname:port`.
+    /// Compares `key` with the trusted key recorded for `hostname:port` reached along `route`
+    /// (empty for direct connections). The same address behind different jump hosts or proxies
+    /// is a different server and has its own record.
     pub fn check_host_key(
         &self,
         hostname: &str,
         port: u16,
+        route: &str,
         key: &HostKey,
     ) -> Result<KnownHostStatus, VaultError> {
         let recorded: Option<(String, String, String)> = self
             .conn
             .lock()
             .query_row(
-                "SELECT algorithm, public_key, fingerprint FROM known_hosts WHERE hostname = ?1 AND port = ?2",
-                params![hostname.to_ascii_lowercase(), port],
+                "SELECT algorithm, public_key, fingerprint FROM known_hosts
+                 WHERE hostname = ?1 AND port = ?2 AND route = ?3",
+                params![hostname.to_ascii_lowercase(), port, route],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
@@ -568,19 +572,23 @@ impl Vault {
         })
     }
 
-    /// Records `key` as the trusted key of `hostname:port`, replacing any previous key.
+    /// Records `key` as the trusted key of `hostname:port` along `route`, replacing any previous
+    /// key of that triple.
     pub fn trust_host_key(
         &self,
         hostname: &str,
         port: u16,
+        route: &str,
         key: &HostKey,
     ) -> Result<(), VaultError> {
         self.conn.lock().execute(
-            "INSERT OR REPLACE INTO known_hosts (hostname, port, algorithm, public_key, fingerprint, added_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT OR REPLACE INTO known_hosts
+             (hostname, port, route, algorithm, public_key, fingerprint, added_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 hostname.to_ascii_lowercase(),
                 port,
+                route,
                 key.algorithm,
                 key.public_key,
                 key.fingerprint,
@@ -751,6 +759,29 @@ fn migrate(conn: &Connection) -> Result<(), VaultError> {
                  updated_at INTEGER NOT NULL
              );
              PRAGMA user_version = 6;
+             COMMIT;",
+        )?;
+    }
+    if version < 7 {
+        // SQLite cannot change a primary key in place: rebuild the table with `route` in it.
+        // Existing records were all direct connections.
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE known_hosts_v7 (
+                 hostname TEXT NOT NULL,
+                 port INTEGER NOT NULL,
+                 route TEXT NOT NULL DEFAULT '',
+                 algorithm TEXT NOT NULL,
+                 public_key TEXT NOT NULL,
+                 fingerprint TEXT NOT NULL,
+                 added_at INTEGER NOT NULL,
+                 PRIMARY KEY (hostname, port, route)
+             );
+             INSERT INTO known_hosts_v7 (hostname, port, route, algorithm, public_key, fingerprint, added_at)
+                 SELECT hostname, port, '', algorithm, public_key, fingerprint, added_at FROM known_hosts;
+             DROP TABLE known_hosts;
+             ALTER TABLE known_hosts_v7 RENAME TO known_hosts;
+             PRAGMA user_version = 7;
              COMMIT;",
         )?;
     }

@@ -101,7 +101,9 @@ impl FileSystem for LocalFs {
             permissions.set_readonly(mode & 0o200 == 0);
             permissions
         };
-        tokio::fs::set_permissions(path, permissions).await.map_err(io)
+        tokio::fs::set_permissions(path, permissions)
+            .await
+            .map_err(io)
     }
 
     async fn mkdir(&self, path: &str) -> Result<(), FsError> {

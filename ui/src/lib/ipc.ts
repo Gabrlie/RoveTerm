@@ -226,6 +226,8 @@ export interface HostKeyPrompt {
   request_id: string;
   hostname: string;
   port: number;
+  /** How the server is reached; empty for a direct connection. */
+  route: string;
   key: { algorithm: string; public_key: string; fingerprint: string };
 }
 

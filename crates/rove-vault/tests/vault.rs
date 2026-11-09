@@ -160,27 +160,27 @@ fn known_hosts_detect_unknown_trusted_and_mismatch() {
     };
     assert_eq!(
         vault
-            .check_host_key("Example.com", 22, &key("AAA"))
+            .check_host_key("Example.com", 22, "", &key("AAA"))
             .unwrap(),
         KnownHostStatus::Unknown
     );
     vault
-        .trust_host_key("Example.com", 22, &key("AAA"))
+        .trust_host_key("Example.com", 22, "", &key("AAA"))
         .unwrap();
     assert_eq!(
         vault
-            .check_host_key("example.com", 22, &key("AAA"))
+            .check_host_key("example.com", 22, "", &key("AAA"))
             .unwrap(),
         KnownHostStatus::Trusted
     );
     assert_eq!(
         vault
-            .check_host_key("example.com", 2222, &key("AAA"))
+            .check_host_key("example.com", 2222, "", &key("AAA"))
             .unwrap(),
         KnownHostStatus::Unknown
     );
     assert!(matches!(
-        vault.check_host_key("example.com", 22, &key("BBB")).unwrap(),
+        vault.check_host_key("example.com", 22, "", &key("BBB")).unwrap(),
         KnownHostStatus::Mismatch { expected_fingerprint, .. } if expected_fingerprint == "SHA256:AAA"
     ));
 }
@@ -306,6 +306,7 @@ fn version_one_databases_migrate_to_the_current_schema() {
                  added_at INTEGER NOT NULL, PRIMARY KEY (hostname, port));
              INSERT INTO hosts VALUES ('0190a0b0-0000-7000-8000-000000000001', 'old', NULL, 'old.lan',
                  22, 'root', '{"method":"agent"}', '[]', 0, 0);
+             INSERT INTO known_hosts VALUES ('old.lan', 22, 'ssh-ed25519', 'ssh-ed25519 OLD', 'SHA256:OLD', 0);
              PRAGMA user_version = 1;"#,
         )
         .unwrap();
@@ -316,6 +317,15 @@ fn version_one_databases_migrate_to_the_current_schema() {
     let hosts = vault.list_hosts().unwrap();
     assert_eq!(hosts.len(), 1);
     assert_eq!(hosts[0].route, HostRoute::Direct);
+    let old_key = HostKey {
+        algorithm: "ssh-ed25519".into(),
+        public_key: "ssh-ed25519 OLD".into(),
+        fingerprint: "SHA256:OLD".into(),
+    };
+    assert_eq!(
+        vault.check_host_key("old.lan", 22, "", &old_key).unwrap(),
+        KnownHostStatus::Trusted
+    );
     let conn = rusqlite::Connection::open(&path).unwrap();
     let version: i32 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
@@ -514,5 +524,40 @@ fn snippets_round_trip() {
     assert!(matches!(
         vault.delete_snippet(snippet.id),
         Err(VaultError::SnippetNotFound(_))
+    ));
+}
+
+#[test]
+fn known_hosts_are_separate_per_route() {
+    let (vault, _) = vault();
+    let key = |data: &str| HostKey {
+        algorithm: "ssh-ed25519".into(),
+        public_key: format!("ssh-ed25519 {data}"),
+        fingerprint: format!("SHA256:{data}"),
+    };
+    vault
+        .trust_host_key("10.0.0.1", 22, "jump:a", &key("A"))
+        .unwrap();
+    // The same address behind another jump host is unknown, not a mismatch.
+    assert_eq!(
+        vault
+            .check_host_key("10.0.0.1", 22, "jump:b", &key("B"))
+            .unwrap(),
+        KnownHostStatus::Unknown
+    );
+    vault
+        .trust_host_key("10.0.0.1", 22, "jump:b", &key("B"))
+        .unwrap();
+    assert_eq!(
+        vault
+            .check_host_key("10.0.0.1", 22, "jump:a", &key("A"))
+            .unwrap(),
+        KnownHostStatus::Trusted
+    );
+    assert!(matches!(
+        vault
+            .check_host_key("10.0.0.1", 22, "jump:a", &key("B"))
+            .unwrap(),
+        KnownHostStatus::Mismatch { .. }
     ));
 }
