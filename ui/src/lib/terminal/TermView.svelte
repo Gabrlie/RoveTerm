@@ -17,6 +17,7 @@
   import { errorText, t } from '../i18n';
   import { currentTheme } from './theme';
   import { isAppShortcut } from '../actions';
+  import { prefs, SYMBOL_FONT } from '../settings/prefs.svelte';
 
   interface Props {
     open: (size: TermSize, onOutput: (message: OutputMessage) => void) => Promise<SessionId>;
@@ -35,6 +36,7 @@
   let sessionId: SessionId | undefined;
   let observer: ResizeObserver | undefined;
   let frame = 0;
+  let destroyed = false;
   let lastSize: TermSize = { cols: 0, rows: 0 };
   const media = matchMedia('(prefers-color-scheme: dark)');
 
@@ -117,14 +119,41 @@
     if (term) term.options.theme = currentTheme();
   }
 
+  /** Waits for the fonts the terminal draws with, so glyphs are not measured or cached before they load. */
+  async function loadFonts(size: number): Promise<void> {
+    const families = [SYMBOL_FONT, prefs.value.terminal.font_family].filter(Boolean);
+    try {
+      await Promise.all(families.map((family) => document.fonts.load(`${size}px "${family}"`, '\ue0b0a')));
+    } catch (error) {
+      console.info('terminal fonts not preloaded', error);
+    }
+  }
+
+  // Applies preference changes to a running terminal.
+  $effect(() => {
+    const { font_size: fontSize, line_height: lineHeight } = prefs.value.terminal;
+    const fontFamily = prefs.terminalFontFamily;
+    const target = term;
+    if (!target) return;
+    void loadFonts(fontSize).then(() => {
+      if (target !== term) return;
+      target.options.fontFamily = fontFamily;
+      target.options.fontSize = fontSize;
+      target.options.lineHeight = lineHeight;
+      scheduleRefit();
+    });
+  });
+
   onMount(async () => {
-    const styles = getComputedStyle(document.documentElement);
+    const { font_size: fontSize, line_height: lineHeight } = prefs.value.terminal;
+    await loadFonts(fontSize);
+    if (destroyed) return;
     term = new Terminal({
       allowProposedApi: true,
       cursorBlink: true,
-      fontFamily: styles.getPropertyValue('--font-mono').trim() || 'monospace',
-      fontSize: 13,
-      lineHeight: 1.15,
+      fontFamily: prefs.terminalFontFamily,
+      fontSize,
+      lineHeight,
       scrollback: 5000,
       theme: currentTheme(),
     });
@@ -168,6 +197,7 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
     cancelAnimationFrame(frame);
     observer?.disconnect();
     media.removeEventListener('change', applyTheme);

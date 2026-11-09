@@ -14,9 +14,10 @@
     onedit: (host: HostEntry | null) => void;
     onquick: () => void;
     onnotice: (message: string) => void;
+    onsettings: () => void;
   }
 
-  let { onconnect, onfiles, onforwards, onedit, onquick, onnotice }: Props = $props();
+  let { onconnect, onfiles, onforwards, onedit, onquick, onnotice, onsettings }: Props = $props();
 
   async function importConfig(): Promise<void> {
     try {
@@ -86,10 +87,13 @@
       <p class="empty">{hosts.query ? t('host.noMatch') : t('host.empty')}</p>
     {/each}
   </div>
-  <button type="button" class="vault" class:unlocked={vault.unlocked} onclick={unlock} disabled={vault.unlocked}>
-    <Icon name={vault.unlocked ? 'unlock' : 'lock'} size={14} />
-    <span>{vault.unlocked ? t('vault.unlocked') : vault.keyLost ? t('vault.keyLost') : t('vault.locked')}</span>
-  </button>
+  <footer>
+    <button type="button" class="vault" class:unlocked={vault.unlocked} onclick={unlock} disabled={vault.unlocked}>
+      <Icon name={vault.unlocked ? 'unlock' : 'lock'} size={14} />
+      <span>{vault.unlocked ? t('vault.unlocked') : vault.keyLost ? t('vault.keyLost') : t('vault.locked')}</span>
+    </button>
+    <IconButton icon="settings" label={t('action.settings.open')} small onclick={onsettings} />
+  </footer>
 </aside>
 
 <style>
@@ -199,11 +203,16 @@
     color: var(--fg-muted);
     font-size: var(--text-footnote);
   }
+  footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: var(--space-2);
+  }
   .vault {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    margin: var(--space-2);
     padding: var(--space-1) var(--space-2);
     border: none;
     border-radius: var(--radius-sm);

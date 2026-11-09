@@ -164,6 +164,31 @@ export function vaultResetSecrets(): Promise<LockState> {
   return invoke('vault_reset_secrets');
 }
 
+/** Terminal appearance; see `TerminalPrefs` in rove-vault. */
+export interface TerminalPrefs {
+  /** Empty uses the built-in font stack. */
+  font_family: string;
+  font_size: number;
+  line_height: number;
+}
+
+export interface Preferences {
+  terminal: TerminalPrefs;
+}
+
+export function prefsGet(): Promise<Preferences> {
+  return invoke('prefs_get');
+}
+
+export function prefsSet(prefs: Preferences): Promise<Preferences> {
+  return invoke('prefs_set', { prefs });
+}
+
+/** Installed monospaced font families; empty where they cannot be listed. */
+export function fontsMonospace(): Promise<string[]> {
+  return invoke('fonts_monospace');
+}
+
 export function onVaultState(handler: (state: LockState) => void): Promise<UnlistenFn> {
   return listen<LockState>('vault-state', (event) => handler(event.payload));
 }

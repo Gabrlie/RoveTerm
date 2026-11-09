@@ -6,6 +6,7 @@
   import HostSidebar from './lib/hosts/HostSidebar.svelte';
   import HostEditor from './lib/hosts/HostEditor.svelte';
   import PasswordPrompt from './lib/hosts/PasswordPrompt.svelte';
+  import SettingsDialog from './lib/settings/SettingsDialog.svelte';
   import QuickConnect from './lib/hosts/QuickConnect.svelte';
   import HostKeyDialog from './lib/hosts/HostKeyDialog.svelte';
   import ForwardsDialog from './lib/forwards/ForwardsDialog.svelte';
@@ -31,6 +32,7 @@
   let passwordRequest = $state<PasswordRequest | null>(null);
   let hostKeyPrompts = $state<HostKeyPrompt[]>([]);
   let forwardsHost = $state<HostEntry | null>(null);
+  let settingsOpen = $state(false);
   let notice = $state('');
   let noticeTimer = 0;
 
@@ -144,6 +146,9 @@
       case 'palette.open':
         paletteOpen = true;
         break;
+      case 'settings.open':
+        settingsOpen = true;
+        break;
       case 'host.quickConnect':
         quickOpen = true;
         break;
@@ -191,7 +196,7 @@
 
 <div class="app">
   {#if sidebarOpen}
-    <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onquick={() => (quickOpen = true)} onnotice={showNotice} />
+    <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onquick={() => (quickOpen = true)} onnotice={showNotice} onsettings={() => (settingsOpen = true)} />
   {/if}
   <div class="main">
     <TabBar onnew={() => run('tab.newLocal')} />
@@ -238,6 +243,10 @@
     onsubmit={submitPassword}
     onclose={() => (passwordRequest = null)}
   />
+{/if}
+
+{#if settingsOpen}
+  <SettingsDialog onclose={() => (settingsOpen = false)} />
 {/if}
 
 {#if forwardsHost}

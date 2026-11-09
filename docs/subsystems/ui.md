@@ -20,8 +20,10 @@
 | `src/lib/forwards/` | 端口转发对话框 `ForwardsDialog`、转发状态 `forwards.svelte.ts` |
 | `src/lib/hosts/` | 主机列表与搜索、主机编辑、快速连接、密码输入、host key 确认 |
 | `src/lib/vault/vault.svelte.ts` | vault 锁定状态，以及由用户操作触发的解锁和重置 |
+| `src/lib/settings/` | 偏好设置 `prefs.svelte.ts`（启动时在挂载前加载）与设置对话框 `SettingsDialog` |
 | `src/lib/i18n/` | 文案字典与 `t()`、`errorText()` |
 | `src/styles/tokens.css` | 设计 token：颜色、间距（4px 网格）、圆角、字号、字体 |
+| `src/styles/fonts.css`、`src/assets/fonts/` | 内置的 Symbols Nerd Font Mono 及其许可说明 |
 
 ## TermView
 
@@ -34,6 +36,7 @@
 - 每次 `fit` 之后重绘可见区域，避免画布尺寸变化后留白。
 - 注册 `attachCustomKeyEventHandler`，应用快捷键不会再发给 shell。
 - 跟随系统亮暗主题切换配色。
+- 字体、字号、行高取自偏好设置，修改后对已打开的终端立即生效。字体栈依次为用户选择的字体、`--font-mono` 内置字体栈（以 `monospace` 结尾）、内置的 Symbols Nerd Font Mono；符号字体放在最后，因为第一个可用字体决定行高度量。创建终端和切换字体前先等待字体加载，避免字形在加载前被测量或缓存。
 - 组件提供 `focus()`、`selection()`、`paste(text)` 方法。
 
 ## 标签与分屏
@@ -62,6 +65,10 @@
 - 编辑器按类型显示字段和说明；本地或动态转发的监听地址不是回环地址时显示警告。勾选"自动启动"的规则在打开该主机的终端时启动。
 - 启动时需要密码（`ssh.credentials_required`）就在该规则下显示密码框，可以勾选记住密码。
 - `forwards.svelte.ts` 监听 `forward-update` 事件；主机栏在有运行中的转发时，在主机名旁显示转发数。
+
+## 设置
+
+主机栏底部的齿轮按钮或 `App+,` 打开设置对话框。终端字体从 `fonts_monospace` 返回的本机等宽字体中选择，已保存但不再安装的字体仍保留在列表里；字号 8–32，行高 1.0–2.0。预览区用草稿字体显示 Powerline 与 Nerd Font 图标；保存后由后端校验并写入 vault，再更新 `prefs`。
 
 ## 主机与凭据
 
@@ -95,6 +102,7 @@
 | 切换到第 N 个标签 | `App+1` … `App+9` |
 | 复制 / 粘贴 | `App+C` / `App+V` |
 | 命令面板 | `App+P` |
+| 设置 | `App+,` |
 | 快速连接 | `App+K` |
 | 新建主机 | `App+N` |
 | 显示或隐藏主机栏 | `App+B` |

@@ -1,0 +1,6 @@
+/* Bundled fonts. The symbol font is a fallback for Powerline and Nerd Font icons in the terminal. */
+@font-face {
+  font-family: 'Symbols Nerd Font Mono';
+  src: url('../assets/fonts/SymbolsNerdFontMono-Regular.woff2') format('woff2');
+  font-display: block;
+}

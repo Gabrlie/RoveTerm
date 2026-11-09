@@ -37,6 +37,7 @@ import forwards from 'remixicon/icons/Arrows/arrow-left-right-line.svg?raw';
 import play from 'remixicon/icons/Media/play-line.svg?raw';
 import stop from 'remixicon/icons/Media/stop-line.svg?raw';
 import warning from 'remixicon/icons/System/error-warning-line.svg?raw';
+import settings from 'remixicon/icons/System/settings-3-line.svg?raw';
 
 export const icons = {
   add,
@@ -77,6 +78,7 @@ export const icons = {
   play,
   stop,
   warning,
+  settings,
 } as const;
 
 export type IconName = keyof typeof icons;
