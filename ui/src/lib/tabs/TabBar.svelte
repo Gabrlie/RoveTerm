@@ -10,9 +10,13 @@
     sidebarOpen: boolean;
     /** Shows the collapsed sidebar again. */
     onsidebar: () => void;
+    rightOpen: boolean;
+    bottomOpen: boolean;
+    ontoggleright: () => void;
+    ontogglebottom: () => void;
   }
 
-  let { onnew, sidebarOpen, onsidebar }: Props = $props();
+  let { onnew, sidebarOpen, onsidebar, rightOpen, bottomOpen, ontoggleright, ontogglebottom }: Props = $props();
 
   function title(tabId: string): string {
     const tab = workspace.tabs.find((candidate) => candidate.id === tabId);
@@ -63,6 +67,9 @@
     </div>
   {/each}
   <IconButton icon="add" label={t('tab.new')} onclick={onnew} />
+  <span class="spacer"></span>
+  <IconButton icon="panelBottom" label={t('action.panel.bottom')} active={bottomOpen} onclick={ontogglebottom} />
+  <IconButton icon="panelRight" label={t('action.panel.right')} active={rightOpen} onclick={ontoggleright} />
 </div>
 
 <style>
@@ -89,6 +96,9 @@
     color: var(--fg-muted);
     cursor: pointer;
     user-select: none;
+  }
+  .spacer {
+    flex: 1;
   }
   .tab.home {
     flex: none;

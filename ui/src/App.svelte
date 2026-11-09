@@ -10,6 +10,8 @@
   import ConfirmHost from './lib/ui/ConfirmHost.svelte';
   import KeysDialog from './lib/keys/KeysDialog.svelte';
   import HomePage from './lib/home/HomePage.svelte';
+  import RightPanel from './lib/panels/RightPanel.svelte';
+  import BottomPanel from './lib/panels/BottomPanel.svelte';
   import { keys } from './lib/keys/keys.svelte';
   import QuickConnect from './lib/hosts/QuickConnect.svelte';
   import HostKeyDialog from './lib/hosts/HostKeyDialog.svelte';
@@ -47,8 +49,58 @@
     }
   }
 
+  function storedSize(key: string, fallback: number): number {
+    try {
+      const value = Number(localStorage.getItem(key));
+      return Number.isFinite(value) && value > 0 ? value : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  function storeSize(key: string, value: number): void {
+    try {
+      localStorage.setItem(key, String(Math.round(value)));
+    } catch {
+      // Storage unavailable: the size lasts for this run only.
+    }
+  }
+
   let sidebarOpen = $state(stored('ui.sidebar', true));
   $effect(() => store('ui.sidebar', sidebarOpen));
+  let rightOpen = $state(stored('ui.panel.right', false));
+  $effect(() => store('ui.panel.right', rightOpen));
+  let bottomOpen = $state(stored('ui.panel.bottom', false));
+  $effect(() => store('ui.panel.bottom', bottomOpen));
+  let rightSize = $state(storedSize('ui.panel.rightSize', 300));
+  $effect(() => storeSize('ui.panel.rightSize', rightSize));
+  let bottomSize = $state(storedSize('ui.panel.bottomSize', 260));
+  $effect(() => storeSize('ui.panel.bottomSize', bottomSize));
+
+  /** Drags a panel edge; `apply` receives the pointer movement since the drag started. */
+  function dragEdge(event: PointerEvent, apply: (delta: number) => void, axis: 'x' | 'y'): void {
+    const handle = event.currentTarget as HTMLElement;
+    handle.setPointerCapture(event.pointerId);
+    const start = axis === 'x' ? event.clientX : event.clientY;
+    const move = (moveEvent: PointerEvent): void => apply((axis === 'x' ? moveEvent.clientX : moveEvent.clientY) - start);
+    const end = (): void => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', end);
+      handle.removeEventListener('pointercancel', end);
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+  }
+
+  function resizeRight(event: PointerEvent): void {
+    const initial = rightSize;
+    dragEdge(event, (delta) => (rightSize = Math.min(Math.max(initial - delta, 220), window.innerWidth * 0.6)), 'x');
+  }
+
+  function resizeBottom(event: PointerEvent): void {
+    const initial = bottomSize;
+    dragEdge(event, (delta) => (bottomSize = Math.min(Math.max(initial - delta, 140), window.innerHeight * 0.7)), 'y');
+  }
   let quickOpen = $state(false);
   let editing = $state<HostEntry | null | undefined>(undefined);
   let passwordRequest = $state<PasswordRequest | null>(null);
@@ -177,6 +229,12 @@
       case 'keys.manage':
         keysOpen = true;
         break;
+      case 'panel.right':
+        rightOpen = !rightOpen;
+        break;
+      case 'panel.bottom':
+        bottomOpen = !bottomOpen;
+        break;
       case 'host.quickConnect':
         quickOpen = true;
         break;
@@ -227,7 +285,17 @@
     <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onquick={() => (quickOpen = true)} onnotice={showNotice} onsettings={() => (settingsOpen = true)} onkeys={() => (keysOpen = true)} oncollapse={() => (sidebarOpen = false)} />
   {/if}
   <div class="main">
-    <TabBar onnew={() => workspace.activate(HOME_TAB)} {sidebarOpen} onsidebar={() => (sidebarOpen = true)} />
+    <TabBar
+      onnew={() => workspace.activate(HOME_TAB)}
+      {sidebarOpen}
+      onsidebar={() => (sidebarOpen = true)}
+      {rightOpen}
+      {bottomOpen}
+      ontoggleright={() => (rightOpen = !rightOpen)}
+      ontogglebottom={() => (bottomOpen = !bottomOpen)}
+    />
+    <div class="workarea">
+    <div class="center">
     <main class="stage">
       {#each workspace.tabs as tab (tab.id)}
         <PaneGrid
@@ -247,6 +315,20 @@
         />
       {/if}
     </main>
+    {#if bottomOpen}
+      <div class="edge horizontal" role="separator" aria-orientation="horizontal" onpointerdown={resizeBottom}></div>
+      <div class="bottom" style:height="{bottomSize}px">
+        <BottomPanel onclose={() => (bottomOpen = false)} />
+      </div>
+    {/if}
+    </div>
+    {#if rightOpen}
+      <div class="edge vertical" role="separator" aria-orientation="vertical" onpointerdown={resizeRight}></div>
+      <div class="right" style:width="{rightSize}px">
+        <RightPanel onclose={() => (rightOpen = false)} />
+      </div>
+    {/if}
+    </div>
   </div>
 </div>
 
@@ -316,11 +398,45 @@
     display: flex;
     flex-direction: column;
   }
+  .workarea {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+  .center {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
   .stage {
     position: relative;
     flex: 1;
     min-height: 0;
     background: var(--term-bg);
+  }
+  .bottom,
+  .right {
+    flex: none;
+    min-height: 0;
+    min-width: 0;
+  }
+  .edge {
+    flex: none;
+    background: transparent;
+  }
+  .edge.horizontal {
+    height: 4px;
+    border-top: 1px solid var(--border);
+    cursor: row-resize;
+  }
+  .edge.vertical {
+    width: 4px;
+    border-left: 1px solid var(--border);
+    cursor: col-resize;
+  }
+  .edge:hover {
+    background: color-mix(in srgb, var(--accent) 35%, transparent);
   }
   .notice {
     position: fixed;

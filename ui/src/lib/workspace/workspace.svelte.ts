@@ -65,6 +65,25 @@ export function filesTargetFor(target: PaneTarget): PaneTarget | null {
   }
 }
 
+/** The remote behind a pane, or null for local terminals. Panels follow the focused pane's remote. */
+export function remoteSourceOf(target: PaneTarget): RemoteSource | null {
+  switch (target.kind) {
+    case 'local':
+      return null;
+    case 'ssh':
+      return { hostId: target.hostId };
+    case 'quick':
+      return { address: target.address };
+    case 'sftp':
+      return target.source;
+  }
+}
+
+/** Stable key of a remote, to remount views when it changes. */
+export function sourceKey(source: RemoteSource): string {
+  return 'hostId' in source ? `host:${source.hostId}` : `quick:${source.address}`;
+}
+
 /** Id of the pinned home tab, which lists saved hosts and has no panes. */
 export const HOME_TAB = 'home';
 

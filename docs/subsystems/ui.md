@@ -21,6 +21,7 @@
 | `src/lib/hosts/` | 主机列表与搜索、主机编辑、快速连接、密码输入、host key 确认 |
 | `src/lib/vault/vault.svelte.ts` | vault 锁定状态，以及由用户操作触发的解锁和重置 |
 | `src/lib/home/HomePage.svelte` | 首页：主机卡片按最近连接排序，快速连接、新建主机、本地终端入口 |
+| `src/lib/panels/` | 工作区面板：右侧 `RightPanel`（`StatusPanel` 服务器状态、`SnippetsPanel` 快捷指令），底部 `BottomPanel`（文件） |
 | `src/lib/keys/` | 密钥库对话框 `KeysDialog` 与密钥列表 `keys.svelte.ts` |
 | `src/lib/settings/` | 偏好设置 `prefs.svelte.ts`（启动时在挂载前加载）与设置对话框 `SettingsDialog` |
 | `src/lib/i18n/` | 文案字典与 `t()`、`errorText()` |
@@ -71,6 +72,15 @@
 - 编辑器按类型显示字段和说明；本地或动态转发的监听地址不是回环地址时显示警告。勾选"自动启动"的规则在打开该主机的终端时启动。
 - 启动时需要密码（`ssh.credentials_required`）就在该规则下显示密码框，可以勾选记住密码。
 - `forwards.svelte.ts` 监听 `forward-update` 事件；主机栏在有运行中的转发时，在主机名旁显示转发数。
+
+## 工作区面板
+
+终端区域右侧和下方各有一个可开关、可拖动边缘调整大小的面板，开关状态和尺寸按设备记在 localStorage。它们都跟随当前聚焦面板所在的远程主机（`remoteSourceOf`），主机变化时重新挂载；聚焦本地终端或首页时显示提示。
+
+- 右侧面板（`App+L` 或标签栏右侧按钮）：
+  - 状态：每 3 秒调用 `server_stats` 采样，用两次采样的差值计算 CPU 使用率和网速，显示主机名、内核、运行时间、CPU 与负载、内存与交换分区、根分区、网络。只使用已有连接，没有连接或非 Linux 服务器时显示说明。
+  - 快捷指令：搜索、新建、编辑、删除；"插入"以 bracketed paste 写入聚焦终端（不执行），"运行"把命令（多行按行）连同回车一次写入会话，保证回车不会先于命令到达。
+- 底部面板（`App+J` 或标签栏右侧按钮）：用 `FileBrowser` 显示聚焦终端所在主机的文件，复用同一条共享连接。聚焦的是文件面板时不重复显示。
 
 ## 密钥库
 
@@ -126,6 +136,8 @@
 | 复制 / 粘贴 | `App+C` / `App+V` |
 | 命令面板 | `App+P` |
 | 设置 | `App+,` |
+| 状态与快捷指令面板 | `App+L` |
+| 文件面板 | `App+J` |
 | 快速连接 | `App+K` |
 | 新建主机 | `App+N` |
 | 显示或隐藏主机栏 | `App+B` |
