@@ -74,10 +74,11 @@ pub async fn sftp_open(
     host_id: Option<String>,
     address: Option<String>,
     password: Option<String>,
+    password_kind: Option<String>,
     remember: bool,
 ) -> Result<SftpOpened, CommandError> {
-    let source = Source::from_args(host_id, address, password, remember)?;
-    let sftp = with_connection(&state, &source, |connection| async move {
+    let source = Source::from_args(host_id, address, password, password_kind, remember)?;
+    let sftp = with_connection(&state, &source, None, |connection| async move {
         connection.open_sftp().await
     })
     .await?;

@@ -5,20 +5,37 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use rove_ssh::{AuthSpec, SshConnection, SshError, SshTarget, Via, parse_quick_connect};
+use rove_ssh::{AuthSpec, Progress, SshConnection, SshError, SshTarget, Via, parse_quick_connect};
 use rove_vault::{AuthMethod, Host, HostId, HostRoute, MAX_JUMP_DEPTH, Secret};
 use zeroize::Zeroizing;
 
 use crate::error::CommandError;
 use crate::state::AppState;
 
+/// What a value typed for a saved host is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypedKind {
+    /// The credential the host's method asks for: a password for password hosts, a passphrase
+    /// for key hosts.
+    Natural,
+    /// A login password, whatever the host's method; used to retry after key authentication
+    /// failed. Never remembered for hosts that do not use passwords.
+    Password,
+}
+
+/// A value typed by the user for one attempt.
+pub struct Typed {
+    pub value: Zeroizing<String>,
+    pub kind: TypedKind,
+}
+
 /// Where to connect, as given by the WebView.
 pub enum Source {
-    /// A saved host. `password` was typed for this attempt; with `remember` it is stored after a
+    /// A saved host. `typed` was entered for this attempt; with `remember` it is stored after a
     /// successful login.
     Host {
         host_id: HostId,
-        password: Option<Zeroizing<String>>,
+        typed: Option<Typed>,
         remember: bool,
     },
     /// A quick-connect string; without `password` the SSH agent is used.
@@ -30,17 +47,33 @@ pub enum Source {
 
 impl Source {
     /// Builds a source from command arguments; exactly one of `host_id` and `address` is required.
+    /// `password_kind` is `"password"` to log in to a key host with a password; otherwise the
+    /// typed value is what the host's method asks for.
     pub fn from_args(
         host_id: Option<String>,
         address: Option<String>,
         password: Option<String>,
+        password_kind: Option<String>,
         remember: bool,
     ) -> Result<Self, CommandError> {
         let password = password.map(Zeroizing::new);
+        let kind = match password_kind.as_deref() {
+            None | Some("natural") => TypedKind::Natural,
+            Some("password") => TypedKind::Password,
+            Some(other) => {
+                return Err(CommandError::new(
+                    "input.invalid",
+                    format!(
+                        "unknown password kind `{}`",
+                        other.chars().take(32).collect::<String>()
+                    ),
+                ));
+            }
+        };
         match (host_id, address) {
             (Some(host_id), None) => Ok(Self::Host {
                 host_id: host_id.parse()?,
-                password,
+                typed: password.map(|value| Typed { value, kind }),
                 remember,
             }),
             (None, Some(address)) => Ok(Self::Quick { address, password }),
@@ -71,14 +104,16 @@ pub fn quick_target(address: &str) -> Result<SshTarget, CommandError> {
     })
 }
 
-/// Runs `op` on a connection for `source`.
+/// Runs `op` on a connection for `source`, reporting connection steps to `progress`.
 ///
 /// A live shared connection is tried first without credentials; when it can no longer open
 /// channels it is evicted and a new connection is made. Fails with `ssh.credentials_required`
-/// when a password must be asked for first.
+/// when a password must be asked for first. A successful saved-host connection updates its
+/// last connection time.
 pub async fn with_connection<T, F, Fut>(
     state: &AppState,
     source: &Source,
+    progress: Option<Progress>,
     op: F,
 ) -> Result<T, CommandError>
 where
@@ -88,20 +123,35 @@ where
     match source {
         Source::Host {
             host_id,
-            password,
+            typed,
             remember,
         } => {
             let host = state.vault.host(*host_id)?;
             let target = SshTarget::from_host(&host);
-            if let Some(value) = try_live(state, &target, &op).await? {
-                return Ok(value);
-            }
-            let auth = host_auth(state, &host, password.clone()).await?;
-            let via = route(state, &host, 0).await?;
-            let connection = state.ssh.shared_via(&target, &auth, &via, None).await?;
-            let value = op(connection).await?;
-            if *remember && let Some(typed) = password {
-                remember_typed(state, &host, typed.clone()).await;
+            let value = match try_live(state, &target, &op).await? {
+                Some(value) => value,
+                None => {
+                    let auth = match typed {
+                        Some(Typed {
+                            value,
+                            kind: TypedKind::Password,
+                        }) => AuthSpec::Password(value.clone()),
+                        Some(Typed { value, .. }) => {
+                            host_auth(state, &host, Some(value.clone())).await?
+                        }
+                        None => host_auth(state, &host, None).await?,
+                    };
+                    let via = route(state, &host, 0, progress.clone()).await?;
+                    let connection = state.ssh.shared_via(&target, &auth, &via, progress).await?;
+                    let value = op(connection).await?;
+                    if *remember && let Some(typed) = typed {
+                        remember_typed(state, &host, typed).await;
+                    }
+                    value
+                }
+            };
+            if let Err(error) = state.vault.touch_host(host.id) {
+                tracing::warn!(%error, "could not record the connection time");
             }
             Ok(value)
         }
@@ -119,7 +169,11 @@ where
             };
             // A typed value is always sent as a password, so a locked default key falls back to
             // asking for one.
-            let connection = match state.ssh.shared(&target, &auth).await {
+            let connection = match state
+                .ssh
+                .shared_via(&target, &auth, &Via::Direct, progress)
+                .await
+            {
                 Err(SshError::Agent(_) | SshError::AuthFailed | SshError::PassphraseRequired)
                     if password.is_none() =>
                 {
@@ -162,7 +216,12 @@ type RouteFuture<'a> = Pin<Box<dyn Future<Output = Result<Via, CommandError>> + 
 /// Returns how to reach `host`: directly, through its proxy, or through the shared connection to
 /// its jump host, which is connected first when needed. `depth` counts the jump hosts already
 /// followed.
-fn route<'a>(state: &'a AppState, host: &'a Host, depth: usize) -> RouteFuture<'a> {
+fn route<'a>(
+    state: &'a AppState,
+    host: &'a Host,
+    depth: usize,
+    progress: Option<Progress>,
+) -> RouteFuture<'a> {
     Box::pin(async move {
         match &host.route {
             HostRoute::Direct => Ok(Via::Direct),
@@ -183,7 +242,7 @@ fn route<'a>(state: &'a AppState, host: &'a Host, depth: usize) -> RouteFuture<'
                     ));
                 }
                 let jump = state.vault.host(*jump_id)?;
-                let connection = jump_connection(state, &jump, depth + 1)
+                let connection = jump_connection(state, &jump, depth + 1, progress)
                     .await
                     .map_err(|error| jump_error(&jump, error))?;
                 Ok(Via::Jump(connection))
@@ -198,14 +257,15 @@ async fn jump_connection(
     state: &AppState,
     jump: &Host,
     depth: usize,
+    progress: Option<Progress>,
 ) -> Result<Arc<SshConnection>, CommandError> {
     let target = SshTarget::from_host(jump);
     if let Some(connection) = state.ssh.live(&target).await {
         return Ok(connection);
     }
     let auth = host_auth(state, jump, None).await?;
-    let via = route(state, jump, depth).await?;
-    Ok(state.ssh.shared_via(&target, &auth, &via, None).await?)
+    let via = route(state, jump, depth, progress.clone()).await?;
+    Ok(state.ssh.shared_via(&target, &auth, &via, progress).await?)
 }
 
 /// Names the jump host in a failure to reach it; the code becomes `ssh.jump_host`. A failure of
@@ -260,7 +320,12 @@ async fn host_auth(
 
 /// Stores what the user typed for `host` after a successful login: a password for password
 /// hosts, a passphrase for key hosts. Agent and interactive hosts store nothing.
-async fn remember_typed(state: &AppState, host: &Host, typed: Zeroizing<String>) {
+async fn remember_typed(state: &AppState, host: &Host, typed: &Typed) {
+    let natural_password = matches!(host.auth, AuthMethod::Password | AuthMethod::Interactive);
+    if typed.kind == TypedKind::Password && !natural_password {
+        return;
+    }
+    let typed = typed.value.clone();
     let saved = match state.ensure_unlocked().await {
         Ok(()) => remembered_secret(state, host, typed).and_then(|secret| match secret {
             Some(secret) => state

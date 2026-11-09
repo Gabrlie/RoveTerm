@@ -89,9 +89,15 @@ pub async fn forward_start(
     remember: bool,
 ) -> Result<ForwardStatus, CommandError> {
     let rule = state.vault.forward(id.parse()?)?;
-    let source = Source::from_args(Some(rule.host_id.to_string()), None, password, remember)?;
+    let source = Source::from_args(
+        Some(rule.host_id.to_string()),
+        None,
+        password,
+        None,
+        remember,
+    )?;
     let forwards = state.forwards.clone();
-    with_connection(&state, &source, |connection| {
+    with_connection(&state, &source, None, |connection| {
         let forwards = forwards.clone();
         let spec = rule.spec.clone();
         async move {

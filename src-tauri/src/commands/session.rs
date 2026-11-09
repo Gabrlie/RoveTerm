@@ -8,7 +8,7 @@ use tauri::ipc::{Channel, InvokeResponseBody, Response};
 
 use crate::connect::{Source, with_connection};
 use crate::error::CommandError;
-use crate::sink::ChannelSink;
+use crate::sink::{ChannelSink, progress_to};
 use crate::state::AppState;
 
 /// Largest accepted single input write.
@@ -49,22 +49,27 @@ pub async fn session_open_local(
 
 /// Opens a shell on a saved host.
 ///
-/// `password` is a password typed by the user for this attempt; with `remember`, it is stored in
-/// the vault after a successful login. Fails with `ssh.credentials_required` when the host needs a
-/// password and none is available.
+/// `password` was typed by the user for this attempt: what the host's method asks for, or with
+/// `password_kind = "password"` a login password for a key host. With `remember` it is stored in
+/// the vault after a successful login. Connection steps are reported on `on_output` before the
+/// shell starts. Fails with `ssh.credentials_required` when the host needs a password and none
+/// is available.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn session_open_ssh(
     state: State<'_, AppState>,
     on_output: Channel<InvokeResponseBody>,
     host_id: String,
     password: Option<String>,
+    password_kind: Option<String>,
     remember: bool,
     cols: u16,
     rows: u16,
 ) -> Result<SessionId, CommandError> {
     let size = TermSize::new(cols, rows)?;
-    let source = Source::from_args(Some(host_id), None, password, remember)?;
-    let opened = with_connection(&state, &source, |connection| async move {
+    let source = Source::from_args(Some(host_id), None, password, password_kind, remember)?;
+    let progress = Some(progress_to(&on_output));
+    let opened = with_connection(&state, &source, progress, |connection| async move {
         connection.open_shell(size).await
     })
     .await?;
@@ -88,8 +93,9 @@ pub async fn session_open_quick(
     rows: u16,
 ) -> Result<SessionId, CommandError> {
     let size = TermSize::new(cols, rows)?;
-    let source = Source::from_args(None, Some(address), password, false)?;
-    let opened = with_connection(&state, &source, |connection| async move {
+    let source = Source::from_args(None, Some(address), password, None, false)?;
+    let progress = Some(progress_to(&on_output));
+    let opened = with_connection(&state, &source, progress, |connection| async move {
         connection.open_shell(size).await
     })
     .await?;
