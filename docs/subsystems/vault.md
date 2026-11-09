@@ -66,6 +66,8 @@ pub trait KeyCache: Send + Sync {
 
 应用通过 `src-tauri/src/commands/keys.rs` 暴露密钥库：`key_list`、`key_generate`（在阻塞线程上生成，RSA 需要数秒）、`key_import`（加密私钥缺少 passphrase 时返回 `ssh.passphrase_required`）、`key_read_file`（读取用户选择的私钥文件，最大 64 KiB，供导入前查看）、`key_update`（只改名，或连同私钥一起替换）、`key_delete`、`key_reveal`（解锁后返回私钥与 passphrase 供查看或复制）、`key_install`（用与打开终端相同的连接方式，在主机上执行 `authorize_command`，20 秒超时，失败时返回带退出码和 stderr 的 `key.install_failed`）。
 
+快捷指令 `Snippet { id, name, command }` 不含秘密，锁定时可读写；`SnippetDraft::validate` 要求命令非空且不超过 16 KiB，名称为空时取命令的第一行。
+
 偏好设置 `Preferences` 以一条记录保存，锁定时照常可读写；记录中缺少的字段取默认值，因此旧记录在新增字段后仍可读取。`set_preferences` 先经 `validate()` 校验：
 
 | 字段 | 默认值 | 校验 |
@@ -78,4 +80,4 @@ pub trait KeyCache: Send + Sync {
 
 ## 表结构
 
-`meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`、`forwards`（外键级联删除）、`preferences`、`ssh_keys`。主机的路线以 JSON 存在 `hosts.route` 列。结构版本记录在 `PRAGMA user_version`，当前版本为 5；打开旧版本数据库时按版本依次迁移。
+`meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`、`forwards`（外键级联删除）、`preferences`、`ssh_keys`、`snippets`。主机的路线以 JSON 存在 `hosts.route` 列。结构版本记录在 `PRAGMA user_version`，当前版本为 6；打开旧版本数据库时按版本依次迁移。

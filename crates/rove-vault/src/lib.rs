@@ -10,6 +10,7 @@ mod key_cache;
 mod keys;
 mod model;
 mod prefs;
+mod snippets;
 mod store;
 
 use std::path::PathBuf;
@@ -30,6 +31,7 @@ pub use model::{
     AuthMethod, Host, HostDraft, HostId, HostKey, HostRoute, KnownHostStatus, ProxyProtocol, Secret,
 };
 pub use prefs::{Preferences, TerminalPrefs};
+pub use snippets::{Snippet, SnippetDraft, SnippetId};
 pub use store::{LockReason, LockState, MAX_JUMP_DEPTH, SCHEMA_VERSION, Vault};
 
 /// Errors returned by the vault.
@@ -47,6 +49,9 @@ pub enum VaultError {
     /// The key is still used by these hosts.
     #[error("key is used by {}", .0.join(", "))]
     KeyInUse(Vec<String>),
+    /// No snippet with this id exists.
+    #[error("snippet {0} not found")]
+    SnippetNotFound(SnippetId),
     /// No forwarding rule with this id exists.
     #[error("forward {0} not found")]
     ForwardNotFound(ForwardId),

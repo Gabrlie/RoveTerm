@@ -17,7 +17,7 @@ use crate::{
 };
 
 /// Version of the on-disk schema, stored in `PRAGMA user_version`. Only ever increases.
-pub const SCHEMA_VERSION: i32 = 5;
+pub const SCHEMA_VERSION: i32 = 6;
 
 /// Longest chain of jump hosts a route may form.
 pub const MAX_JUMP_DEPTH: usize = 4;
@@ -737,6 +737,20 @@ fn migrate(conn: &Connection) -> Result<(), VaultError> {
              );
              ALTER TABLE hosts ADD COLUMN last_connected_at INTEGER;
              PRAGMA user_version = 5;
+             COMMIT;",
+        )?;
+    }
+    if version < 6 {
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE snippets (
+                 id TEXT PRIMARY KEY,
+                 name TEXT NOT NULL,
+                 command TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             PRAGMA user_version = 6;
              COMMIT;",
         )?;
     }

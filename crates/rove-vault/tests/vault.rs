@@ -489,3 +489,30 @@ fn touching_a_host_records_the_connection_time() {
     vault.touch_host(host.id).unwrap();
     assert!(vault.host(host.id).unwrap().last_connected_at.is_some());
 }
+
+#[test]
+fn snippets_round_trip() {
+    let (vault, _) = vault();
+    let snippet = vault
+        .create_snippet(SnippetDraft {
+            name: "logs".into(),
+            command: "journalctl -f".into(),
+        })
+        .unwrap();
+    let updated = vault
+        .update_snippet(
+            snippet.id,
+            SnippetDraft {
+                name: String::new(),
+                command: "tail -f /var/log/syslog".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(updated.name, "tail -f /var/log/syslog");
+    assert_eq!(vault.list_snippets().unwrap(), [updated]);
+    vault.delete_snippet(snippet.id).unwrap();
+    assert!(matches!(
+        vault.delete_snippet(snippet.id),
+        Err(VaultError::SnippetNotFound(_))
+    ));
+}

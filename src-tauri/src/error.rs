@@ -51,6 +51,7 @@ impl From<VaultError> for CommandError {
             VaultError::ForwardNotFound(_) => "forward.not_found",
             VaultError::KeyNotFound(_) => "key.not_found",
             VaultError::KeyInUse(_) => "key.in_use",
+            VaultError::SnippetNotFound(_) => "snippet.not_found",
             VaultError::Invalid(_) => "input.invalid",
             _ => "vault.error",
         };
