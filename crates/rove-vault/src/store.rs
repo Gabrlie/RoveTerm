@@ -11,9 +11,9 @@ use zeroize::Zeroizing;
 use crate::crypto::FieldCipher;
 use crate::model::now_millis;
 use crate::{
-    AuthMethod, ForwardDraft, ForwardId, ForwardRule, Host, HostDraft, HostId, HostKey, HostRoute,
-    Interaction, KeyCache, KeyCacheError, KnownHostStatus, MasterKey, Preferences, Secret,
-    VaultError,
+    AuthMethod, DevicePrefs, ForwardDraft, ForwardId, ForwardRule, Host, HostDraft, HostId,
+    HostKey, HostRoute, Interaction, KeyCache, KeyCacheError, KnownHostStatus, MasterKey,
+    Preferences, Secret, VaultError,
 };
 
 /// Version of the on-disk schema, stored in `PRAGMA user_version`. Only ever increases.
@@ -471,6 +471,34 @@ impl Vault {
         let prefs = prefs.validate()?;
         self.conn.lock().execute(
             "INSERT OR REPLACE INTO preferences (key, value, updated_at) VALUES ('app', ?1, ?2)",
+            params![serde_json::to_string(&prefs)?, now_millis()],
+        )?;
+        Ok(prefs)
+    }
+
+    /// Returns this device's preferences, or the defaults when none are stored. Readable while
+    /// locked.
+    pub fn device_preferences(&self) -> Result<DevicePrefs, VaultError> {
+        let stored: Option<String> = self
+            .conn
+            .lock()
+            .query_row(
+                "SELECT value FROM preferences WHERE key = 'device'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match stored {
+            Some(json) => Ok(serde_json::from_str(&json)?),
+            None => Ok(DevicePrefs::default()),
+        }
+    }
+
+    /// Validates and stores this device's preferences. Returns what was stored.
+    pub fn set_device_preferences(&self, prefs: DevicePrefs) -> Result<DevicePrefs, VaultError> {
+        let prefs = prefs.validate()?;
+        self.conn.lock().execute(
+            "INSERT OR REPLACE INTO preferences (key, value, updated_at) VALUES ('device', ?1, ?2)",
             params![serde_json::to_string(&prefs)?, now_millis()],
         )?;
         Ok(prefs)

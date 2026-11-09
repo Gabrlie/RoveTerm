@@ -56,6 +56,15 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(profile = profile.name(), data_dir = %data_dir.display(), "runtime booted");
 
     let state = AppState::new(runtime).map_err(|error| error.message)?;
+    match state.vault.device_preferences() {
+        Ok(device) => {
+            let transfers = state.transfers.clone();
+            tauri::async_runtime::spawn(async move {
+                transfers.set_max_concurrent(usize::from(device.max_transfers));
+            });
+        }
+        Err(error) => tracing::warn!(%error, "device preferences unavailable, using defaults"),
+    }
     let handle = app.handle().clone();
     let forward = ctx.events().on::<HostKeyPrompt>(move |prompt| {
         if let Err(error) = handle.emit(HOSTKEY_PROMPT_EVENT, prompt) {
@@ -173,6 +182,8 @@ pub fn run() {
             commands::workspace::workspace_save,
             commands::workspace::workspace_load,
             commands::prefs::prefs_get,
+            commands::prefs::device_prefs_get,
+            commands::prefs::device_prefs_set,
             commands::prefs::prefs_set,
             commands::prefs::fonts_monospace,
         ])

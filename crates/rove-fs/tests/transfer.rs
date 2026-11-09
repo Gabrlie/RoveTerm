@@ -566,3 +566,43 @@ async fn concurrent_names_differing_in_case_do_not_collide_on_a_folding_volume()
     firsts.sort();
     assert_eq!(firsts, [1, 2]);
 }
+
+/// Runs three large copies under `limit` and returns the most that were running at once.
+async fn peak_running(initial: usize, limit: usize) -> usize {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let (queue, mut rx) = queue(TransferConfig {
+        max_concurrent: initial,
+        ..TransferConfig::default()
+    });
+    queue.set_max_concurrent(limit);
+    let mut ids = Vec::new();
+    for name in ["a.bin", "b.bin", "c.bin"] {
+        std::fs::write(src.path().join(name), vec![7u8; 3_000_000]).unwrap();
+        ids.push(queue.enqueue(request(&src.path().join(name), dst.path(), Conflict::Rename)));
+    }
+    let mut running = std::collections::HashSet::new();
+    let mut finished = 0;
+    let mut peak = 0;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while finished < ids.len() {
+            let update = rx.recv().await.unwrap();
+            if update.state.is_final() {
+                running.remove(&update.id);
+                finished += 1;
+            } else if update.state == TransferState::Running {
+                running.insert(update.id);
+            }
+            peak = peak.max(running.len());
+        }
+    })
+    .await
+    .expect("transfers finished in time");
+    peak
+}
+
+#[tokio::test]
+async fn concurrency_limit_changes_at_runtime() {
+    assert_eq!(peak_running(1, 3).await, 3);
+    assert_eq!(peak_running(3, 1).await, 1);
+}

@@ -360,6 +360,36 @@ fn preferences_default_validate_and_persist_while_locked() {
 }
 
 #[test]
+fn device_preferences_are_stored_apart_from_user_preferences() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.db");
+    let cache = Arc::new(MemoryKeyCache::default());
+    {
+        let vault = Vault::open(&path, cache.clone()).unwrap();
+        assert_eq!(vault.device_preferences().unwrap(), DevicePrefs::default());
+        let device = DevicePrefs {
+            window_material: false,
+            max_transfers: 5,
+            ..DevicePrefs::default()
+        };
+        vault.set_device_preferences(device).unwrap();
+        let bad = DevicePrefs {
+            max_transfers: 0,
+            ..DevicePrefs::default()
+        };
+        assert!(matches!(
+            vault.set_device_preferences(bad),
+            Err(VaultError::Invalid(_))
+        ));
+    }
+    let vault = Vault::open(&path, cache).unwrap();
+    let device = vault.device_preferences().unwrap();
+    assert!(!device.window_material);
+    assert_eq!(device.max_transfers, 5);
+    assert_eq!(vault.preferences().unwrap(), Preferences::default());
+}
+
+#[test]
 fn jump_routes_reject_cycles_and_reset_when_the_jump_host_is_deleted() {
     let (vault, _) = vault();
     let bastion = vault

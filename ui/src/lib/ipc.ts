@@ -193,16 +193,51 @@ export function vaultResetSecrets(): Promise<LockState> {
   return invoke('vault_reset_secrets');
 }
 
-/** Terminal appearance; see `TerminalPrefs` in rove-vault. */
+/** Terminal appearance and behaviour; see `TerminalPrefs` in rove-vault. */
 export interface TerminalPrefs {
   /** Empty uses the built-in font stack. */
   font_family: string;
   font_size: number;
   line_height: number;
+  /** Colour scheme ids (see terminal/schemes.ts) for the light and dark interface. */
+  scheme_light: string;
+  scheme_dark: string;
+  cursor_style: 'block' | 'bar' | 'underline';
+  cursor_blink: boolean;
+  scrollback: number;
+  copy_on_select: boolean;
+  right_click: 'menu' | 'paste';
+  bell: 'none' | 'visual';
 }
 
+export type Theme = 'system' | 'light' | 'dark';
+export type Accent = 'blue' | 'purple' | 'pink' | 'red' | 'orange' | 'yellow' | 'green' | 'graphite';
+export type Language = 'auto' | 'zh-CN' | 'en';
+
+export interface AppearancePrefs {
+  theme: Theme;
+  accent: Accent;
+  /** Interface scale in percent, 90–125. */
+  ui_scale: number;
+  language: Language;
+}
+
+export interface FilePrefs {
+  default_conflict: 'ask' | Conflict;
+  show_hidden: boolean;
+  confirm_delete: boolean;
+}
+
+export interface StatusPrefs {
+  interval_secs: number;
+}
+
+/** Preferences that follow the user; see `Preferences` in rove-vault. */
 export interface Preferences {
+  appearance: AppearancePrefs;
   terminal: TerminalPrefs;
+  files: FilePrefs;
+  status: StatusPrefs;
 }
 
 export function prefsGet(): Promise<Preferences> {
@@ -211,6 +246,22 @@ export function prefsGet(): Promise<Preferences> {
 
 export function prefsSet(prefs: Preferences): Promise<Preferences> {
   return invoke('prefs_set', { prefs });
+}
+
+/** Preferences of this device only; see `DevicePrefs` in rove-vault. */
+export interface DevicePrefs {
+  window_material: boolean;
+  /** Absolute path; empty uses the system download directory. */
+  download_dir: string;
+  max_transfers: number;
+}
+
+export function devicePrefsGet(): Promise<DevicePrefs> {
+  return invoke('device_prefs_get');
+}
+
+export function devicePrefsSet(prefs: DevicePrefs): Promise<DevicePrefs> {
+  return invoke('device_prefs_set', { prefs });
 }
 
 /** Installed monospaced font families; empty where they cannot be listed. */

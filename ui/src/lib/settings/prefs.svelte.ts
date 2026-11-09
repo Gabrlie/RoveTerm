@@ -1,10 +1,30 @@
 // User preferences shared by the UI. Loaded once at startup; views read them reactively.
-import { prefsGet, prefsSet, type Preferences } from '../ipc';
+import { devicePrefsGet, devicePrefsSet, prefsGet, prefsSet, type DevicePrefs, type Preferences } from '../ipc';
 
 /** Family of the bundled symbol font (see styles/fonts.css). */
 export const SYMBOL_FONT = 'Symbols Nerd Font Mono';
 
-const DEFAULTS: Preferences = { terminal: { font_family: '', font_size: 13, line_height: 1.15 } };
+/** Mirrors the defaults in rove-vault; used until the stored values load. */
+const DEFAULTS: Preferences = {
+  appearance: { theme: 'system', accent: 'blue', ui_scale: 100, language: 'auto' },
+  terminal: {
+    font_family: '',
+    font_size: 13,
+    line_height: 1.15,
+    scheme_light: 'rove-light',
+    scheme_dark: 'rove-dark',
+    cursor_style: 'block',
+    cursor_blink: false,
+    scrollback: 10_000,
+    copy_on_select: false,
+    right_click: 'menu',
+    bell: 'visual',
+  },
+  files: { default_conflict: 'ask', show_hidden: false, confirm_delete: true },
+  status: { interval_secs: 3 },
+};
+
+const DEVICE_DEFAULTS: DevicePrefs = { window_material: true, download_dir: '', max_transfers: 3 };
 
 /**
  * CSS font list for the terminal: `family` when set, then the built-in stack from the `--font-mono`
@@ -20,6 +40,7 @@ export function terminalFontStack(family: string): string {
 
 class PrefsState {
   value = $state<Preferences>(structuredClone(DEFAULTS));
+  device = $state<DevicePrefs>(structuredClone(DEVICE_DEFAULTS));
 
   /** CSS font list for the terminal; see {@link terminalFontStack}. */
   get terminalFontFamily(): string {
@@ -27,12 +48,17 @@ class PrefsState {
   }
 
   async load(): Promise<void> {
-    this.value = await prefsGet();
+    [this.value, this.device] = await Promise.all([prefsGet(), devicePrefsGet()]);
   }
 
   /** Stores `next`; the backend returns the normalized value, which becomes current. */
   async save(next: Preferences): Promise<void> {
     this.value = await prefsSet(next);
+  }
+
+  /** Stores this device's preferences; the normalized value becomes current. */
+  async saveDevice(next: DevicePrefs): Promise<void> {
+    this.device = await devicePrefsSet(next);
   }
 }
 

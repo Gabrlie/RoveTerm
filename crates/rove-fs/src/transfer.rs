@@ -174,6 +174,8 @@ pub struct TransferQueue {
     config: TransferConfig,
     events: EventBus,
     permits: Arc<Semaphore>,
+    /// Current limit on concurrent copies; see [`TransferQueue::set_max_concurrent`].
+    limit: Mutex<usize>,
     jobs: Jobs,
     reserved: Reserved,
 }
@@ -200,11 +202,35 @@ impl TransferQueue {
     pub fn new(config: TransferConfig, events: EventBus) -> Self {
         Self {
             permits: Arc::new(Semaphore::new(config.max_concurrent)),
+            limit: Mutex::new(config.max_concurrent),
             config,
             events,
             jobs: Arc::default(),
             reserved: Arc::default(),
         }
+    }
+
+    /// Changes how many transfers copy at the same time (clamped to 1–16). A higher limit starts
+    /// waiting transfers at once; a lower one takes effect as running transfers finish, without
+    /// interrupting them. Must be called inside a Tokio runtime when lowering the limit.
+    pub fn set_max_concurrent(&self, max: usize) {
+        let max = max.clamp(1, 16);
+        let mut limit = self.limit.lock();
+        match max.cmp(&*limit) {
+            std::cmp::Ordering::Greater => self.permits.add_permits(max - *limit),
+            std::cmp::Ordering::Less => {
+                // Withdraw the surplus permits as they come back from running transfers.
+                let surplus = u32::try_from(*limit - max).unwrap_or(u32::MAX);
+                let permits = self.permits.clone();
+                tokio::spawn(async move {
+                    if let Ok(taken) = permits.acquire_many_owned(surplus).await {
+                        taken.forget();
+                    }
+                });
+            }
+            std::cmp::Ordering::Equal => {}
+        }
+        *limit = max;
     }
 
     /// Queues `request` and returns its identifier. Must be called inside a Tokio runtime.

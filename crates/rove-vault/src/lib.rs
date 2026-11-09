@@ -30,7 +30,10 @@ pub use keys::{KeyDraft, KeyId, KeySecret, SshKey};
 pub use model::{
     AuthMethod, Host, HostDraft, HostId, HostKey, HostRoute, KnownHostStatus, ProxyProtocol, Secret,
 };
-pub use prefs::{Preferences, TerminalPrefs};
+pub use prefs::{
+    Accent, AppearancePrefs, Bell, ConflictChoice, CursorStyle, DevicePrefs, FilePrefs, Language,
+    Preferences, RightClick, StatusPrefs, TerminalPrefs, Theme,
+};
 pub use snippets::{Snippet, SnippetDraft, SnippetId};
 pub use store::{LockReason, LockState, MAX_JUMP_DEPTH, SCHEMA_VERSION, Vault};
 

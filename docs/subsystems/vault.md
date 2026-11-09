@@ -69,15 +69,27 @@ pub trait KeyCache: Send + Sync {
 快捷指令 `Snippet { id, name, command }` 不含秘密，锁定时可读写；`SnippetDraft::validate` 要求命令非空且不超过 16 KiB，名称为空时取命令的第一行。
 应用通过 `snippet_list` / `snippet_create` / `snippet_update` / `snippet_delete` 管理快捷指令；发送到终端由界面调用 `session_write` 完成。
 
-偏好设置 `Preferences` 以一条记录保存，锁定时照常可读写；记录中缺少的字段取默认值，因此旧记录在新增字段后仍可读取。`set_preferences` 先经 `validate()` 校验：
+偏好设置分两条记录保存在 `preferences` 表，锁定时照常可读写：`Preferences`（键 `app`）随用户走，以后参与同步；`DevicePrefs`（键 `device`）只属于本机，不离开设备。记录中缺少的字段取默认值，因此旧记录在新增字段后仍可读取。`set_preferences` 先经 `validate()` 校验：
 
 | 字段 | 默认值 | 校验 |
 |---|---|---|
 | `terminal.font_family` | 空（使用内置字体栈） | 去除首尾空白，最多 100 个字符，不含引号、逗号、分号、反斜杠、花括号和控制字符 |
 | `terminal.font_size` | 13 | 8–32 |
 | `terminal.line_height` | 1.15 | 1.0–2.0 |
+| `terminal.scheme_light` / `scheme_dark` | `rove-light` / `rove-dark` | 1–40 个小写字母、数字或 `-`；配色目录在界面侧，未知 id 退回默认 |
+| `terminal.cursor_style` / `cursor_blink` | `block` / 否 | `block`、`bar`、`underline` |
+| `terminal.scrollback` | 10000 | 1000–100000 |
+| `terminal.copy_on_select` / `right_click` / `bell` | 否 / `menu` / `visual` | `menu` 或 `paste`；`none` 或 `visual` |
+| `appearance.theme` / `accent` | `system` / `blue` | `system`、`light`、`dark`；系统色板中的 8 种 |
+| `appearance.ui_scale` / `language` | 100 / `auto` | 90–125；`auto`、`zh-CN`、`en` |
+| `files.default_conflict` | `ask` | `ask`、`rename`、`overwrite`、`skip` |
+| `files.show_hidden` / `confirm_delete` | 否 / 是 | |
+| `status.interval_secs` | 3 | 2–30 |
+| `DevicePrefs.window_material` | 是 | |
+| `DevicePrefs.download_dir` | 空（系统下载目录） | 去除首尾空白，空或绝对路径，最多 1024 字节 |
+| `DevicePrefs.max_transfers` | 3 | 1–8 |
 
-应用通过 `prefs_get` / `prefs_set` 命令读写偏好设置；`fonts_monospace` 用 fontdb 列出本机已安装的等宽字体族（去重、按名称排序），供字体选择使用，移动端返回空列表。
+应用通过 `prefs_get` / `prefs_set` 和 `device_prefs_get` / `device_prefs_set` 命令读写偏好设置，后者同时把 `max_transfers` 应用到传输队列（启动时也会应用）；`fonts_monospace` 用 fontdb 列出本机已安装的等宽字体族（去重、按名称排序），供字体选择使用，移动端返回空列表。
 
 ## 表结构
 

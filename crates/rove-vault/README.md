@@ -13,7 +13,7 @@
 - 端口转发规则随主机级联删除；`ForwardDraft::validate` 拒绝不是 IP 地址或 `localhost` 的本地监听地址。
 - 密钥库：名称与公钥锁定时可读，私钥加密保存；被主机使用的密钥不能删除；重置凭据后保留条目、丢弃私钥。
 - 快捷指令（snippets）不含秘密，名称为空时取命令第一行。
-- `preferences()` 在没有记录时返回默认值；`set_preferences()` 校验后整体替换。偏好设置不含秘密，锁定时可读写。
+- `preferences()` 在没有记录时返回默认值；`set_preferences()` 校验后整体替换。`device_preferences()` / `set_device_preferences()` 读写只属于本机的 `DevicePrefs`，单独存放，不随同步离开设备。偏好设置不含秘密，锁定时可读写。
 - 数据库结构版本记录在 `PRAGMA user_version` 中，只增不减，旧版本按顺序迁移；打开更新版本写入的数据库时返回 `FutureSchema`。
 
 ## 配置（`[plugin.vault]`）

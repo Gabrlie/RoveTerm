@@ -43,7 +43,7 @@
     try {
       await prefs.save({
         ...prefs.value,
-        terminal: { font_family: fontFamily, font_size: Number(fontSize), line_height: Number(lineHeight) },
+        terminal: { ...prefs.value.terminal, font_family: fontFamily, font_size: Number(fontSize), line_height: Number(lineHeight) },
       });
       onclose();
     } catch (caught) {

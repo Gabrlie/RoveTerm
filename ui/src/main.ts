@@ -17,12 +17,11 @@ if (/Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent)) {
 // macOS draws its window buttons over the top-left corner (overlay title bar).
 if (isMac) document.documentElement.dataset.platform = 'mac';
 
-void applyWindowMaterial(true);
-
 const target = document.getElementById('app');
 if (!target) throw new Error('missing #app mount point');
 
 // Terminals are created with the stored preferences, so load them before the first view mounts.
 await prefs.load().catch((error: unknown) => console.warn('preferences unavailable, using defaults', error));
+void applyWindowMaterial(prefs.device.window_material);
 
 export default mount(App, { target });

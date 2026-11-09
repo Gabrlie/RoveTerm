@@ -1,6 +1,6 @@
 //! User preferences and the fonts they can refer to.
 
-use rove_vault::Preferences;
+use rove_vault::{DevicePrefs, Preferences};
 use tauri::State;
 
 use crate::error::CommandError;
@@ -19,6 +19,26 @@ pub fn prefs_set(
     prefs: Preferences,
 ) -> Result<Preferences, CommandError> {
     Ok(state.vault.set_preferences(prefs)?)
+}
+
+/// Returns this device's preferences, or the defaults.
+#[tauri::command]
+pub fn device_prefs_get(state: State<'_, AppState>) -> Result<DevicePrefs, CommandError> {
+    Ok(state.vault.device_preferences()?)
+}
+
+/// Validates and stores this device's preferences and applies the transfer limit; returns the
+/// normalized preferences. Async: lowering the transfer limit spawns onto the runtime.
+#[tauri::command]
+pub async fn device_prefs_set(
+    state: State<'_, AppState>,
+    prefs: DevicePrefs,
+) -> Result<DevicePrefs, CommandError> {
+    let prefs = state.vault.set_device_preferences(prefs)?;
+    state
+        .transfers
+        .set_max_concurrent(usize::from(prefs.max_transfers));
+    Ok(prefs)
 }
 
 /// Lists the families of the monospaced fonts installed on this device, sorted and without
