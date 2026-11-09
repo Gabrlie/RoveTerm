@@ -5,7 +5,7 @@ use std::sync::Arc;
 use rove_fs::{FsSessions, LocalFs, TransferQueue};
 use rove_kernel::{Disposer, Runtime};
 use rove_session::SessionManager;
-use rove_ssh::{HostKeyPrompts, SshConnector};
+use rove_ssh::{Forwards, HostKeyPrompts, SshConnector};
 use rove_vault::{LockState, Vault};
 use std::sync::Mutex;
 
@@ -21,6 +21,8 @@ pub struct AppState {
     pub ssh: Arc<SshConnector>,
     /// Pending host key confirmations.
     pub prompts: Arc<HostKeyPrompts>,
+    /// Running port forwards.
+    pub forwards: Arc<Forwards>,
     /// Open file systems (SFTP sessions).
     pub fs_sessions: Arc<FsSessions>,
     /// File transfer queue.
@@ -43,6 +45,7 @@ impl AppState {
             vault: ctx.require::<Vault>()?,
             ssh: ctx.require::<SshConnector>()?,
             prompts: ctx.require::<HostKeyPrompts>()?,
+            forwards: ctx.require::<Forwards>()?,
             fs_sessions: ctx.require::<FsSessions>()?,
             transfers: ctx.require::<TransferQueue>()?,
             local_fs: ctx.require::<LocalFs>()?,

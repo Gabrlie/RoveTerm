@@ -21,6 +21,8 @@ const HOSTKEY_PROMPT_EVENT: &str = "hostkey-prompt";
 const VAULT_STATE_EVENT: &str = "vault-state";
 /// Event name of forwarded [`TransferUpdate`](rove_fs::TransferUpdate)s.
 const TRANSFER_EVENT: &str = "transfer-update";
+/// Event name of forwarded [`ForwardStatus`](rove_ssh::ForwardStatus) changes.
+const FORWARD_EVENT: &str = "forward-update";
 
 fn data_dir(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
     if let Some(dir) = std::env::var_os("ROVETERM_DATA_DIR") {
@@ -66,9 +68,16 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             tracing::error!(%error, "forwarding transfer update failed");
         }
     });
+    let handle = app.handle().clone();
+    let forwards = ctx.events().on::<rove_ssh::ForwardStatus>(move |status| {
+        if let Err(error) = handle.emit(FORWARD_EVENT, status) {
+            tracing::error!(%error, "forwarding port forward status failed");
+        }
+    });
     if let Some((_, disposers)) = state.lifetime.lock().expect("lifetime lock").as_mut() {
         disposers.push(forward);
         disposers.push(transfers);
+        disposers.push(forwards);
         disposers.extend(host_services);
     }
 
@@ -87,6 +96,7 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 fn shutdown(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     state.transfers.cancel_all();
+    state.forwards.stop_all();
     state.fs_sessions.clear();
     tauri::async_runtime::block_on(async {
         state.sessions.close_all().await;
@@ -130,6 +140,12 @@ pub fn run() {
             commands::sftp::transfer_list,
             commands::sftp::transfer_cancel,
             commands::sftp::transfer_clear,
+            commands::forward::forward_list,
+            commands::forward::forward_create,
+            commands::forward::forward_update,
+            commands::forward::forward_delete,
+            commands::forward::forward_start,
+            commands::forward::forward_stop,
             commands::host::host_list,
             commands::host::host_create,
             commands::host::host_update,

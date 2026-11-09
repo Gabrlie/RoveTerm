@@ -78,6 +78,8 @@
 - 监督任务每秒检查一次连接；连接关闭时状态变为 `failed`，监听关闭，条目保留到再次 `start` 或 `stop`。
 - `stop` 立即关闭监听和全部转发中的连接，远程转发会发送 `cancel-tcpip-forward`。重复 `start` 一个运行中的转发直接返回当前状态。
 
+应用通过 `src-tauri/src/commands/forward.rs` 暴露转发：`forward_list` 返回规则及其状态，`forward_create` / `forward_update` / `forward_delete` 管理规则（修改或删除时先停止正在运行的转发），`forward_start` 用与打开终端相同的方式获取连接后启动，`forward_stop` 停止。`ForwardStatus` 以 `forward-update` 事件转发给 WebView。在已保存主机上打开终端后，该主机标记为 `auto_start` 且未在运行的规则会在同一连接上自动启动，失败时登记为 `failed`。退出应用时停止全部转发。
+
 ## 快速连接
 
 `parse_quick_connect` 接受以下形式，返回 `QuickTarget { username, hostname, port }`，其中用户名和端口可以省略：

@@ -68,9 +68,13 @@ pub async fn session_open_ssh(
         connection.open_shell(size).await
     })
     .await?;
-    Ok(state
+    let id = state
         .sessions
-        .attach(opened, Arc::new(ChannelSink(on_output))))
+        .attach(opened, Arc::new(ChannelSink(on_output)));
+    if let Source::Host { host_id, .. } = source {
+        crate::commands::forward::autostart(&state, host_id).await;
+    }
+    Ok(id)
 }
 
 /// Opens a shell from a quick-connect string. Uses `password` when given, otherwise the SSH agent.
