@@ -19,6 +19,7 @@ use russh_sftp::client::SftpSession;
 use tokio::sync::mpsc;
 
 use crate::forward::RemoteRoutes;
+use crate::keys;
 use crate::{AuthSpec, HostKeyRejection, HostKeyVerifier, SftpFs, SshError, SshTarget};
 
 const OUTPUT_QUEUE: usize = 256;
@@ -389,17 +390,16 @@ async fn authenticate(
             result.success() || keyboard_interactive(handle, &user, password).await?
         }
         AuthSpec::PrivateKey { key, passphrase } => {
-            let key =
-                russh::keys::decode_secret_key(key, passphrase.as_deref().map(String::as_str))
-                    .map_err(|error| SshError::Key(error.to_string()))?;
+            let key = keys::decode(key, passphrase.as_deref().map(String::as_str))?;
             publickey(handle, user, key).await?
         }
         AuthSpec::KeyFile { path, passphrase } => {
-            let key = russh::keys::load_secret_key(path, passphrase.as_deref().map(String::as_str))
-                .map_err(|error| SshError::Key(error.to_string()))?;
+            let key = keys::load(path, passphrase.as_deref().map(String::as_str))?;
             publickey(handle, user, key).await?
         }
-        AuthSpec::Agent => agent(handle, user).await?,
+        AuthSpec::Agent { passphrase } => {
+            agent_then_defaults(handle, user, passphrase.as_deref().map(String::as_str)).await?
+        }
     };
     if success {
         Ok(())
@@ -452,6 +452,36 @@ async fn keyboard_interactive(
         }
     }
     Ok(false)
+}
+
+/// Tries the SSH agent, then the default identity files. An unreachable agent is not an error
+/// while a default identity remains to try. Fails with [`SshError::PassphraseRequired`] when
+/// nothing succeeded and an encrypted default identity could not be opened.
+async fn agent_then_defaults(
+    handle: &mut Handle<ClientHandler>,
+    user: String,
+    passphrase: Option<&str>,
+) -> Result<bool, SshError> {
+    let agent_error = match agent(handle, user.clone()).await {
+        Ok(true) => return Ok(true),
+        Ok(false) => None,
+        Err(SshError::Agent(reason)) => Some(reason),
+        Err(error) => return Err(error),
+    };
+    let home = std::env::home_dir();
+    let defaults = keys::default_keys(home.as_deref(), passphrase);
+    for key in defaults.keys {
+        if publickey(handle, user.clone(), key).await? {
+            return Ok(true);
+        }
+    }
+    if defaults.locked {
+        return Err(SshError::PassphraseRequired);
+    }
+    match agent_error {
+        Some(reason) => Err(SshError::Agent(reason)),
+        None => Ok(false),
+    }
 }
 
 #[cfg(unix)]

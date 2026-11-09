@@ -7,6 +7,7 @@
 mod connection;
 mod forward;
 mod hostkey;
+mod keys;
 mod pool;
 mod sftp;
 mod socks;
@@ -88,20 +89,25 @@ pub enum AuthSpec {
         /// Passphrase, if the key is encrypted.
         passphrase: Option<Zeroizing<String>>,
     },
-    /// Keys from the running SSH agent.
-    Agent,
+    /// Keys from the running SSH agent, then the default identity files (`~/.ssh/id_ed25519`,
+    /// `id_ecdsa`, `id_rsa`) as OpenSSH does.
+    Agent {
+        /// Passphrase for encrypted default identity files.
+        passphrase: Option<Zeroizing<String>>,
+    },
 }
 
 impl AuthSpec {
     /// Resolves credentials for `host` from its stored `secret` and an optional password typed by
-    /// the user. Returns [`SshError::CredentialsRequired`] when the user must be asked for a
+    /// the user. For key-based methods the typed value is a passphrase and takes precedence over
+    /// a stored one. Returns [`SshError::CredentialsRequired`] when the user must be asked for a
     /// password first.
     pub fn resolve(
         host: &Host,
         secret: Option<Secret>,
-        typed_password: Option<Zeroizing<String>>,
+        typed: Option<Zeroizing<String>>,
     ) -> Result<Self, SshError> {
-        match (&host.auth, secret, typed_password) {
+        match (&host.auth, secret, typed) {
             (AuthMethod::Password | AuthMethod::Interactive, _, Some(password)) => {
                 Ok(Self::Password(password))
             }
@@ -111,20 +117,23 @@ impl AuthSpec {
             (AuthMethod::Password | AuthMethod::Interactive, _, None) => {
                 Err(SshError::CredentialsRequired)
             }
-            (AuthMethod::PrivateKey, Some(Secret::PrivateKey { key, passphrase }), _) => {
-                Ok(Self::PrivateKey { key, passphrase })
+            (AuthMethod::PrivateKey, Some(Secret::PrivateKey { key, passphrase }), typed) => {
+                Ok(Self::PrivateKey {
+                    key,
+                    passphrase: typed.or(passphrase),
+                })
             }
             (AuthMethod::PrivateKey, _, _) => Err(SshError::Key(
                 "no private key is stored for this host".into(),
             )),
             (AuthMethod::KeyFile { path }, secret, typed) => Ok(Self::KeyFile {
                 path: path.clone(),
-                passphrase: match secret {
+                passphrase: typed.or(match secret {
                     Some(Secret::Passphrase { passphrase }) => Some(passphrase),
-                    _ => typed,
-                },
+                    _ => None,
+                }),
             }),
-            (AuthMethod::Agent, _, _) => Ok(Self::Agent),
+            (AuthMethod::Agent, _, typed) => Ok(Self::Agent { passphrase: typed }),
         }
     }
 }
@@ -148,9 +157,12 @@ pub enum SshError {
     /// A password must be obtained from the user before connecting.
     #[error("credentials required")]
     CredentialsRequired,
-    /// A private key could not be read or decrypted.
+    /// A private key could not be read or parsed.
     #[error("private key error: {0}")]
     Key(String),
+    /// A private key is encrypted and no passphrase, or a wrong one, was given.
+    #[error("private key passphrase required")]
+    PassphraseRequired,
     /// The SSH agent is unreachable or failed.
     #[error("ssh agent error: {0}")]
     Agent(String),
@@ -436,7 +448,39 @@ mod tests {
         ));
         assert!(matches!(
             AuthSpec::resolve(&host(AuthMethod::Agent), None, None),
-            Ok(AuthSpec::Agent)
+            Ok(AuthSpec::Agent { passphrase: None })
+        ));
+    }
+
+    #[test]
+    fn resolve_prefers_typed_passphrase_for_keys() {
+        let key_file = host(AuthMethod::KeyFile {
+            path: "~/.ssh/id".into(),
+        });
+        let stored = || {
+            Some(Secret::Passphrase {
+                passphrase: pw("stored"),
+            })
+        };
+        assert!(matches!(
+            AuthSpec::resolve(&key_file, stored(), Some(pw("typed"))),
+            Ok(AuthSpec::KeyFile { passphrase: Some(p), .. }) if p.as_str() == "typed"
+        ));
+        assert!(matches!(
+            AuthSpec::resolve(&key_file, stored(), None),
+            Ok(AuthSpec::KeyFile { passphrase: Some(p), .. }) if p.as_str() == "stored"
+        ));
+        let stored_key = Some(Secret::PrivateKey {
+            key: pw("KEY"),
+            passphrase: None,
+        });
+        assert!(matches!(
+            AuthSpec::resolve(&host(AuthMethod::PrivateKey), stored_key, Some(pw("typed"))),
+            Ok(AuthSpec::PrivateKey { passphrase: Some(p), .. }) if p.as_str() == "typed"
+        ));
+        assert!(matches!(
+            AuthSpec::resolve(&host(AuthMethod::Agent), None, Some(pw("typed"))),
+            Ok(AuthSpec::Agent { passphrase: Some(p) }) if p.as_str() == "typed"
         ));
     }
 

@@ -7,21 +7,23 @@
 | 类型 | 说明 |
 |---|---|
 | `SshTarget` | `hostname`、`port`、`username`，以及可选的 `host_id` 和标题；`address()` 返回 `user@host:port`，IPv6 地址加方括号 |
-| `AuthSpec` | `Password`、`PrivateKey { key, passphrase }`、`KeyFile { path, passphrase }`、`Agent` |
+| `AuthSpec` | `Password`、`PrivateKey { key, passphrase }`、`KeyFile { path, passphrase }`、`Agent { passphrase }` |
 | `SshConnection` | 已认证的连接；`open_shell(size)` 打开 PTY shell channel，`open_sftp()` 打开 SFTP 会话 |
-| `SshError` | `Connect`、`Timeout`、`HostKey(HostKeyRejection)`、`AuthFailed`、`CredentialsRequired`、`Key`、`Agent`、`Channel`、`ForwardBind`、`ForwardRejected`、`Sftp`、`Protocol` |
+| `SshError` | `Connect`、`Timeout`、`HostKey(HostKeyRejection)`、`AuthFailed`、`CredentialsRequired`、`Key`、`PassphraseRequired`、`Agent`、`Channel`、`ForwardBind`、`ForwardRejected`、`Sftp`、`Protocol` |
 
 ## 凭据解析
 
-`AuthSpec::resolve(host, stored_secret, typed_password)`：
+`AuthSpec::resolve(host, stored_secret, typed)`。对基于密钥的方式，`typed` 是 passphrase，优先于已存的 passphrase：
 
 | 认证方式 | 结果 |
 |---|---|
 | `Password` | 用户输入的密码 → 已存密码 → `CredentialsRequired` |
 | `Interactive` | 用户输入的密码 → `CredentialsRequired` |
 | `PrivateKey` | 已存私钥；没有时返回 `Key` 错误 |
-| `KeyFile { path }` | 读取密钥文件；passphrase 依次取已存的 → 用户输入的 |
-| `Agent` | 依次尝试 agent 中的公钥：Unix 用 `SSH_AUTH_SOCK`，Windows 先用 OpenSSH agent 命名管道，再用 Pageant |
+| `KeyFile { path }` | 读取密钥文件，路径开头的 `~` 展开为用户主目录 |
+| `Agent` | 先尝试 agent 中的公钥（Unix 用 `SSH_AUTH_SOCK`，Windows 先用 OpenSSH agent 命名管道，再用 Pageant），再依次尝试 `~/.ssh/id_ed25519`、`id_ecdsa`、`id_rsa` 中存在的文件 |
+
+私钥已加密而没有 passphrase，或 passphrase 无法解密时返回 `PassphraseRequired`，界面据此询问 passphrase；文件读不到或格式不对时返回带原因的 `Key`。`Agent` 方式下 agent 不可用不算错误，只有默认密钥也都不可用时才返回 `Agent`。
 
 ## host key 校验
 

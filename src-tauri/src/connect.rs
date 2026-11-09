@@ -116,10 +116,14 @@ where
             }
             let auth = match password {
                 Some(password) => AuthSpec::Password(password.clone()),
-                None => AuthSpec::Agent,
+                None => AuthSpec::Agent { passphrase: None },
             };
+            // A typed value is always sent as a password, so a locked default key falls back to
+            // asking for one.
             let connection = match state.ssh.shared(&target, &auth).await {
-                Err(SshError::Agent(_) | SshError::AuthFailed) if password.is_none() => {
+                Err(SshError::Agent(_) | SshError::AuthFailed | SshError::PassphraseRequired)
+                    if password.is_none() =>
+                {
                     return Err(SshError::CredentialsRequired.into());
                 }
                 result => result?,

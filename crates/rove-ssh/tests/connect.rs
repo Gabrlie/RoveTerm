@@ -144,6 +144,48 @@ async fn public_key_login() {
 }
 
 #[tokio::test]
+async fn encrypted_key_needs_its_passphrase() {
+    use russh::keys::ssh_key::{Cipher, Kdf, LineEnding};
+    let client_key = devsshd::generate_key();
+    let mut config = DevConfig::demo();
+    config.password = None;
+    config.authorized_keys.push(client_key.public_key().clone());
+    let harness = Harness::new(config).await;
+    let (_answer, _) = harness.auto_answer(HostKeyAnswer::Trust);
+    let kdf = Kdf::Bcrypt {
+        salt: vec![3; 16],
+        rounds: 2,
+    };
+    let text = client_key
+        .encrypt_with(Cipher::Aes256Ctr, kdf, 7, "secret")
+        .unwrap()
+        .to_openssh(LineEnding::LF)
+        .unwrap()
+        .to_string();
+    let key_auth = |passphrase: Option<&str>| AuthSpec::PrivateKey {
+        key: Zeroizing::new(text.clone()),
+        passphrase: passphrase.map(|p| Zeroizing::new(p.to_owned())),
+    };
+    let result = harness
+        .connector
+        .connect(&harness.target(), &key_auth(None))
+        .await;
+    assert!(
+        matches!(result, Err(SshError::PassphraseRequired)),
+        "{:?}",
+        result.err()
+    );
+    let (output, _) = run_shell(
+        &harness.connector,
+        &harness.target(),
+        &key_auth(Some("secret")),
+        b"echo unlocked; exit\n",
+    )
+    .await;
+    assert!(output.contains("unlocked"), "{output}");
+}
+
+#[tokio::test]
 async fn wrong_password_fails_authentication() {
     let harness = Harness::new(DevConfig::demo()).await;
     let (_answer, _) = harness.auto_answer(HostKeyAnswer::Trust);

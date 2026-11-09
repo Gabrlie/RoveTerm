@@ -14,7 +14,8 @@ SSH Provider：认证、host key 校验，打开 PTY shell channel，`FileSystem
 - `SshConnection::open_sftp` 打开 SFTP 会话 `SftpFs`（实现 `rove_fs::FileSystem`）。会话和终端一样持有 channel 租约；服务器不提供 `sftp` 子系统时返回 `SshError::Sftp`。
 - `Forwards` 在共享连接上运行 local、remote、dynamic（SOCKS5）转发；运行中的转发持有 channel 租约，连接关闭时状态变为 `failed`。状态变化通过 Live 事件 `ForwardStatus` 广播。
 - `AuthSpec` 中的秘密材料在 drop 时清零。密码认证失败后，会用同一个密码尝试 keyboard-interactive。
-- `AuthSpec::resolve` 根据主机的认证方式、已存凭据和用户输入的密码确定凭据；需要先向用户索取密码时返回 `CredentialsRequired`。
+- `AuthSpec::resolve` 根据主机的认证方式、已存凭据和用户输入的密码或 passphrase 确定凭据；需要先向用户索取密码时返回 `CredentialsRequired`，私钥已加密而缺少正确 passphrase 时连接返回 `PassphraseRequired`。
+- `Agent` 方式在 agent 之后回退到 `~/.ssh` 下的默认密钥文件，与 OpenSSH 一致。
 
 - `parse_quick_connect` 解析快速连接字符串；`parse_ssh_config` 解析 OpenSSH 客户端配置；`import_ssh_config` 把配置中的主机写入 vault，跳过用户名、主机名、端口都相同的已有主机。
 
