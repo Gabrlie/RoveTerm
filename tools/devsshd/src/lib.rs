@@ -1,11 +1,15 @@
 //! Development SSH server: password and public-key authentication, PTY shells backed by
-//! `rove-pty`, and `exec` requests run through `sh -c`.
+//! `rove-pty`, `exec` requests run through `sh -c`, an SFTP subsystem on the real file system, and
+//! local (`direct-tcpip`) and remote (`tcpip-forward`) port forwarding.
 //!
 //! Intended for integration tests and local debugging only. It runs commands as the current user
-//! and must never listen on a public interface.
+//! and must never listen on a public interface. Remote forwards always bind to loopback.
+
+mod sftp;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -16,7 +20,8 @@ use russh::server::{
     Auth, ChannelOpenHandle, Handle, Msg, Server as _, Session, VerifiedPublicKey,
 };
 use russh::{Channel, ChannelId, Pty};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::task::AbortHandle;
 
 /// Server settings.
 pub struct DevConfig {
@@ -30,6 +35,8 @@ pub struct DevConfig {
     pub host_key: PrivateKey,
     /// Shell for PTY sessions; `None` uses the platform default.
     pub shell: Option<String>,
+    /// Directory relative SFTP paths resolve against; `None` uses the current directory.
+    pub sftp_root: Option<PathBuf>,
 }
 
 impl DevConfig {
@@ -41,6 +48,7 @@ impl DevConfig {
             authorized_keys: Vec::new(),
             host_key: generate_key(),
             shell: Some("/bin/sh".into()),
+            sftp_root: None,
         }
     }
 }
@@ -127,6 +135,8 @@ impl russh::server::Server for Server {
             config: self.config.clone(),
             terminals: self.terminals.clone(),
             channels: HashMap::new(),
+            unclaimed: HashMap::new(),
+            forwards: HashMap::new(),
         }
     }
 }
@@ -141,10 +151,17 @@ struct Client {
     config: Arc<DevConfig>,
     terminals: Arc<LocalTerminals>,
     channels: HashMap<ChannelId, ChannelState>,
+    /// Session channels kept until a request decides their use; only `sftp` consumes them.
+    unclaimed: HashMap<ChannelId, Channel<Msg>>,
+    /// Remote forward listeners by `(address, port)` as requested by the client.
+    forwards: HashMap<(String, u32), AbortHandle>,
 }
 
 impl Drop for Client {
     fn drop(&mut self) {
+        for forward in self.forwards.values() {
+            forward.abort();
+        }
         for state in self.channels.values_mut() {
             if let Some(session) = state.session.take() {
                 tokio::spawn(async move {
@@ -206,8 +223,117 @@ impl russh::server::Handler for Client {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         self.channels.insert(channel.id(), ChannelState::default());
+        self.unclaimed.insert(channel.id(), channel);
         reply.accept().await;
         Ok(())
+    }
+
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        host_to_connect: &str,
+        port_to_connect: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: ChannelOpenHandle,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let Ok(port) = u16::try_from(port_to_connect) else {
+            reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
+            return Ok(());
+        };
+        match TcpStream::connect((host_to_connect, port)).await {
+            Ok(stream) => {
+                reply.accept().await;
+                tokio::spawn(bridge(channel, stream));
+            }
+            Err(error) => {
+                tracing::debug!(%error, "devsshd direct-tcpip connect failed");
+                reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
+            }
+        }
+        Ok(())
+    }
+
+    async fn tcpip_forward(
+        &mut self,
+        address: &str,
+        port: &mut u32,
+        session: &mut Session,
+    ) -> Result<bool, Self::Error> {
+        let Ok(requested) = u16::try_from(*port) else {
+            return Ok(false);
+        };
+        let listener = match TcpListener::bind(("127.0.0.1", requested)).await {
+            Ok(listener) => listener,
+            Err(error) => {
+                tracing::debug!(%error, "devsshd tcpip-forward bind failed");
+                return Ok(false);
+            }
+        };
+        let bound = match listener.local_addr() {
+            Ok(addr) => u32::from(addr.port()),
+            Err(_) => return Ok(false),
+        };
+        let handle = session.handle();
+        let connected_address = address.to_owned();
+        let task = tokio::spawn(async move {
+            while let Ok((stream, peer)) = listener.accept().await {
+                let channel = handle
+                    .channel_open_forwarded_tcpip(
+                        connected_address.clone(),
+                        bound,
+                        peer.ip().to_string(),
+                        u32::from(peer.port()),
+                    )
+                    .await;
+                match channel {
+                    Ok(channel) => {
+                        tokio::spawn(bridge(channel, stream));
+                    }
+                    Err(error) => tracing::debug!(%error, "devsshd forwarded-tcpip open failed"),
+                }
+            }
+        });
+        self.forwards
+            .insert((address.to_owned(), bound), task.abort_handle());
+        *port = bound;
+        Ok(true)
+    }
+
+    async fn cancel_tcpip_forward(
+        &mut self,
+        address: &str,
+        port: u32,
+        _session: &mut Session,
+    ) -> Result<bool, Self::Error> {
+        Ok(match self.forwards.remove(&(address.to_owned(), port)) {
+            Some(task) => {
+                task.abort();
+                true
+            }
+            None => false,
+        })
+    }
+
+    async fn subsystem_request(
+        &mut self,
+        channel: ChannelId,
+        name: &str,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        match (name, self.unclaimed.remove(&channel)) {
+            ("sftp", Some(stream)) => {
+                let root = match &self.config.sftp_root {
+                    Some(root) => root.clone(),
+                    None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+                };
+                session.channel_success(channel)?;
+                russh_sftp::server::run(stream.into_stream(), sftp::SftpHandler::new(root)).await;
+                Ok(())
+            }
+            _ => session.channel_failure(channel),
+        }
     }
 
     async fn pty_request(
@@ -221,6 +347,7 @@ impl russh::server::Handler for Client {
         _modes: &[(Pty, u32)],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        self.unclaimed.remove(&channel);
         self.channels.entry(channel).or_default().size = clamp_size(cols, rows);
         session.channel_success(channel)
     }
@@ -230,6 +357,7 @@ impl russh::server::Handler for Client {
         channel: ChannelId,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        self.unclaimed.remove(&channel);
         let size = self.channels.entry(channel).or_default().size;
         let request = LocalRequest {
             shell: self.config.shell.clone(),
@@ -273,6 +401,7 @@ impl russh::server::Handler for Client {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        self.unclaimed.remove(&channel);
         let command = String::from_utf8_lossy(data).into_owned();
         let handle = session.handle();
         tokio::spawn(async move {
@@ -341,6 +470,7 @@ impl russh::server::Handler for Client {
         channel: ChannelId,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
+        self.unclaimed.remove(&channel);
         if let Some(terminal) = self
             .channels
             .remove(&channel)
@@ -349,5 +479,13 @@ impl russh::server::Handler for Client {
             let _already_closed_is_fine = terminal.close().await;
         }
         Ok(())
+    }
+}
+
+/// Copies bytes both ways between a forwarding channel and a TCP stream until either side closes.
+async fn bridge(channel: Channel<Msg>, mut stream: TcpStream) {
+    let mut channel = channel.into_stream();
+    if let Err(error) = tokio::io::copy_bidirectional(&mut channel, &mut stream).await {
+        tracing::debug!(%error, "devsshd forwarding stream ended");
     }
 }

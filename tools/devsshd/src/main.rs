@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use devsshd::{DevConfig, DevServer, generate_key};
 
 const USAGE: &str = "usage: devsshd [--addr 127.0.0.1:2222] [--user demo] [--password demo] \
-[--host-key PATH] [--authorized-key PATH]... [--shell PATH]";
+[--host-key PATH] [--authorized-key PATH]... [--shell PATH] [--sftp-root DIR]";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -33,6 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .authorized_keys
                 .push(russh::keys::load_public_key(value()?)?),
             "--shell" => config.shell = Some(value()?),
+            "--sftp-root" => config.sftp_root = Some(PathBuf::from(value()?)),
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Ok(());
