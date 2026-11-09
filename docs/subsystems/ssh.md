@@ -77,6 +77,7 @@
 - `generate_key(kind, comment, passphrase)` 生成 Ed25519、ECDSA P-256 或 RSA 3072 密钥，返回 OpenSSH 格式文本，提供 passphrase 时加密。
 - `describe_key(private, passphrase)` 解析私钥，返回算法、带注释的 OpenSSH 公钥行和 `SHA256:` 指纹。
 - `sample_server(connection)` 用一次 `exec` 读取 Linux 服务器 `/proc` 中的负载、CPU 累计时间、内存、根分区、运行时间和网络累计字节（不含 `lo`），以及内核与主机名，返回 `ServerStats`。CPU 使用率和网速由调用方用两次采样的差值计算；输出不是 Linux 格式时返回 `Protocol`。
+- 应用命令 `server_stats(host_id | address)` 只使用已有的共享连接采样（8 秒超时），不会新建连接或询问凭据；没有连接时返回 `ssh.not_connected`，非 Linux 服务器返回 `monitor.unsupported`。
 - `authorize_command(public_key)` 生成把公钥追加到 `~/.ssh/authorized_keys` 的命令（已存在则不重复），只保留算法和密钥数据，注释不会进入 shell。
 
 <a id="sftp"></a>

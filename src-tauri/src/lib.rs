@@ -163,6 +163,7 @@ pub fn run() {
             commands::keys::key_delete,
             commands::keys::key_reveal,
             commands::keys::key_install,
+            commands::monitor::server_stats,
             commands::prefs::prefs_get,
             commands::prefs::prefs_set,
             commands::prefs::fonts_monospace,
