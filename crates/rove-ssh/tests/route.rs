@@ -272,3 +272,21 @@ async fn hop_latency_has_one_segment_per_jump() {
         .unwrap();
     assert_eq!(segments.len(), 2);
 }
+
+/// devsshd runs the probe on this machine, which must be Linux with os-release.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn probe_os_reads_this_linux_machine() {
+    let harness = Harness::new(DevConfig::demo()).await;
+    let connection = harness.connect().await;
+    let os = rove_ssh::probe_os(&connection)
+        .await
+        .unwrap()
+        .expect("os detected");
+    assert!(!os.id.is_empty());
+    assert!(
+        os.id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
+    );
+}

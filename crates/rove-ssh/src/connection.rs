@@ -331,7 +331,11 @@ impl SshConnection {
     pub fn chain(self: &Arc<Self>) -> Vec<Arc<SshConnection>> {
         let mut chain = vec![self.clone()];
         let mut current = self.clone();
-        while let Some(next) = current._tunnel.as_ref().map(|lease| lease.connection.clone()) {
+        while let Some(next) = current
+            ._tunnel
+            .as_ref()
+            .map(|lease| lease.connection.clone())
+        {
             chain.push(next.clone());
             current = next;
         }

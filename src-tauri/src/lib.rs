@@ -175,6 +175,7 @@ pub fn run() {
             commands::keys::key_reveal,
             commands::keys::key_install,
             commands::monitor::server_stats,
+            commands::monitor::host_detect_os,
             commands::snippets::snippet_list,
             commands::snippets::snippet_create,
             commands::snippets::snippet_update,

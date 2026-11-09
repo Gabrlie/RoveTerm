@@ -46,3 +46,23 @@ pub async fn server_stats(
             other => other.into(),
         })
 }
+
+/// Detects the operating system of saved host `id` over its live shared connection and stores it
+/// for the host's icon. Returns `None` without storing anything when no connection is open; a
+/// connected server whose system is not recognised clears the stored one.
+#[tauri::command]
+pub async fn host_detect_os(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<rove_vault::HostOs>, CommandError> {
+    let id: rove_vault::HostId = id.parse()?;
+    let target = host_target(&state, &state.vault.host(id)?)?;
+    let Some(connection) = state.ssh.live(&target).await else {
+        return Ok(None);
+    };
+    let os = tokio::time::timeout(SAMPLE_TIMEOUT, rove_ssh::probe_os(&connection))
+        .await
+        .map_err(|_| CommandError::new("ssh.timeout", "system detection timed out"))??;
+    state.vault.set_host_os(id, os.clone())?;
+    Ok(os)
+}

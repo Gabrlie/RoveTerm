@@ -9,6 +9,7 @@ mod forward;
 mod hostkey;
 mod keys;
 mod monitor;
+mod os;
 mod pool;
 mod progress;
 mod proxy;
@@ -35,6 +36,7 @@ pub use keys::{
     generate as generate_key,
 };
 pub use monitor::{CpuTimes, Disk, NetInterface, ServerStats, sample as sample_server};
+pub use os::probe as probe_os;
 pub use progress::{AuthKind, ConnectStep, Progress};
 pub use sftp::SftpFs;
 pub use sshconfig::{
