@@ -185,6 +185,8 @@ struct Hostile {
     injected: Option<&'static str>,
     /// `open_read` fails for every path.
     unreadable: bool,
+    /// `rename` fails when moving a temporary transfer file.
+    rename_fails: bool,
 }
 
 #[async_trait::async_trait]
@@ -223,6 +225,9 @@ impl FileSystem for Hostile {
         LocalFs.remove_dir(path).await
     }
     async fn rename(&self, from: &str, to: &str) -> Result<(), rove_fs::FsError> {
+        if self.rename_fails && from.ends_with(".part") {
+            return Err(rove_fs::FsError::Io(format!("injected rename failure: {from}")));
+        }
         LocalFs.rename(from, to).await
     }
     async fn open_read(&self, path: &str) -> Result<rove_fs::FsReader, rove_fs::FsError> {
@@ -257,6 +262,7 @@ async fn source_names_cannot_escape_the_destination() {
     evil.src = Arc::new(Hostile {
         injected: Some("../../victim.txt"),
         unreadable: false,
+        rename_fails: false,
     });
     let done = wait_final(&mut rx, queue.enqueue(evil)).await;
     assert_eq!(done.state, TransferState::Failed, "{done:?}");
@@ -279,6 +285,7 @@ async fn a_failed_overwrite_keeps_the_existing_file() {
     failing.src = Arc::new(Hostile {
         injected: None,
         unreadable: true,
+        rename_fails: false,
     });
     let done = wait_final(&mut rx, queue.enqueue(failing)).await;
     assert_eq!(done.state, TransferState::Failed);
@@ -311,4 +318,29 @@ async fn remove_all_removes_a_directory_link_but_not_its_target() {
     remove_all(&LocalFs, &tree.to_string_lossy()).await.unwrap();
     assert!(!tree.exists());
     assert_eq!(std::fs::read(target.join("keep.txt")).unwrap(), b"keep");
+}
+
+#[tokio::test]
+async fn a_failed_rename_restores_the_existing_file() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let file = src.path().join("data.bin");
+    std::fs::write(&file, b"new").unwrap();
+    std::fs::write(dst.path().join("data.bin"), b"old").unwrap();
+
+    let (queue, mut rx) = queue(TransferConfig::default());
+    let mut failing = request(&file, dst.path(), Conflict::Overwrite);
+    failing.dst = Arc::new(Hostile {
+        injected: None,
+        unreadable: false,
+        rename_fails: true,
+    });
+    let done = wait_final(&mut rx, queue.enqueue(failing)).await;
+    assert_eq!(done.state, TransferState::Failed);
+    assert_eq!(std::fs::read(dst.path().join("data.bin")).unwrap(), b"old");
+    let names: Vec<_> = std::fs::read_dir(dst.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["data.bin"]);
 }

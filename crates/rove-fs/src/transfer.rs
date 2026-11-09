@@ -494,13 +494,11 @@ impl Runner {
         dst: &str,
     ) -> Result<(), FsError> {
         let fs = request.dst.as_ref();
-        let dir = fs
-            .parent(dst)
-            .ok_or_else(|| FsError::InvalidPath(dst.to_owned()))?;
+        let dir = fs.parent(dst).ok_or_else(|| FsError::InvalidPath(dst.to_owned()))?;
         let name: String = basename(dst).chars().take(100).collect();
         let temp = fs.join(&dir, &format!(".{name}.{}.part", self.update.id));
         let result = match self.copy(request, src, &temp).await {
-            Ok(()) => Self::replace(fs, &temp, dst).await,
+            Ok(()) => Self::replace(fs, &temp, dst, &format!("{temp}.old")).await,
             Err(error) => Err(error),
         };
         if result.is_err()
@@ -512,17 +510,30 @@ impl Runner {
         result
     }
 
-    /// Moves `temp` to `dst`. Servers whose rename refuses an existing target (SFTP version 3)
-    /// get the target removed first.
-    async fn replace(fs: &dyn FileSystem, temp: &str, dst: &str) -> Result<(), FsError> {
+    /// Moves `temp` to `dst` without ever deleting `dst` while it is the only copy. When rename
+    /// refuses an existing target (SFTP version 3), `dst` is first moved aside to `backup`, then
+    /// `temp` takes its place and the backup is removed; if that fails the backup is moved back.
+    async fn replace(fs: &dyn FileSystem, temp: &str, dst: &str, backup: &str) -> Result<(), FsError> {
+        let first = match fs.rename(temp, dst).await {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        if !Self::exists(fs, dst).await? {
+            return Err(first);
+        }
+        fs.rename(dst, backup).await?;
         match fs.rename(temp, dst).await {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                if !Self::exists(fs, dst).await? {
-                    return Err(error);
+            Ok(()) => {
+                if let Err(error) = fs.remove_file(backup).await {
+                    tracing::warn!(%error, backup, "removing the replaced file failed");
                 }
-                fs.remove_file(dst).await?;
-                fs.rename(temp, dst).await
+                Ok(())
+            }
+            Err(error) => {
+                if let Err(restore) = fs.rename(backup, dst).await {
+                    tracing::error!(%restore, backup, dst, "restoring the original file failed");
+                }
+                Err(error)
             }
         }
     }
