@@ -309,9 +309,36 @@ fn version_one_databases_migrate_to_the_current_schema() {
     }
     let vault = Vault::open(&path, Arc::new(MemoryKeyCache::default())).unwrap();
     assert!(vault.list_forwards(None).unwrap().is_empty());
+    assert_eq!(vault.preferences().unwrap(), Preferences::default());
     let conn = rusqlite::Connection::open(&path).unwrap();
     let version: i32 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
     assert_eq!(version, SCHEMA_VERSION);
+}
+
+#[test]
+fn preferences_default_validate_and_persist_while_locked() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.db");
+    let cache = Arc::new(MemoryKeyCache::default());
+    {
+        let vault = Vault::open(&path, cache.clone()).unwrap();
+        assert_eq!(vault.preferences().unwrap(), Preferences::default());
+        let mut prefs = Preferences::default();
+        prefs.terminal.font_family = " MesloLGS NF ".into();
+        prefs.terminal.font_size = 15;
+        let stored = vault.set_preferences(prefs).unwrap();
+        assert_eq!(stored.terminal.font_family, "MesloLGS NF");
+        let mut bad = Preferences::default();
+        bad.terminal.font_size = 99;
+        assert!(matches!(
+            vault.set_preferences(bad),
+            Err(VaultError::Invalid(_))
+        ));
+    }
+    let vault = Vault::open(&path, cache).unwrap();
+    let prefs = vault.preferences().unwrap();
+    assert_eq!(prefs.terminal.font_family, "MesloLGS NF");
+    assert_eq!(prefs.terminal.font_size, 15);
 }

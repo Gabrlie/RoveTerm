@@ -8,6 +8,7 @@ mod crypto;
 mod forward;
 mod key_cache;
 mod model;
+mod prefs;
 mod store;
 
 use std::path::PathBuf;
@@ -24,6 +25,7 @@ pub use key_cache::MemoryKeyCache;
 pub use key_cache::OsKeyCache;
 pub use key_cache::{Interaction, KeyCache, KeyCacheError};
 pub use model::{AuthMethod, Host, HostDraft, HostId, HostKey, KnownHostStatus, Secret};
+pub use prefs::{Preferences, TerminalPrefs};
 pub use store::{LockReason, LockState, SCHEMA_VERSION, Vault};
 
 /// Errors returned by the vault.

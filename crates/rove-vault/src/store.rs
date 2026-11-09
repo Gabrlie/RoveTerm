@@ -12,11 +12,11 @@ use crate::crypto::FieldCipher;
 use crate::model::now_millis;
 use crate::{
     ForwardDraft, ForwardId, ForwardRule, Host, HostDraft, HostId, HostKey, Interaction, KeyCache,
-    KeyCacheError, KnownHostStatus, MasterKey, Secret, VaultError,
+    KeyCacheError, KnownHostStatus, MasterKey, Preferences, Secret, VaultError,
 };
 
 /// Version of the on-disk schema, stored in `PRAGMA user_version`. Only ever increases.
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 3;
 
 const KEY_CHECK_PLAINTEXT: &[u8] = b"rove-vault-key-check";
 const KEY_CHECK_AAD: &[u8] = b"rove/vault/key-check/v1";
@@ -385,6 +385,34 @@ impl Vault {
         Ok(())
     }
 
+    /// Returns the stored preferences, or the defaults when none are stored. Readable while
+    /// locked.
+    pub fn preferences(&self) -> Result<Preferences, VaultError> {
+        let stored: Option<String> = self
+            .conn
+            .lock()
+            .query_row(
+                "SELECT value FROM preferences WHERE key = 'app'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match stored {
+            Some(json) => Ok(serde_json::from_str(&json)?),
+            None => Ok(Preferences::default()),
+        }
+    }
+
+    /// Validates and stores `prefs`, replacing the previous record. Returns what was stored.
+    pub fn set_preferences(&self, prefs: Preferences) -> Result<Preferences, VaultError> {
+        let prefs = prefs.validate()?;
+        self.conn.lock().execute(
+            "INSERT OR REPLACE INTO preferences (key, value, updated_at) VALUES ('app', ?1, ?2)",
+            params![serde_json::to_string(&prefs)?, now_millis()],
+        )?;
+        Ok(prefs)
+    }
+
     fn with_cipher<T>(
         &self,
         f: impl FnOnce(&FieldCipher) -> Result<T, VaultError>,
@@ -605,6 +633,18 @@ fn migrate(conn: &Connection) -> Result<(), VaultError> {
              );
              CREATE INDEX forwards_by_host ON forwards (host_id);
              PRAGMA user_version = 2;
+             COMMIT;",
+        )?;
+    }
+    if version < 3 {
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE preferences (
+                 key TEXT PRIMARY KEY,
+                 value TEXT NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             PRAGMA user_version = 3;
              COMMIT;",
         )?;
     }

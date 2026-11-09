@@ -59,6 +59,14 @@ pub trait KeyCache: Send + Sync {
 
 `listens_publicly()` 判断本地监听地址是否对其他机器开放（非回环地址），UI 据此给出提示。
 
+偏好设置 `Preferences` 以一条记录保存，锁定时照常可读写；记录中缺少的字段取默认值，因此旧记录在新增字段后仍可读取。`set_preferences` 先经 `validate()` 校验：
+
+| 字段 | 默认值 | 校验 |
+|---|---|---|
+| `terminal.font_family` | 空（使用内置字体栈） | 去除首尾空白，最多 100 个字符，不含引号、逗号、分号、反斜杠、花括号和控制字符 |
+| `terminal.font_size` | 13 | 8–32 |
+| `terminal.line_height` | 1.15 | 1.0–2.0 |
+
 ## 表结构
 
-`meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`、`forwards`（外键级联删除）。结构版本记录在 `PRAGMA user_version`，当前版本为 2；打开旧版本数据库时按版本依次迁移。
+`meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`、`forwards`（外键级联删除）、`preferences`。结构版本记录在 `PRAGMA user_version`，当前版本为 3；打开旧版本数据库时按版本依次迁移。
