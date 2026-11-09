@@ -57,7 +57,6 @@ export const en = {
   'home.title': 'Home',
   'action.panel.right': 'Toggle status and snippets panel',
   'action.panel.bottom': 'Toggle files panel',
-  'files.panelTitle': 'Files',
   'status.title': 'Status',
   'status.noRemote': 'Focus a remote terminal to see it here.',
   'status.notConnected': 'Shown once a terminal or file panel is connected to this host.',

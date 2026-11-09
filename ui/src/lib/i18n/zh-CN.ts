@@ -59,7 +59,6 @@ export const zhCN: Messages = {
   'home.title': '主页',
   'action.panel.right': '显示或隐藏状态与快捷指令面板',
   'action.panel.bottom': '显示或隐藏文件面板',
-  'files.panelTitle': '文件',
   'status.title': '状态',
   'status.noRemote': '聚焦一个远程终端后在这里显示。',
   'status.notConnected': '终端或文件面板连接到这台主机后显示。',

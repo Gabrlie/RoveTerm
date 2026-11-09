@@ -14,51 +14,28 @@
 </script>
 
 <section class="panel">
-  <div class="head">
-    <span class="title">{t('files.panelTitle')}{pane && source ? ` · ${pane.title}` : ''}</span>
-    <IconButton icon="close" label={t('common.close')} small onclick={onclose} />
-  </div>
-  <div class="body">
-    {#if source}
-      {#key sourceKey(source)}
-        <FileBrowser {source} password={null} remember={false} active={false} visible={true} />
-      {/key}
-    {:else}
-      <p class="muted">{t('status.noRemote')}</p>
-    {/if}
-  </div>
+  {#if source}
+    {#key sourceKey(source)}
+      <FileBrowser {source} password={null} remember={false} active={false} visible={true} {onclose} />
+    {/key}
+  {:else}
+    <p class="muted">{t('status.noRemote')}</p>
+    <span class="close"><IconButton icon="close" label={t('common.close')} small onclick={onclose} /></span>
+  {/if}
 </section>
 
 <style>
   .panel {
+    position: relative;
     height: 100%;
     display: flex;
     flex-direction: column;
     background: var(--surface);
   }
-  .head {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    height: 32px;
-    padding: 0 var(--space-2) 0 var(--space-3);
-    background: var(--material-bar);
-    box-shadow: inset 0 -1px 0 var(--separator);
-  }
-  .title {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--fg-muted);
-    font-size: var(--text-footnote);
-    font-weight: 600;
-  }
-  .body {
-    position: relative;
-    flex: 1;
-    min-height: 0;
+  .close {
+    position: absolute;
+    top: 7px;
+    right: var(--space-2);
   }
   .muted {
     margin: 0;

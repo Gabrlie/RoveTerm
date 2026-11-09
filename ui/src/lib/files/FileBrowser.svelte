@@ -41,9 +41,11 @@
     visible: boolean;
     onopened?: () => void;
     onerror?: (error: unknown) => void;
+    /** Shows a close button at the right end of the toolbar (the bottom panel). */
+    onclose?: () => void;
   }
 
-  let { source, password, remember, active, visible, onopened, onerror }: Props = $props();
+  let { source, password, remember, active, visible, onopened, onerror, onclose }: Props = $props();
 
   type Pending =
     | { kind: 'mkdir' }
@@ -416,6 +418,10 @@
     <IconButton icon="edit" label={t('files.rename')} small disabled={selection.length !== 1} onclick={askRename} />
     <IconButton icon="remove" label={t('common.delete')} small danger disabled={selection.length === 0} onclick={askDelete} />
     <IconButton icon={showHidden ? 'eye' : 'eyeOff'} label={t('files.showHidden')} small active={showHidden} onclick={toggleHidden} />
+    {#if onclose}
+      <span class="toolbar-gap"></span>
+      <IconButton icon="close" label={t('common.close')} small onclick={onclose} />
+    {/if}
   </div>
 
   <div class="header row">
@@ -548,6 +554,12 @@
     padding: 0 var(--space-2);
     background: var(--material-bar);
     box-shadow: inset 0 -1px 0 var(--separator);
+  }
+  .toolbar-gap {
+    width: 1px;
+    height: 16px;
+    margin: 0 var(--space-1);
+    background: var(--separator);
   }
   .path {
     flex: 1;
