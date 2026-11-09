@@ -32,7 +32,7 @@
 
 `TermView` 接收一个 `open(size, onOutput) => Promise<SessionId>` 函数：挂载后先按容器尺寸计算终端尺寸，再调用 `open` 启动会话，因此 shell 一开始就拿到正确的尺寸。
 
-- 输出通过 IPC Channel 到达：`ArrayBuffer` 直接写入 xterm；`{ progress }` 消息由 `connectLog.ts` 格式化为一行连接日志（连接、握手、host key、逐个凭据的尝试与拒绝、认证成功）写入终端；`{ exit }` 消息在终端中显示退出提示，并调用 `onexit`。
+- 输出通过 IPC Channel 到达：`ArrayBuffer` 直接写入 xterm；`{ progress }` 消息由 `connectLog.ts` 格式化为一行连接日志（连接、握手、host key、逐个凭据的尝试与拒绝、认证成功）写入终端，连接成功后在第一段终端输出到达时清空，连接失败时保留以便查看停在哪一步；`{ exit }` 消息在终端中显示退出提示，并调用 `onexit`。
 - 输入通过 `onData` 调用 `sessionWrite`；会话打开之前的输入会被丢弃。
 - 面板在连接完成前被关闭时，稍后返回的会话立即由 `sessionClose` 关闭，之后到达的输出和错误都被忽略，不会留下后台会话。
 - 容器尺寸变化经 `ResizeObserver` 和 `requestAnimationFrame` 合并后调用 `fit`，行列数变化时才调用 `sessionResize`。

@@ -39,6 +39,8 @@
   let observer: ResizeObserver | undefined;
   let frame = 0;
   let destroyed = false;
+  /** Connection steps are on screen; the first terminal output replaces them. */
+  let showingLog = false;
   let lastSize: TermSize = { cols: 0, rows: 0 };
   const media = matchMedia('(prefers-color-scheme: dark)');
 
@@ -60,10 +62,16 @@
   function handleOutput(message: OutputMessage): void {
     if (!term || destroyed) return;
     if (message instanceof ArrayBuffer) {
+      if (showingLog) {
+        // Connected: the shell's own output starts on a clean screen.
+        showingLog = false;
+        term.reset();
+      }
       term.write(new Uint8Array(message));
       return;
     }
     if ('progress' in message) {
+      showingLog = true;
       term.write(formatStep(message.progress));
       return;
     }
