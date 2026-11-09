@@ -29,7 +29,7 @@
 
 `TermView` 接收一个 `open(size, onOutput) => Promise<SessionId>` 函数：挂载后先按容器尺寸计算终端尺寸，再调用 `open` 启动会话，因此 shell 一开始就拿到正确的尺寸。
 
-- 输出通过 IPC Channel 到达：`ArrayBuffer` 直接写入 xterm；`{ exit }` 消息在终端中显示退出提示，并调用 `onexit`。
+- 输出通过 IPC Channel 到达：`ArrayBuffer` 直接写入 xterm；`{ progress }` 消息由 `connectLog.ts` 格式化为一行连接日志（连接、握手、host key、逐个凭据的尝试与拒绝、认证成功）写入终端；`{ exit }` 消息在终端中显示退出提示，并调用 `onexit`。
 - 输入通过 `onData` 调用 `sessionWrite`；会话打开之前的输入会被丢弃。
 - 容器尺寸变化经 `ResizeObserver` 和 `requestAnimationFrame` 合并后调用 `fit`，行列数变化时才调用 `sessionResize`。
 - macOS、Windows 和 Android 上按需动态加载 WebGL 渲染器；Linux 桌面（WebKitGTK）在同时存在多个 GL 上下文时，较早的 WebGL 终端不再重绘，因此使用 DOM 渲染器。WebGL 上下文丢失时退回 DOM 渲染器并立即重绘。
@@ -74,6 +74,7 @@
 
 - 侧栏按分组列出主机，搜索时匹配名称、地址、用户名、分组和标签；双击或按 Enter 连接，悬停时显示编辑和删除按钮。
 - 连接前，如果主机使用"每次询问"认证，或者使用密码认证但没有保存密码，先弹出密码框；用户可以勾选"记住密码"，连接成功后由后端写入 vault。
+- 终端打开失败时记录到面板的 `failure`，在面板底部显示失败原因和操作：重试、输入私钥密码（缺少 passphrase 时）、使用密码登录（对密钥主机以 `password_kind = "password"` 重连，这种密码不能记住）、编辑主机、关闭。
 - 打开面板时如果后端返回 `ssh.credentials_required` 或 `ssh.passphrase_required`，弹出密码或私钥密码框，再用新面板替换原面板重新连接（`workspace.reopen`）。密钥主机可以勾选"记住私钥密码"，成功后存为 passphrase。
 - 一次性密码只保存在面板状态中，会话打开后立即清除。
 - 主机编辑表单在保存失败（例如用户拒绝解锁）时保持打开，已填写的内容不会丢失。留空的秘密字段表示保留已保存的值。

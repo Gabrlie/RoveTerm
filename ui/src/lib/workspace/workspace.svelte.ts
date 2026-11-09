@@ -1,5 +1,5 @@
 // Tabs, their split layouts, and what each pane is connected to.
-import { sessionClose, type ExitStatus, type HostId, type RemoteSource, type SessionId } from '../ipc';
+import { sessionClose, type CommandError, type ExitStatus, type HostId, type PasswordKind, type RemoteSource, type SessionId } from '../ipc';
 import { terminals } from '../terminal/registry';
 import { computeLayout, pane, paneIds, removePane, replacePane, setRatio, splitPane, type LayoutNode, type PaneId, type Path, type SplitDir } from '../layout/layout';
 
@@ -15,8 +15,12 @@ export interface PaneState {
   target: PaneTarget;
   /** One-shot credentials for the first open; cleared once the session starts. */
   password: string | null;
+  /** How `password` is used; see `PasswordKind`. */
+  passwordKind: PasswordKind;
   remember: boolean;
   sessionId: SessionId | null;
+  /** Why opening failed, until the pane is reopened. */
+  failure: CommandError | null;
   title: string;
   exited: ExitStatus | null;
 }
@@ -25,6 +29,10 @@ export interface Tab {
   id: string;
   root: LayoutNode;
   focused: PaneId;
+}
+
+function isError(value: unknown): value is CommandError {
+  return typeof value === 'object' && value !== null && 'code' in value && 'message' in value;
 }
 
 let counter = 0;
@@ -71,9 +79,9 @@ class Workspace {
     return tab ? this.panes[tab.focused] : undefined;
   }
 
-  private createPane(target: PaneTarget, password: string | null = null, remember = false): PaneId {
+  private createPane(target: PaneTarget, password: string | null = null, remember = false, passwordKind: PasswordKind = 'natural'): PaneId {
     const id = nextId('pane');
-    this.panes[id] = { id, target, password, remember, sessionId: null, title: initialTitle(target), exited: null };
+    this.panes[id] = { id, target, password, passwordKind, remember, sessionId: null, failure: null, title: initialTitle(target), exited: null };
     return id;
   }
 
@@ -191,11 +199,11 @@ class Workspace {
    * Replaces a pane that failed to open with a fresh one carrying one-shot credentials. The new pane
    * mounts a new terminal view, which opens the target again.
    */
-  reopen(paneId: PaneId, password: string, remember: boolean): void {
+  reopen(paneId: PaneId, password: string | null, remember: boolean, passwordKind: PasswordKind = 'natural'): void {
     const tab = this.tabs.find((candidate) => paneIds(candidate.root).includes(paneId));
     const old = this.panes[paneId];
     if (!tab || !old) return;
-    const added = this.createPane(old.target, password, remember);
+    const added = this.createPane(old.target, password, remember, passwordKind);
     tab.root = replacePane(tab.root, paneId, added);
     if (tab.focused === paneId) tab.focused = added;
     delete this.panes[paneId];
@@ -219,6 +227,14 @@ class Workspace {
   opened(paneId: PaneId): void {
     const state = this.panes[paneId];
     if (state) state.password = null;
+  }
+
+  /** Records why a pane could not open. */
+  failed(paneId: PaneId, error: unknown): void {
+    const state = this.panes[paneId];
+    if (!state) return;
+    state.password = null;
+    state.failure = isError(error) ? error : { code: 'unknown', message: String(error), detail: null };
   }
 
   exited(paneId: PaneId, status: ExitStatus): void {

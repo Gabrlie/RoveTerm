@@ -16,6 +16,7 @@
   } from '../ipc';
   import { errorText, t } from '../i18n';
   import { currentTheme } from './theme';
+  import { formatStep } from './connectLog';
   import { isAppShortcut } from '../actions';
   import { prefs, SYMBOL_FONT } from '../settings/prefs.svelte';
 
@@ -59,6 +60,10 @@
     if (!term) return;
     if (message instanceof ArrayBuffer) {
       term.write(new Uint8Array(message));
+      return;
+    }
+    if ('progress' in message) {
+      term.write(formatStep(message.progress));
       return;
     }
     const { exit } = message;

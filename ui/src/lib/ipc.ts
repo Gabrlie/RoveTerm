@@ -32,7 +32,23 @@ export interface ExitStatus {
 }
 
 /** Messages delivered on a session output channel. */
-export type OutputMessage = ArrayBuffer | { exit: ExitStatus };
+/** Kind of credential in a connection step. */
+export type AuthKind = 'password' | 'keyboard_interactive' | 'public_key' | 'agent';
+
+/** One step of establishing an SSH connection; see `ConnectStep` in rove-ssh. */
+export type ConnectStep =
+  | { step: 'connecting'; address: string; via: string | null }
+  | { step: 'handshake' }
+  | { step: 'host_key_accepted'; algorithm: string; fingerprint: string }
+  | { step: 'agent_unavailable'; reason: string }
+  | { step: 'trying'; method: AuthKind; label: string | null }
+  | { step: 'rejected'; method: AuthKind; label: string | null }
+  | { step: 'authenticated' };
+
+export type OutputMessage = ArrayBuffer | { exit: ExitStatus } | { progress: ConnectStep };
+
+/** How a typed value is used: what the host's method asks for, or a login password for a key host. */
+export type PasswordKind = 'natural' | 'password';
 
 export type OutputHandler = (message: OutputMessage) => void;
 
@@ -54,11 +70,12 @@ export function sessionOpenLocal(size: TermSize, onOutput: OutputHandler): Promi
 export function sessionOpenSsh(
   hostId: HostId,
   password: string | null,
+  passwordKind: PasswordKind,
   remember: boolean,
   size: TermSize,
   onOutput: OutputHandler,
 ): Promise<SessionId> {
-  return invoke('session_open_ssh', { onOutput: outputChannel(onOutput), hostId, password, remember, ...size });
+  return invoke('session_open_ssh', { onOutput: outputChannel(onOutput), hostId, password, passwordKind, remember, ...size });
 }
 
 export function sessionOpenQuick(
@@ -90,6 +107,7 @@ export function sessionReattach(id: SessionId, onOutput: OutputHandler): Promise
 export type AuthMethod =
   | { method: 'password' }
   | { method: 'private_key' }
+  | { method: 'key'; key: KeyId }
   | { method: 'key_file'; path: string }
   | { method: 'agent' }
   | { method: 'interactive' };
@@ -117,6 +135,8 @@ export interface Host extends HostDraft {
   id: HostId;
   created_at: number;
   updated_at: number;
+  /** Last successful connection, Unix milliseconds. */
+  last_connected_at: number | null;
 }
 
 export interface HostEntry extends Host {
@@ -239,11 +259,17 @@ export interface SftpOpened {
   home: string;
 }
 
-export function sftpOpen(source: RemoteSource, password: string | null, remember: boolean): Promise<SftpOpened> {
+export function sftpOpen(
+  source: RemoteSource,
+  password: string | null,
+  remember: boolean,
+  passwordKind: PasswordKind = 'natural',
+): Promise<SftpOpened> {
   return invoke('sftp_open', {
     hostId: 'hostId' in source ? source.hostId : null,
     address: 'address' in source ? source.address : null,
     password,
+    passwordKind,
     remember,
   });
 }
@@ -377,4 +403,124 @@ export function forwardStop(id: ForwardId): Promise<boolean> {
 
 export function onForwardUpdate(handler: (status: ForwardStatus) => void): Promise<UnlistenFn> {
   return listen<ForwardStatus>('forward-update', (event) => handler(event.payload));
+}
+
+// Key library
+
+export type KeyId = string;
+
+export interface SshKey {
+  id: KeyId;
+  name: string;
+  algorithm: string;
+  public_key: string;
+  fingerprint: string;
+  /** `false` after a credential reset: the private key must be imported again. */
+  has_private: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export type KeyType = 'ed25519' | 'ecdsa_p256' | 'rsa3072';
+
+export function keyList(): Promise<SshKey[]> {
+  return invoke('key_list');
+}
+
+export function keyGenerate(name: string, kind: KeyType, comment: string, passphrase: string | null): Promise<SshKey> {
+  return invoke('key_generate', { name, kind, comment, passphrase });
+}
+
+export function keyImport(name: string, privateKey: string, passphrase: string | null): Promise<SshKey> {
+  return invoke('key_import', { name, privateKey, passphrase });
+}
+
+export function keyReadFile(path: string): Promise<string> {
+  return invoke('key_read_file', { path });
+}
+
+/** Renames a key, or with `privateKey` replaces it as well. */
+export function keyUpdate(id: KeyId, name: string, privateKey: string | null, passphrase: string | null): Promise<SshKey> {
+  return invoke('key_update', { id, name, privateKey, passphrase });
+}
+
+export function keyDelete(id: KeyId): Promise<void> {
+  return invoke('key_delete', { id });
+}
+
+export function keyReveal(id: KeyId): Promise<{ private_key: string; passphrase: string | null }> {
+  return invoke('key_reveal', { id });
+}
+
+export function keyInstall(id: KeyId, hostId: HostId, password: string | null, passwordKind: PasswordKind): Promise<void> {
+  return invoke('key_install', { id, hostId, password, passwordKind });
+}
+
+// Server status
+
+/** One status sample; counters are cumulative. See `ServerStats` in rove-ssh. */
+export interface ServerStats {
+  load: [number, number, number];
+  cpu_total: number;
+  cpu_idle: number;
+  cores: number;
+  mem_total: number;
+  mem_available: number;
+  swap_total: number;
+  swap_free: number;
+  disk_total: number;
+  disk_used: number;
+  uptime_secs: number;
+  net_rx: number;
+  net_tx: number;
+  kernel: string;
+  hostname: string;
+}
+
+export function serverStats(source: RemoteSource): Promise<ServerStats> {
+  return invoke('server_stats', {
+    hostId: 'hostId' in source ? source.hostId : null,
+    address: 'address' in source ? source.address : null,
+  });
+}
+
+// Snippets
+
+export interface Snippet {
+  id: string;
+  name: string;
+  command: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SnippetDraft {
+  name: string;
+  command: string;
+}
+
+export function snippetList(): Promise<Snippet[]> {
+  return invoke('snippet_list');
+}
+
+export function snippetCreate(draft: SnippetDraft): Promise<Snippet> {
+  return invoke('snippet_create', { draft });
+}
+
+export function snippetUpdate(id: string, draft: SnippetDraft): Promise<Snippet> {
+  return invoke('snippet_update', { id, draft });
+}
+
+export function snippetDelete(id: string): Promise<void> {
+  return invoke('snippet_delete', { id });
+}
+
+// Session restore
+
+export function workspaceSave(snapshot: object): Promise<void> {
+  return invoke('workspace_save', { snapshot });
+}
+
+export function workspaceLoad(): Promise<object | null> {
+  return invoke('workspace_load');
 }

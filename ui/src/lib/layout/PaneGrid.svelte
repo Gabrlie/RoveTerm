@@ -8,17 +8,26 @@
   import { sessionOpenLocal, sessionOpenQuick, sessionOpenSsh, type OutputMessage, type TermSize } from '../ipc';
   import type { Divider, PaneId } from './layout';
   import { credentialKindOf, type CredentialKind } from '../ipc';
+  import { errorText, t } from '../i18n';
+  import Icon from '../ui/Icon.svelte';
 
   interface Props {
     tab: Tab;
     visible: boolean;
-    /** Called when a pane needs a password before it can connect. */
-    oncredentials: (paneId: PaneId, kind: CredentialKind) => void;
+    /**
+     * Called when a pane needs a typed credential before it can connect. `override` asks for a
+     * login password for a host that normally uses keys.
+     */
+    oncredentials: (paneId: PaneId, kind: CredentialKind, override?: boolean) => void;
+    /** Opens the editor of a saved host. */
+    onedithost: (hostId: string) => void;
   }
 
-  let { tab, visible, oncredentials }: Props = $props();
+  let { tab, visible, oncredentials, onedithost }: Props = $props();
 
-  function credentialRequest(id: PaneId, error: unknown): void {
+  /** Records the failure; a missing password or passphrase is asked for right away. */
+  function onOpenError(id: PaneId, error: unknown): void {
+    workspace.failed(id, error);
     const kind = credentialKindOf(error);
     if (kind) oncredentials(id, kind);
   }
@@ -35,7 +44,7 @@
         case 'local':
           return sessionOpenLocal(size, onOutput);
         case 'ssh':
-          return sessionOpenSsh(target.hostId, pane.password, pane.remember, size, onOutput);
+          return sessionOpenSsh(target.hostId, pane.password, pane.passwordKind, pane.remember, size, onOutput);
         case 'quick':
           return sessionOpenQuick(target.address, pane.password, size, onOutput);
         case 'sftp':
@@ -113,7 +122,10 @@
             active={visible && tab.focused === id}
             {visible}
             onopened={() => workspace.opened(id)}
-            onerror={(error) => credentialRequest(id, error)}
+            onerror={(error) => {
+              const kind = credentialKindOf(error);
+              if (kind) oncredentials(id, kind);
+            }}
           />
         {:else}
           <TermView
@@ -123,8 +135,29 @@
             onsession={(sessionId) => workspace.attached(id, sessionId)}
             onexit={(status) => onExit(pane, status.code)}
             ontitle={(title) => workspace.retitle(id, title)}
-            onerror={(error) => credentialRequest(id, error)}
+            onerror={(error) => onOpenError(id, error)}
           />
+          {#if pane.failure}
+            {@const failure = pane.failure}
+            <div class="failure" role="alert">
+              <Icon name="warning" size={16} />
+              <span class="reason">{t('connect.failed', { reason: errorText(failure) })}</span>
+              <div class="buttons">
+                <button type="button" class="primary" onclick={() => workspace.reopen(id, null, false)}>{t('connect.retry')}</button>
+                {#if failure.code === 'ssh.passphrase_required'}
+                  <button type="button" onclick={() => oncredentials(id, 'passphrase')}>{t('connect.enterPassphrase')}</button>
+                {/if}
+                {#if pane.target.kind !== 'local' && failure.code !== 'ssh.connect' && failure.code !== 'ssh.timeout'}
+                  <button type="button" onclick={() => oncredentials(id, 'password', true)}>{t('connect.usePassword')}</button>
+                {/if}
+                {#if pane.target.kind === 'ssh'}
+                  {@const hostId = pane.target.hostId}
+                  <button type="button" onclick={() => onedithost(hostId)}>{t('connect.editHost')}</button>
+                {/if}
+                <button type="button" onclick={() => workspace.closePane(id)}>{t('common.close')}</button>
+              </div>
+            </div>
+          {/if}
         {/if}
       </div>
     {/if}
@@ -156,6 +189,54 @@
   }
   .pane.focused {
     border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  .failure {
+    position: absolute;
+    left: var(--space-3);
+    right: var(--space-3);
+    bottom: var(--space-3);
+    z-index: 3;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+    box-shadow: 0 6px 20px rgb(0 0 0 / 14%);
+    color: var(--fg);
+    font-size: var(--text-body);
+  }
+  .failure :global(svg) {
+    color: var(--danger);
+  }
+  .reason {
+    flex: 1 1 200px;
+    min-width: 0;
+  }
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+  .buttons button {
+    padding: 4px var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--fg);
+    font: inherit;
+    font-size: var(--text-footnote);
+    cursor: pointer;
+  }
+  .buttons button:hover {
+    background: var(--bg-sunken);
+  }
+  .buttons button.primary {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
   }
   .divider {
     position: absolute;

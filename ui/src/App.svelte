@@ -23,7 +23,7 @@
   type PasswordRequest =
     | { kind: 'host'; host: HostEntry }
     | { kind: 'files'; host: HostEntry }
-    | { kind: 'pane'; paneId: PaneId; title: string; secret: CredentialKind; allowRemember: boolean };
+    | { kind: 'pane'; paneId: PaneId; title: string; secret: CredentialKind; allowRemember: boolean; override: boolean };
 
   let paletteOpen = $state(false);
   let sidebarOpen = $state(true);
@@ -75,7 +75,7 @@
     return secret === 'password' ? method === 'password' : method === 'key_file' || method === 'private_key';
   }
 
-  function requestPaneCredentials(paneId: PaneId, secret: CredentialKind): void {
+  function requestPaneCredentials(paneId: PaneId, secret: CredentialKind, override = false): void {
     const pane = workspace.panes[paneId];
     if (!pane || pane.target.kind === 'local') return;
     const hostId = hostIdOf(pane.target);
@@ -85,7 +85,9 @@
       paneId,
       title: pane.title,
       secret,
-      allowRemember: canRemember(host, secret),
+      // A password typed for a key host is used once and never stored.
+      allowRemember: canRemember(host, secret) && !(override && host?.auth.method !== 'password'),
+      override,
     };
   }
 
@@ -102,7 +104,7 @@
       workspace.openTab(target, password, remember);
       if (remember) setTimeout(() => void hosts.refresh(), 3000);
     } else {
-      workspace.reopen(request.paneId, password, remember);
+      workspace.reopen(request.paneId, password, remember, request.override ? 'password' : 'natural');
     }
   }
 
@@ -202,7 +204,12 @@
     <TabBar onnew={() => run('tab.newLocal')} />
     <main class="stage">
       {#each workspace.tabs as tab (tab.id)}
-        <PaneGrid {tab} visible={tab.id === workspace.activeTabId} oncredentials={requestPaneCredentials} />
+        <PaneGrid
+          {tab}
+          visible={tab.id === workspace.activeTabId}
+          oncredentials={requestPaneCredentials}
+          onedithost={(hostId) => (editing = hosts.find(hostId) ?? undefined)}
+        />
       {:else}
         <div class="empty">{t('workspace.empty')}</div>
       {/each}
