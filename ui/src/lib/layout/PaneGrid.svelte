@@ -115,7 +115,9 @@
         onfocusin={() => workspace.focus(id)}
         onpointerdown={() => workspace.focus(id)}
       >
-        {#if pane.target.kind === 'sftp'}
+        {#if pane.deferred}
+          <div class="deferred">{pane.title}</div>
+        {:else if pane.target.kind === 'sftp'}
           <FileBrowser
             source={pane.target.source}
             password={pane.password}
@@ -194,6 +196,13 @@
   }
   .pane.focused {
     border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  .deferred {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    color: var(--fg-muted);
+    font-size: var(--text-footnote);
   }
   .failure {
     position: absolute;

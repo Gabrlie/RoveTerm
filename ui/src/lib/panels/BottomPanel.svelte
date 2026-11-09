@@ -8,8 +8,9 @@
   let { onclose }: { onclose: () => void } = $props();
 
   const pane = $derived(workspace.focusedPane);
-  // A file pane already shows these files; the panel follows terminals only.
-  const source = $derived(pane && pane.target.kind !== 'sftp' ? remoteSourceOf(pane.target) : null);
+  // A file pane already shows these files; the panel follows terminals only, once they are
+  // connected, so it reuses their connection instead of starting (and prompting for) its own.
+  const source = $derived(pane && pane.target.kind !== 'sftp' && pane.sessionId ? remoteSourceOf(pane.target) : null);
 </script>
 
 <section class="panel">

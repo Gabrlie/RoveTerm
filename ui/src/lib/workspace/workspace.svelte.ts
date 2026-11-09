@@ -1,6 +1,7 @@
 // Tabs, their split layouts, and what each pane is connected to.
 import { sessionClose, type CommandError, type ExitStatus, type HostId, type PasswordKind, type RemoteSource, type SessionId } from '../ipc';
 import { terminals } from '../terminal/registry';
+import { SNAPSHOT_VERSION, snapshotNode, type Snapshot, type SnapshotNode } from './snapshot';
 import { computeLayout, pane, paneIds, removePane, replacePane, setRatio, splitPane, type LayoutNode, type PaneId, type Path, type SplitDir } from '../layout/layout';
 
 /** What a pane opens. Splitting a pane opens the same target again. */
@@ -21,6 +22,8 @@ export interface PaneState {
   sessionId: SessionId | null;
   /** Why opening failed, until the pane is reopened. */
   failure: CommandError | null;
+  /** Restored from a snapshot and not yet shown: connects when its tab is first activated. */
+  deferred: boolean;
   title: string;
   exited: ExitStatus | null;
 }
@@ -104,7 +107,7 @@ class Workspace {
 
   private createPane(target: PaneTarget, password: string | null = null, remember = false, passwordKind: PasswordKind = 'natural'): PaneId {
     const id = nextId('pane');
-    this.panes[id] = { id, target, password, passwordKind, remember, sessionId: null, failure: null, title: initialTitle(target), exited: null };
+    this.panes[id] = { id, target, password, passwordKind, remember, sessionId: null, failure: null, deferred: false, title: initialTitle(target), exited: null };
     return id;
   }
 
@@ -188,6 +191,52 @@ class Workspace {
 
   activate(tabId: string): void {
     this.activeTabId = tabId;
+    this.undefer(tabId);
+  }
+
+  /** Lets the deferred panes of a tab connect. */
+  private undefer(tabId: string): void {
+    const tab = this.tabs.find((candidate) => candidate.id === tabId);
+    if (!tab) return;
+    for (const id of paneIds(tab.root)) {
+      const state = this.panes[id];
+      if (state?.deferred) state.deferred = false;
+    }
+  }
+
+  /** The open tabs as a snapshot for session restore. */
+  snapshot(): Snapshot {
+    const tabs = this.tabs.flatMap((tab) => {
+      const root = snapshotNode(tab.root, (id) => this.panes[id]?.target);
+      return root ? [{ root, focused: Math.max(0, paneIds(tab.root).indexOf(tab.focused)) }] : [];
+    });
+    return { version: SNAPSHOT_VERSION, tabs, active: this.tabs.findIndex((tab) => tab.id === this.activeTabId) };
+  }
+
+  /**
+   * Reopens the tabs of `snapshot` after the existing ones. Panes start deferred and connect when
+   * their tab is first shown, so restoring never opens many connections or password prompts at
+   * once; the snapshot's active tab is shown right away.
+   */
+  restore(snapshot: Snapshot): void {
+    const build = (node: SnapshotNode): LayoutNode => {
+      if ('pane' in node) {
+        const id = this.createPane(node.pane);
+        const state = this.panes[id];
+        if (state) state.deferred = true;
+        return pane(id);
+      }
+      return { kind: 'split', dir: node.dir, ratio: node.ratio, a: build(node.a), b: build(node.b) };
+    };
+    const created = snapshot.tabs.map((saved) => {
+      const root = build(saved.root);
+      const ids = paneIds(root);
+      const tab: Tab = { id: nextId('tab'), root, focused: ids[saved.focused] ?? ids[0] ?? '' };
+      this.tabs.push(tab);
+      return tab;
+    });
+    const active = created[snapshot.active];
+    if (active) this.activate(active.id);
   }
 
   /** Activates the tab `offset` positions away, wrapping around; the home tab comes first. */

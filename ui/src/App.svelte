@@ -22,7 +22,8 @@
   import { actionFor, type ActionId } from './lib/actions';
   import { terminals } from './lib/terminal/registry';
   import { HOME_TAB, workspace, type PaneTarget } from './lib/workspace/workspace.svelte';
-  import { onHostKeyPrompt, type CredentialKind, type HostEntry, type HostKeyPrompt } from './lib/ipc';
+  import { onHostKeyPrompt, workspaceLoad, workspaceSave, type CredentialKind, type HostEntry, type HostKeyPrompt } from './lib/ipc';
+  import { parseSnapshot } from './lib/workspace/snapshot';
   import { errorText, t } from './lib/i18n';
   import type { PaneId } from './lib/layout/layout';
 
@@ -268,7 +269,27 @@
     run(id);
   }
 
+  // Session restore: reopen the last workspace once, then record changes (debounced).
+  let restored = $state(false);
+  let saveTimer = 0;
+  $effect(() => {
+    if (!restored) return;
+    const snapshot = workspace.snapshot();
+    const text = JSON.stringify(snapshot);
+    clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => {
+      workspaceSave(JSON.parse(text)).catch((error: unknown) => console.warn('saving the workspace failed', error));
+    }, 1500);
+  });
+
   onMount(() => {
+    workspaceLoad()
+      .then((stored) => {
+        const snapshot = parseSnapshot(stored);
+        if (snapshot) workspace.restore(snapshot);
+      })
+      .catch((error: unknown) => console.warn('workspace restore unavailable', error))
+      .finally(() => (restored = true));
     vault.init().catch((error: unknown) => console.warn('vault state unavailable', error));
     hosts.refresh().catch((error: unknown) => showNotice(errorText(error)));
     keys.refresh().catch((error: unknown) => console.warn('key library unavailable', error));
