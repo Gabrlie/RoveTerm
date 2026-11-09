@@ -147,6 +147,7 @@
   $effect(() => {
     void prefs.value.terminal.scheme_light;
     void prefs.value.terminal.scheme_dark;
+    void prefs.value.appearance.theme;
     applyTheme();
   });
 

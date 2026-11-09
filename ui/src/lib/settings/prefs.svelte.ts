@@ -1,4 +1,5 @@
 // User preferences shared by the UI. Loaded once at startup; views read them reactively.
+import { applyAppearance } from './appearance';
 import { devicePrefsGet, devicePrefsSet, prefsGet, prefsSet, type DevicePrefs, type Preferences } from '../ipc';
 
 /** Family of the bundled symbol font (see styles/fonts.css). */
@@ -49,11 +50,13 @@ class PrefsState {
 
   async load(): Promise<void> {
     [this.value, this.device] = await Promise.all([prefsGet(), devicePrefsGet()]);
+    applyAppearance(this.value.appearance);
   }
 
   /** Stores `next`; the backend returns the normalized value, which becomes current. */
   async save(next: Preferences): Promise<void> {
     this.value = await prefsSet(next);
+    applyAppearance(this.value.appearance);
   }
 
   /** Stores this device's preferences; the normalized value becomes current. */

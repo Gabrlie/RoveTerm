@@ -80,17 +80,19 @@
   --radius-pill: 999px;
 
   /* List rows and toolbar controls. */
-  --row-height: 30px;
-  --control-height: 28px;
+  --row-height: calc(30px * var(--ui-scale));
+  --control-height: calc(28px * var(--ui-scale));
 
   --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui,
     'PingFang SC', 'Microsoft YaHei UI', 'Noto Sans CJK SC', sans-serif;
   --font-mono: 'JetBrains Mono', 'Cascadia Mono', 'SF Mono', Menlo, Consolas, 'Noto Sans Mono CJK SC', monospace;
-  --text-caption: 11px;
-  --text-footnote: 12px;
-  --text-body: 13px;
-  --text-title: 15px;
-  --text-large: 20px;
+  /* Interface text scales with the `ui_scale` preference; the terminal has its own size. */
+  --ui-scale: 1;
+  --text-caption: calc(11px * var(--ui-scale));
+  --text-footnote: calc(12px * var(--ui-scale));
+  --text-body: calc(13px * var(--ui-scale));
+  --text-title: calc(15px * var(--ui-scale));
+  --text-large: calc(20px * var(--ui-scale));
 
   /* Motion: a soft deceleration close to the system's spring animations. */
   --ease: cubic-bezier(0.32, 0.72, 0, 1);

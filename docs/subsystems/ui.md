@@ -180,5 +180,7 @@
 - 分隔一律用半透明细线 `--separator`（常以 0.5px 的 `box-shadow` 绘制），`--border` 只给输入类控件描边。
 - 强调色只设 `--accent`，`--accent-hover`、`--accent-soft`、`--focus-ring` 等由 `color-mix()` 派生；状态色有 `--success` / `--warning` / `--danger` 及其 soft 版本。
 - `--shadow-sm|md|lg` 是多层柔和阴影，`--glass-edge` 是玻璃边缘高光；动效用 `--ease` 与 `--dur-fast|dur|dur-slow`，系统要求减少动效时时长为 0。
+- 外观偏好由 `applyAppearance()`（`src/lib/settings/appearance.ts`）在偏好加载和保存后应用：主题写入 `<html data-theme>`（跟随系统时移除），非蓝色的强调色把 `--accent` 指向 `--sys-*`，界面缩放写入 `--ui-scale`（文字与控件高度按它缩放，终端字号不受影响），语言交给 `setLocale()`。
+- 文案目录放在响应式状态 `locale`（`src/lib/i18n/locale.svelte.ts`）里，`t()` 读取它，切换语言后已渲染的界面随之更新，不需要重新挂载。
 - 旧名 `--bg`、`--bg-elevated`、`--bg-sunken` 暂作别名保留。
 - `controls.css` 的选择器都包在 `:where()` 里，没有优先级，组件自己的规则总能覆盖；自带外框的输入框（搜索框、路径栏）加 `class="bare"` 去掉文本框外观。开关用 `src/lib/ui/Switch.svelte`。

@@ -2,6 +2,7 @@
 import { en, type MessageKey, type Messages } from './en';
 import { zhCN } from './zh-CN';
 import { isCommandError } from '../ipc';
+import { locale } from './locale.svelte';
 
 const catalogs: Record<string, Messages> = { en, 'zh-CN': zhCN };
 
@@ -14,13 +15,13 @@ function pickLocale(): string {
   return 'en';
 }
 
-let messages: Messages = catalogs[pickLocale()] ?? en;
+locale.messages = catalogs[pickLocale()] ?? en;
 
 export type { MessageKey };
 
 /** Formats `key`, replacing `{name}` placeholders with `params`. */
 export function t(key: MessageKey, params: Record<string, string | number> = {}): string {
-  const template = messages[key] ?? en[key];
+  const template = locale.messages[key] ?? en[key];
   return template.replace(/\{(\w+)\}/g, (_, name: string) => String(params[name] ?? `{${name}}`));
 }
 
@@ -37,7 +38,8 @@ export function errorText(error: unknown): string {
   return `${t('error.unknown')}: ${String(error)}`;
 }
 
-/** Switches the active locale for subsequently rendered text. */
-export function setLocale(locale: string): void {
-  messages = catalogs[locale] ?? en;
+/** Switches the language; `auto` follows the system. Text rendered through `t` updates. */
+export function setLocale(tag: string): void {
+  locale.messages = (tag === 'auto' ? catalogs[pickLocale()] : catalogs[tag]) ?? en;
+  document.documentElement.lang = tag === 'auto' ? pickLocale() : tag;
 }
