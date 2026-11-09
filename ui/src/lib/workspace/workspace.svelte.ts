@@ -191,11 +191,13 @@ class Workspace {
 
   activate(tabId: string): void {
     this.activeTabId = tabId;
-    this.undefer(tabId);
   }
 
-  /** Lets the deferred panes of a tab connect. */
-  private undefer(tabId: string): void {
+  /**
+   * Lets the deferred panes of a tab connect. Called by the tab's view whenever it becomes
+   * visible, so every way of switching tabs (click, shortcuts, closing a neighbour) applies.
+   */
+  undefer(tabId: string): void {
     const tab = this.tabs.find((candidate) => candidate.id === tabId);
     if (!tab) return;
     for (const id of paneIds(tab.root)) {

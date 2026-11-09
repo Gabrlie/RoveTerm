@@ -75,7 +75,7 @@
 
 ## 会话恢复
 
-标签与分屏变化后 1.5 秒，把 `workspace.snapshot()` 经 `workspace_save` 记入 journal。快照（`src/lib/workspace/snapshot.ts`）记录每个标签的分屏树、各面板的目标（本地、已保存主机 id、快速连接地址、文件面板）、聚焦面板和当前标签，不含任何凭据。启动时 `workspace_load` 读取最新快照，经 `parseSnapshot` 校验后恢复；恢复的面板先处于 `deferred` 状态，只显示标题，所在标签第一次被激活时才连接，因此不会同时发起多条连接或弹出多个密码框；快照中的当前标签立即激活。
+标签与分屏变化后 1.5 秒，把 `workspace.snapshot()` 经 `workspace_save` 记入 journal。快照（`src/lib/workspace/snapshot.ts`）记录每个标签的分屏树、各面板的目标（本地、已保存主机 id、快速连接地址、文件面板）、聚焦面板和当前标签，不含任何凭据。启动时 `workspace_load` 读取最新快照，经 `parseSnapshot` 校验后恢复；恢复的面板先处于 `deferred` 状态，只显示标题，所在标签第一次显示时才连接（无论通过点击、快捷键切换，还是关闭相邻标签后自动切换），因此不会同时发起多条连接或弹出多个密码框；快照中的当前标签立即激活。
 
 ## 工作区面板
 

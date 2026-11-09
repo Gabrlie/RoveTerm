@@ -87,6 +87,11 @@
     target.addEventListener('pointercancel', end);
   }
 
+  // Restored panes connect the first time their tab is shown, however it got activated.
+  $effect(() => {
+    if (visible) workspace.undefer(tab.id);
+  });
+
   $effect(() => {
     for (const [id, view] of Object.entries(views)) {
       if (view) terminals.set(id, view);
