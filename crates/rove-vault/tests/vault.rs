@@ -758,6 +758,7 @@ fn sync_settings_keep_the_key_sealed() {
             target: serde_json::json!({ "kind": "folder", "path": "/sync" }),
             state: serde_json::json!({ "device": "d1" }),
             key: Some(Zeroizing::new([9u8; 32])),
+            secret: Some(Zeroizing::new("dav-password".into())),
         };
         vault.set_sync_local(Some(&local)).unwrap();
         // The key is not stored in the clear.
@@ -770,17 +771,18 @@ fn sync_settings_keep_the_key_sealed() {
             )
             .unwrap();
         assert!(!stored.contains(&"09".repeat(32)));
+        assert!(!stored.contains("dav-password"));
     }
     let vault = Vault::open(&path, cache).unwrap();
     // Locked: settings readable, key not.
     let locked = vault.sync_local().unwrap().unwrap();
     assert_eq!(locked.key, None);
+    assert_eq!(locked.secret, None);
     assert_eq!(locked.target["path"], "/sync");
     assert_eq!(vault.try_unlock(), LockState::Unlocked);
-    assert_eq!(
-        vault.sync_local().unwrap().unwrap().key.unwrap().as_slice(),
-        &[9u8; 32]
-    );
+    let unlocked = vault.sync_local().unwrap().unwrap();
+    assert_eq!(unlocked.key.unwrap().as_slice(), &[9u8; 32]);
+    assert_eq!(unlocked.secret.unwrap().as_str(), "dav-password");
     vault.set_sync_local(None).unwrap();
     assert_eq!(vault.sync_local().unwrap(), None);
 }

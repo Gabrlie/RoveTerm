@@ -683,7 +683,7 @@ export function onMenuAction(handler: (id: string) => void): Promise<UnlistenFn>
 }
 
 /** Where a sync space lives; see `SyncTarget` in src-tauri. */
-export type SyncTarget = { kind: 'folder'; path: string };
+export type SyncTarget = { kind: 'folder'; path: string } | { kind: 'webdav'; url: string; username: string };
 
 export interface SyncStatus {
   configured: boolean;
@@ -706,9 +706,10 @@ export function syncStatus(): Promise<SyncStatus> {
   return invoke('sync_status');
 }
 
-/** Creates a space at `target` (`create`) or joins the one there, then syncs once. */
-export function syncSetup(target: SyncTarget, password: string, create: boolean): Promise<SyncReport> {
-  return invoke('sync_setup', { target, password, create });
+/** Creates a space at `target` (`create`) or joins the one there, then syncs once.
+ *  `storagePassword` is the WebDAV password, stored sealed on this device. */
+export function syncSetup(target: SyncTarget, password: string, create: boolean, storagePassword: string | null = null): Promise<SyncReport> {
+  return invoke('sync_setup', { target, password, create, storagePassword });
 }
 
 export function syncNow(): Promise<SyncReport> {

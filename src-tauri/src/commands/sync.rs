@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use rove_sync::{
     Change, FolderBackend, KdfParams, Record, RecordStore, Report, SyncBackend, SyncError, SyncKey,
-    SyncState,
+    SyncState, WebDavBackend,
 };
 use rove_vault::{SyncChange, SyncLocal, Vault};
 use serde::{Deserialize, Serialize};
@@ -27,12 +27,33 @@ const MAX_PASSWORD: usize = 1024;
 pub enum SyncTarget {
     /// A directory on this device, typically inside a synced folder.
     Folder { path: String },
+    /// A directory on a WebDAV server; its password is stored sealed, apart from the target.
+    #[serde(rename = "webdav")]
+    WebDav { url: String, username: String },
 }
 
 impl SyncTarget {
-    /// Checks the target from the WebView and opens its backend.
-    fn backend(&self) -> Result<Box<dyn SyncBackend>, CommandError> {
+    /// Checks the target from the WebView and opens its backend; `secret` is the storage's
+    /// password where it needs one.
+    fn backend(&self, secret: Option<&str>) -> Result<Box<dyn SyncBackend>, CommandError> {
         match self {
+            Self::WebDav { url, username } => {
+                if url.len() > 2048 || username.len() > 256 {
+                    return Err(CommandError::new(
+                        "input.invalid",
+                        "WebDAV address or user name too long",
+                    ));
+                }
+                let password = secret.ok_or_else(|| {
+                    CommandError::new(
+                        "sync.needs_password",
+                        "enter the WebDAV password on this device",
+                    )
+                })?;
+                Ok(Box::new(
+                    WebDavBackend::new(url, username, password).map_err(sync_error)?,
+                ))
+            }
             Self::Folder { path } => {
                 let dir = Path::new(path);
                 if path.len() > 4096 || !dir.is_absolute() {
@@ -70,6 +91,7 @@ fn sync_error(error: SyncError) -> CommandError {
         SyncError::NoSpace => "sync.no_space",
         SyncError::SpaceExists => "sync.space_exists",
         SyncError::Crypto(_) => "sync.crypto",
+        SyncError::Unauthorized => "sync.unauthorized",
         SyncError::Store(_) => "sync.store",
     };
     CommandError::new(code, error.to_string())
@@ -109,9 +131,15 @@ impl RecordStore for VaultStore {
     }
 }
 
-fn read_local(
-    vault: &Vault,
-) -> Result<Option<(SyncTarget, SyncState, Option<SyncKey>)>, CommandError> {
+/// This device's sync settings as stored in the vault.
+struct Local {
+    target: SyncTarget,
+    state: SyncState,
+    key: Option<SyncKey>,
+    secret: Option<Zeroizing<String>>,
+}
+
+fn read_local(vault: &Vault) -> Result<Option<Local>, CommandError> {
     let Some(local) = vault.sync_local()? else {
         return Ok(None);
     };
@@ -120,7 +148,12 @@ fn read_local(
     let state: SyncState = serde_json::from_value(local.state)
         .map_err(|error| CommandError::new("sync.format", error.to_string()))?;
     let key = local.key.map(|bytes| SyncKey::from_bytes(*bytes));
-    Ok(Some((target, state, key)))
+    Ok(Some(Local {
+        target,
+        state,
+        key,
+        secret: local.secret,
+    }))
 }
 
 fn write_local(
@@ -128,6 +161,7 @@ fn write_local(
     target: &SyncTarget,
     state: &SyncState,
     key: &SyncKey,
+    secret: Option<&Zeroizing<String>>,
 ) -> Result<(), CommandError> {
     let local = SyncLocal {
         target: serde_json::to_value(target)
@@ -135,6 +169,7 @@ fn write_local(
         state: serde_json::to_value(state)
             .map_err(|error| CommandError::new("sync.format", error.to_string()))?,
         key: Some(key.to_bytes()),
+        secret: secret.cloned(),
     };
     Ok(vault.set_sync_local(Some(&local))?)
 }
@@ -143,12 +178,14 @@ fn write_local(
 #[tauri::command]
 pub fn sync_status(state: State<'_, AppState>) -> Result<SyncStatus, CommandError> {
     Ok(match read_local(&state.vault)? {
-        Some((target, sync_state, key)) => SyncStatus {
+        Some(local) => SyncStatus {
             configured: true,
-            target: Some(target),
-            ready: key.is_some(),
-            device: Some(sync_state.device),
-            records: sync_state
+            ready: local.key.is_some()
+                && (local.secret.is_some() || matches!(local.target, SyncTarget::Folder { .. })),
+            target: Some(local.target),
+            device: Some(local.state.device),
+            records: local
+                .state
                 .known
                 .values()
                 .filter(|known| !known.deleted)
@@ -165,15 +202,29 @@ pub fn sync_status(state: State<'_, AppState>) -> Result<SyncStatus, CommandErro
 }
 
 /// Sets up sync on this device: creates a new space at `target` protected by `password`
-/// (`create`), or joins the existing one there. Then runs a first round.
+/// (`create`), or joins the existing one there. Then runs a first round. `storage_password` is
+/// the WebDAV password; it is stored sealed with the device key.
 #[tauri::command]
 pub async fn sync_setup(
     state: State<'_, AppState>,
     target: SyncTarget,
     password: String,
     create: bool,
+    storage_password: Option<String>,
 ) -> Result<Report, CommandError> {
     let password = Zeroizing::new(password);
+    let secret = storage_password
+        .filter(|value| !value.is_empty())
+        .map(Zeroizing::new);
+    if secret
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_PASSWORD)
+    {
+        return Err(CommandError::new(
+            "input.invalid",
+            "storage password too long",
+        ));
+    }
     if password.len() > MAX_PASSWORD || (create && password.chars().count() < MIN_PASSWORD) {
         return Err(CommandError::new(
             "sync.weak_password",
@@ -181,7 +232,7 @@ pub async fn sync_setup(
         ));
     }
     state.ensure_unlocked().await?;
-    let backend = target.backend()?;
+    let backend = target.backend(secret.as_deref().map(String::as_str))?;
     let key = if create {
         rove_sync::create_space(backend.as_ref(), &password, KdfParams::default()).await
     } else {
@@ -198,7 +249,7 @@ pub async fn sync_setup(
     )
     .await
     .map_err(sync_error)?;
-    write_local(&state.vault, &target, &sync_state, &key)?;
+    write_local(&state.vault, &target, &sync_state, &key, secret.as_ref())?;
     Ok(report)
 }
 
@@ -208,7 +259,12 @@ pub async fn sync_setup(
 pub async fn sync_now(state: State<'_, AppState>) -> Result<Report, CommandError> {
     state.ensure_unlocked().await?;
     let _guard = state.sync_lock.lock().await;
-    let (target, mut sync_state, key) = read_local(&state.vault)?
+    let Local {
+        target,
+        state: mut sync_state,
+        key,
+        secret,
+    } = read_local(&state.vault)?
         .ok_or_else(|| CommandError::new("sync.not_configured", "sync is not set up"))?;
     let key = key.ok_or_else(|| {
         CommandError::new(
@@ -216,7 +272,7 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<Report, CommandError
             "enter the sync password on this device",
         )
     })?;
-    let backend = target.backend()?;
+    let backend = target.backend(secret.as_deref().map(String::as_str))?;
     let report = rove_sync::sync(
         backend.as_ref(),
         &key,
@@ -225,7 +281,7 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<Report, CommandError
     )
     .await
     .map_err(sync_error)?;
-    write_local(&state.vault, &target, &sync_state, &key)?;
+    write_local(&state.vault, &target, &sync_state, &key, secret.as_ref())?;
     Ok(report)
 }
 

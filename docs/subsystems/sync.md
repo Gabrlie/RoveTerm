@@ -35,4 +35,4 @@
 
 ## 应用中的同步
 
-`src-tauri/src/commands/sync.rs` 暴露 `sync_status`、`sync_setup(target, password, create)`、`sync_now`、`sync_disable`。`SyncTarget` 目前只有 `Folder { path }`（绝对路径）。`sync_setup` 创建或加入空间（创建时密码至少 8 个字符），为本设备生成 UUIDv7 设备 id，跑第一轮后把目标、状态和同步密钥存入 vault（见 [vault](vault.md#同步)）。各轮由 `AppState.sync_lock` 串行执行，需要 vault 已解锁；本机没有同步密钥时 `sync_now` 返回 `sync.needs_password`。错误码为 `sync.*`（`wrong_password`、`no_space`、`space_exists`、`rejected`、`backend`、`format`、`crypto`、`store`、`not_configured`、`needs_password`、`weak_password`）。
+`src-tauri/src/commands/sync.rs` 暴露 `sync_status`、`sync_setup(target, password, create)`、`sync_now`、`sync_disable`。`SyncTarget` 为 `Folder { path }`（绝对路径）或 `WebDav { url, username }`；WebDAV 密码经 `sync_setup` 的 `storage_password` 传入，与同步密钥一样密封存放，不进入目标的 JSON。`sync_setup` 创建或加入空间（创建时密码至少 8 个字符），为本设备生成 UUIDv7 设备 id，跑第一轮后把目标、状态和同步密钥存入 vault（见 [vault](vault.md#同步)）。各轮由 `AppState.sync_lock` 串行执行，需要 vault 已解锁；本机没有同步密钥时 `sync_now` 返回 `sync.needs_password`。错误码为 `sync.*`（`wrong_password`、`no_space`、`space_exists`、`rejected`、`backend`、`format`、`crypto`、`unauthorized`、`store`、`not_configured`、`needs_password`、`weak_password`）。

@@ -88,6 +88,8 @@ pub struct SyncLocal {
     pub state: Value,
     /// The sync key; `None` until the user enters the sync password on this device.
     pub key: Option<Zeroizing<[u8; 32]>>,
+    /// The storage's own password (WebDAV), if it needs one.
+    pub secret: Option<Zeroizing<String>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -96,9 +98,13 @@ struct StoredSyncLocal {
     state: Value,
     /// Hex of the sealed key.
     key: Option<String>,
+    /// Hex of the sealed storage password.
+    #[serde(default)]
+    secret: Option<String>,
 }
 
 const SYNC_KEY_AAD: &[u8] = b"rove/vault/sync-key/v1";
+const SYNC_SECRET_AAD: &[u8] = b"rove/vault/sync-secret/v1";
 
 fn json<T: Serialize>(value: &T) -> Result<Value, VaultError> {
     Ok(serde_json::to_value(value)?)
@@ -388,8 +394,8 @@ impl Vault {
         Ok(())
     }
 
-    /// This device's sync settings, or `None` when sync is not set up. The sealed key is opened
-    /// only when the vault is unlocked; while locked it reads as `None`.
+    /// This device's sync settings, or `None` when sync is not set up. The sealed key and storage
+    /// password are opened only when the vault is unlocked; while locked they read as `None`.
     pub fn sync_local(&self) -> Result<Option<SyncLocal>, VaultError> {
         let stored: Option<String> = self
             .conn
@@ -404,18 +410,21 @@ impl Vault {
             return Ok(None);
         };
         let stored: StoredSyncLocal = serde_json::from_str(&stored)?;
-        let key = match stored.key.as_deref().and_then(unhex) {
-            Some(sealed) => self
-                .with_cipher(|cipher| cipher.open(&sealed, SYNC_KEY_AAD))
-                .ok()
-                .and_then(|plain| <[u8; 32]>::try_from(plain.as_slice()).ok())
-                .map(Zeroizing::new),
-            None => None,
+        let open = |hex: Option<&str>, aad: &[u8]| {
+            let sealed = hex.and_then(unhex)?;
+            self.with_cipher(|cipher| cipher.open(&sealed, aad)).ok()
         };
+        let key = open(stored.key.as_deref(), SYNC_KEY_AAD)
+            .and_then(|plain| <[u8; 32]>::try_from(plain.as_slice()).ok())
+            .map(Zeroizing::new);
+        let secret = open(stored.secret.as_deref(), SYNC_SECRET_AAD)
+            .and_then(|plain| String::from_utf8(plain.to_vec()).ok())
+            .map(Zeroizing::new);
         Ok(Some(SyncLocal {
             target: stored.target,
             state: stored.state,
             key,
+            secret,
         }))
     }
 
@@ -436,10 +445,19 @@ impl Vault {
             }
             None => None,
         };
+        let secret = match &local.secret {
+            Some(secret) => {
+                Some(hex(&self.with_cipher(|cipher| {
+                    cipher.seal(secret.as_bytes(), SYNC_SECRET_AAD)
+                })?))
+            }
+            None => None,
+        };
         let stored = StoredSyncLocal {
             target: local.target.clone(),
             state: local.state.clone(),
             key,
+            secret,
         };
         self.conn.lock().execute(
             "INSERT OR REPLACE INTO preferences (key, value, updated_at) VALUES ('sync', ?1, ?2)",

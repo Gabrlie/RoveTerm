@@ -48,8 +48,8 @@ class SyncStore {
     }
   }
 
-  setup(target: SyncTarget, password: string, create: boolean): Promise<boolean> {
-    return this.round(() => syncSetup(target, password, create));
+  setup(target: SyncTarget, password: string, create: boolean, storagePassword: string | null = null): Promise<boolean> {
+    return this.round(() => syncSetup(target, password, create, storagePassword));
   }
 
   syncNow(): Promise<boolean> {
