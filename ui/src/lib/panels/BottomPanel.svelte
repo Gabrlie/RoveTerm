@@ -34,15 +34,16 @@
     height: 100%;
     display: flex;
     flex-direction: column;
-    background: var(--bg-elevated);
+    background: var(--surface);
   }
   .head {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    height: 30px;
+    height: 32px;
     padding: 0 var(--space-2) 0 var(--space-3);
-    border-bottom: 1px solid var(--border);
+    background: var(--material-bar);
+    box-shadow: inset 0 -0.5px 0 var(--separator);
   }
   .title {
     flex: 1;
@@ -52,6 +53,7 @@
     white-space: nowrap;
     color: var(--fg-muted);
     font-size: var(--text-footnote);
+    font-weight: 600;
   }
   .body {
     position: relative;
@@ -60,8 +62,9 @@
   }
   .muted {
     margin: 0;
-    padding: var(--space-3);
+    padding: var(--space-6) var(--space-4);
     color: var(--fg-muted);
     font-size: var(--text-footnote);
+    text-align: center;
   }
 </style>

@@ -27,6 +27,17 @@
   --border: rgb(0 0 0 / 0.13);
   --glass-edge: inset 0 0.5px 0 rgb(255 255 255 / 0.75), 0 0 0 0.5px rgb(0 0 0 / 0.1);
 
+  /* System palette: accent presets and identity colours (host avatars). */
+  --sys-blue: #007aff;
+  --sys-purple: #af52de;
+  --sys-pink: #ff2d55;
+  --sys-red: #ff3b30;
+  --sys-orange: #ff9500;
+  --sys-yellow: #e6a700;
+  --sys-green: #28cd41;
+  --sys-teal: #30b0c7;
+  --sys-graphite: #8e8e93;
+
   /* Text. */
   --fg: #1d1d1f;
   --fg-muted: #6e6e73;
@@ -110,6 +121,15 @@
     --fg-muted: #98989f;
     --fg-subtle: #636366;
     --accent: #0a84ff;
+    --sys-blue: #0a84ff;
+    --sys-purple: #bf5af2;
+    --sys-pink: #ff375f;
+    --sys-red: #ff453a;
+    --sys-orange: #ff9f0a;
+    --sys-yellow: #ffd60a;
+    --sys-green: #30d158;
+    --sys-teal: #40c8e0;
+    --sys-graphite: #98989d;
     --success: #32d74b;
     --warning: #ffb340;
     --danger: #ff453a;
@@ -140,6 +160,15 @@
   --fg-muted: #98989f;
   --fg-subtle: #636366;
   --accent: #0a84ff;
+  --sys-blue: #0a84ff;
+  --sys-purple: #bf5af2;
+  --sys-pink: #ff375f;
+  --sys-red: #ff453a;
+  --sys-orange: #ff9f0a;
+  --sys-yellow: #ffd60a;
+  --sys-green: #30d158;
+  --sys-teal: #40c8e0;
+  --sys-graphite: #98989d;
   --success: #32d74b;
   --warning: #ffb340;
   --danger: #ff453a;

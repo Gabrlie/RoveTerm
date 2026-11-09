@@ -17,9 +17,11 @@
 </script>
 
 <aside class="panel">
-  <div class="tabs" role="tablist">
+  <div class="tabs">
+    <div class="segmented" role="tablist">
     <button type="button" role="tab" aria-selected={page === 'status'} class:active={page === 'status'} onclick={() => (page = 'status')}>{t('status.title')}</button>
     <button type="button" role="tab" aria-selected={page === 'snippets'} class:active={page === 'snippets'} onclick={() => (page = 'snippets')}>{t('snippets.title')}</button>
+    </div>
     <span class="spacer"></span>
     <IconButton icon="close" label={t('common.close')} small onclick={onclose} />
   </div>
@@ -43,29 +45,16 @@
     height: 100%;
     display: flex;
     flex-direction: column;
-    background: var(--bg-elevated);
+    background: var(--material-sidebar);
+    backdrop-filter: var(--material-blur);
+    -webkit-backdrop-filter: var(--material-blur);
   }
   .tabs {
     display: flex;
     align-items: center;
     gap: var(--space-1);
-    height: 36px;
-    padding: 0 var(--space-2);
-    border-bottom: 1px solid var(--border);
-  }
-  .tabs button[role='tab'] {
-    padding: 4px var(--space-2);
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--fg-muted);
-    font: inherit;
-    font-size: var(--text-footnote);
-    cursor: pointer;
-  }
-  .tabs button.active {
-    background: var(--bg-sunken);
-    color: var(--fg);
+    height: 44px;
+    padding: 0 var(--space-2) 0 var(--space-3);
   }
   .spacer {
     flex: 1;
@@ -77,8 +66,9 @@
   }
   .muted {
     margin: 0;
-    padding: var(--space-3);
+    padding: var(--space-6) var(--space-4);
     color: var(--fg-muted);
     font-size: var(--text-footnote);
+    text-align: center;
   }
 </style>

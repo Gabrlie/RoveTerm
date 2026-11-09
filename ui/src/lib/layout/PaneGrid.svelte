@@ -61,8 +61,8 @@
   function dividerStyle(divider: Divider): string {
     const { area, ratio, dir } = divider;
     return dir === 'row'
-      ? `left: calc(${percent(area.x + area.w * ratio)} - 2px); top: ${percent(area.y)}; width: 4px; height: ${percent(area.h)};`
-      : `top: calc(${percent(area.y + area.h * ratio)} - 2px); left: ${percent(area.x)}; height: 4px; width: ${percent(area.w)};`;
+      ? `left: calc(${percent(area.x + area.w * ratio)} - 3px); top: ${percent(area.y)}; width: 6px; height: ${percent(area.h)};`
+      : `top: calc(${percent(area.y + area.h * ratio)} - 3px); left: ${percent(area.x)}; height: 6px; width: ${percent(area.w)};`;
   }
 
   function startDrag(event: PointerEvent, divider: Divider): void {
@@ -157,16 +157,16 @@
               <div class="buttons">
                 <button type="button" class="primary" onclick={() => workspace.reopen(id, null, false)}>{t('connect.retry')}</button>
                 {#if failure.code === 'ssh.passphrase_required'}
-                  <button type="button" onclick={() => oncredentials(id, 'passphrase')}>{t('connect.enterPassphrase')}</button>
+                  <button type="button" class="secondary" onclick={() => oncredentials(id, 'passphrase')}>{t('connect.enterPassphrase')}</button>
                 {/if}
                 {#if pane.target.kind !== 'local' && failure.code !== 'ssh.connect' && failure.code !== 'ssh.timeout'}
-                  <button type="button" onclick={() => oncredentials(id, 'password', true)}>{t('connect.usePassword')}</button>
+                  <button type="button" class="secondary" onclick={() => oncredentials(id, 'password', true)}>{t('connect.usePassword')}</button>
                 {/if}
                 {#if pane.target.kind === 'ssh'}
                   {@const hostId = pane.target.hostId}
-                  <button type="button" onclick={() => onedithost(hostId)}>{t('connect.editHost')}</button>
+                  <button type="button" class="secondary" onclick={() => onedithost(hostId)}>{t('connect.editHost')}</button>
                 {/if}
-                <button type="button" onclick={() => workspace.closePane(id)}>{t('common.close')}</button>
+                <button type="button" class="secondary" onclick={() => workspace.closePane(id)}>{t('common.close')}</button>
               </div>
             </div>
           {/if}
@@ -202,7 +202,7 @@
     overflow: hidden;
   }
   .pane.focused {
-    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 35%, transparent);
   }
   .deferred {
     display: grid;
@@ -221,13 +221,21 @@
     flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+    padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
     border-radius: var(--radius-md);
-    background: var(--bg-elevated);
-    box-shadow: 0 6px 20px rgb(0 0 0 / 14%);
+    background: var(--material-popover);
+    backdrop-filter: var(--material-blur);
+    -webkit-backdrop-filter: var(--material-blur);
+    box-shadow: var(--glass-edge), var(--shadow-md);
     color: var(--fg);
     font-size: var(--text-body);
+    animation: slide-up var(--dur-slow) var(--ease);
+  }
+  @keyframes slide-up {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
   }
   .failure :global(svg) {
     color: var(--danger);
@@ -242,22 +250,10 @@
     gap: var(--space-1);
   }
   .buttons button {
-    padding: 4px var(--space-3);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: transparent;
-    color: var(--fg);
-    font: inherit;
+    min-width: 0;
+    height: 26px;
+    padding: 0 var(--space-3);
     font-size: var(--text-footnote);
-    cursor: pointer;
-  }
-  .buttons button:hover {
-    background: var(--bg-sunken);
-  }
-  .buttons button.primary {
-    border-color: var(--accent);
-    background: var(--accent);
-    color: #fff;
   }
   .divider {
     position: absolute;
@@ -269,7 +265,26 @@
   .divider.column {
     cursor: row-resize;
   }
-  .divider:hover {
-    background: color-mix(in srgb, var(--accent) 35%, transparent);
+  /* Dividers are wide hit areas drawing a hairline in the middle. */
+  .divider::after {
+    content: '';
+    position: absolute;
+    background: var(--separator);
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  .divider.row::after {
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+  }
+  .divider.column::after {
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 1px;
+  }
+  .divider:hover::after {
+    background: var(--accent);
   }
 </style>

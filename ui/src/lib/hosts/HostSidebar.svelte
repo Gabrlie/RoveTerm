@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from '../ui/Icon.svelte';
+  import { avatarColor, initials } from '../ui/avatar';
   import IconButton from '../ui/IconButton.svelte';
   import { hosts } from './hosts.svelte';
   import { vault } from '../vault/vault.svelte';
@@ -107,7 +108,7 @@
   </div>
   <div class="list">
     {#each hosts.grouped as [group, entries] (group ?? '')}
-      {#if group}<div class="group">{group}</div>{/if}
+      {#if group}<div class="group section-label">{group}</div>{/if}
       {#each entries as host (host.id)}
         <div
           class="host"
@@ -125,7 +126,7 @@
           }}
           title={`${host.username}@${host.hostname}:${host.port}`}
         >
-          <Icon name="server" size={14} />
+          <span class="avatar" style:--tint={avatarColor(host.name)} aria-hidden="true">{initials(host.name)}</span>
           <div class="text">
             <span class="name">
               <span class="label">{host.name}</span>
@@ -176,73 +177,104 @@
     flex: none;
     display: flex;
     flex-direction: column;
-    background: var(--bg-elevated);
-    border-right: 1px solid var(--border);
+    background: var(--material-sidebar);
+    backdrop-filter: var(--material-blur);
+    -webkit-backdrop-filter: var(--material-blur);
+    box-shadow: inset -0.5px 0 0 var(--separator);
   }
   .toolbar {
     display: flex;
     align-items: center;
-    height: 36px;
-    padding: 0 var(--space-1) 0 var(--space-3);
-    border-bottom: 1px solid var(--border);
+    gap: 2px;
+    height: 44px;
+    padding: 0 var(--space-2) 0 var(--space-4);
   }
   .heading {
     flex: 1;
-    font-weight: 600;
+    font-size: var(--text-title);
+    font-weight: 700;
+    letter-spacing: -0.01em;
   }
   .search {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    margin: var(--space-2);
+    height: var(--control-height);
+    margin: 0 var(--space-3) var(--space-2);
     padding: 0 var(--space-2);
-    border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    background: var(--bg);
+    background: var(--fill);
     color: var(--fg-muted);
+    transition: box-shadow var(--dur-fast) var(--ease-out);
+  }
+  .search:focus-within {
+    background: var(--surface);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent),
+      var(--focus-ring);
   }
   .search input {
     flex: 1;
     min-width: 0;
-    padding: 5px 0;
-    border: none;
-    background: transparent;
     color: var(--fg);
-    font: inherit;
     outline: none;
   }
   .list {
     flex: 1;
     overflow-y: auto;
-    padding: 0 var(--space-1);
+    padding: 0 var(--space-2) var(--space-2);
   }
   .group {
-    padding: var(--space-2) var(--space-2) var(--space-1);
-    color: var(--fg-muted);
-    font-size: var(--text-caption);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    padding: var(--space-3) var(--space-2) var(--space-1);
   }
   .host {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    padding: var(--space-1) var(--space-2);
+    min-height: 40px;
+    padding: 0 var(--space-1) 0 var(--space-2);
     border-radius: var(--radius-sm);
     color: var(--fg-muted);
     cursor: default;
     user-select: none;
+    transition: background-color var(--dur-fast) var(--ease-out);
   }
-  .host:hover,
+  .host:hover {
+    background: var(--fill-hover);
+  }
   .host:focus-visible {
-    background: var(--bg-sunken);
+    background: var(--accent);
+    color: color-mix(in srgb, var(--accent-fg) 80%, transparent);
     outline: none;
+  }
+  .host:focus-visible .name,
+  .host:focus-visible .badge,
+  .host:focus-visible .forwarding {
+    color: var(--accent-fg);
+  }
+  .host:focus-visible :global(.icon-button) {
+    color: var(--accent-fg);
+  }
+  .avatar {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    background: linear-gradient(to bottom, color-mix(in srgb, var(--tint) 82%, #fff), var(--tint));
+    box-shadow: inset 0 0.5px 0 rgb(255 255 255 / 0.3), 0 0.5px 1px rgb(0 0 0 / 0.15);
+    color: #fff;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
   }
   .text {
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
+    gap: 1px;
   }
   .name {
     display: flex;
@@ -250,6 +282,7 @@
     gap: var(--space-1);
     min-width: 0;
     color: var(--fg);
+    font-weight: 500;
   }
   .label {
     min-width: 0;
@@ -267,9 +300,12 @@
     align-items: center;
     gap: 2px;
     margin-left: var(--space-1);
+    padding: 0 5px;
+    border-radius: var(--radius-pill);
+    background: var(--accent-soft);
     color: var(--accent);
     font-size: var(--text-caption);
-    vertical-align: middle;
+    font-weight: 600;
   }
   .address {
     font-size: var(--text-caption);
@@ -288,18 +324,21 @@
     padding: var(--space-3);
     color: var(--fg-muted);
     font-size: var(--text-footnote);
+    text-align: center;
   }
   footer {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin: var(--space-2);
+    padding: var(--space-2);
+    box-shadow: inset 0 0.5px 0 var(--separator);
   }
   .vault {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    padding: var(--space-1) var(--space-2);
+    height: 26px;
+    padding: 0 var(--space-2);
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;
@@ -308,8 +347,14 @@
     font-size: var(--text-footnote);
     cursor: pointer;
   }
+  .vault :global(svg) {
+    color: var(--warning);
+  }
+  .vault.unlocked :global(svg) {
+    color: var(--success);
+  }
   .vault:hover:not(:disabled) {
-    background: var(--bg-sunken);
+    background: var(--fill-hover);
     color: var(--fg);
   }
   .vault.unlocked {

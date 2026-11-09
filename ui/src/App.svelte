@@ -442,33 +442,62 @@
     min-height: 0;
     min-width: 0;
   }
+  /* Panel edges: a hairline with a wider invisible grip around it. */
   .edge {
+    position: relative;
+    z-index: 5;
     flex: none;
-    background: transparent;
+    background: var(--separator);
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  .edge::before {
+    content: '';
+    position: absolute;
   }
   .edge.horizontal {
-    height: 4px;
-    border-top: 1px solid var(--border);
+    height: 1px;
     cursor: row-resize;
   }
+  .edge.horizontal::before {
+    left: 0;
+    right: 0;
+    top: -3px;
+    bottom: -3px;
+  }
   .edge.vertical {
-    width: 4px;
-    border-left: 1px solid var(--border);
+    width: 1px;
     cursor: col-resize;
   }
+  .edge.vertical::before {
+    top: 0;
+    bottom: 0;
+    left: -3px;
+    right: -3px;
+  }
   .edge:hover {
-    background: color-mix(in srgb, var(--accent) 35%, transparent);
+    background: var(--accent);
   }
   .notice {
     position: fixed;
-    bottom: var(--space-4);
+    bottom: var(--space-5);
     left: 50%;
     transform: translateX(-50%);
     z-index: 40;
     padding: var(--space-2) var(--space-4);
-    border-radius: 999px;
-    background: var(--fg);
-    color: var(--bg);
+    border-radius: var(--radius-pill);
+    background: var(--material-popover);
+    backdrop-filter: var(--material-blur);
+    -webkit-backdrop-filter: var(--material-blur);
+    box-shadow: var(--glass-edge), var(--shadow-md);
+    color: var(--fg);
     font-size: var(--text-footnote);
+    font-weight: 500;
+    animation: notice-in var(--dur-slow) var(--ease);
+  }
+  @keyframes notice-in {
+    from {
+      opacity: 0;
+      transform: translate(-50%, 8px);
+    }
   }
 </style>
