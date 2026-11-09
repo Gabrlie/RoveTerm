@@ -1,6 +1,6 @@
 # rove-vault
 
-存储主机、主机凭据和 known_hosts；凭据用设备主密钥派生的密钥加密。参考见 [docs/subsystems/vault.md](../../docs/subsystems/vault.md)，密钥层级见 [docs/security.md](../../docs/security.md)。
+存储主机、主机凭据、known_hosts 和端口转发规则；凭据用设备主密钥派生的密钥加密。参考见 [docs/subsystems/vault.md](../../docs/subsystems/vault.md)，密钥层级见 [docs/security.md](../../docs/security.md)。
 
 ## 契约
 
@@ -9,7 +9,8 @@
 - 首次解锁且没有任何密钥时，生成新的设备主密钥并写入 `KeyCache`。
 - vault 中已有凭据、但 `KeyCache` 中的密钥缺失或不匹配时，状态为 `KeyLost`；只能通过 `reset_secrets()` 丢弃全部凭据后重新解锁，主机和 known_hosts 保留。
 - 删除主机时级联删除它的凭据；修改主机的认证方式类别时删除原有凭据。
-- 数据库结构版本记录在 `PRAGMA user_version` 中，只增不减；打开更新版本写入的数据库时返回 `FutureSchema`。
+- 端口转发规则随主机级联删除；`ForwardDraft::validate` 拒绝不是 IP 地址或 `localhost` 的本地监听地址。
+- 数据库结构版本记录在 `PRAGMA user_version` 中，只增不减，旧版本按顺序迁移；打开更新版本写入的数据库时返回 `FutureSchema`。
 
 ## 配置（`[plugin.vault]`）
 

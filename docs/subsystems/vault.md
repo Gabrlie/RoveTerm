@@ -1,6 +1,6 @@
 # vault
 
-`rove-vault` 存储主机、凭据和 known_hosts，用设备主密钥按记录加密凭据，并定义 `KeyCache` seam。
+`rove-vault` 存储主机、凭据、known_hosts 和端口转发规则，用设备主密钥按记录加密凭据，并定义 `KeyCache` seam。
 
 ## KeyCache seam
 
@@ -49,6 +49,16 @@ pub trait KeyCache: Send + Sync {
 
 每台主机最多一条凭据。known_hosts 按（小写主机名, 端口）记录一把受信任的公钥。
 
+端口转发规则 `ForwardRule { id, host_id, label, spec, auto_start }` 属于一台主机，不含秘密，锁定时照常可读写。`ForwardSpec` 有三种：
+
+| 类型 | 字段 | 校验 |
+|---|---|---|
+| `local`（`-L`） | `bind_host`、`bind_port`、`dest_host`、`dest_port` | `bind_host` 只能是 IP 地址或 `localhost`；端口 1–65535 |
+| `remote`（`-R`） | 同上 | `bind_host` 由服务器解释；`bind_port` 为 0 时由服务器分配 |
+| `dynamic`（`-D`） | `bind_host`、`bind_port` | 同 `local` |
+
+`listens_publicly()` 判断本地监听地址是否对其他机器开放（非回环地址），UI 据此给出提示。
+
 ## 表结构
 
-`meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`。结构版本记录在 `PRAGMA user_version`，当前版本为 1。
+`meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`、`forwards`（外键级联删除）。结构版本记录在 `PRAGMA user_version`，当前版本为 2；打开旧版本数据库时按版本依次迁移。

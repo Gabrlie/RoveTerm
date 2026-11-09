@@ -11,12 +11,12 @@ use zeroize::Zeroizing;
 use crate::crypto::FieldCipher;
 use crate::model::now_millis;
 use crate::{
-    Host, HostDraft, HostId, HostKey, Interaction, KeyCache, KeyCacheError, KnownHostStatus,
-    MasterKey, Secret, VaultError,
+    ForwardDraft, ForwardId, ForwardRule, Host, HostDraft, HostId, HostKey, Interaction, KeyCache,
+    KeyCacheError, KnownHostStatus, MasterKey, Secret, VaultError,
 };
 
 /// Version of the on-disk schema, stored in `PRAGMA user_version`. Only ever increases.
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
 
 const KEY_CHECK_PLAINTEXT: &[u8] = b"rove-vault-key-check";
 const KEY_CHECK_AAD: &[u8] = b"rove/vault/key-check/v1";
@@ -290,6 +290,101 @@ impl Vault {
         Ok(())
     }
 
+    /// Lists forwarding rules of `host`, or of every host, oldest first.
+    pub fn list_forwards(&self, host: Option<HostId>) -> Result<Vec<ForwardRule>, VaultError> {
+        let conn = self.conn.lock();
+        let mut statement = conn.prepare(
+            "SELECT id, host_id, label, spec, auto_start, created_at, updated_at FROM forwards
+             WHERE ?1 IS NULL OR host_id = ?1 ORDER BY created_at, id",
+        )?;
+        let rows = statement.query_map(params![host.map(|id| id.to_string())], row_to_forward)?;
+        rows.map(|row| row.map_err(VaultError::from).and_then(|rule| rule))
+            .collect()
+    }
+
+    /// Returns one forwarding rule.
+    pub fn forward(&self, id: ForwardId) -> Result<ForwardRule, VaultError> {
+        let conn = self.conn.lock();
+        conn.query_row(
+            "SELECT id, host_id, label, spec, auto_start, created_at, updated_at FROM forwards
+             WHERE id = ?1",
+            params![id.to_string()],
+            row_to_forward,
+        )
+        .optional()?
+        .ok_or(VaultError::ForwardNotFound(id))?
+    }
+
+    /// Validates `draft` and stores it as a new rule of `host_id`.
+    pub fn create_forward(
+        &self,
+        host_id: HostId,
+        draft: ForwardDraft,
+    ) -> Result<ForwardRule, VaultError> {
+        let draft = draft.validate()?;
+        self.host(host_id)?;
+        let now = now_millis();
+        let rule = ForwardRule {
+            id: ForwardId::new(),
+            host_id,
+            label: draft.label,
+            spec: draft.spec,
+            auto_start: draft.auto_start,
+            created_at: now,
+            updated_at: now,
+        };
+        self.conn.lock().execute(
+            "INSERT INTO forwards (id, host_id, label, spec, auto_start, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                rule.id.to_string(),
+                host_id.to_string(),
+                rule.label,
+                serde_json::to_string(&rule.spec)?,
+                rule.auto_start,
+                rule.created_at,
+                rule.updated_at
+            ],
+        )?;
+        Ok(rule)
+    }
+
+    /// Validates `draft` and replaces the rule's fields.
+    pub fn update_forward(
+        &self,
+        id: ForwardId,
+        draft: ForwardDraft,
+    ) -> Result<ForwardRule, VaultError> {
+        let draft = draft.validate()?;
+        let updated = self.conn.lock().execute(
+            "UPDATE forwards SET label = ?2, spec = ?3, auto_start = ?4, updated_at = ?5
+             WHERE id = ?1",
+            params![
+                id.to_string(),
+                draft.label,
+                serde_json::to_string(&draft.spec)?,
+                draft.auto_start,
+                now_millis()
+            ],
+        )?;
+        if updated == 0 {
+            return Err(VaultError::ForwardNotFound(id));
+        }
+        self.forward(id)
+    }
+
+    /// Deletes a forwarding rule.
+    pub fn delete_forward(&self, id: ForwardId) -> Result<(), VaultError> {
+        let deleted = self.conn.lock().execute(
+            "DELETE FROM forwards WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+        if deleted == 0 {
+            return Err(VaultError::ForwardNotFound(id));
+        }
+        Ok(())
+    }
+
     fn with_cipher<T>(
         &self,
         f: impl FnOnce(&FieldCipher) -> Result<T, VaultError>,
@@ -418,6 +513,24 @@ fn lock_reason(error: KeyCacheError) -> LockReason {
 }
 
 type HostRow = Result<Host, VaultError>;
+type ForwardRow = Result<ForwardRule, VaultError>;
+
+fn row_to_forward(row: &rusqlite::Row<'_>) -> rusqlite::Result<ForwardRow> {
+    let id: String = row.get(0)?;
+    let host_id: String = row.get(1)?;
+    let spec: String = row.get(3)?;
+    Ok((|| {
+        Ok(ForwardRule {
+            id: id.parse()?,
+            host_id: host_id.parse()?,
+            label: row.get(2)?,
+            spec: serde_json::from_str(&spec)?,
+            auto_start: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
+        })
+    })())
+}
 
 fn row_to_host(row: &rusqlite::Row<'_>) -> rusqlite::Result<HostRow> {
     let id: String = row.get(0)?;
@@ -475,6 +588,23 @@ fn migrate(conn: &Connection) -> Result<(), VaultError> {
                  PRIMARY KEY (hostname, port)
              );
              PRAGMA user_version = 1;
+             COMMIT;",
+        )?;
+    }
+    if version < 2 {
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE forwards (
+                 id TEXT PRIMARY KEY,
+                 host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+                 label TEXT NOT NULL,
+                 spec TEXT NOT NULL,
+                 auto_start INTEGER NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             CREATE INDEX forwards_by_host ON forwards (host_id);
+             PRAGMA user_version = 2;
              COMMIT;",
         )?;
     }

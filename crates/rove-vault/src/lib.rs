@@ -5,6 +5,7 @@
 //! platform key store behind the [`KeyCache`] seam. See `docs/subsystems/vault.md`.
 
 mod crypto;
+mod forward;
 mod key_cache;
 mod model;
 mod store;
@@ -16,6 +17,7 @@ use rove_kernel::{Context, Disposer, KernelError, Plugin, PluginConfig};
 use serde::Deserialize;
 
 pub use crypto::{MASTER_KEY_LEN, MasterKey};
+pub use forward::{ForwardDraft, ForwardId, ForwardRule, ForwardSpec};
 #[cfg(feature = "memory-key-cache")]
 pub use key_cache::MemoryKeyCache;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -33,6 +35,9 @@ pub enum VaultError {
     /// No host with this id exists.
     #[error("host {0} not found")]
     HostNotFound(HostId),
+    /// No forwarding rule with this id exists.
+    #[error("forward {0} not found")]
+    ForwardNotFound(ForwardId),
     /// Input failed validation.
     #[error("{0}")]
     Invalid(String),

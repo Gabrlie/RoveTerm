@@ -204,3 +204,114 @@ fn hosts_list_sorted_by_group_then_name() {
         .collect();
     assert_eq!(names, ["a.example", "b.example", "z.example"]);
 }
+
+#[test]
+fn forward_rules_round_trip_and_cascade_with_their_host() {
+    let (vault, _cache) = vault();
+    let host = vault
+        .create_host(draft("fwd.example", AuthMethod::Agent))
+        .unwrap();
+    let other = vault
+        .create_host(draft("other.example", AuthMethod::Agent))
+        .unwrap();
+    let rule = vault
+        .create_forward(
+            host.id,
+            ForwardDraft {
+                label: " db ".into(),
+                spec: ForwardSpec::Local {
+                    bind_host: "127.0.0.1".into(),
+                    bind_port: 15432,
+                    dest_host: "db.internal".into(),
+                    dest_port: 5432,
+                },
+                auto_start: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(rule.label, "db");
+    vault
+        .create_forward(
+            other.id,
+            ForwardDraft {
+                label: String::new(),
+                spec: ForwardSpec::Dynamic {
+                    bind_host: "localhost".into(),
+                    bind_port: 1080,
+                },
+                auto_start: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        vault.list_forwards(Some(host.id)).unwrap(),
+        vec![rule.clone()]
+    );
+    assert_eq!(vault.list_forwards(None).unwrap().len(), 2);
+
+    let updated = vault
+        .update_forward(
+            rule.id,
+            ForwardDraft {
+                label: "db2".into(),
+                spec: rule.spec.clone(),
+                auto_start: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(updated.label, "db2");
+    assert!(!updated.auto_start);
+
+    let invalid = ForwardDraft {
+        label: String::new(),
+        spec: ForwardSpec::Local {
+            bind_host: "evil.example".into(),
+            bind_port: 1,
+            dest_host: "x".into(),
+            dest_port: 1,
+        },
+        auto_start: false,
+    };
+    assert!(matches!(
+        vault.create_forward(host.id, invalid),
+        Err(VaultError::Invalid(_))
+    ));
+
+    vault.delete_host(host.id).unwrap();
+    assert!(vault.list_forwards(Some(host.id)).unwrap().is_empty());
+    assert!(matches!(
+        vault.forward(rule.id),
+        Err(VaultError::ForwardNotFound(_))
+    ));
+    assert_eq!(vault.list_forwards(None).unwrap().len(), 1);
+}
+
+#[test]
+fn version_one_databases_migrate_to_the_current_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.db");
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value BLOB NOT NULL);
+             CREATE TABLE hosts (id TEXT PRIMARY KEY, name TEXT NOT NULL, group_name TEXT,
+                 hostname TEXT NOT NULL, port INTEGER NOT NULL, username TEXT NOT NULL,
+                 auth TEXT NOT NULL, tags TEXT NOT NULL, created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL);
+             CREATE TABLE host_secrets (host_id TEXT PRIMARY KEY REFERENCES hosts(id) ON DELETE CASCADE,
+                 sealed BLOB NOT NULL, updated_at INTEGER NOT NULL);
+             CREATE TABLE known_hosts (hostname TEXT NOT NULL, port INTEGER NOT NULL,
+                 algorithm TEXT NOT NULL, public_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
+                 added_at INTEGER NOT NULL, PRIMARY KEY (hostname, port));
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    }
+    let vault = Vault::open(&path, Arc::new(MemoryKeyCache::default())).unwrap();
+    assert!(vault.list_forwards(None).unwrap().is_empty());
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let version: i32 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION);
+}

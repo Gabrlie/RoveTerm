@@ -29,5 +29,6 @@ zeroize = { version = "1", features = ["derive", "serde"] }
 keyring = "4"
 
 [dev-dependencies]
+rusqlite = { version = "0.37", features = ["bundled"] }
 tempfile = "3"
 rove-vault = { path = ".", features = ["memory-key-cache"] }

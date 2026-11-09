@@ -48,6 +48,7 @@ impl From<VaultError> for CommandError {
         let code = match &error {
             VaultError::Locked(_) => "vault.locked",
             VaultError::HostNotFound(_) => "host.not_found",
+            VaultError::ForwardNotFound(_) => "forward.not_found",
             VaultError::Invalid(_) => "input.invalid",
             _ => "vault.error",
         };
