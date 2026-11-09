@@ -4,6 +4,7 @@
   // the difference between two samples.
   import { onDestroy } from 'svelte';
   import Icon from '../ui/Icon.svelte';
+  import CoreChart from './CoreChart.svelte';
   import { isCommandError, serverStats, type CpuTimes, type RemoteSource, type ServerStats } from '../ipc';
   import { errorText, t } from '../i18n';
   import { formatSize } from '../files/format';
@@ -12,13 +13,16 @@
 
   /** Time between samples. */
   const INTERVAL_MS = 3000;
+  /** Samples kept per core: two minutes. */
+  const HISTORY = 40;
   /** Interfaces shown before the list collapses. */
   const INTERFACES_SHOWN = 6;
 
   let stats = $state<ServerStats | null>(null);
   let previous: { stats: ServerStats; at: number } | null = null;
   let cpu = $state<number | null>(null);
-  let cores = $state<number[]>([]);
+  /** Usage history of each core, oldest first. */
+  let coreHistory = $state<number[][]>([]);
   let rates = $state<Record<string, { rx: number; tx: number }>>({});
   let showAllInterfaces = $state(false);
   let problem = $state<string | null>(null);
@@ -40,7 +44,10 @@
       if (previous) {
         const before = previous.stats;
         cpu = usage(next.cpu, before.cpu);
-        cores = next.cpus.map((core, index) => usage(core, before.cpus[index]) ?? 0);
+        coreHistory = next.cpus.map((core, index) => [
+          ...(coreHistory[index] ?? []).slice(1 - HISTORY),
+          usage(core, before.cpus[index]) ?? 0,
+        ]);
         const seconds = (now - previous.at) / 1000;
         const nextRates: Record<string, { rx: number; tx: number }> = {};
         for (const net of next.interfaces) {
@@ -103,6 +110,17 @@
     return bytes === undefined ? '…' : `${formatSize(Math.round(bytes))}/s`;
   }
 
+  let coresWidth = $state(0);
+  /** Narrowest chart: labelled charts up to 8 cores, compact (value only) beyond. */
+  const coreMinWidth = $derived(coreHistory.length <= 8 ? 110 : coreHistory.length <= 32 ? 64 : 46);
+  /** Charts per row: as many as fit, then evened out so the last row is not left mostly empty
+   *  (4 cores in a narrow panel become 2 × 2). */
+  const coreColumns = $derived.by(() => {
+    const count = Math.max(coreHistory.length, 1);
+    const fit = Math.max(1, Math.min(count, Math.floor((coresWidth + 4) / (coreMinWidth + 4))));
+    return Math.ceil(count / Math.ceil(count / fit));
+  });
+
   /** Interfaces, busiest first. */
   const interfaces = $derived(
     [...(stats?.interfaces ?? [])].sort(
@@ -136,12 +154,10 @@
         <strong class:hot={(cpu ?? 0) > 85}>{cpu === null ? '…' : `${cpu.toFixed(0)}%`}</strong>
         <span class="muted">{t('status.average')}</span>
       </div>
-      {#if cores.length > 0}
-        <div class="cores" title={t('status.perCore')}>
-          {#each cores as value, index (index)}
-            <div class="core" title={`CPU ${index}: ${value.toFixed(0)}%`}>
-              <div class="core-fill" class:hot={value > 85} style:height="{Math.max(value, 2)}%"></div>
-            </div>
+      {#if coreHistory.length > 0}
+        <div class="cores" bind:clientWidth={coresWidth} style:grid-template-columns="repeat({coreColumns}, minmax(0, 1fr))" aria-label={t('status.perCore')}>
+          {#each coreHistory as points, index (index)}
+            <CoreChart label={`CPU ${index}`} {points} capacity={HISTORY} compact={coreMinWidth < 110} />
           {/each}
         </div>
       {/if}
@@ -258,25 +274,8 @@
   }
   .cores {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(10px, 1fr));
-    gap: 3px;
-    height: 36px;
+    gap: 4px;
     margin: var(--space-1) 0;
-  }
-  .core {
-    position: relative;
-    height: 100%;
-    border-radius: 2px;
-    background: var(--bg-sunken);
-    overflow: hidden;
-  }
-  .core-fill {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: var(--accent);
-    transition: height 0.4s ease;
   }
   .row {
     display: flex;
