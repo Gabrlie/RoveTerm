@@ -428,7 +428,7 @@ impl SshConnection {
         let session = SftpSession::new(channel.into_stream())
             .await
             .map_err(|error| SshError::Sftp(error.to_string()))?;
-        Ok(SftpFs::new(session, self.target.address(), lease))
+        Ok(SftpFs::new(session, self.target.location(), lease))
     }
 
     /// Runs `command` on the server without a PTY and collects its output. Output beyond `limit`

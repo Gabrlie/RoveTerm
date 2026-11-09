@@ -71,6 +71,17 @@ impl SshTarget {
         }
     }
 
+    /// Returns the address followed by the route, such as `user@host:22 via admin@bastion:22`.
+    /// Equal only for targets that reach the same server the same way; used as the label of the
+    /// target's SFTP file system, which identifies transfer destinations.
+    pub fn location(&self) -> String {
+        if self.route.is_empty() {
+            self.address()
+        } else {
+            format!("{} {}", self.address(), self.route)
+        }
+    }
+
     /// Builds the target of a saved host. `jumps` is its current jump chain, nearest jump host
     /// first (empty unless the host uses a jump route); see [`route_key`].
     pub fn from_host(host: &Host, jumps: &[Host]) -> Self {
@@ -513,6 +524,24 @@ mod tests {
 
     fn pw(text: &str) -> Zeroizing<String> {
         Zeroizing::new(text.into())
+    }
+
+    #[test]
+    fn location_tells_routes_apart() {
+        let direct = SshTarget {
+            hostname: "10.0.0.5".into(),
+            port: 22,
+            username: "root".into(),
+            host_id: None,
+            title: None,
+            route: String::new(),
+        };
+        let behind = SshTarget {
+            route: "via admin@bastion:22".into(),
+            ..direct.clone()
+        };
+        assert_eq!(direct.location(), "root@10.0.0.5:22");
+        assert_eq!(behind.location(), "root@10.0.0.5:22 via admin@bastion:22");
     }
 
     #[test]

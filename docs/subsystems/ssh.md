@@ -93,7 +93,7 @@
 - 服务器拒绝子系统时返回 `SshError::Sftp`。
 - 读写使用 `russh-sftp` 的流水线请求（默认各 16 个并发请求），单个请求超时 10 秒。
 - SFTP 状态码映射为 `FsError`：`NoSuchFile` → `NotFound`，`PermissionDenied` → `PermissionDenied`，`OpUnsupported` → `Unsupported`，连接丢失 → `Closed`，其余 → `Io`。
-- `list` 过滤掉服务器返回的 `.` 和 `..`；`label()` 是 `user@host:port`。
+- `list` 过滤掉服务器返回的 `.` 和 `..`；`label()` 是 `SshTarget::location()`：`user@host:port`，经跳板机或代理时后面再接路线（如 `user@host:22 via admin@bastion:22`），所以不同路线到达的同地址服务器标签不同，传输队列据此区分目标。
 
 ## 端口转发
 
