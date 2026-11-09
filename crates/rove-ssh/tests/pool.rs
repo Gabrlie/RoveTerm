@@ -34,6 +34,7 @@ fn target(server: &DevServer) -> SshTarget {
         username: "demo".into(),
         host_id: None,
         title: None,
+        route: String::new(),
     }
 }
 
@@ -122,4 +123,23 @@ async fn open_live_reuses_connection_without_credentials() {
         .unwrap();
     assert!(second.is_some());
     assert_eq!(server.connections(), 1);
+}
+
+#[tokio::test]
+async fn equal_addresses_on_different_routes_do_not_share() {
+    let (server, connector, _trust) = setup(60).await;
+    let direct = target(&server);
+    let behind_jump = SshTarget {
+        route: "jump:other-environment".into(),
+        ..target(&server)
+    };
+    let first = connector.shared(&direct, &auth()).await.unwrap();
+    let second = connector.shared(&behind_jump, &auth()).await.unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&first, &second));
+    assert!(connector.live(&behind_jump).await.is_some());
+    assert!(std::sync::Arc::ptr_eq(
+        &connector.live(&direct).await.unwrap(),
+        &first
+    ));
+    assert_eq!(server.connections(), 2);
 }

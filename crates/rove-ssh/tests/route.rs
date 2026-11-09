@@ -23,6 +23,7 @@ fn target_of(server: &DevServer) -> SshTarget {
         username: "demo".into(),
         host_id: None,
         title: None,
+        route: String::new(),
     }
 }
 

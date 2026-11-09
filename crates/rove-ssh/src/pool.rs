@@ -1,4 +1,5 @@
-//! Shares one SSH connection among every terminal opened to the same `user@host:port`.
+//! Shares one SSH connection among every terminal opened to the same `user@host:port` along the
+//! same route (direct, proxy, or jump host).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,6 +14,7 @@ pub(crate) struct PoolKey {
     hostname: String,
     port: u16,
     username: String,
+    route: String,
 }
 
 impl PoolKey {
@@ -21,6 +23,7 @@ impl PoolKey {
             hostname: target.hostname.to_ascii_lowercase(),
             port: target.port,
             username: target.username.clone(),
+            route: target.route.clone(),
         }
     }
 }

@@ -42,6 +42,7 @@ impl Harness {
             username: "demo".into(),
             host_id: None,
             title: None,
+            route: String::new(),
         }
     }
 

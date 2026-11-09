@@ -6,7 +6,7 @@
 
 | 类型 | 说明 |
 |---|---|
-| `SshTarget` | `hostname`、`port`、`username`，以及可选的 `host_id` 和标题；`address()` 返回 `user@host:port`，IPv6 地址加方括号 |
+| `SshTarget` | `hostname`、`port`、`username`、`route`（路线标识：直连为空，否则为代理地址或跳板机 id），以及可选的 `host_id` 和标题；`address()` 返回 `user@host:port`，IPv6 地址加方括号 |
 | `AuthSpec` | `Password`、`PrivateKey { key, passphrase }`、`KeyFile { path, passphrase }`、`Agent { passphrase }` |
 | `SshConnection` | 已认证的连接；`open_shell(size)` 打开 PTY shell channel，`open_sftp()` 打开 SFTP 会话 |
 | `Via` | 建立传输的方式：`Direct`、`Proxy { protocol, host, port }`、`Jump(Arc<SshConnection>)` |
@@ -46,7 +46,7 @@
 
 ## 连接池
 
-`SshConnector` 按 (小写主机名, 端口, 用户名) 维护连接池：
+`SshConnector` 按 (小写主机名, 端口, 用户名, 路线) 维护连接池；地址相同但经不同跳板机或代理到达的主机不会共用连接：
 
 - `shared(target, auth)` 返回该目标的存活连接；没有时用 `auth` 直连新建。`shared_via(target, auth, via)` 按 `via` 建立传输。每个目标有一把异步锁，并发请求只会建立一条连接。
 - `live(target)` 返回存活连接，不需要凭据；没有时返回 `None`。`open_live(target, size)` 在它之上打开 shell。

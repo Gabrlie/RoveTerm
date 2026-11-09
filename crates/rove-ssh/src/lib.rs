@@ -54,6 +54,10 @@ pub struct SshTarget {
     pub host_id: Option<String>,
     /// Tab title; absent uses the address.
     pub title: Option<String>,
+    /// Identity of the path to the server: empty for a direct connection, otherwise the proxy or
+    /// jump host. Connections are shared only between targets with the same route, so equal
+    /// addresses behind different jump hosts never share a connection.
+    pub route: String,
 }
 
 impl SshTarget {
@@ -74,6 +78,27 @@ impl SshTarget {
             username: host.username.clone(),
             host_id: Some(host.id.to_string()),
             title: Some(host.name.clone()),
+            route: route_key(&host.route),
+        }
+    }
+}
+
+/// The pool identity of a saved host's route. A jump host is named by id: its own route is part
+/// of its identity.
+fn route_key(route: &rove_vault::HostRoute) -> String {
+    match route {
+        rove_vault::HostRoute::Direct => String::new(),
+        rove_vault::HostRoute::Jump { host } => format!("jump:{host}"),
+        rove_vault::HostRoute::Proxy {
+            protocol,
+            host,
+            port,
+        } => {
+            let scheme = match protocol {
+                rove_vault::ProxyProtocol::Http => "http",
+                rove_vault::ProxyProtocol::Socks5 => "socks5",
+            };
+            format!("proxy:{scheme}://{}:{port}", host.to_ascii_lowercase())
         }
     }
 }
@@ -532,6 +557,20 @@ mod tests {
             AuthSpec::resolve(&host(AuthMethod::Agent), None, Some(pw("typed"))),
             Ok(AuthSpec::Agent { passphrase: Some(p) }) if p.as_str() == "typed"
         ));
+    }
+
+    #[test]
+    fn saved_hosts_behind_different_jump_hosts_have_different_routes() {
+        let direct = host(AuthMethod::Agent);
+        let jumped = |jump: HostId| Host {
+            route: rove_vault::HostRoute::Jump { host: jump },
+            ..host(AuthMethod::Agent)
+        };
+        let a = SshTarget::from_host(&jumped(HostId::new()));
+        let b = SshTarget::from_host(&jumped(HostId::new()));
+        assert_eq!(SshTarget::from_host(&direct).route, "");
+        assert_ne!(a.route, b.route);
+        assert_eq!(a.address(), b.address());
     }
 
     #[test]

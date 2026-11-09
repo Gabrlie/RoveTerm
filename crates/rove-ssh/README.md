@@ -17,6 +17,7 @@ SSH Provider：认证、host key 校验，打开 PTY shell channel，`FileSystem
 - `AuthSpec::resolve` 根据主机的认证方式、已存凭据和用户输入的密码或 passphrase 确定凭据；需要先向用户索取密码时返回 `CredentialsRequired`，私钥已加密而缺少正确 passphrase 时连接返回 `PassphraseRequired`。
 - `Agent` 方式在 agent 之后回退到 `~/.ssh` 下的默认密钥文件，与 OpenSSH 一致。
 
+- 连接池按 `user@host:port` 加 `SshTarget::route` 区分，不同跳板机或代理之后的同地址主机各用各的连接。
 - `SshConnector::shared_via` 按 `Via` 建立传输：直连、HTTP / SOCKS5 代理（无认证），或经跳板连接的 `direct-tcpip` channel；跳板连接在派生连接存在期间保持打开。
 - 连接时可传入 `Progress` 回调，按顺序收到 `ConnectStep`（连接、握手、host key、逐个凭据的尝试与拒绝、认证成功）。
 - `SshConnection::exec` 运行命令并收集有上限的输出；`generate_key`、`describe_key`、`authorize_command` 用于密钥库与公钥安装；`sample_server` 采样 Linux 服务器状态（只读）。

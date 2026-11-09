@@ -101,6 +101,7 @@ pub fn quick_target(address: &str) -> Result<SshTarget, CommandError> {
         port: quick.port.unwrap_or(22),
         host_id: None,
         title: None,
+        route: String::new(),
     })
 }
 
