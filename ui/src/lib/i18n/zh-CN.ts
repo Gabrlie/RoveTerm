@@ -318,6 +318,7 @@ export const zhCN: Messages = {
   'host.jumpRequired': '请选择跳板机',
   'host.proxyHost': '代理地址',
   'host.via': '经 {name}',
+  'host.viaProxy': '{protocol} 代理',
   'quick.address': '地址',
   'quick.passwordHint': '留空则使用 SSH agent',
   'hostkey.title': '未知的主机密钥',

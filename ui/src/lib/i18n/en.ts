@@ -316,6 +316,7 @@ export const en = {
   'host.jumpRequired': 'Choose a jump host',
   'host.proxyHost': 'Proxy host',
   'host.via': 'via {name}',
+  'host.viaProxy': '{protocol} proxy',
   'quick.address': 'Address',
   'quick.passwordHint': 'Leave empty to use the SSH agent',
   'hostkey.title': 'Unknown host key',

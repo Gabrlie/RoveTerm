@@ -10,6 +10,7 @@
   import { errorText, t } from '../i18n';
   import type { HostEntry } from '../ipc';
   import { hostMenuItems } from './hostMenu';
+  import { hostAddress, hostSubtitle } from './route';
 
   interface Props {
     onconnect: (host: HostEntry) => void;
@@ -31,14 +32,6 @@
   }
 
   const menuItems = (host: HostEntry): MenuItem[] => hostMenuItems(host, { onconnect, onfiles, onforwards, onedit, onnotice });
-
-  /** Describes how the host is reached, for the route badge; empty for direct connections. */
-  function routeTitle(host: HostEntry): string {
-    const { route } = host;
-    if (route.kind === 'jump') return t('host.via', { name: hosts.find(route.host)?.name ?? '?' });
-    if (route.kind === 'proxy') return t('host.via', { name: `${route.protocol}://${route.host}:${route.port}` });
-    return '';
-  }
 
   async function unlock(): Promise<void> {
     if (vault.keyLost) {
@@ -78,22 +71,19 @@
               event.preventDefault();
             }
           }}
-          title={`${host.username}@${host.hostname}:${host.port}`}
+          title={hostAddress(host)}
         >
           <Avatar name={host.name} />
           <div class="text">
             <span class="name">
               <span class="label">{host.name}</span>
-              {#if host.route.kind !== 'direct'}
-                <span class="badge" title={routeTitle(host)}><Icon name={host.route.kind === 'jump' ? 'link' : 'forwards'} size={11} /></span>
-              {/if}
               {#if forwardStatuses.running(host.id) > 0}
                 <span class="forwarding" title={t('forward.activeCount', { count: forwardStatuses.running(host.id) })}>
                   <Icon name="forwards" size={11} />{forwardStatuses.running(host.id)}
                 </span>
               {/if}
             </span>
-            <span class="address">{host.username}@{host.hostname}{host.port === 22 ? '' : `:${host.port}`}</span>
+            <span class="address">{hostSubtitle(host)}</span>
           </div>
           <div class="actions">
             <IconButton icon="terminal" label={t('host.connect')} small onclick={() => onconnect(host)} />
@@ -191,7 +181,6 @@
     outline: none;
   }
   .host:focus-visible .name,
-  .host:focus-visible .badge,
   .host:focus-visible .forwarding {
     color: var(--accent-fg);
   }
@@ -218,11 +207,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .badge {
-    flex: none;
-    display: inline-flex;
-    color: var(--fg-muted);
   }
   .forwarding {
     display: inline-flex;

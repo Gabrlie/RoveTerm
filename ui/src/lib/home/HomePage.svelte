@@ -10,6 +10,7 @@
   import type { HostEntry } from '../ipc';
   import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
   import { hostMenuItems } from '../hosts/hostMenu';
+  import { hostAddress, hostSubtitle } from '../hosts/route';
   import { actions, type ActionId } from '../actions';
 
   interface Props {
@@ -97,16 +98,15 @@
           onclick={() => onconnect(host)}
           onkeydown={(event) => event.key === 'Enter' && onconnect(host)}
           oncontextmenu={(event) => hostMenu(event, host)}
-          title={`${host.username}@${host.hostname}:${host.port}`}
+          title={hostAddress(host)}
         >
           <Avatar name={host.name} size={38} />
           <div class="text">
             <span class="name">
               <span class="label">{host.name}</span>
-              {#if host.route.kind !== 'direct'}<Icon name={host.route.kind === 'jump' ? 'link' : 'forwards'} size={12} />{/if}
               {#if forwardStatuses.running(host.id) > 0}<span class="forwarding"><Icon name="forwards" size={11} />{forwardStatuses.running(host.id)}</span>{/if}
             </span>
-            <span class="address">{host.username}@{host.hostname}{host.port === 22 ? '' : `:${host.port}`}</span>
+            <span class="address">{hostSubtitle(host)}</span>
             <span class="seen">{lastSeen(host)}</span>
           </div>
           <div class="actions">
