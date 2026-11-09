@@ -229,6 +229,8 @@ async fn exec_collects_output_status_and_truncates() {
     assert!(long.truncated);
 }
 
+/// devsshd runs the sampling script on this machine, which must be Linux.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn server_status_samples_this_linux_machine() {
     let harness = Harness::new(DevConfig::demo()).await;
