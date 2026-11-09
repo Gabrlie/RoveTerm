@@ -113,6 +113,26 @@ pub fn describe(private_key: &str, passphrase: Option<&str>) -> Result<KeyInfo, 
     })
 }
 
+/// Checks a user-supplied public key against `private`: returns the trimmed public key line when
+/// both describe the same key (comments may differ), [`SshError::Key`] when it does not parse or
+/// belongs to another key.
+pub fn check_public_key(public_key: &str, private: &KeyInfo) -> Result<String, SshError> {
+    let line = public_key.trim();
+    if line.lines().count() != 1 {
+        return Err(SshError::Key("the public key must be a single line".into()));
+    }
+    let given = russh::keys::PublicKey::from_openssh(line)
+        .map_err(|error| SshError::Key(format!("invalid public key: {error}")))?;
+    let derived = russh::keys::PublicKey::from_openssh(&private.public_key)
+        .map_err(|error| SshError::Key(error.to_string()))?;
+    if given.key_data() != derived.key_data() {
+        return Err(SshError::Key(
+            "the public key does not belong to this private key".into(),
+        ));
+    }
+    Ok(line.to_owned())
+}
+
 /// Generates a key and returns it in OpenSSH form, encrypted when `passphrase` is given.
 pub fn generate(
     kind: KeyType,
@@ -247,6 +267,21 @@ mod tests {
         }
         let plain = generate(KeyType::Ed25519, "", None).unwrap();
         assert_eq!(describe(&plain, None).unwrap().algorithm, "ssh-ed25519");
+    }
+
+    #[test]
+    fn supplied_public_keys_must_match_the_private_key() {
+        let text = generate(KeyType::Ed25519, "from-key", None).unwrap();
+        let info = describe(&text, None).unwrap();
+        let base = info.public_key.rsplit_once(' ').unwrap().0;
+        let custom = format!("  {base} my-own-comment \n");
+        assert_eq!(
+            check_public_key(&custom, &info).unwrap(),
+            format!("{base} my-own-comment")
+        );
+        let other = describe(&generate(KeyType::Ed25519, "", None).unwrap(), None).unwrap();
+        assert!(check_public_key(&other.public_key, &info).is_err());
+        assert!(check_public_key("not a key", &info).is_err());
     }
 
     #[test]

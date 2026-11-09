@@ -39,12 +39,15 @@
   let kind = $state<KeyType>('ed25519');
   let comment = $state('');
   let privateKey = $state('');
+  let publicKey = $state('');
   let passphrase = $state('');
   let needsPassphrase = $state(false);
 
   // Viewing the selected key.
   let revealed = $state<{ private_key: string; passphrase: string | null } | null>(null);
   let renaming = $state(false);
+  /** Editing the selected key's public key. */
+  let editingPublic = $state(false);
   let installHost = $state('');
   let installPassword = $state('');
   let installNeedsPassword = $state(false);
@@ -59,7 +62,9 @@
     name = '';
     comment = '';
     privateKey = '';
+    publicKey = '';
     passphrase = '';
+    editingPublic = false;
     needsPassphrase = false;
     revealed = null;
     renaming = false;
@@ -81,7 +86,7 @@
       const created =
         mode === 'generate'
           ? await keyGenerate(name, kind, comment, passphrase || null)
-          : await keyImport(name, privateKey, passphrase || null);
+          : await keyImport(name, privateKey, passphrase || null, publicKey.trim() || null);
       await keys.refresh();
       select(created);
     } catch (caught) {
@@ -98,6 +103,39 @@
     try {
       privateKey = await keyReadFile(path);
       if (!name) name = path.split(/[\\/]/).pop() ?? '';
+    } catch (caught) {
+      error = errorText(caught);
+      return;
+    }
+    // OpenSSH keeps the public key next to the private one; use it when present.
+    if (!publicKey.trim()) {
+      publicKey = await keyReadFile(`${path}.pub`).catch(() => '');
+    }
+  }
+
+  async function loadPublicFile(): Promise<void> {
+    const path = await openDialog({ multiple: false, directory: false, title: t('keys.choosePublicFile') });
+    if (typeof path !== 'string') return;
+    try {
+      publicKey = (await keyReadFile(path)).trim();
+    } catch (caught) {
+      error = errorText(caught);
+    }
+  }
+
+  function startEditPublic(): void {
+    if (!selected) return;
+    publicKey = selected.public_key;
+    editingPublic = true;
+    error = '';
+  }
+
+  async function savePublic(): Promise<void> {
+    if (!selected) return;
+    try {
+      await keyUpdate(selected.id, selected.name, null, null, publicKey);
+      await keys.refresh();
+      editingPublic = false;
     } catch (caught) {
       error = errorText(caught);
     }
@@ -219,12 +257,27 @@
         </div>
         <p class="meta">{selected.algorithm} · {selected.fingerprint}</p>
 
-        <label
-          >{t('keys.publicKey')}
-          <textarea readonly rows="3" value={selected.public_key}></textarea>
-        </label>
+        {#if editingPublic}
+          <label
+            >{t('keys.publicKey')}
+            <textarea rows="3" bind:value={publicKey} spellcheck="false"></textarea>
+          </label>
+          <p class="hint">{t('keys.publicHint')}</p>
+          <div class="row-actions">
+            <button type="button" class="secondary" onclick={() => (editingPublic = false)}>{t('common.cancel')}</button>
+            <button type="button" class="primary" onclick={() => void savePublic()}>{t('common.save')}</button>
+          </div>
+        {:else}
+          <label
+            >{t('keys.publicKey')}
+            <textarea readonly rows="3" value={selected.public_key}></textarea>
+          </label>
+        {/if}
         <div class="row-actions">
           <button type="button" class="secondary" onclick={() => void copy(selected.public_key)}>{t('keys.copyPublic')}</button>
+          {#if selected.has_private && !editingPublic}
+            <button type="button" class="secondary" onclick={startEditPublic}>{t('keys.editPublic')}</button>
+          {/if}
           {#if selected.has_private}
             <button type="button" class="secondary" onclick={() => void reveal()}>{revealed ? t('keys.hidePrivate') : t('keys.showPrivate')}</button>
           {/if}
@@ -283,6 +336,14 @@
             </label>
             <div class="row-actions">
               <button type="button" class="secondary" onclick={() => void loadFile()}>{t('keys.fromFile')}</button>
+            </div>
+            <label
+              >{t('keys.publicKeyOptional')}
+              <textarea rows="2" bind:value={publicKey} spellcheck="false" placeholder="ssh-ed25519 AAAA… comment"></textarea>
+            </label>
+            <p class="hint">{t('keys.publicHint')}</p>
+            <div class="row-actions">
+              <button type="button" class="secondary" onclick={() => void loadPublicFile()}>{t('keys.publicFromFile')}</button>
             </div>
           {/if}
           <label

@@ -77,6 +77,7 @@
 
 - `SshConnection::exec(command, limit)` 在不分配 PTY 的 session channel 上运行命令，分别收集 stdout 和 stderr，每路最多 `limit` 字节，超出部分丢弃并置 `truncated`；超时由调用方控制。
 - `generate_key(kind, comment, passphrase)` 生成 Ed25519、ECDSA P-256 或 RSA 3072 密钥，返回 OpenSSH 格式文本，提供 passphrase 时加密。
+- `check_public_key(public, info)` 确认用户提供的公钥与私钥是同一把密钥（注释可以不同），返回去掉首尾空白的公钥行。
 - `describe_key(private, passphrase)` 解析私钥，返回算法、带注释的 OpenSSH 公钥行和 `SHA256:` 指纹。
 - `sample_server(connection)` 用一次 `exec` 读取 Linux 服务器 `/proc` 中的负载、CPU 累计时间、内存、根分区、运行时间和网络累计字节（不含 `lo`），以及内核与主机名，返回 `ServerStats`。CPU 使用率和网速由调用方用两次采样的差值计算；输出不是 Linux 格式时返回 `Protocol`。
 - 应用命令 `server_stats(host_id | address)` 只使用已有的共享连接采样（8 秒超时），不会新建连接或询问凭据；没有连接时返回 `ssh.not_connected`，非 Linux 服务器返回 `monitor.unsupported`。

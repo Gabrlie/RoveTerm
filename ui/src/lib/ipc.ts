@@ -438,17 +438,24 @@ export function keyGenerate(name: string, kind: KeyType, comment: string, passph
   return invoke('key_generate', { name, kind, comment, passphrase });
 }
 
-export function keyImport(name: string, privateKey: string, passphrase: string | null): Promise<SshKey> {
-  return invoke('key_import', { name, privateKey, passphrase });
+/** Imports a private key; `publicKey` (optional) is kept as written once it matches. */
+export function keyImport(name: string, privateKey: string, passphrase: string | null, publicKey: string | null = null): Promise<SshKey> {
+  return invoke('key_import', { name, privateKey, passphrase, publicKey });
 }
 
 export function keyReadFile(path: string): Promise<string> {
   return invoke('key_read_file', { path });
 }
 
-/** Renames a key, or with `privateKey` replaces it as well. */
-export function keyUpdate(id: KeyId, name: string, privateKey: string | null, passphrase: string | null): Promise<SshKey> {
-  return invoke('key_update', { id, name, privateKey, passphrase });
+/** Renames a key; with `publicKey` replaces its public key; with `privateKey` replaces both halves. */
+export function keyUpdate(
+  id: KeyId,
+  name: string,
+  privateKey: string | null,
+  passphrase: string | null,
+  publicKey: string | null = null,
+): Promise<SshKey> {
+  return invoke('key_update', { id, name, privateKey, passphrase, publicKey });
 }
 
 export function keyDelete(id: KeyId): Promise<void> {

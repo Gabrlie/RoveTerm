@@ -383,7 +383,11 @@ async fn concurrent_renames_pick_different_names() {
     let dst = tempfile::tempdir().unwrap();
     let (queue, mut rx) = queue(TransferConfig::default());
     let mut ids = Vec::new();
-    for (folder, content) in [("a", vec![1u8; 2_000_000]), ("b", vec![2u8; 2_000_000]), ("c", vec![3u8; 2_000_000])] {
+    for (folder, content) in [
+        ("a", vec![1u8; 2_000_000]),
+        ("b", vec![2u8; 2_000_000]),
+        ("c", vec![3u8; 2_000_000]),
+    ] {
         let dir = src.path().join(folder);
         std::fs::create_dir(&dir).unwrap();
         std::fs::write(dir.join("note.bin"), content).unwrap();
@@ -424,11 +428,18 @@ async fn overwrite_never_replaces_a_directory_with_a_file_or_back() {
     std::fs::write(dst.path().join("data/inside.txt"), b"keep").unwrap();
     let done = wait_final(
         &mut rx,
-        queue.enqueue(request(&src.path().join("data"), dst.path(), Conflict::Overwrite)),
+        queue.enqueue(request(
+            &src.path().join("data"),
+            dst.path(),
+            Conflict::Overwrite,
+        )),
     )
     .await;
     assert_eq!(done.state, TransferState::Failed);
-    assert_eq!(std::fs::read(dst.path().join("data/inside.txt")).unwrap(), b"keep");
+    assert_eq!(
+        std::fs::read(dst.path().join("data/inside.txt")).unwrap(),
+        b"keep"
+    );
 
     // A directory named like an existing file.
     std::fs::create_dir(src.path().join("logs")).unwrap();
@@ -436,7 +447,11 @@ async fn overwrite_never_replaces_a_directory_with_a_file_or_back() {
     std::fs::write(dst.path().join("logs"), b"old file").unwrap();
     let done = wait_final(
         &mut rx,
-        queue.enqueue(request(&src.path().join("logs"), dst.path(), Conflict::Overwrite)),
+        queue.enqueue(request(
+            &src.path().join("logs"),
+            dst.path(),
+            Conflict::Overwrite,
+        )),
     )
     .await;
     assert_eq!(done.state, TransferState::Failed);

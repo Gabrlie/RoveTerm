@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use rove_ssh::{KeyType, authorize_command, describe_key, generate_key};
+use rove_ssh::{KeyType, authorize_command, check_public_key, describe_key, generate_key};
 use rove_vault::{KeyDraft, KeyId, KeySecret, SshKey};
 use serde::Serialize;
 use tauri::State;
@@ -34,21 +34,35 @@ fn passphrase(value: Option<String>) -> Result<Option<Zeroizing<String>>, Comman
     }
 }
 
+/// Checks a user-supplied public key; failures get their own code so they are not mistaken for
+/// an unreadable private key.
+fn checked_public(public_key: &str, info: &rove_ssh::KeyInfo) -> Result<String, CommandError> {
+    check_public_key(public_key, info)
+        .map_err(|error| CommandError::new("key.public_invalid", error.to_string()))
+}
+
 /// Derives the public facts of `private_key` and builds a draft. An encrypted key needs its
-/// passphrase (`ssh.passphrase_required` otherwise).
+/// passphrase (`ssh.passphrase_required` otherwise). A supplied `public_key` is kept as the
+/// user wrote it (for example with their own comment) once it is checked to belong to the
+/// private key; without one, the public key derived from the private key is used.
 fn draft(
     name: String,
     private_key: Zeroizing<String>,
     passphrase: Option<Zeroizing<String>>,
+    public_key: Option<String>,
 ) -> Result<KeyDraft, CommandError> {
     if private_key.len() > MAX_KEY_TEXT {
         return Err(CommandError::new("input.invalid", "private key too large"));
     }
     let info = describe_key(&private_key, passphrase.as_deref().map(String::as_str))?;
+    let public_key = match public_key.filter(|text| !text.trim().is_empty()) {
+        Some(text) => checked_public(&text, &info)?,
+        None => info.public_key.clone(),
+    };
     Ok(KeyDraft {
         name,
         algorithm: info.algorithm,
-        public_key: info.public_key,
+        public_key,
         fingerprint: info.fingerprint,
         secret: KeySecret {
             private_key,
@@ -86,21 +100,24 @@ pub async fn key_generate(
     .map_err(|error| CommandError::new("app.task", error.to_string()))??;
     Ok(state
         .vault
-        .create_ssh_key(draft(name, private_key, passphrase)?)?)
+        .create_ssh_key(draft(name, private_key, passphrase, None)?)?)
 }
 
-/// Adds a pasted or loaded private key to the library.
+/// Adds a pasted or loaded private key to the library, with an optional public key of the
+/// user's own.
 #[tauri::command]
 pub async fn key_import(
     state: State<'_, AppState>,
     name: String,
     private_key: String,
     passphrase: Option<String>,
+    public_key: Option<String>,
 ) -> Result<SshKey, CommandError> {
     let draft = draft(
         name,
         Zeroizing::new(private_key),
         self::passphrase(passphrase)?,
+        public_key,
     )?;
     state.ensure_unlocked().await?;
     Ok(state.vault.create_ssh_key(draft)?)
@@ -127,7 +144,8 @@ pub async fn key_read_file(path: String) -> Result<String, CommandError> {
         .map_err(|error| CommandError::new("fs.io", error.to_string()))
 }
 
-/// Renames a key, or with `private_key` replaces both halves as well.
+/// Renames a key; with `public_key`, also replaces its public key (checked against the stored
+/// private key); with `private_key`, replaces both halves.
 #[tauri::command]
 pub async fn key_update(
     state: State<'_, AppState>,
@@ -135,15 +153,30 @@ pub async fn key_update(
     name: String,
     private_key: Option<String>,
     passphrase: Option<String>,
+    public_key: Option<String>,
 ) -> Result<SshKey, CommandError> {
     let id = key_id(&id)?;
     match private_key {
-        None => Ok(state.vault.rename_ssh_key(id, &name)?),
+        None => {
+            let renamed = state.vault.rename_ssh_key(id, &name)?;
+            let Some(public_key) = public_key.filter(|text| !text.trim().is_empty()) else {
+                return Ok(renamed);
+            };
+            state.ensure_unlocked().await?;
+            let secret = state.vault.ssh_key_secret(id)?;
+            let info = describe_key(
+                &secret.private_key,
+                secret.passphrase.as_deref().map(String::as_str),
+            )?;
+            let line = checked_public(&public_key, &info)?;
+            Ok(state.vault.set_ssh_key_public(id, &line)?)
+        }
         Some(private_key) => {
             let draft = draft(
                 name,
                 Zeroizing::new(private_key),
                 self::passphrase(passphrase)?,
+                public_key,
             )?;
             state.ensure_unlocked().await?;
             Ok(state.vault.replace_ssh_key(id, draft)?)

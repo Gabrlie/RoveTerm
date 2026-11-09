@@ -201,6 +201,19 @@ impl Vault {
         self.ssh_key(id)
     }
 
+    /// Replaces the stored public key line, for example to change its comment. The caller checks
+    /// that it belongs to the key's private half.
+    pub fn set_ssh_key_public(&self, id: KeyId, public_key: &str) -> Result<SshKey, VaultError> {
+        let updated = self.conn.lock().execute(
+            "UPDATE ssh_keys SET public_key = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id.to_string(), public_key, now_millis()],
+        )?;
+        if updated == 0 {
+            return Err(VaultError::KeyNotFound(id));
+        }
+        self.ssh_key(id)
+    }
+
     /// Replaces the name and both halves of a key, for example after importing it again. Hosts
     /// using the key keep using it. Requires the vault to be unlocked.
     pub fn replace_ssh_key(&self, id: KeyId, draft: KeyDraft) -> Result<SshKey, VaultError> {

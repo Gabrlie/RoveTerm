@@ -64,7 +64,7 @@ pub trait KeyCache: Send + Sync {
 
 密钥库保存具名的 SSH 密钥 `SshKey { id, name, algorithm, public_key, fingerprint, has_private }`，名称不区分大小写唯一。名称和公钥在锁定时可读；私钥和 passphrase（`KeySecret`）按记录绑定加密，读写需要解锁。vault 不解析密钥，调用方从私钥推出算法、公钥和指纹后通过 `KeyDraft` 传入。主机以 `AuthMethod::Key` 引用密钥，保存时检查密钥存在；仍被主机使用的密钥不能删除（`KeyInUse` 列出这些主机）。重置凭据时密钥条目保留，私钥被丢弃，`has_private` 变为 `false`，需重新导入。`touch_host` 记录最近一次成功连接的时间。
 
-应用通过 `src-tauri/src/commands/keys.rs` 暴露密钥库：`key_list`、`key_generate`（在阻塞线程上生成，RSA 需要数秒）、`key_import`（加密私钥缺少 passphrase 时返回 `ssh.passphrase_required`）、`key_read_file`（读取用户选择的私钥文件，最大 64 KiB，供导入前查看）、`key_update`（只改名，或连同私钥一起替换）、`key_delete`、`key_reveal`（解锁后返回私钥与 passphrase 供查看或复制）、`key_install`（用与打开终端相同的连接方式，在主机上执行 `authorize_command`，20 秒超时，失败时返回带退出码和 stderr 的 `key.install_failed`）。
+应用通过 `src-tauri/src/commands/keys.rs` 暴露密钥库：`key_list`、`key_generate`（在阻塞线程上生成，RSA 需要数秒）、`key_import`（加密私钥缺少 passphrase 时返回 `ssh.passphrase_required`；可附带用户自己的公钥，经 `check_public_key` 确认与私钥配对后原样保存，否则使用从私钥推出的公钥，不匹配时返回 `key.public_invalid`）、`key_read_file`（读取用户选择的私钥文件，最大 64 KiB，供导入前查看）、`key_update`（改名；附带公钥时校验后只替换公钥；附带私钥时整体替换）、`key_delete`、`key_reveal`（解锁后返回私钥与 passphrase 供查看或复制）、`key_install`（用与打开终端相同的连接方式，在主机上执行 `authorize_command`，20 秒超时，失败时返回带退出码和 stderr 的 `key.install_failed`）。
 
 快捷指令 `Snippet { id, name, command }` 不含秘密，锁定时可读写；`SnippetDraft::validate` 要求命令非空且不超过 16 KiB，名称为空时取命令的第一行。
 应用通过 `snippet_list` / `snippet_create` / `snippet_update` / `snippet_delete` 管理快捷指令；发送到终端由界面调用 `session_write` 完成。

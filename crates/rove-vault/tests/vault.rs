@@ -473,6 +473,10 @@ fn key_library_seals_private_keys_and_guards_keys_in_use() {
         Err(VaultError::KeyInUse(names)) if names == ["db"]
     ));
 
+    let custom = vault
+        .set_ssh_key_public(work.id, "ssh-ed25519 AAAA custom-comment")
+        .unwrap();
+    assert_eq!(custom.public_key, "ssh-ed25519 AAAA custom-comment");
     let renamed = vault.rename_ssh_key(work.id, "laptop").unwrap();
     assert_eq!(renamed.name, "laptop");
     let replaced = vault.replace_ssh_key(work.id, key_draft("laptop")).unwrap();

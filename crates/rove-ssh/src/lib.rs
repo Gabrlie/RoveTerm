@@ -31,7 +31,8 @@ pub use hostkey::{
     HostKeyAnswer, HostKeyPrompt, HostKeyPrompts, HostKeyRejection, HostKeyVerifier, VaultVerifier,
 };
 pub use keys::{
-    KeyInfo, KeyType, authorize_command, describe as describe_key, generate as generate_key,
+    KeyInfo, KeyType, authorize_command, check_public_key, describe as describe_key,
+    generate as generate_key,
 };
 pub use monitor::{ServerStats, sample as sample_server};
 pub use progress::{AuthKind, ConnectStep, Progress};

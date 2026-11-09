@@ -318,7 +318,11 @@ fn check_same_kind(path: &str, wanted: EntryKind, existing: EntryKind) -> Result
     if is_dir(wanted) != is_dir(existing) {
         return Err(FsError::AlreadyExists(format!(
             "{path} exists as a {}",
-            if is_dir(existing) { "directory" } else { "file" }
+            if is_dir(existing) {
+                "directory"
+            } else {
+                "file"
+            }
         )));
     }
     Ok(())
@@ -415,10 +419,13 @@ impl Runner {
     /// holds it.
     fn reserve(&self, request: &TransferRequest, path: &str) -> Option<Reservation> {
         let key = (request.dst.label(), path.to_owned());
-        self.reserved.lock().insert(key.clone()).then(|| Reservation {
-            reserved: self.reserved.clone(),
-            key,
-        })
+        self.reserved
+            .lock()
+            .insert(key.clone())
+            .then(|| Reservation {
+                reserved: self.reserved.clone(),
+                key,
+            })
     }
 
     /// Picks and reserves the destination path of the top-level item, or `None` to skip. A path
@@ -445,7 +452,9 @@ impl Runner {
                 match self.reserve(request, &path) {
                     Some(reservation) => Ok(Some((path, reservation))),
                     // Another transfer is writing this name right now.
-                    None if request.conflict == Conflict::Rename => self.renamed(request, name).await,
+                    None if request.conflict == Conflict::Rename => {
+                        self.renamed(request, name).await
+                    }
                     None if request.conflict == Conflict::Skip => Ok(None),
                     None => Err(FsError::AlreadyExists(path)),
                 }
