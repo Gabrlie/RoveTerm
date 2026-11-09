@@ -1,7 +1,7 @@
 <script lang="ts">
   import IconButton from '../ui/IconButton.svelte';
   import Icon from '../ui/Icon.svelte';
-  import { workspace } from '../workspace/workspace.svelte';
+  import { HOME_TAB, workspace } from '../workspace/workspace.svelte';
   import { t } from '../i18n';
   import type { IconName } from '../ui/icons';
 
@@ -34,6 +34,18 @@
   {#if !sidebarOpen}
     <IconButton icon="sidebar" label={t('action.sidebar.toggle')} onclick={onsidebar} />
   {/if}
+  <div
+    class="tab home"
+    class:active={workspace.activeTabId === HOME_TAB}
+    role="tab"
+    tabindex="0"
+    aria-selected={workspace.activeTabId === HOME_TAB}
+    title={t('home.title')}
+    onclick={() => workspace.activate(HOME_TAB)}
+    onkeydown={(event) => event.key === 'Enter' && workspace.activate(HOME_TAB)}
+  >
+    <Icon name="home" size={14} />
+  </div>
   {#each workspace.tabs as tab (tab.id)}
     <div
       class="tab"
@@ -50,7 +62,7 @@
       <IconButton icon="close" label={t('action.tab.close')} small onclick={(event) => { event.stopPropagation(); workspace.closeTab(tab.id); }} />
     </div>
   {/each}
-  <IconButton icon="add" label={t('action.tab.newLocal')} onclick={onnew} />
+  <IconButton icon="add" label={t('tab.new')} onclick={onnew} />
 </div>
 
 <style>
@@ -77,6 +89,11 @@
     color: var(--fg-muted);
     cursor: pointer;
     user-select: none;
+  }
+  .tab.home {
+    flex: none;
+    min-width: 0;
+    padding: 0 var(--space-2);
   }
   .tab:hover {
     background: var(--bg-sunken);

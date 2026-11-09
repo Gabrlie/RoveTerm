@@ -10,6 +10,7 @@
   import { credentialKindOf, type CredentialKind } from '../ipc';
   import { errorText, t } from '../i18n';
   import Icon from '../ui/Icon.svelte';
+  import { hosts } from '../hosts/hosts.svelte';
 
   interface Props {
     tab: Tab;
@@ -132,7 +133,11 @@
             bind:this={views[id]}
             open={opener(pane)}
             active={visible && tab.focused === id}
-            onsession={(sessionId) => workspace.attached(id, sessionId)}
+            onsession={(sessionId) => {
+              workspace.attached(id, sessionId);
+              // The backend recorded the connection time; the home page sorts by it.
+              if (pane.target.kind === 'ssh') hosts.refresh().catch((error: unknown) => console.warn('host refresh failed', error));
+            }}
             onexit={(status) => onExit(pane, status.code)}
             ontitle={(title) => workspace.retitle(id, title)}
             onerror={(error) => onOpenError(id, error)}

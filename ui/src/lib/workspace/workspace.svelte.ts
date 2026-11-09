@@ -65,10 +65,14 @@ export function filesTargetFor(target: PaneTarget): PaneTarget | null {
   }
 }
 
+/** Id of the pinned home tab, which lists saved hosts and has no panes. */
+export const HOME_TAB = 'home';
+
 class Workspace {
   tabs = $state<Tab[]>([]);
   panes = $state<Record<PaneId, PaneState>>({});
-  activeTabId = $state<string | null>(null);
+  /** The active tab, or {@link HOME_TAB}. */
+  activeTabId = $state<string>(HOME_TAB);
 
   get activeTab(): Tab | undefined {
     return this.tabs.find((tab) => tab.id === this.activeTabId);
@@ -159,7 +163,7 @@ class Workspace {
     if (index < 0) return;
     this.tabs.splice(index, 1);
     if (this.activeTabId === tabId) {
-      this.activeTabId = this.tabs[Math.min(index, this.tabs.length - 1)]?.id ?? null;
+      this.activeTabId = this.tabs[Math.min(index, this.tabs.length - 1)]?.id ?? HOME_TAB;
     }
   }
 
@@ -167,12 +171,11 @@ class Workspace {
     this.activeTabId = tabId;
   }
 
-  /** Activates the tab `offset` positions away, wrapping around. */
+  /** Activates the tab `offset` positions away, wrapping around; the home tab comes first. */
   cycleTab(offset: number): void {
-    if (this.tabs.length === 0) return;
-    const index = this.tabs.findIndex((tab) => tab.id === this.activeTabId);
-    const next = (index + offset + this.tabs.length) % this.tabs.length;
-    this.activeTabId = this.tabs[next]?.id ?? null;
+    const ids = [HOME_TAB, ...this.tabs.map((tab) => tab.id)];
+    const index = ids.indexOf(this.activeTabId);
+    this.activeTabId = ids[(index + offset + ids.length) % ids.length] ?? HOME_TAB;
   }
 
   /** Activates the tab at zero-based `index`, if it exists. */

@@ -9,6 +9,7 @@
   import SettingsDialog from './lib/settings/SettingsDialog.svelte';
   import ConfirmHost from './lib/ui/ConfirmHost.svelte';
   import KeysDialog from './lib/keys/KeysDialog.svelte';
+  import HomePage from './lib/home/HomePage.svelte';
   import { keys } from './lib/keys/keys.svelte';
   import QuickConnect from './lib/hosts/QuickConnect.svelte';
   import HostKeyDialog from './lib/hosts/HostKeyDialog.svelte';
@@ -18,7 +19,7 @@
   import { vault } from './lib/vault/vault.svelte';
   import { actionFor, type ActionId } from './lib/actions';
   import { terminals } from './lib/terminal/registry';
-  import { workspace, type PaneTarget } from './lib/workspace/workspace.svelte';
+  import { HOME_TAB, workspace, type PaneTarget } from './lib/workspace/workspace.svelte';
   import { onHostKeyPrompt, type CredentialKind, type HostEntry, type HostKeyPrompt } from './lib/ipc';
   import { errorText, t } from './lib/i18n';
   import type { PaneId } from './lib/layout/layout';
@@ -210,7 +211,6 @@
   }
 
   onMount(() => {
-    workspace.openTab({ kind: 'local' });
     vault.init().catch((error: unknown) => console.warn('vault state unavailable', error));
     hosts.refresh().catch((error: unknown) => showNotice(errorText(error)));
     keys.refresh().catch((error: unknown) => console.warn('key library unavailable', error));
@@ -227,7 +227,7 @@
     <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onquick={() => (quickOpen = true)} onnotice={showNotice} onsettings={() => (settingsOpen = true)} onkeys={() => (keysOpen = true)} oncollapse={() => (sidebarOpen = false)} />
   {/if}
   <div class="main">
-    <TabBar onnew={() => run('tab.newLocal')} {sidebarOpen} onsidebar={() => (sidebarOpen = true)} />
+    <TabBar onnew={() => workspace.activate(HOME_TAB)} {sidebarOpen} onsidebar={() => (sidebarOpen = true)} />
     <main class="stage">
       {#each workspace.tabs as tab (tab.id)}
         <PaneGrid
@@ -236,9 +236,16 @@
           oncredentials={requestPaneCredentials}
           onedithost={(hostId) => (editing = hosts.find(hostId) ?? undefined)}
         />
-      {:else}
-        <div class="empty">{t('workspace.empty')}</div>
       {/each}
+      {#if workspace.activeTabId === HOME_TAB}
+        <HomePage
+          onconnect={connect}
+          onfiles={openFiles}
+          onedit={(host) => (editing = host)}
+          onquick={() => (quickOpen = true)}
+          onlocal={() => run('tab.newLocal')}
+        />
+      {/if}
     </main>
   </div>
 </div>
@@ -314,12 +321,6 @@
     flex: 1;
     min-height: 0;
     background: var(--term-bg);
-  }
-  .empty {
-    height: 100%;
-    display: grid;
-    place-items: center;
-    color: var(--fg-muted);
   }
   .notice {
     position: fixed;

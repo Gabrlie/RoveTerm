@@ -20,6 +20,7 @@
 | `src/lib/forwards/` | 端口转发对话框 `ForwardsDialog`、转发状态 `forwards.svelte.ts` |
 | `src/lib/hosts/` | 主机列表与搜索、主机编辑、快速连接、密码输入、host key 确认 |
 | `src/lib/vault/vault.svelte.ts` | vault 锁定状态，以及由用户操作触发的解锁和重置 |
+| `src/lib/home/HomePage.svelte` | 首页：主机卡片按最近连接排序，快速连接、新建主机、本地终端入口 |
 | `src/lib/keys/` | 密钥库对话框 `KeysDialog` 与密钥列表 `keys.svelte.ts` |
 | `src/lib/settings/` | 偏好设置 `prefs.svelte.ts`（启动时在挂载前加载）与设置对话框 `SettingsDialog` |
 | `src/lib/i18n/` | 文案字典与 `t()`、`errorText()` |
@@ -42,6 +43,9 @@
 - 组件提供 `focus()`、`selection()`、`paste(text)` 方法。
 
 ## 标签与分屏
+
+- 标签栏最左侧固定一个"主页"标签（`HOME_TAB`），启动时显示它；关闭最后一个标签后回到主页；"+"按钮也打开主页，`App+T` 直接新建本地终端。`Ctrl+Tab` 循环时主页排在最前。
+- 首页列出已保存主机，按 `last_connected_at` 降序排列，从未连接的按名称排在后面；卡片显示经由图标、运行中的转发数和"x 分钟前连接"，点击连接，悬停显示浏览文件和编辑。终端连上已保存主机后刷新主机列表，排序随之更新。
 
 - 每个标签页有一棵分屏树：叶子是面板，内部节点是 `split { dir, ratio, a, b }`。`row` 表示左右分屏，`column` 表示上下分屏，`ratio` 被限制在 0.1–0.9。
 - `PaneGrid` 把分屏树换算成每个面板的矩形，用绝对定位渲染。面板按 ID 作为 key，拆分或调整大小时终端组件不会重新挂载，会话也不会重启；非活动标签页用 `visibility: hidden` 隐藏，终端保持原有尺寸。
