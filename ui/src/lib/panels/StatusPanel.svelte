@@ -1,3 +1,18 @@
+<script lang="ts" module>
+  import type { ServerStats as Stats } from '../ipc';
+
+  /** What a panel showed for one host, kept across remounts (switching panes, closing the panel)
+   *  so returning shows it at once while fresh samples arrive. Lives as long as the window. */
+  interface Snapshot {
+    stats: Stats;
+    previous: { stats: Stats; at: number };
+    cpu: number | null;
+    coreHistory: number[][];
+    rates: Record<string, { rx: number; tx: number }>;
+  }
+  const snapshots = new Map<string, Snapshot>();
+</script>
+
 <script lang="ts">
   // Server status of the focused pane's remote, sampled every few seconds over its live
   // connection, shown as cards: system, CPU, memory, network, disks. Usage and rates come from
@@ -9,6 +24,7 @@
   import { errorText, t } from '../i18n';
   import { formatSize } from '../files/format';
   import { prefs } from '../settings/prefs.svelte';
+  import { sourceKey } from '../workspace/workspace.svelte';
 
   let { source, visible }: { source: RemoteSource; visible: boolean } = $props();
 
@@ -17,12 +33,16 @@
   /** Interfaces shown before the list collapses. */
   const INTERFACES_SHOWN = 6;
 
-  let stats = $state<ServerStats | null>(null);
-  let previous: { stats: ServerStats; at: number } | null = null;
-  let cpu = $state<number | null>(null);
+  // The panel is keyed by source, so the key never changes for one instance.
+  // svelte-ignore state_referenced_locally
+  const key = sourceKey(source);
+  const cached = snapshots.get(key);
+  let stats = $state<ServerStats | null>(cached?.stats ?? null);
+  let previous: { stats: ServerStats; at: number } | null = cached?.previous ?? null;
+  let cpu = $state<number | null>(cached?.cpu ?? null);
   /** Usage history of each core, oldest first. */
-  let coreHistory = $state<number[][]>([]);
-  let rates = $state<Record<string, { rx: number; tx: number }>>({});
+  let coreHistory = $state<number[][]>(cached?.coreHistory ?? []);
+  let rates = $state<Record<string, { rx: number; tx: number }>>(cached?.rates ?? {});
   let showAllInterfaces = $state(false);
   let problem = $state<string | null>(null);
   let timer = 0;
@@ -59,6 +79,7 @@
       }
       previous = { stats: next, at: now };
       stats = next;
+      snapshots.set(key, { stats: next, previous, cpu, coreHistory: $state.snapshot(coreHistory), rates: $state.snapshot(rates) });
       problem = null;
     } catch (error) {
       if (stopped) return;

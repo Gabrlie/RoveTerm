@@ -72,6 +72,10 @@
   $effect(() => store('ui.panel.right', rightOpen));
   let bottomOpen = $state(stored('ui.panel.bottom', false));
   $effect(() => store('ui.panel.bottom', bottomOpen));
+  let bottomMounted = $state(false);
+  $effect(() => {
+    if (bottomOpen) bottomMounted = true;
+  });
   let rightSize = $state(storedSize('ui.panel.rightSize', 300));
   $effect(() => storeSize('ui.panel.rightSize', rightSize));
   let bottomSize = $state(storedSize('ui.panel.bottomSize', 260));
@@ -338,7 +342,10 @@
     </main>
     {#if bottomOpen}
       <div class="edge horizontal" role="separator" aria-orientation="horizontal" onpointerdown={resizeBottom}></div>
-      <div class="bottom" style:height="{bottomSize}px">
+    {/if}
+    <!-- Once opened the panel stays mounted while hidden, keeping its file browsers open. -->
+    {#if bottomMounted}
+      <div class="bottom" hidden={!bottomOpen} style:height="{bottomSize}px">
         <BottomPanel onclose={() => (bottomOpen = false)} />
       </div>
     {/if}
@@ -435,6 +442,9 @@
     flex: 1;
     min-height: 0;
     background: var(--term-bg);
+  }
+  .bottom[hidden] {
+    display: none;
   }
   .bottom,
   .right {
