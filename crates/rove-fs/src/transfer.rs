@@ -311,6 +311,19 @@ fn basename(path: &str) -> String {
         .to_owned()
 }
 
+/// Fails when overwriting would put a directory in place of a file or a file in place of a
+/// directory: replacing a directory would move its whole content away.
+fn check_same_kind(path: &str, wanted: EntryKind, existing: EntryKind) -> Result<(), FsError> {
+    let is_dir = |kind| kind == EntryKind::Dir;
+    if is_dir(wanted) != is_dir(existing) {
+        return Err(FsError::AlreadyExists(format!(
+            "{path} exists as a {}",
+            if is_dir(existing) { "directory" } else { "file" }
+        )));
+    }
+    Ok(())
+}
+
 /// Joins `name` to `dir` on `fs`, refusing names that are not a single component (`..`,
 /// separators) or that the platform would not place directly inside `dir` (a Windows drive prefix
 /// such as `C:x`).
@@ -409,10 +422,12 @@ impl Runner {
     }
 
     /// Picks and reserves the destination path of the top-level item, or `None` to skip. A path
-    /// another running transfer reserved counts as taken.
+    /// another running transfer reserved counts as taken. Overwriting refuses to replace a file
+    /// with a directory or a directory with a file.
     async fn destination(
         &self,
         request: &TransferRequest,
+        src_kind: EntryKind,
     ) -> Result<Option<(String, Reservation)>, FsError> {
         let dst = request.dst.as_ref();
         let name = &self.update.name;
@@ -424,6 +439,9 @@ impl Runner {
         };
         match (existing, request.conflict) {
             (None, _) | (Some(_), Conflict::Overwrite) => {
+                if let Some(kind) = existing {
+                    check_same_kind(&path, src_kind, kind)?;
+                }
                 match self.reserve(request, &path) {
                     Some(reservation) => Ok(Some((path, reservation))),
                     // Another transfer is writing this name right now.
@@ -506,7 +524,8 @@ impl Runner {
     }
 
     async fn run(&mut self, request: &TransferRequest) -> Result<(), FsError> {
-        let Some((dst_path, _reservation)) = self.destination(request).await? else {
+        let src_kind = request.src.stat(&request.src_path).await?.kind;
+        let Some((dst_path, _reservation)) = self.destination(request, src_kind).await? else {
             self.update.skipped = true;
             return Ok(());
         };
@@ -522,14 +541,16 @@ impl Runner {
         for step in &steps {
             self.check()?;
             match step {
-                Step::Dir(path) => match request.dst.mkdir(path).await {
-                    Ok(()) | Err(FsError::AlreadyExists(_)) => {}
-                    // Some SFTP servers report an existing directory as a generic failure.
-                    Err(error) if Self::exists(request.dst.as_ref(), path).await? => {
-                        tracing::debug!(%error, path, "mkdir failed on existing directory");
+                Step::Dir(path) => {
+                    if let Err(error) = request.dst.mkdir(path).await {
+                        // An existing directory is merged into (some SFTP servers report it as
+                        // a generic failure); anything else in its place is an error.
+                        match request.dst.stat(path).await {
+                            Ok(existing) => check_same_kind(path, EntryKind::Dir, existing.kind)?,
+                            Err(_) => return Err(error),
+                        }
                     }
-                    Err(error) => return Err(error),
-                },
+                }
                 Step::File { src, dst, .. } => {
                     self.copy_file(request, src, dst).await?;
                     self.update.files_done += 1;
@@ -558,6 +579,7 @@ impl Runner {
         let temp = fs.join(&dir, &format!(".{name}.{}.part", self.update.id));
         let keep_mode = match fs.stat(dst).await {
             Ok(existing) => {
+                check_same_kind(dst, EntryKind::File, existing.kind)?;
                 // Only "overwrite" replaces files; with "rename" or "skip" a file that appeared
                 // meanwhile is left alone.
                 if request.conflict != Conflict::Overwrite {
