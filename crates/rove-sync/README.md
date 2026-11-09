@@ -9,7 +9,7 @@
 - `RecordStore` 由调用方实现：`records()` 返回所有可同步记录，`apply()` 一次收到本轮合并胜出的全部远程变更（按时间戳排序，`body` 为 `None` 时删除），可以自行调整顺序以满足引用关系（先父后子）。`apply` 之后 `records()` 应返回相同的内容，否则下一轮会把它当成本地修改再推送一次。
 - `SyncState` 不含秘密（指纹以同步密钥为键），由调用方在两轮之间保存。
 - 后端路径由字母、数字、`.`、`_`、`-` 组成，不允许 `.`、`..`；单个文件最大 16 MiB。
-- 后端：`FolderBackend`（本机目录）与 `WebDavBackend`（基本认证；必须是 https，回环地址可用 http；地址不能带凭据、查询或片段；凭据被拒绝时返回 `Unauthorized`）。
+- 后端：`FolderBackend`（本机目录）与 `WebDavBackend`（基本认证；必须是 https，回环地址可用 http；地址不能带凭据、查询或片段；凭据被拒绝时返回 `Unauthorized`；Android 上用 `webpki-roots` 的根证书校验，不依赖需要 JNI 初始化的系统校验器）。
 
 ## 局限
 

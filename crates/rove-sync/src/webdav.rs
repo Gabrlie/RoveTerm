@@ -71,9 +71,12 @@ impl WebDavBackend {
         }
         // reqwest is built without a default crypto provider; ring is the one this app ships.
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = Client::builder()
+        let builder = Client::builder()
             .timeout(std::time::Duration::from_secs(60))
-            .user_agent(concat!("RoveTerm/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("RoveTerm/", env!("CARGO_PKG_VERSION")));
+        #[cfg(target_os = "android")]
+        let builder = builder.tls_backend_preconfigured(android_tls()?);
+        let client = builder
             .build()
             .map_err(|error| SyncError::Backend(error.to_string()))?;
         Ok(Self {
@@ -167,6 +170,25 @@ impl WebDavBackend {
         }
         Ok(())
     }
+}
+
+/// TLS for Android, where the system verifier would first have to be initialised over JNI:
+/// trusts the Mozilla root set bundled with `webpki-roots`, so a server whose certificate chains
+/// only to a user-installed CA is rejected there.
+#[cfg(target_os = "android")]
+fn android_tls() -> Result<rustls::ClientConfig, SyncError> {
+    let roots = rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
+    let mut config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|error| SyncError::Backend(error.to_string()))?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Ok(config)
 }
 
 /// Names of the members of `dir_url` in a `PROPFIND` multistatus response.
