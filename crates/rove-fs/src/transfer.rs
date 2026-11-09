@@ -292,6 +292,20 @@ fn basename(path: &str) -> String {
         .to_owned()
 }
 
+/// Joins `name` to `dir` on `fs`, refusing names that are not a single component (`..`,
+/// separators) or that the platform would not place directly inside `dir` (a Windows drive prefix
+/// such as `C:x`).
+fn child_path(fs: &dyn FileSystem, dir: &str, name: &str) -> Result<String, FsError> {
+    crate::validate_name(name)?;
+    let path = fs.join(dir, name);
+    let parent = fs.parent(&path);
+    let normalize = |path: &str| path.trim_end_matches(['/', '\\']).to_owned();
+    if parent.as_deref().map(normalize) != Some(normalize(dir)) || basename(&path) != name {
+        return Err(FsError::InvalidPath(name.to_owned()));
+    }
+    Ok(path)
+}
+
 /// `report.txt` + 2 → `report (2).txt`; names without an extension or starting with a dot get the
 /// suffix at the end.
 fn numbered(name: &str, n: u32) -> String {
@@ -368,8 +382,7 @@ impl Runner {
     async fn destination(&self, request: &TransferRequest) -> Result<Option<String>, FsError> {
         let dst = request.dst.as_ref();
         let name = &self.update.name;
-        crate::validate_name(name)?;
-        let path = dst.join(&request.dst_dir, name);
+        let path = child_path(dst, &request.dst_dir, name)?;
         if !Self::exists(dst, &path).await? {
             return Ok(Some(path));
         }
@@ -409,8 +422,10 @@ impl Runner {
         while let Some((src_dir, dst_dir)) = pending.pop() {
             self.check()?;
             for entry in src.list(&src_dir).await? {
+                // Names come from the source (possibly a remote server) and must stay one
+                // component below the destination directory.
+                let dst_child = child_path(dst, &dst_dir, &entry.name)?;
                 let src_child = src.join(&src_dir, &entry.name);
-                let dst_child = dst.join(&dst_dir, &entry.name);
                 let metadata = match entry.metadata.kind {
                     // Follow links to files; linked directories are skipped to avoid cycles.
                     EntryKind::Symlink => match src.stat(&src_child).await {

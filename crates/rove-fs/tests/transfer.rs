@@ -178,6 +178,94 @@ async fn remove_all_deletes_a_tree() {
     );
 }
 
+/// A local file system whose directory listings and reads can be tampered with, standing in for
+/// a misbehaving server.
+struct Hostile {
+    /// Extra entry name injected into every listing.
+    injected: Option<&'static str>,
+    /// `open_read` fails for every path.
+    unreadable: bool,
+}
+
+#[async_trait::async_trait]
+impl FileSystem for Hostile {
+    fn label(&self) -> String {
+        "hostile".into()
+    }
+    async fn home(&self) -> Result<String, rove_fs::FsError> {
+        LocalFs.home().await
+    }
+    async fn list(&self, path: &str) -> Result<Vec<rove_fs::DirEntry>, rove_fs::FsError> {
+        let mut entries = LocalFs.list(path).await?;
+        if let Some(name) = self.injected
+            && let Some(first) = entries.first().cloned()
+        {
+            entries.push(rove_fs::DirEntry {
+                name: name.into(),
+                ..first
+            });
+        }
+        Ok(entries)
+    }
+    async fn stat(&self, path: &str) -> Result<rove_fs::Metadata, rove_fs::FsError> {
+        LocalFs.stat(path).await
+    }
+    async fn lstat(&self, path: &str) -> Result<rove_fs::Metadata, rove_fs::FsError> {
+        LocalFs.lstat(path).await
+    }
+    async fn mkdir(&self, path: &str) -> Result<(), rove_fs::FsError> {
+        LocalFs.mkdir(path).await
+    }
+    async fn remove_file(&self, path: &str) -> Result<(), rove_fs::FsError> {
+        LocalFs.remove_file(path).await
+    }
+    async fn remove_dir(&self, path: &str) -> Result<(), rove_fs::FsError> {
+        LocalFs.remove_dir(path).await
+    }
+    async fn rename(&self, from: &str, to: &str) -> Result<(), rove_fs::FsError> {
+        LocalFs.rename(from, to).await
+    }
+    async fn open_read(&self, path: &str) -> Result<rove_fs::FsReader, rove_fs::FsError> {
+        if self.unreadable {
+            return Err(rove_fs::FsError::PermissionDenied(path.into()));
+        }
+        LocalFs.open_read(path).await
+    }
+    async fn open_write(&self, path: &str) -> Result<rove_fs::FsWriter, rove_fs::FsError> {
+        LocalFs.open_write(path).await
+    }
+    fn join(&self, dir: &str, name: &str) -> String {
+        LocalFs.join(dir, name)
+    }
+    fn parent(&self, path: &str) -> Option<String> {
+        LocalFs.parent(path)
+    }
+}
+
+#[tokio::test]
+async fn source_names_cannot_escape_the_destination() {
+    let root = tempfile::tempdir().unwrap();
+    let src = root.path().join("remote/tree");
+    let dst = root.path().join("downloads");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(&dst).unwrap();
+    std::fs::write(src.join("ok.txt"), b"fine").unwrap();
+    std::fs::write(root.path().join("victim.txt"), b"precious").unwrap();
+
+    let (queue, mut rx) = queue(TransferConfig::default());
+    let mut evil = request(&src, &dst, Conflict::Rename);
+    evil.src = Arc::new(Hostile {
+        injected: Some("../../victim.txt"),
+        unreadable: false,
+    });
+    let done = wait_final(&mut rx, queue.enqueue(evil)).await;
+    assert_eq!(done.state, TransferState::Failed, "{done:?}");
+    assert_eq!(
+        std::fs::read(root.path().join("victim.txt")).unwrap(),
+        b"precious"
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn remove_all_removes_a_directory_link_but_not_its_target() {

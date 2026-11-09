@@ -32,7 +32,7 @@ enqueue(TransferRequest) → TransferId，状态 queued
 
 ## 路径
 
-远程路径一律按 POSIX 处理（`posix_join`、`posix_parent`）。本地路径由 `LocalFs` 按平台语法拼接。从 IPC 传入的单个文件名先经 `validate_name` 校验，拒绝空名、`.`、`..` 和包含分隔符的名称。
+远程路径一律按 POSIX 处理（`posix_join`、`posix_parent`）。本地路径由 `LocalFs` 按平台语法拼接。从 IPC 传入的单个文件名先经 `validate_name` 校验，拒绝空名、`.`、`..` 和包含分隔符的名称。传输时源目录列出的每个名称同样校验，并确认拼接后的路径恰好位于目标目录之下（例如拒绝 Windows 的 `C:x`），不符合时整个传输失败，不会写到目标目录之外。
 
 ## 应用命令
 
