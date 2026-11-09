@@ -44,7 +44,7 @@
   }
 </script>
 
-<div class="tabbar" role="tablist">
+<div class="tabbar" class:bare-corner={!sidebarOpen} role="tablist" data-tauri-drag-region>
   {#if !sidebarOpen}
     <IconButton icon="sidebar" label={t('action.sidebar.toggle')} onclick={onsidebar} />
   {/if}
@@ -80,7 +80,7 @@
     </div>
   {/each}
   <IconButton icon="add" label={t('tab.new')} onclick={onnew} />
-  <span class="spacer"></span>
+  <span class="spacer" data-tauri-drag-region></span>
   <IconButton icon="panelBottom" label={t('action.panel.bottom')} active={bottomOpen} onclick={ontogglebottom} />
   <IconButton icon="panelRight" label={t('action.panel.right')} active={rightOpen} onclick={ontoggleright} />
 </div>
@@ -98,6 +98,10 @@
     box-shadow: inset 0 -0.5px 0 var(--separator);
     overflow-x: auto;
     scrollbar-width: none;
+  }
+  /* With the sidebar collapsed the macOS window buttons sit over the tab bar. */
+  :global(:root[data-platform='mac']) .tabbar.bare-corner {
+    padding-left: 84px;
   }
   .tab {
     position: relative;

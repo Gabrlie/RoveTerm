@@ -174,6 +174,8 @@
 组件只读取 `tokens.css` 中的 CSS 变量，不写死颜色、间距、圆角、阴影和动效时长。暗色主题跟随系统，也可以通过 `<html data-theme="light|dark">` 强制指定。
 
 - 表面分层：`--window`（窗口底色）之上是半透明材质 `--material-sidebar` / `--material-bar` / `--material-popover`，配合 `--material-blur` 做毛玻璃；内容区用不透明的 `--surface` / `--surface-raised`。WebKitGTK 接受但不绘制 `backdrop-filter`，所以 Linux 上 `<html data-blur="off">`，弹层材质改为不透明。
+- 窗口材质：启动时调用 `window_set_material`（`src/lib/ui/window.ts`），macOS 26 及以上用 Liquid Glass，更早的 macOS 用侧栏毛玻璃（vibrancy），Windows 11 用 Mica；Windows 10、Linux 和移动端返回 `false`，保持不透明。生效时 `<html data-material="on">`，`--window` 变为透明，侧栏和工具栏只做淡色叠加，内容区和终端仍不透明。窗口为此在 `tauri.macos.conf.json` / `tauri.windows.conf.json` 中设为 `transparent`。
+- macOS 使用覆盖式标题栏（`titleBarStyle: Overlay`，隐藏标题），红绿灯按钮画在侧栏头部，`<html data-platform="mac">` 时侧栏头部（侧栏收起时为标签栏）左侧留出 84px；侧栏头部和标签栏空白处带 `data-tauri-drag-region`，可拖动窗口。
 - 分隔一律用半透明细线 `--separator`（常以 0.5px 的 `box-shadow` 绘制），`--border` 只给输入类控件描边。
 - 强调色只设 `--accent`，`--accent-hover`、`--accent-soft`、`--focus-ring` 等由 `color-mix()` 派生；状态色有 `--success` / `--warning` / `--danger` 及其 soft 版本。
 - `--shadow-sm|md|lg` 是多层柔和阴影，`--glass-edge` 是玻璃边缘高光；动效用 `--ease` 与 `--dur-fast|dur|dur-slow`，系统要求减少动效时时长为 0。

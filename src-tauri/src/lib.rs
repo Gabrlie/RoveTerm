@@ -169,6 +169,7 @@ pub fn run() {
             commands::snippets::snippet_create,
             commands::snippets::snippet_update,
             commands::snippets::snippet_delete,
+            commands::window::window_set_material,
             commands::workspace::workspace_save,
             commands::workspace::workspace_load,
             commands::prefs::prefs_get,

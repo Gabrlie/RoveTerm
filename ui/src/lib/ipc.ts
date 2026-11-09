@@ -557,3 +557,8 @@ export function workspaceSave(snapshot: object): Promise<void> {
 export function workspaceLoad(): Promise<object | null> {
   return invoke('workspace_load');
 }
+
+/** Turns the translucent window material on or off; resolves to whether it is now shown. */
+export function windowSetMaterial(enabled: boolean): Promise<boolean> {
+  return invoke('window_set_material', { enabled });
+}

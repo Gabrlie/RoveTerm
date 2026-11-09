@@ -22,7 +22,7 @@ rove-ssh = { path = "../crates/rove-ssh" }
 rove-vault = { path = "../crates/rove-vault", features = ["memory-key-cache"] }
 serde.workspace = true
 serde_json.workspace = true
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-dialog = "2.8.4"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
@@ -34,3 +34,6 @@ zeroize = "1"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 rove-pty = { path = "../crates/rove-pty" }
 fontdb = "0.24"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-version = "0.1"

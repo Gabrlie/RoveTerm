@@ -94,8 +94,8 @@
 </script>
 
 <aside class="sidebar">
-  <div class="toolbar">
-    <span class="heading">{t('host.title')}</span>
+  <div class="toolbar" data-tauri-drag-region>
+    <span class="heading" data-tauri-drag-region>{t('host.title')}</span>
     <IconButton icon="quickConnect" label={t('action.host.quickConnect')} onclick={onquick} />
     <IconButton icon="key" label={t('action.keys.manage')} onclick={onkeys} />
     <IconButton icon="importConfig" label={t('host.import')} onclick={importConfig} />
@@ -188,6 +188,10 @@
     gap: 2px;
     height: 44px;
     padding: 0 var(--space-2) 0 var(--space-4);
+  }
+  /* Room for the macOS window buttons drawn over the corner. */
+  :global(:root[data-platform='mac']) .toolbar {
+    padding-left: 84px;
   }
   .heading {
     flex: 1;
