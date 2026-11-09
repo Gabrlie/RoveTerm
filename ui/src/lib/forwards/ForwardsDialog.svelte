@@ -276,16 +276,19 @@
     display: flex;
     align-items: flex-start;
     gap: var(--space-2);
-    padding: var(--space-2);
-    border: 1px solid var(--border);
+    padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow:
+      0 0 0 0.5px var(--separator),
+      var(--shadow-sm);
   }
   .kind {
     flex: none;
     width: 22px;
     margin-top: 1px;
     border-radius: var(--radius-sm);
-    background: var(--bg-sunken);
+    background: var(--fill);
     color: var(--fg-muted);
     font-family: var(--font-mono);
     font-size: var(--text-caption);
@@ -324,7 +327,7 @@
   .tag {
     padding: 0 var(--space-1);
     border-radius: var(--radius-sm);
-    background: var(--bg-sunken);
+    background: var(--fill);
     color: var(--fg-muted);
     font-size: var(--text-caption);
   }
@@ -344,8 +347,8 @@
     gap: var(--space-3);
   }
   .editor.separated {
-    padding-top: var(--space-2);
-    border-top: 1px solid var(--border);
+    padding-top: var(--space-3);
+    box-shadow: inset 0 0.5px 0 var(--separator);
   }
   .hint {
     margin: calc(-1 * var(--space-2)) 0 0;

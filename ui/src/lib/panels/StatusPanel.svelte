@@ -228,9 +228,11 @@
     flex-direction: column;
     gap: var(--space-1);
     padding: var(--space-3);
-    border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: var(--bg);
+    background: var(--surface-raised);
+    box-shadow:
+      0 0 0 0.5px var(--separator),
+      var(--shadow-sm);
   }
   h4 {
     display: flex;
@@ -238,6 +240,7 @@
     gap: var(--space-1);
     margin: 0 0 var(--space-1);
     font-size: var(--text-body);
+    font-weight: 600;
   }
   h4 :global(svg) {
     color: var(--accent);
@@ -272,7 +275,10 @@
   }
   .headline strong {
     color: var(--accent);
-    font-size: 22px;
+    font-size: 24px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
   }
   .headline strong.hot {
     color: var(--danger);
@@ -306,7 +312,7 @@
   .bar {
     height: 6px;
     border-radius: 3px;
-    background: var(--bg-sunken);
+    background: var(--fill-pressed);
     overflow: hidden;
   }
   .fill {
@@ -325,7 +331,7 @@
     align-items: center;
     padding: 3px var(--space-2);
     border-radius: var(--radius-sm);
-    background: var(--bg-sunken);
+    background: var(--fill);
   }
   .name {
     overflow: hidden;
@@ -333,7 +339,7 @@
     white-space: nowrap;
   }
   .up {
-    color: #16a34a;
+    color: var(--success);
   }
   .down {
     color: var(--accent);

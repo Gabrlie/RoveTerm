@@ -33,9 +33,9 @@
     --tone: var(--accent);
     position: relative;
     height: 54px;
-    border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    background: var(--bg-sunken);
+    background: var(--fill);
+    box-shadow: inset 0 0 0 0.5px var(--separator);
     overflow: hidden;
   }
   .chart.compact {
@@ -58,7 +58,7 @@
     height: 100%;
   }
   .grid {
-    stroke: var(--border);
+    stroke: var(--separator);
     stroke-width: 1;
     vector-effect: non-scaling-stroke;
   }

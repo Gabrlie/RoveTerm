@@ -375,8 +375,8 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    border-right: 1px solid var(--border);
     padding-right: var(--space-3);
+    box-shadow: inset -0.5px 0 0 var(--separator);
   }
   .list {
     flex: 1;
@@ -401,11 +401,11 @@
   }
   .item:hover,
   .add button:hover {
-    background: var(--bg-sunken);
+    background: var(--fill-hover);
   }
   .item.active,
   .add button.active {
-    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    background: var(--accent-soft);
   }
   .text {
     display: flex;
@@ -430,7 +430,7 @@
     flex-direction: column;
     gap: 2px;
     padding-top: var(--space-2);
-    border-top: 1px solid var(--border);
+    box-shadow: inset 0 0.5px 0 var(--separator);
   }
   section {
     flex: 1;
@@ -469,7 +469,7 @@
   }
   .install {
     padding-top: var(--space-3);
-    border-top: 1px solid var(--border);
+    box-shadow: inset 0 0.5px 0 var(--separator);
   }
   .row-actions {
     display: flex;

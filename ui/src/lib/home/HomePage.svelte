@@ -2,6 +2,7 @@
   // The home tab: saved hosts as cards, most recently connected first, plus the ways to start
   // something new.
   import Icon from '../ui/Icon.svelte';
+  import Avatar from '../ui/Avatar.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import { hosts } from '../hosts/hosts.svelte';
   import { forwardStatuses } from '../forwards/forwards.svelte';
@@ -48,18 +49,19 @@
       <Icon name="search" size={15} />
       <input class="bare" bind:value={query} placeholder={t('host.search')} spellcheck="false" />
     </div>
-    <button type="button" class="action" onclick={onquick}><Icon name="quickConnect" size={15} />{t('action.host.quickConnect')}</button>
-    <button type="button" class="action" onclick={() => onedit(null)}><Icon name="add" size={15} />{t('host.new')}</button>
-    <button type="button" class="action" onclick={onlocal}><Icon name="terminal" size={15} />{t('action.tab.newLocal')}</button>
+    <button type="button" class="secondary action" onclick={onquick}><Icon name="quickConnect" size={15} />{t('action.host.quickConnect')}</button>
+    <button type="button" class="secondary action" onclick={() => onedit(null)}><Icon name="add" size={15} />{t('host.new')}</button>
+    <button type="button" class="secondary action" onclick={onlocal}><Icon name="terminal" size={15} />{t('action.tab.newLocal')}</button>
   </header>
 
   {#if hosts.items.length === 0}
     <div class="empty">
+      <div class="empty-mark"><Icon name="server" size={28} /></div>
       <p>{t('home.empty')}</p>
       <button type="button" class="primary" onclick={() => onedit(null)}>{t('host.new')}</button>
     </div>
   {:else}
-    <h2>{t('home.hosts')}</h2>
+    <h2 class="section-label">{t('home.hosts')}</h2>
     <div class="grid">
       {#each sorted as host (host.id)}
         <div
@@ -70,7 +72,7 @@
           onkeydown={(event) => event.key === 'Enter' && onconnect(host)}
           title={`${host.username}@${host.hostname}:${host.port}`}
         >
-          <div class="icon"><Icon name="server" size={18} /></div>
+          <Avatar name={host.name} size={38} />
           <div class="text">
             <span class="name">
               <span class="label">{host.name}</span>
@@ -113,90 +115,91 @@
     position: absolute;
     inset: 0;
     overflow-y: auto;
-    padding: var(--space-6);
-    background: var(--bg);
+    padding: var(--space-8) var(--space-8) var(--space-6);
+    background: var(--surface);
   }
   header {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
-    margin-bottom: var(--space-6);
+    max-width: 1100px;
+    margin: 0 auto var(--space-8);
   }
   .search {
     flex: 1 1 260px;
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    height: 34px;
     padding: 0 var(--space-3);
-    height: 36px;
-    border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: var(--bg-elevated);
+    background: var(--fill);
     color: var(--fg-muted);
+    transition: box-shadow var(--dur-fast) var(--ease-out);
+  }
+  .search:focus-within {
+    background: var(--surface);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent),
+      var(--focus-ring);
   }
   .search input {
     flex: 1;
     min-width: 0;
-    border: none;
-    outline: none;
-    background: transparent;
     color: var(--fg);
-    font: inherit;
+    outline: none;
   }
   .action {
-    display: flex;
-    align-items: center;
-    gap: var(--space-1);
-    height: 36px;
+    height: 34px;
+    min-width: 0;
     padding: 0 var(--space-3);
-    border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: var(--bg-elevated);
-    color: var(--fg);
-    font: inherit;
-    cursor: pointer;
   }
-  .action:hover {
-    border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  .action :global(svg) {
+    color: var(--accent);
   }
   h2 {
-    margin: 0 0 var(--space-3);
-    color: var(--fg-muted);
-    font-size: var(--text-footnote);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    max-width: 1100px;
+    margin: 0 auto var(--space-3);
   }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
     gap: var(--space-3);
+    max-width: 1100px;
+    margin: 0 auto;
   }
   .card {
     position: relative;
     display: flex;
+    align-items: center;
     gap: var(--space-3);
-    padding: var(--space-3);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    background: var(--bg-elevated);
-    cursor: pointer;
-    outline: none;
-  }
-  .card:hover,
-  .card:focus-visible {
-    border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  }
-  .icon {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 36px;
-    height: 36px;
+    padding: var(--space-3) var(--space-4);
     border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--accent) 14%, transparent);
-    color: var(--accent);
+    background: var(--surface-raised);
+    box-shadow:
+      0 0 0 0.5px var(--separator),
+      var(--shadow-sm);
+    cursor: default;
+    outline: none;
+    transition:
+      transform var(--dur) var(--ease),
+      box-shadow var(--dur) var(--ease);
+  }
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow:
+      0 0 0 0.5px var(--separator),
+      var(--shadow-md);
+  }
+  .card:active {
+    transform: translateY(0) scale(0.99);
+  }
+  .card:focus-visible {
+    box-shadow:
+      0 0 0 0.5px var(--separator),
+      var(--focus-ring);
   }
   .text {
     flex: 1;
@@ -209,9 +212,9 @@
     display: flex;
     align-items: center;
     gap: var(--space-1);
+    min-width: 0;
     color: var(--fg);
     font-weight: 600;
-    min-width: 0;
   }
   .name :global(svg) {
     flex: none;
@@ -230,41 +233,54 @@
     font-size: var(--text-footnote);
   }
   .seen {
+    color: var(--fg-subtle);
     font-size: var(--text-caption);
   }
   .forwarding {
     display: inline-flex;
     align-items: center;
     gap: 2px;
+    padding: 0 5px;
+    border-radius: var(--radius-pill);
+    background: var(--accent-soft);
     color: var(--accent);
     font-size: var(--text-caption);
+  }
+  .forwarding :global(svg) {
+    color: inherit;
   }
   .actions {
     position: absolute;
     top: var(--space-2);
     right: var(--space-2);
-    display: none;
+    display: flex;
     gap: 2px;
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease-out);
   }
   .card:hover .actions,
   .card:focus-within .actions {
-    display: flex;
+    opacity: 1;
   }
   .empty {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: var(--space-3);
-    margin-top: 15vh;
+    margin-top: 14vh;
     color: var(--fg-muted);
   }
-  .primary {
-    padding: 6px var(--space-4);
-    border: none;
-    border-radius: 999px;
-    background: var(--accent);
-    color: #fff;
-    font: inherit;
-    cursor: pointer;
+  .empty p {
+    margin: 0 0 var(--space-2);
+  }
+  .empty-mark {
+    display: grid;
+    place-items: center;
+    width: 64px;
+    height: 64px;
+    border-radius: 18px;
+    background: linear-gradient(to bottom, color-mix(in srgb, var(--accent) 80%, #fff), var(--accent));
+    box-shadow: var(--shadow-md);
+    color: var(--accent-fg);
   }
 </style>

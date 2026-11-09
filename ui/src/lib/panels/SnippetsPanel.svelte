@@ -101,7 +101,7 @@
   <div class="tools">
     <div class="search">
       <Icon name="search" size={13} />
-      <input bind:value={query} placeholder={t('snippets.search')} spellcheck="false" />
+      <input class="bare" bind:value={query} placeholder={t('snippets.search')} spellcheck="false" />
     </div>
     <IconButton icon="add" label={t('snippets.add')} small onclick={() => edit(null)} />
   </div>
@@ -111,7 +111,7 @@
       <input bind:value={name} placeholder={t('snippets.name')} autocomplete="off" use:focusOnMount />
       <textarea bind:value={command} rows="4" placeholder={t('snippets.command')} spellcheck="false" required></textarea>
       <div class="buttons">
-        <button type="button" onclick={() => (editing = null)}>{t('common.cancel')}</button>
+        <button type="button" class="secondary" onclick={() => (editing = null)}>{t('common.cancel')}</button>
         <button type="submit" class="primary">{t('common.save')}</button>
       </div>
     </form>
@@ -162,35 +162,28 @@
     align-items: center;
     gap: var(--space-1);
     padding: 0 var(--space-2);
-    height: 28px;
-    border: 1px solid var(--border);
+    height: var(--control-height);
     border-radius: var(--radius-sm);
-    background: var(--bg);
+    background: var(--fill);
     color: var(--fg-muted);
+  }
+  .search:focus-within {
+    background: var(--surface);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent),
+      var(--focus-ring);
   }
   .search input {
     flex: 1;
     min-width: 0;
     width: 100%;
-    border: none;
-    outline: none;
-    background: transparent;
     color: var(--fg);
-    font: inherit;
+    outline: none;
   }
   .editor {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-  }
-  .editor input,
-  .editor textarea {
-    padding: 4px var(--space-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--bg);
-    color: var(--fg);
-    font: inherit;
   }
   .editor textarea {
     font-family: var(--font-mono);
@@ -202,18 +195,9 @@
     gap: var(--space-1);
   }
   .buttons button {
-    padding: 3px var(--space-3);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: transparent;
-    color: var(--fg);
-    font: inherit;
-    cursor: pointer;
-  }
-  .buttons .primary {
-    border-color: var(--accent);
-    background: var(--accent);
-    color: #fff;
+    min-width: 0;
+    height: 26px;
+    padding: 0 var(--space-3);
   }
   ul {
     list-style: none;
@@ -225,9 +209,12 @@
   }
   li {
     position: relative;
-    padding: var(--space-2);
-    border: 1px solid var(--border);
+    padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow:
+      0 0 0 0.5px var(--separator),
+      var(--shadow-sm);
   }
   .text {
     display: flex;
@@ -253,8 +240,9 @@
     right: 2px;
     display: none;
     gap: 1px;
-    background: var(--bg-elevated);
     border-radius: var(--radius-sm);
+    background: var(--material-popover);
+    box-shadow: var(--glass-edge);
   }
   li:hover .actions,
   li:focus-within .actions {

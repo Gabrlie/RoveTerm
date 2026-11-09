@@ -1,6 +1,6 @@
 <script lang="ts">
   import Icon from '../ui/Icon.svelte';
-  import { avatarColor, initials } from '../ui/avatar';
+  import Avatar from '../ui/Avatar.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import { hosts } from './hosts.svelte';
   import { vault } from '../vault/vault.svelte';
@@ -126,7 +126,7 @@
           }}
           title={`${host.username}@${host.hostname}:${host.port}`}
         >
-          <span class="avatar" style:--tint={avatarColor(host.name)} aria-hidden="true">{initials(host.name)}</span>
+          <Avatar name={host.name} />
           <div class="text">
             <span class="name">
               <span class="label">{host.name}</span>
@@ -254,20 +254,6 @@
   }
   .host:focus-visible :global(.icon-button) {
     color: var(--accent-fg);
-  }
-  .avatar {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 7px;
-    background: linear-gradient(to bottom, color-mix(in srgb, var(--tint) 82%, #fff), var(--tint));
-    box-shadow: inset 0 0.5px 0 rgb(255 255 255 / 0.3), 0 0.5px 1px rgb(0 0 0 / 0.15);
-    color: #fff;
-    font-size: 10.5px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
   }
   .text {
     flex: 1;

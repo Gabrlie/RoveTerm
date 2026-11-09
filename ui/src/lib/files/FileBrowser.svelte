@@ -162,6 +162,22 @@
     anchor = index;
   }
 
+  /** Extension groups and the system colour their icons use. */
+  const FILE_TINTS: [RegExp, string][] = [
+    [/\.(zip|tar|gz|tgz|bz2|xz|zst|7z|rar)$/i, 'orange'],
+    [/\.(png|jpe?g|gif|webp|svg|bmp|ico|heic)$/i, 'purple'],
+    [/\.(sh|bash|zsh|py|rb|pl|js|ts|go|rs|c|h|cpp|java)$/i, 'green'],
+    [/\.(conf|cfg|ini|toml|ya?ml|json|xml|env)$/i, 'teal'],
+    [/\.(log|txt|md)$/i, 'graphite'],
+  ];
+
+  function fileTint(entry: DirEntry): string {
+    if (entry.kind === 'dir') return 'var(--accent)';
+    if (entry.kind === 'symlink') return 'var(--fg-muted)';
+    const tint = FILE_TINTS.find(([pattern]) => pattern.test(entry.name))?.[1];
+    return tint ? `var(--sys-${tint})` : 'var(--fg-muted)';
+  }
+
   function openEntry(entry: DirEntry): void {
     if (entry.kind === 'dir' || entry.kind === 'symlink') void navigate(joinPath(cwd, entry.name));
     else void download([entry.name], false);
@@ -431,7 +447,7 @@
         onkeydown={() => {}}
       >
         <span class="name">
-          <Icon name={entry.kind === 'dir' ? 'folder' : entry.kind === 'symlink' ? 'link' : 'file'} size={14} />
+          <span class="glyph" style:--tint={fileTint(entry)}><Icon name={entry.kind === 'dir' ? 'folder' : entry.kind === 'symlink' ? 'link' : 'file'} size={15} /></span>
           <span class="label">{entry.name}</span>
         </span>
         <span class="size">{entry.kind === 'dir' ? '' : formatSize(entry.size)}</span>
@@ -525,16 +541,17 @@
     height: 100%;
     display: flex;
     flex-direction: column;
-    background: var(--bg);
+    background: var(--surface);
     font-size: var(--text-body);
   }
   .toolbar {
     display: flex;
     align-items: center;
     gap: 2px;
-    padding: var(--space-1) var(--space-2);
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-elevated);
+    height: 38px;
+    padding: 0 var(--space-2);
+    background: var(--material-bar);
+    box-shadow: inset 0 -0.5px 0 var(--separator);
   }
   .path {
     flex: 1;
@@ -543,30 +560,46 @@
   }
   .path input {
     width: 100%;
-    padding: 3px var(--space-2);
-    border: 1px solid var(--border);
+    height: 24px;
+    padding: 0 var(--space-2);
     border-radius: var(--radius-sm);
-    background: var(--bg);
+    background: var(--fill);
     color: var(--fg);
     font-family: var(--font-mono);
     font-size: var(--text-footnote);
+    outline: none;
+    transition: box-shadow var(--dur-fast) var(--ease-out);
+  }
+  .path input:focus {
+    background: var(--surface);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent),
+      var(--focus-ring);
   }
   .row {
     display: grid;
     grid-template-columns: minmax(120px, 1fr) 80px 136px 88px;
     gap: var(--space-2);
     align-items: center;
-    padding: 0 var(--space-3);
-    height: 26px;
+    margin: 0 6px;
+    padding: 0 var(--space-2);
+    height: 28px;
+    border-radius: var(--radius-sm);
   }
   .header {
+    height: 26px;
+    margin: 0;
+    padding: 0 calc(6px + var(--space-2));
+    border-radius: 0;
     color: var(--fg-muted);
     font-size: var(--text-caption);
-    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+    box-shadow: inset 0 -0.5px 0 var(--separator);
   }
   .list {
     flex: 1;
     min-height: 0;
+    padding: 4px 0;
     overflow-y: auto;
     outline: none;
   }
@@ -574,14 +607,24 @@
     cursor: default;
     user-select: none;
   }
+  .entry:nth-child(even of .entry) {
+    background: color-mix(in srgb, var(--fill) 55%, transparent);
+  }
   .entry:hover {
-    background: var(--bg-elevated);
+    background: var(--fill-hover);
   }
   .entry.selected {
-    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    background: var(--fill-pressed);
   }
-  .list:focus-visible .entry.selected {
-    background: color-mix(in srgb, var(--accent) 28%, transparent);
+  .list:focus .entry.selected {
+    background: var(--accent);
+  }
+  .list:focus .entry.selected .name,
+  .list:focus .entry.selected .size,
+  .list:focus .entry.selected .time,
+  .list:focus .entry.selected .mode,
+  .list:focus .entry.selected .glyph {
+    color: var(--accent-fg);
   }
   .name {
     display: flex;
@@ -589,6 +632,10 @@
     gap: var(--space-2);
     min-width: 0;
     color: var(--fg);
+  }
+  .glyph {
+    display: inline-flex;
+    color: var(--tint);
   }
   .label {
     overflow: hidden;
@@ -605,18 +652,22 @@
   }
   .size {
     text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .time {
+    font-variant-numeric: tabular-nums;
   }
   .mode {
     font-family: var(--font-mono);
   }
   .placeholder {
-    padding: var(--space-4);
+    padding: var(--space-6) var(--space-4);
     color: var(--fg-muted);
     text-align: center;
   }
   .transfers {
-    border-top: 1px solid var(--border);
-    background: var(--bg-elevated);
+    background: var(--material-bar);
+    box-shadow: inset 0 0.5px 0 var(--separator);
   }
   .transfers-head {
     display: flex;
@@ -628,17 +679,22 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    padding: var(--space-1);
+    height: 28px;
+    padding: 0 var(--space-1);
     border: none;
     background: none;
     color: var(--fg-muted);
     font: inherit;
     font-size: var(--text-footnote);
+    font-weight: 600;
     text-align: left;
     cursor: pointer;
   }
+  .toggle :global(svg) {
+    color: var(--accent);
+  }
   .transfer-list {
-    max-height: 132px;
+    max-height: 140px;
     overflow-y: auto;
     padding-bottom: var(--space-1);
   }
@@ -647,7 +703,7 @@
     grid-template-columns: 16px minmax(60px, 1fr) minmax(60px, 120px) auto 24px;
     gap: var(--space-2);
     align-items: center;
-    height: 24px;
+    height: 26px;
     padding: 0 var(--space-3);
     font-size: var(--text-footnote);
     color: var(--fg-muted);
@@ -663,27 +719,33 @@
   }
   .bar {
     height: 4px;
-    border-radius: 2px;
-    background: var(--bg-sunken);
+    border-radius: var(--radius-pill);
+    background: var(--fill-pressed);
     overflow: hidden;
   }
   .bar span {
     display: block;
     height: 100%;
+    border-radius: inherit;
     background: var(--accent);
+    transition: width var(--dur) var(--ease-out);
+  }
+  .transfer.failed .bar span {
+    background: var(--danger);
   }
   .transfer-status {
     white-space: nowrap;
+    font-variant-numeric: tabular-nums;
   }
   .status {
-    padding: 2px var(--space-3);
-    border-top: 1px solid var(--border);
+    padding: 3px var(--space-3);
     color: var(--fg-muted);
     font-size: var(--text-caption);
-    min-height: 20px;
+    min-height: 22px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    box-shadow: inset 0 0.5px 0 var(--separator);
   }
   .status.error {
     color: var(--danger);
@@ -695,10 +757,12 @@
     align-items: center;
     justify-content: center;
     gap: var(--space-2);
-    border: 2px dashed var(--accent);
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--accent) 10%, transparent);
-    color: var(--fg);
+    border: 2px dashed color-mix(in srgb, var(--accent) 70%, transparent);
+    border-radius: var(--radius-lg);
+    background: var(--accent-softer);
+    backdrop-filter: blur(2px);
+    color: var(--accent);
+    font-weight: 600;
     pointer-events: none;
   }
   form input {
