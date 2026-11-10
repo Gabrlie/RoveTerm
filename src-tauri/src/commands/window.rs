@@ -3,7 +3,8 @@
 /// Turns the translucent window material on or off and returns whether the window is now
 /// translucent, so the WebView knows whether to draw its own opaque background.
 ///
-/// - macOS: Liquid Glass on macOS 26 and later, the sidebar vibrancy material before that.
+/// - macOS: the sidebar vibrancy material, which blurs what is behind the window beyond
+///   recognition (Liquid Glass stays see-through, which reads badly behind a whole window).
 /// - Windows 11: Mica. Windows 10 has no suitable material and stays opaque.
 /// - Linux and mobile: always opaque.
 #[tauri::command]
@@ -14,7 +15,7 @@ pub fn window_set_material(window: tauri::WebviewWindow, enabled: bool) -> bool 
         use tauri::window::Effect;
 
         let effects = if cfg!(target_os = "macos") {
-            vec![Effect::LiquidGlassRegular, Effect::Sidebar]
+            vec![Effect::Sidebar]
         } else {
             vec![Effect::Mica]
         };

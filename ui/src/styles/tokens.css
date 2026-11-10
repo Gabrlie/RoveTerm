@@ -203,6 +203,19 @@
   --material-sidebar: rgb(30 30 33 / 0.32);
   --material-bar: rgb(32 32 35 / 0.5);
 }
+/* On macOS the material only tints the window: a mostly opaque background keeps what is behind
+   the window from showing through. */
+:root[data-material='on'][data-platform='mac'] {
+  --window: rgb(227 227 232 / 0.82);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-material='on'][data-platform='mac']:not([data-theme='light']) {
+    --window: rgb(27 27 29 / 0.82);
+  }
+}
+:root[data-material='on'][data-platform='mac'][data-theme='dark'] {
+  --window: rgb(27 27 29 / 0.82);
+}
 
 :root[data-blur='off'] {
   --material-popover: color-mix(in srgb, var(--surface-raised) 95%, var(--fg));

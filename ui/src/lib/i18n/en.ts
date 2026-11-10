@@ -273,7 +273,7 @@ export const en = {
   'settings.accent.graphite': 'Graphite',
   'settings.uiScale': 'Interface text size',
   'settings.windowMaterial': 'Translucent window',
-  'settings.windowMaterialHint': 'Liquid Glass or vibrancy on macOS, Mica on Windows 11. Other systems keep an opaque window.',
+  'settings.windowMaterialHint': 'Frosted vibrancy on macOS, Mica on Windows 11. Other systems keep an opaque window.',
   'settings.language': 'Language',
   'settings.languageAuto': 'System',
   'settings.languageZh': '简体中文',

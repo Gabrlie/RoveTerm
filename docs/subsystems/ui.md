@@ -197,7 +197,7 @@
 组件只读取 `tokens.css` 中的 CSS 变量，不写死颜色、间距、圆角、阴影和动效时长。暗色主题跟随系统，也可以通过 `<html data-theme="light|dark">` 强制指定。
 
 - 表面分层：`--window`（窗口底色）之上是半透明材质 `--material-sidebar` / `--material-bar` / `--material-popover`，配合 `--material-blur` 做毛玻璃；内容区用不透明的 `--surface` / `--surface-raised`。WebKitGTK 接受但不绘制 `backdrop-filter`，所以 Linux 上 `<html data-blur="off">`，弹层材质改为不透明。
-- 窗口材质：启动时调用 `window_set_material`（`src/lib/ui/window.ts`），macOS 26 及以上用 Liquid Glass，更早的 macOS 用侧栏毛玻璃（vibrancy），Windows 11 用 Mica；Windows 10、Linux 和移动端返回 `false`，保持不透明。生效时 `<html data-material="on">`，`--window` 变为透明，侧栏和工具栏只做淡色叠加，内容区和终端仍不透明。窗口为此在 `tauri.macos.conf.json` / `tauri.windows.conf.json` 中设为 `transparent`。
+- 窗口材质：启动时调用 `window_set_material`（`src/lib/ui/window.ts`），macOS 用侧栏毛玻璃（vibrancy；Liquid Glass 会清楚透出窗口后的内容，不用于整个窗口），Windows 11 用 Mica；Windows 10、Linux 和移动端返回 `false`，保持不透明。生效时 `<html data-material="on">`，`--window` 变为透明（macOS 上为 82% 不透明的底色，材质只带来淡淡的色调），侧栏和工具栏只做淡色叠加，内容区和终端仍不透明。窗口为此在 `tauri.macos.conf.json` / `tauri.windows.conf.json` 中设为 `transparent`。
 - 标题栏以下，侧栏、工作区（标签栏、终端区与底部面板）、右侧面板是浮动的圆角卡片（`--radius-lg`），彼此及与窗口边缘相隔 `--gap-panel`，轮廓为 `--panel-shadow`；间隙露出窗口底色或系统材质。工作区与右侧面板之间的间隙本身就是拖动调整宽度的把手，悬停时显示强调色细线。
 - 窗口顶部是 `TitleBar`（`src/lib/layout/TitleBar.svelte`，高 38px），空白处带 `data-tauri-drag-region`，可拖动、双击最大化；右侧是侧栏、底部面板、右侧面板三个布局开关。
   - Windows 与 Linux 不用系统标题栏（`decorations: false`，见 `tauri.windows.conf.json` / `tauri.linux.conf.json`）：左侧是 `menu.ts` 定义的文字菜单，点击展开、展开时指向其他菜单名即切换、左右方向键在菜单间移动；最右侧是自绘的最小化、最大化/还原、关闭按钮，最大化状态随窗口缩放更新。Windows 11 悬停最大化按钮时的贴靠布局弹窗因此不可用。

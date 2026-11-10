@@ -275,7 +275,7 @@ export const zhCN: Messages = {
   'settings.accent.graphite': '石墨色',
   'settings.uiScale': '界面文字大小',
   'settings.windowMaterial': '半透明窗口',
-  'settings.windowMaterialHint': 'macOS 上为液态玻璃或毛玻璃，Windows 11 上为 Mica；其他系统保持不透明窗口。',
+  'settings.windowMaterialHint': 'macOS 上为毛玻璃，Windows 11 上为 Mica；其他系统保持不透明窗口。',
   'settings.language': '语言',
   'settings.languageAuto': '跟随系统',
   'settings.languageZh': '简体中文',
