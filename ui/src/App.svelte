@@ -11,6 +11,7 @@
   import EditMenu from './lib/ui/EditMenu.svelte';
   import Toaster from './lib/ui/Toaster.svelte';
   import { notify, type ToastKind } from './lib/ui/toast.svelte';
+  import { readClipboard } from './lib/ui/clipboard';
   import KeysDialog from './lib/keys/KeysDialog.svelte';
   import HomePage from './lib/home/HomePage.svelte';
   import RightPanel from './lib/panels/RightPanel.svelte';
@@ -244,10 +245,7 @@
         break;
       }
       case 'terminal.paste':
-        navigator.clipboard
-          .readText()
-          .then((text) => focusedTerminal()?.paste(text))
-          .catch((error: unknown) => console.warn('paste failed', error));
+        void readClipboard().then((text) => text && focusedTerminal()?.paste(text));
         break;
       case 'palette.open':
         paletteOpen = true;

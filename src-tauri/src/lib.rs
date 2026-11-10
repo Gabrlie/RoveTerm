@@ -128,6 +128,7 @@ pub fn run() {
         .init();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(boot)
         .on_menu_event(commands::menu::on_event)
         .invoke_handler(tauri::generate_handler![

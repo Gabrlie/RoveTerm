@@ -4,6 +4,7 @@
   // does nothing.
   import ContextMenu, { type MenuItem } from './ContextMenu.svelte';
   import { t } from '../i18n';
+  import { readClipboard } from './clipboard';
 
   type Field = HTMLInputElement | HTMLTextAreaElement;
 
@@ -51,13 +52,10 @@
         label: t('edit.paste'),
         icon: 'paste',
         onselect: () => {
-          navigator.clipboard
-            .readText()
-            .then((pasted) => {
-              field.focus();
-              replace(field, pasted);
-            })
-            .catch((error: unknown) => console.warn('paste failed', error));
+          void readClipboard().then((pasted) => {
+            field.focus();
+            if (pasted) replace(field, pasted);
+          });
         },
       });
     }

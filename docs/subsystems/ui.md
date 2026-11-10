@@ -189,6 +189,8 @@
 
 WebView 的原生右键菜单在任何位置都不出现：`EditMenu`（挂在 `App` 上，监听 `window` 的 `contextmenu`）对没有被组件自行处理的右键调用 `preventDefault`；在文本输入框里右键弹出剪切、复制、粘贴、全选（密码框不提供剪切和复制），其他位置右键没有反应。
 
+读取剪贴板统一走 `src/lib/ui/clipboard.ts` 的 `readClipboard()`（`tauri-plugin-clipboard-manager`，只授予 `allow-read-text`）：`navigator.clipboard.readText()` 在 macOS 的 WebKit 上每次都会弹出"粘贴"确认气泡。写入剪贴板仍用 `navigator.clipboard.writeText()`。
+
 界面文字默认不可选中（`body` 设 `user-select: none`），与原生应用一致；输入框、文本域，以及需要复制的内容（加 `.selectable`：错误信息 `.error`、连接失败原因、主机指纹、密钥指纹）可以选中。
 
 对话框统一使用 `Dialog`：打开时聚焦第一个输入控件，关闭时把焦点还给打开前的元素（通常是终端）；Escape 在窗口上监听，只关闭最内层的对话框，因此对话框内的焦点元素消失后仍然有效。
