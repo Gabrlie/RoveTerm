@@ -1,6 +1,7 @@
 // The application menus: the title bar menus on Windows and Linux and the menu bar on macOS.
 // Items name actions; their labels and shortcuts come from the actions table.
-import { actions, type ActionId } from './actions';
+import { actions, bindingsOf, type ActionId } from './actions';
+import { menuAccelerator } from './accelerator';
 import { t, type MessageKey } from './i18n';
 import type { NativeMenu, NativeMenuLabels } from './ipc';
 
@@ -52,7 +53,9 @@ export function nativeMenus(): NativeMenu[] {
     items: menu.items.map((entry) => {
       if (entry === '-') return { kind: 'separator' as const };
       const action = actions.find((candidate) => candidate.id === entry);
-      return { kind: 'action' as const, id: entry, label: action ? t(action.label) : entry };
+      // Copy and paste belong to text fields as well; they stay with the system Edit menu.
+      const binding = action && !action.yieldsToTextField ? bindingsOf(action)[0] : undefined;
+      return { kind: 'action' as const, id: entry, label: action ? t(action.label) : entry, accelerator: binding ? menuAccelerator(binding) : null };
     }),
   }));
 }

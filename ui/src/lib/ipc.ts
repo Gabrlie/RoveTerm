@@ -680,7 +680,8 @@ export function windowSetMaterial(enabled: boolean): Promise<boolean> {
 /** A menu as sent to the macOS menu bar; see `MenuSpec` in src-tauri. */
 export interface NativeMenu {
   label: string;
-  items: ({ kind: 'action'; id: string; label: string } | { kind: 'separator' })[];
+  /** `accelerator`: the key equivalent the menu shows and handles, such as `Cmd+Shift+I`. */
+  items: ({ kind: 'action'; id: string; label: string; accelerator: string | null } | { kind: 'separator' })[];
 }
 
 /** Texts of the system-provided macOS menu items, in the interface language. */

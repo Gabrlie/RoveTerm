@@ -34,6 +34,9 @@ pub enum MenuItemSpec {
         id: String,
         /// Item text.
         label: String,
+        /// Key equivalent shown and handled by the menu, such as `Cmd+Shift+I`.
+        #[serde(default)]
+        accelerator: Option<String>,
     },
     /// A separator line.
     Separator,
@@ -85,6 +88,20 @@ fn check_id(id: &str) -> Result<(), CommandError> {
     }
 }
 
+/// An accelerator is modifier and key names joined by `+`.
+fn check_accelerator(accelerator: &str) -> Result<(), CommandError> {
+    let valid = !accelerator.is_empty()
+        && accelerator.len() <= 40
+        && accelerator
+            .split('+')
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric()));
+    if valid {
+        Ok(())
+    } else {
+        Err(invalid("invalid accelerator"))
+    }
+}
+
 /// Checks the structure sent by the WebView before it reaches the system menu.
 fn validate(menus: &[MenuSpec], labels: &NativeLabels) -> Result<(), CommandError> {
     if menus.len() > MAX_MENUS {
@@ -96,9 +113,17 @@ fn validate(menus: &[MenuSpec], labels: &NativeLabels) -> Result<(), CommandErro
             return Err(invalid("too many menu items"));
         }
         for item in &menu.items {
-            if let MenuItemSpec::Action { id, label } = item {
+            if let MenuItemSpec::Action {
+                id,
+                label,
+                accelerator,
+            } = item
+            {
                 check_id(id)?;
                 check_label(label)?;
+                if let Some(accelerator) = accelerator {
+                    check_accelerator(accelerator)?;
+                }
             }
         }
     }
@@ -150,6 +175,15 @@ fn install(app: &AppHandle, menus: &[MenuSpec], labels: &NativeLabels) -> tauri:
     let action = |id: &str, label: &str| {
         MenuItemBuilder::with_id(format!("{ACTION_PREFIX}{id}"), label).build(app)
     };
+    // An accelerator the system cannot parse leaves the item without one rather than failing
+    // the whole menu.
+    let keyed = |id: &str, label: &str, accelerator: &Option<String>| match accelerator {
+        Some(keys) => MenuItemBuilder::with_id(format!("{ACTION_PREFIX}{id}"), label)
+            .accelerator(keys)
+            .build(app)
+            .or_else(|_| action(id, label)),
+        None => action(id, label),
+    };
     let app_menu = SubmenuBuilder::new(app, "RoveTerm")
         .item(&action("help.about", &labels.about)?)
         .separator()
@@ -181,7 +215,11 @@ fn install(app: &AppHandle, menus: &[MenuSpec], labels: &NativeLabels) -> tauri:
         let mut submenu = SubmenuBuilder::new(app, &menu.label);
         for item in &menu.items {
             submenu = match item {
-                MenuItemSpec::Action { id, label } => submenu.item(&action(id, label)?),
+                MenuItemSpec::Action {
+                    id,
+                    label,
+                    accelerator,
+                } => submenu.item(&keyed(id, label, accelerator)?),
                 MenuItemSpec::Separator => submenu.separator(),
             };
         }
@@ -237,6 +275,7 @@ mod tests {
                 MenuItemSpec::Action {
                     id: id.into(),
                     label: label.into(),
+                    accelerator: None,
                 },
                 MenuItemSpec::Separator,
             ],
@@ -255,6 +294,17 @@ mod tests {
         let mut bad = labels();
         bad.quit = String::new();
         assert!(validate(&[], &bad).is_err());
+        let keyed = |accelerator: &str| MenuSpec {
+            label: "View".into(),
+            items: vec![MenuItemSpec::Action {
+                id: "ai.open".into(),
+                label: "AI".into(),
+                accelerator: Some(accelerator.into()),
+            }],
+        };
+        assert!(validate(&[keyed("Cmd+Shift+I")], &labels()).is_ok());
+        assert!(validate(&[keyed("Cmd+")], &labels()).is_err());
+        assert!(validate(&[keyed("Cmd+<script>")], &labels()).is_err());
     }
 
     #[test]
