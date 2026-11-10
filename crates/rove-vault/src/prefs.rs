@@ -35,12 +35,54 @@ pub enum AiMode {
     Auto,
 }
 
-/// AI approval settings, which follow the user.
+/// How a model provider is spoken to (see `rove_ai::llm::Format`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderFormat {
+    /// OpenAI Chat Completions, which most providers speak.
+    #[default]
+    Chat,
+    /// OpenAI Responses.
+    Responses,
+    /// Anthropic Messages.
+    Anthropic,
+}
+
+/// How much a model reasons, where the format can set it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    Low,
+    Medium,
+    High,
+}
+
+/// A model provider of the built-in assistant. Its API key is kept apart, on each device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderPrefs {
+    /// Stable id: lowercase letters, digits and `-`.
+    pub id: String,
+    pub name: String,
+    pub format: ProviderFormat,
+    /// Base URL including the API version path, such as `https://api.openai.com/v1`.
+    pub base_url: String,
+    pub model: String,
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    #[serde(default)]
+    pub effort: Option<ReasoningEffort>,
+}
+
+/// AI settings that follow the user.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AiPrefs {
     /// Default approval mode of new AI sessions.
     pub mode: AiMode,
+    /// Model providers of the built-in assistant.
+    pub providers: Vec<ProviderPrefs>,
+    /// The agent new conversations start with: `builtin:<provider id>` or `acp:<agent id>`.
+    pub default_agent: Option<String>,
     /// Extra programs treated as read-only (base names).
     pub read_only: Vec<String>,
     /// Text that makes any command containing it dangerous.
@@ -60,7 +102,31 @@ pub enum AgentAuth {
     Account,
 }
 
-/// The AI agent program on this device.
+/// An ACP agent the user added by command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomAgent {
+    /// Stable id: `custom-` followed by lowercase letters, digits and `-`.
+    pub id: String,
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+/// ACP agents on this device.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentsPrefs {
+    /// Ids of detected agents the user turned off.
+    pub disabled: Vec<String>,
+    /// Agents added by command.
+    pub custom: Vec<CustomAgent>,
+    /// How agents sign in.
+    pub auth: AgentAuth,
+}
+
+/// The AI agent program on this device, before agents were listed; read from older records and
+/// moved into [`AgentsPrefs::custom`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AgentPrefs {
@@ -291,8 +357,11 @@ pub struct DevicePrefs {
     pub download_dir: String,
     /// Transfers copying at the same time (1–8).
     pub max_transfers: u8,
-    /// The AI agent program.
+    /// The older single agent setting; moved into `agents` when read, never written.
+    #[serde(skip_serializing)]
     pub agent: AgentPrefs,
+    /// ACP agents on this device.
+    pub agents: AgentsPrefs,
     /// SSH connection timing on this device's networks.
     pub connection: ConnectionPrefs,
 }
@@ -326,6 +395,7 @@ impl Default for DevicePrefs {
             download_dir: String::new(),
             max_transfers: 3,
             agent: AgentPrefs::default(),
+            agents: AgentsPrefs::default(),
             connection: ConnectionPrefs::default(),
         }
     }
@@ -433,23 +503,156 @@ impl AiPrefs {
                 "read-only rule {bad:?} is not a program name"
             )));
         }
+        if self.providers.len() > MAX_PROVIDERS {
+            return Err(VaultError::Invalid("too many providers".into()));
+        }
+        let mut ids = std::collections::HashSet::new();
+        for provider in &mut self.providers {
+            provider.validate()?;
+            if !ids.insert(provider.id.clone()) {
+                return Err(VaultError::Invalid(format!(
+                    "provider id {:?} is used twice",
+                    provider.id
+                )));
+            }
+        }
+        if let Some(agent) = &self.default_agent {
+            check_agent_ref(agent)?;
+        }
         Ok(())
     }
 }
 
-impl AgentPrefs {
-    /// Trims the command and checks sizes.
+/// Most model providers.
+const MAX_PROVIDERS: usize = 20;
+
+/// `true` for a short id of lowercase letters, digits and `-`.
+fn is_slug(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 40
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// An agent reference is `builtin:<id>` or `acp:<id>`.
+fn check_agent_ref(agent: &str) -> Result<(), VaultError> {
+    match agent.split_once(':') {
+        Some(("builtin" | "acp", id)) if is_slug(id) => Ok(()),
+        _ => Err(VaultError::Invalid(format!(
+            "{agent:?} is not an agent reference"
+        ))),
+    }
+}
+
+impl ProviderPrefs {
+    /// Trims text and checks it: a slug id, a name, an http(s) address without credentials, a
+    /// model, and a positive token limit.
     fn validate(&mut self) -> Result<(), VaultError> {
-        self.command = self.command.trim().to_owned();
+        self.name = self.name.trim().to_owned();
+        self.base_url = self.base_url.trim().trim_end_matches('/').to_owned();
+        self.model = self.model.trim().to_owned();
+        let invalid = |what: &str| {
+            Err(VaultError::Invalid(format!(
+                "provider {:?}: {what}",
+                self.name
+            )))
+        };
+        if !is_slug(&self.id) {
+            return invalid("the id is not valid");
+        }
+        if self.name.is_empty()
+            || self.name.chars().count() > 60
+            || self.name.chars().any(char::is_control)
+        {
+            return invalid("the name is not valid");
+        }
+        let scheme_ok =
+            self.base_url.starts_with("https://") || self.base_url.starts_with("http://");
+        let host = self
+            .base_url
+            .split_once("://")
+            .map(|(_, rest)| rest)
+            .unwrap_or_default();
+        if !scheme_ok
+            || host.is_empty()
+            || host.starts_with('/')
+            || host.contains('@')
+            || host.contains('?')
+            || self.base_url.len() > 500
+            || self
+                .base_url
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control())
+        {
+            return invalid("the address must be an http or https URL");
+        }
+        if self.model.is_empty()
+            || self.model.len() > 200
+            || self.model.chars().any(char::is_control)
+        {
+            return invalid("the model is not valid");
+        }
+        if self
+            .max_tokens
+            .is_some_and(|max| max == 0 || max > 1_000_000)
+        {
+            return invalid("the token limit must be 1–1000000");
+        }
+        Ok(())
+    }
+}
+
+impl AgentsPrefs {
+    /// Trims commands and checks ids, names and sizes.
+    fn validate(&mut self) -> Result<(), VaultError> {
         let bad = |text: &str| text.len() > 1024 || text.chars().any(char::is_control);
-        if bad(&self.command) || self.args.len() > 32 || self.args.iter().any(|arg| bad(arg)) {
-            return Err(VaultError::Invalid("the agent command is not valid".into()));
+        if self.custom.len() > 20
+            || self.disabled.len() > 50
+            || self.disabled.iter().any(|id| !is_slug(id))
+        {
+            return Err(VaultError::Invalid("too many agents".into()));
+        }
+        let mut ids = std::collections::HashSet::new();
+        for agent in &mut self.custom {
+            agent.command = agent.command.trim().to_owned();
+            agent.name = agent.name.trim().to_owned();
+            let id_ok = agent.id.strip_prefix("custom-").is_some_and(is_slug);
+            if !id_ok
+                || !ids.insert(agent.id.clone())
+                || agent.name.is_empty()
+                || agent.name.chars().count() > 60
+                || agent.command.is_empty()
+                || bad(&agent.command)
+                || agent.args.len() > 32
+                || agent.args.iter().any(|arg| bad(arg))
+            {
+                return Err(VaultError::Invalid(format!(
+                    "the agent {:?} is not valid",
+                    agent.name
+                )));
+            }
         }
         Ok(())
     }
 }
 
 impl DevicePrefs {
+    /// Moves the older single agent command into the agent list.
+    pub(crate) fn upgrade(mut self) -> Self {
+        let legacy = std::mem::take(&mut self.agent);
+        if !legacy.command.trim().is_empty() && self.agents.custom.is_empty() {
+            self.agents.custom.push(CustomAgent {
+                id: "custom-1".into(),
+                name: "Agent".into(),
+                command: legacy.command.trim().to_owned(),
+                args: legacy.args,
+            });
+            self.agents.auth = legacy.auth;
+        }
+        self
+    }
+
     /// Trims the download directory and checks ranges. Returns the normalized preferences. The
     /// directory must be absolute; whether it exists is checked when downloading.
     pub fn validate(mut self) -> Result<Self, VaultError> {
@@ -466,7 +669,7 @@ impl DevicePrefs {
             }
         }
         check_range("concurrent transfers", self.max_transfers, 1..=8)?;
-        self.agent.validate()?;
+        self.agents.validate()?;
         check_range(
             "connect timeout",
             self.connection.connect_timeout_secs,

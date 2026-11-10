@@ -17,7 +17,7 @@ use crate::{
 };
 
 /// Version of the on-disk schema, stored in `PRAGMA user_version`. Only ever increases.
-pub const SCHEMA_VERSION: i32 = 8;
+pub const SCHEMA_VERSION: i32 = 9;
 
 /// Longest chain of jump hosts a route may form.
 pub const MAX_JUMP_DEPTH: usize = 4;
@@ -506,7 +506,7 @@ impl Vault {
             )
             .optional()?;
         match stored {
-            Some(json) => Ok(serde_json::from_str(&json)?),
+            Some(json) => Ok(serde_json::from_str::<DevicePrefs>(&json)?.upgrade()),
             None => Ok(DevicePrefs::default()),
         }
     }
@@ -840,6 +840,15 @@ fn migrate(conn: &Connection) -> Result<(), VaultError> {
             "BEGIN;
              ALTER TABLE hosts ADD COLUMN os TEXT;
              PRAGMA user_version = 8;
+             COMMIT;",
+        )?;
+    }
+    if version < 9 {
+        // API keys became per agent; the single key served Codex.
+        conn.execute_batch(
+            "BEGIN;
+             UPDATE preferences SET key = 'ai_key:acp:codex' WHERE key = 'ai_key';
+             PRAGMA user_version = 9;
              COMMIT;",
         )?;
     }

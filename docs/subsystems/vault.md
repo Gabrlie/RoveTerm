@@ -91,9 +91,9 @@ pub trait KeyCache: Send + Sync {
 | `DevicePrefs.max_transfers` | 3 | 1–8 |
 | `ai.mode` | `ask_by_risk` | `ask_by_risk` / `ask_all` / `auto`，新 AI 会话的默认审批模式 |
 | `ai.read_only` / `ai.dangerous` | 空 | 去除首尾空白并丢弃空项，每类最多 200 项、每项最多 100 个字符、不含控制字符；只读项只能是程序名（字母、数字、`-_.+`） |
-| `DevicePrefs.agent.command` / `args` | 空（自动查找 Codex 的 ACP 适配器） | 去除首尾空白；命令与每个参数最多 1024 字节、不含控制字符，最多 32 个参数 |
-| `DevicePrefs.connection` | 连接超时 15 秒、保活 30 秒、3 次 | 连接超时 5–120 秒，保活间隔 5–600 秒，允许丢失的保活 1–10 次 |
-| `DevicePrefs.agent.auth` | `auto` | `auto`（有 API key 时用 key，否则用 Agent 自己的登录）/ `api_key` / `account` |
+| `ai.providers` | 空 | 内置助手的模型服务商，最多 20 个：id 为 1–40 个小写字母、数字或 `-` 且不重复；名称 1–60 个字符；格式 `chat` / `responses` / `anthropic`；地址去除首尾空白与末尾 `/`，须为 http(s)、不含凭据和查询，最多 500 字节；模型 1–200 字节；`max_tokens` 为空或 1–1000000；`effort` 为空或 `low` / `medium` / `high`。随用户同步，不含 key |
+| `ai.default_agent` | 空 | 新对话默认的 Agent：`builtin:<服务商 id>` 或 `acp:<智能体 id>` |
+| `DevicePrefs.agents` | 空 | `disabled`：关闭的已检测智能体 id（最多 50）；`custom`：按命令添加的智能体（最多 20，id 为 `custom-` 加小写 slug，名称 1–60 个字符，命令非空，命令与参数最多 1024 字节、不含控制字符，最多 32 个参数）；`auth`：`auto` / `api_key` / `account`。旧记录中的单个 `agent` 命令在读取时移入 `custom`（id `custom-1`），之后不再写出 |
 
 应用通过 `prefs_get` / `prefs_set` 和 `device_prefs_get` / `device_prefs_set` 命令读写偏好设置，后者同时把 `max_transfers` 应用到传输队列（启动时也会应用）；`fonts_monospace` 用 fontdb 列出本机已安装的等宽字体族（去重、按名称排序），供字体选择使用，移动端返回空列表。
 
@@ -104,7 +104,7 @@ pub trait KeyCache: Send + Sync {
 
 - `sync_records()` 列出全部可同步记录（种类 `prefs`、`host`、`key`、`host_secret`、`forward`、`snippet`，内容为 JSON）：主机不含连接时间，含检测到的系统；凭据与私钥为明文 JSON，交给同步引擎密封后才离开本机。需要已解锁，否则凭据会看似被删除并把删除扩散到其他设备。
 - `apply_sync(changes)` 写入来自其他设备的变更：先按父到子的顺序写入新增和修改，再按子到父删除；内容像本地编辑一样校验，引用的主机不存在时跳过对应的凭据与转发，未知种类忽略。密钥缺少私钥时保留本机已有的私钥。
-- AI 的 API key：`set_ai_key(Some(key))` 用设备主密钥密封后存在 `preferences` 表的 `ai_key` 记录中（需已解锁；去除首尾空白，不能为空、含空白或控制字符，最多 4096 字节），`None` 删除；`ai_key()` 需已解锁，`has_ai_key()` 锁定时也可读。它只属于本机，不参与同步。
+- AI 的 API key 按 Agent 分别保存：`set_ai_key(id, Some(key))` 用设备主密钥密封后存在 `preferences` 表的 `ai_key:<id>` 记录中，`id` 为 `builtin:<服务商 id>` 或 `acp:<智能体 id>`，AAD 绑定该 id，挪到别的记录下无法打开（需已解锁；key 去除首尾空白，不能为空、含空白或控制字符，最多 4096 字节），`None` 删除；`ai_key(id)` 需已解锁，`ai_key_ids()` 锁定时也可读。schema 9 把旧的单个 key 改名为 `ai_key:acp:codex`，它仍以旧的 AAD 打开，且只有这条记录可以。key 只属于本机，不参与同步。
 - `sync_local()` / `set_sync_local()` 读写本机的同步设置（后端位置、同步状态、同步密钥、存储密码），存在 `preferences` 表的 `sync` 记录中，不参与同步；同步密钥和存储密码（如 WebDAV 密码）用设备主密钥分别密封，锁定时读出为空。
 
 ## 表结构

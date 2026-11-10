@@ -9,10 +9,10 @@
   import { editDevice, editPrefs, settingsError } from '../edit.svelte';
   import { notify } from '../../ui/toast.svelte';
 
-  const agent = $derived(prefs.device.agent);
+  const agent = $derived(prefs.device.agents);
   const rules = $derived(prefs.value.ai);
-  let command = $state(prefs.device.agent.command);
-  let args = $state(prefs.device.agent.args.join(' '));
+  let command = $state(prefs.device.agents.custom[0]?.command ?? '');
+  let args = $state((prefs.device.agents.custom[0]?.args ?? []).join(' '));
   let key = $state('');
   // Edited as one entry per line; stored on blur.
   let readOnly = $state(prefs.value.ai.read_only.join('\n'));
@@ -35,8 +35,8 @@
 
   async function saveAgent(): Promise<void> {
     await editDevice((draft) => {
-      draft.agent.command = command.trim();
-      draft.agent.args = args.trim() ? args.trim().split(/\s+/) : [];
+      const rest = draft.agents.custom.slice(1);
+      draft.agents.custom = command.trim() ? [{ id: 'custom-1', name: 'Agent', command: command.trim(), args: args.trim() ? args.trim().split(/\s+/) : [] }, ...rest] : rest;
     });
     await ai.refreshStatus().catch(() => undefined);
   }
@@ -82,7 +82,7 @@
 <div class="form-group">
   <div class="form-row">
     <span class="form-label">{t('ai.auth')}<small>{t('ai.authHint')}</small></span>
-    <div class="control"><Select label={t('ai.auth')} value={agent.auth} options={AUTH} onchange={(value) => void editDevice((draft) => (draft.agent.auth = value))} /></div>
+    <div class="control"><Select label={t('ai.auth')} value={agent.auth} options={AUTH} onchange={(value) => void editDevice((draft) => (draft.agents.auth = value))} /></div>
   </div>
   <div class="form-row">
     <span class="form-label">{t('ai.key')}<small>{ai.status?.has_key ? t('ai.keyStored') : t('ai.keyHint')}</small></span>

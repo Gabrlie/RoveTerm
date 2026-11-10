@@ -34,9 +34,10 @@ pub use model::{
     ProxyProtocol, Secret,
 };
 pub use prefs::{
-    Accent, AgentAuth, AgentPrefs, AiMode, AiPrefs, AppearancePrefs, Bell, ConflictChoice,
-    ConnectionPrefs, CursorStyle, DevicePrefs, FilePrefs, Language, Preferences, RightClick,
-    StatusPrefs, TerminalPrefs, Theme,
+    Accent, AgentAuth, AgentPrefs, AgentsPrefs, AiMode, AiPrefs, AppearancePrefs, Bell,
+    ConflictChoice, ConnectionPrefs, CursorStyle, CustomAgent, DevicePrefs, FilePrefs, Language,
+    Preferences, ProviderFormat, ProviderPrefs, ReasoningEffort, RightClick, StatusPrefs,
+    TerminalPrefs, Theme,
 };
 pub use snippets::{Snippet, SnippetDraft, SnippetId};
 pub use store::{LockReason, LockState, MAX_JUMP_DEPTH, SCHEMA_VERSION, Vault};

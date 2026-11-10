@@ -27,6 +27,8 @@ use crate::state::AppState;
 pub const AI_EVENT: &str = "ai-update";
 /// Longest prompt accepted.
 const MAX_PROMPT: usize = 100_000;
+/// Where the API key of the Codex agent is stored.
+const CODEX_KEY: &str = "acp:codex";
 /// Codex's ACP adapter, run through npx when it is not installed.
 const CODEX_PACKAGE: &str = "@agentclientprotocol/codex-acp";
 /// Agent modes that make the agent ask before its own tools change anything.
@@ -137,11 +139,11 @@ pub struct AiStarted {
 }
 
 fn find_agent(state: &AppState) -> Result<Option<AgentFound>, CommandError> {
-    let prefs = state.vault.device_preferences()?.agent;
-    if !prefs.command.is_empty() {
+    let agents = state.vault.device_preferences()?.agents;
+    if let Some(custom) = agents.custom.into_iter().next() {
         return Ok(Some(AgentFound {
-            program: prefs.command,
-            args: prefs.args,
+            program: custom.command,
+            args: custom.args,
             source: "configured",
         }));
     }
@@ -169,7 +171,7 @@ pub async fn ai_status(state: State<'_, AppState>) -> Result<AiStatus, CommandEr
     };
     Ok(AiStatus {
         agent,
-        has_key: state.vault.has_ai_key()?,
+        has_key: state.vault.ai_key_ids()?.iter().any(|id| id == CODEX_KEY),
     })
 }
 
@@ -181,7 +183,9 @@ pub async fn ai_set_key(
 ) -> Result<(), CommandError> {
     state.ensure_unlocked().await?;
     let key = key.map(zeroize::Zeroizing::new);
-    Ok(state.vault.set_ai_key(key.as_deref().map(String::as_str))?)
+    Ok(state
+        .vault
+        .set_ai_key(CODEX_KEY, key.as_deref().map(String::as_str))?)
 }
 
 /// A remote host's live connection, from the app's pool.
@@ -269,13 +273,13 @@ pub async fn ai_start(
         .map_err(|error| CommandError::new("app.io", error.to_string()))?;
 
     // Credentials: the stored key, or the agent's own sign-in.
-    let key = match device.agent.auth {
+    let key = match device.agents.auth {
         AgentAuth::Account => None,
-        AgentAuth::Auto => state.vault.ai_key()?,
+        AgentAuth::Auto => state.vault.ai_key(CODEX_KEY)?,
         AgentAuth::ApiKey => Some(
             state
                 .vault
-                .ai_key()?
+                .ai_key(CODEX_KEY)?
                 .ok_or_else(|| CommandError::new("ai.no_key", "no API key is stored"))?,
         ),
     };
@@ -564,4 +568,3 @@ pub async fn ai_records(
         })
         .collect())
 }
-

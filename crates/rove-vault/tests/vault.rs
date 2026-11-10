@@ -788,35 +788,54 @@ fn sync_settings_keep_the_key_sealed() {
 }
 
 #[test]
-fn ai_key_is_sealed_and_needs_the_vault_unlocked() {
+fn ai_keys_are_sealed_per_agent_and_need_the_vault_unlocked() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vault.db");
     let cache = Arc::new(MemoryKeyCache::default());
     {
         let vault = Vault::open(&path, cache.clone()).unwrap();
-        assert!(!vault.has_ai_key().unwrap());
+        assert!(vault.ai_key_ids().unwrap().is_empty());
         assert!(
-            vault.set_ai_key(Some("sk-test")).is_err(),
+            vault.set_ai_key("builtin:openai", Some("sk-test")).is_err(),
             "storing needs the vault unlocked"
         );
         assert_eq!(vault.try_unlock(), LockState::Unlocked);
         assert!(matches!(
-            vault.set_ai_key(Some("has space")),
+            vault.set_ai_key("builtin:openai", Some("has space")),
             Err(VaultError::Invalid(_))
         ));
-        vault.set_ai_key(Some(" sk-test-123 ")).unwrap();
-        assert_eq!(vault.ai_key().unwrap().unwrap().as_str(), "sk-test-123");
+        assert!(matches!(
+            vault.set_ai_key("bad id!", Some("k")),
+            Err(VaultError::Invalid(_))
+        ));
+        vault
+            .set_ai_key("builtin:openai", Some(" sk-test-123 "))
+            .unwrap();
+        vault.set_ai_key("acp:claude", Some("ant-456")).unwrap();
     }
-    // Not in clear text on disk.
     let bytes = std::fs::read(&path).unwrap();
     assert!(!bytes.windows(11).any(|window| window == b"sk-test-123"));
     let vault = Vault::open(&path, cache).unwrap();
-    assert!(vault.has_ai_key().unwrap());
-    assert!(vault.ai_key().is_err(), "reading needs the vault unlocked");
+    assert_eq!(
+        vault.ai_key_ids().unwrap(),
+        ["acp:claude", "builtin:openai"]
+    );
+    assert!(
+        vault.ai_key("builtin:openai").is_err(),
+        "reading needs the vault unlocked"
+    );
     assert_eq!(vault.try_unlock(), LockState::Unlocked);
-    assert_eq!(vault.ai_key().unwrap().unwrap().as_str(), "sk-test-123");
-    vault.set_ai_key(None).unwrap();
-    assert!(!vault.has_ai_key().unwrap());
+    assert_eq!(
+        vault.ai_key("builtin:openai").unwrap().unwrap().as_str(),
+        "sk-test-123"
+    );
+    assert_eq!(
+        vault.ai_key("acp:claude").unwrap().unwrap().as_str(),
+        "ant-456"
+    );
+    assert_eq!(vault.ai_key("acp:codex").unwrap(), None);
+    vault.set_ai_key("builtin:openai", None).unwrap();
+    assert_eq!(vault.ai_key_ids().unwrap(), ["acp:claude"]);
 }
 
 #[test]
@@ -826,24 +845,109 @@ fn ai_preferences_are_validated() {
     prefs.ai.mode = rove_vault::AiMode::AskAll;
     prefs.ai.read_only = vec![" kubectx ".into(), "".into()];
     prefs.ai.dangerous = vec!["prod-db".into()];
-    let stored = vault.set_preferences(prefs).unwrap();
+    prefs.ai.providers = vec![rove_vault::ProviderPrefs {
+        id: "deepseek".into(),
+        name: " DeepSeek ".into(),
+        format: rove_vault::ProviderFormat::Chat,
+        base_url: "https://api.deepseek.com/v1/".into(),
+        model: "deepseek-chat".into(),
+        max_tokens: None,
+        effort: None,
+    }];
+    prefs.ai.default_agent = Some("builtin:deepseek".into());
+    let stored = vault.set_preferences(prefs.clone()).unwrap();
     assert_eq!(stored.ai.read_only, ["kubectx"]);
+    assert_eq!(stored.ai.providers[0].name, "DeepSeek");
+    assert_eq!(
+        stored.ai.providers[0].base_url,
+        "https://api.deepseek.com/v1"
+    );
     let mut bad = Preferences::default();
     bad.ai.read_only = vec!["rm -rf".into()];
     assert!(matches!(
         vault.set_preferences(bad),
         Err(VaultError::Invalid(_))
     ));
+    for (field, value) in [
+        ("base_url", "ftp://x"),
+        ("base_url", "https://user:pw@x"),
+        ("id", "Bad Id"),
+        ("model", ""),
+    ] {
+        let mut bad = prefs.clone();
+        let provider = &mut bad.ai.providers[0];
+        match field {
+            "base_url" => provider.base_url = value.into(),
+            "id" => provider.id = value.into(),
+            _ => provider.model = value.into(),
+        }
+        assert!(
+            matches!(vault.set_preferences(bad), Err(VaultError::Invalid(_))),
+            "{field} {value}"
+        );
+    }
+    let mut twice = prefs.clone();
+    twice.ai.providers.push(twice.ai.providers[0].clone());
+    assert!(matches!(
+        vault.set_preferences(twice),
+        Err(VaultError::Invalid(_))
+    ));
+    let mut bad = prefs;
+    bad.ai.default_agent = Some("cloud:x".into());
+    assert!(matches!(
+        vault.set_preferences(bad),
+        Err(VaultError::Invalid(_))
+    ));
+
     let mut device = DevicePrefs::default();
-    device.agent.command = " /usr/local/bin/codex-acp ".into();
+    device.agents.custom.push(rove_vault::CustomAgent {
+        id: "custom-mine".into(),
+        name: " Mine ".into(),
+        command: " /opt/agent ".into(),
+        args: vec![],
+    });
     let stored = vault.set_device_preferences(device).unwrap();
-    assert_eq!(stored.agent.command, "/usr/local/bin/codex-acp");
+    assert_eq!(stored.agents.custom[0].command, "/opt/agent");
     let mut bad = DevicePrefs::default();
-    bad.agent.args = vec!["a\nb".into()];
+    bad.agents.custom.push(rove_vault::CustomAgent {
+        id: "mine".into(),
+        name: "x".into(),
+        command: "x".into(),
+        args: vec![],
+    });
     assert!(matches!(
         vault.set_device_preferences(bad),
         Err(VaultError::Invalid(_))
     ));
+}
+
+#[test]
+fn an_older_single_agent_setting_becomes_a_custom_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.db");
+    let cache = Arc::new(MemoryKeyCache::default());
+    {
+        let vault = Vault::open(&path, cache.clone()).unwrap();
+        vault
+            .set_device_preferences(DevicePrefs::default())
+            .unwrap();
+    }
+    // Write a record the way the previous version did.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "UPDATE preferences SET value = ?1 WHERE key = 'device'",
+        [r#"{"window_material":true,"download_dir":"","max_transfers":3,"agent":{"command":"/usr/bin/codex-acp","args":["--x"],"auth":"api_key"}}"#],
+    )
+    .unwrap();
+    drop(conn);
+    let vault = Vault::open(&path, cache).unwrap();
+    let device = vault.device_preferences().unwrap();
+    assert_eq!(device.agents.custom.len(), 1);
+    assert_eq!(device.agents.custom[0].command, "/usr/bin/codex-acp");
+    assert_eq!(device.agents.custom[0].args, ["--x"]);
+    assert_eq!(device.agents.auth, rove_vault::AgentAuth::ApiKey);
+    let stored = vault.set_device_preferences(device).unwrap();
+    assert_eq!(stored.agents.custom.len(), 1);
 }
 
 #[test]

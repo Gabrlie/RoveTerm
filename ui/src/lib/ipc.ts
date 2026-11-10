@@ -280,10 +280,20 @@ export function prefsSet(prefs: Preferences): Promise<Preferences> {
 /** How the agent signs in: the stored API key when there is one, the key, or its own account. */
 export type AgentAuth = 'auto' | 'api_key' | 'account';
 
-export interface AgentPrefs {
-  /** The agent's ACP program; empty finds Codex's adapter automatically. */
+/** An ACP agent added by command. */
+export interface CustomAgent {
+  /** `custom-` followed by lowercase letters, digits and `-`. */
+  id: string;
+  name: string;
   command: string;
   args: string[];
+}
+
+/** ACP agents on this device. */
+export interface AgentsPrefs {
+  /** Ids of detected agents turned off. */
+  disabled: string[];
+  custom: CustomAgent[];
   auth: AgentAuth;
 }
 
@@ -292,7 +302,7 @@ export interface DevicePrefs {
   /** Absolute path; empty uses the system download directory. */
   download_dir: string;
   max_transfers: number;
-  agent: AgentPrefs;
+  agents: AgentsPrefs;
   connection: ConnectionPrefs;
 }
 
