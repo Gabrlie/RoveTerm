@@ -7,14 +7,16 @@
   import IconButton from '../ui/IconButton.svelte';
   import Markdown from './Markdown.svelte';
   import AuditDialog from './AuditDialog.svelte';
-  import { ai } from './ai.svelte';
+  import { ai, contextKey } from './ai.svelte';
   import { outcomeState, rows, subject, toolSubject, type ApprovalItem } from './chatview';
   import { hostOf, workspace } from '../workspace/workspace.svelte';
   import { hosts } from '../hosts/hosts.svelte';
   import { terminals } from '../terminal/registry';
   import { vault } from '../vault/vault.svelte';
   import { t, type MessageKey } from '../i18n';
-  import type { AgentChoice, AiAnswer, AiContext, AiMode, AiOperation, AiOutcome, Risk } from '../ipc';
+  import type { AgentChoice, AiAnswer, AiContext, AiMode, AiOperation, AiOutcome, AiRecord, AiSessionSummary, ConfigOption, Risk } from '../ipc';
+  import { prefs } from '../settings/prefs.svelte';
+  import { notify } from '../ui/toast.svelte';
   import type { IconName } from '../ui/icons';
 
   let { onsettings }: { onsettings: () => void } = $props();
@@ -59,6 +61,10 @@
   let modeOpen = $state(false);
   let modePicker = $state<HTMLDivElement>();
   let historyOpen = $state(false);
+  /** The title being typed, while renaming. */
+  let renaming = $state<string | null>(null);
+  let settingsOpen = $state(false);
+  let settingsPicker = $state<HTMLDivElement>();
   /** Dangerous approvals the user acknowledged, by request id. */
   let acknowledged = $state<Record<number, boolean>>({});
   /** Rows the user expanded, by key. */
@@ -107,6 +113,41 @@
 
   function answer(item: ApprovalItem, choice: AiAnswer): void {
     void chat.answer(item.requestId, choice);
+  }
+
+  async function finishRename(): Promise<void> {
+    if (renaming === null) return;
+    const title = renaming;
+    renaming = null;
+    if (title.trim() !== (chat.name ?? '')) await chat.rename(title);
+  }
+
+  function onRenameKey(event: KeyboardEvent): void {
+    if (event.key === 'Enter') void finishRename();
+    if (event.key === 'Escape') renaming = null;
+  }
+
+  /** The agent's settings: as it reports them, or, before the built-in assistant starts, its
+   *  provider's models. */
+  const settings = $derived.by((): ConfigOption[] => {
+    if (chat.options.length > 0) return chat.options;
+    if (!agentRef?.startsWith('builtin:')) return [];
+    const provider = prefs.value.ai.providers.find((entry) => `builtin:${entry.id}` === agentRef);
+    if (!provider) return [];
+    const models = [provider.model, ...provider.models];
+    return [{ id: 'model', name: t('ai.model'), category: 'model', current: provider.model, choices: models.map((model) => ({ value: model, name: model, description: null })) }];
+  });
+  const modelSetting = $derived(settings.find((option) => option.category === 'model') ?? settings[0]);
+
+  function choiceName(option: ConfigOption): string {
+    const value = chat.optionValue(option);
+    return option.choices.find((entry) => entry.value === value)?.name ?? value;
+  }
+
+  async function resume(summary: AiSessionSummary, records: AiRecord[]): Promise<void> {
+    historyOpen = false;
+    await ai.resume(summary, records);
+    if (summary.context && contextKey(summary.context) !== contextKey(context)) notify(t('ai.resumedElsewhere', { host: summary.host ?? '' }), 'info');
   }
 
   function chooseAgent(choice: AgentChoice): void {
@@ -190,6 +231,7 @@
   function onWindowPointer(event: PointerEvent): void {
     if (pickerOpen && picker && !picker.contains(event.target as Node)) pickerOpen = false;
     if (modeOpen && modePicker && !modePicker.contains(event.target as Node)) modeOpen = false;
+    if (settingsOpen && settingsPicker && !settingsPicker.contains(event.target as Node)) settingsOpen = false;
   }
 
   onMount(() => {
@@ -213,7 +255,12 @@
 
 <div class="ai">
   <div class="toolbar">
-    <span class="host" title={hostName}><Icon name={context.kind === 'local' ? 'terminal' : 'server'} size={12} />{hostName}</span>
+    {#if renaming !== null}
+      <!-- svelte-ignore a11y_autofocus -->
+      <input class="rename" bind:value={renaming} autofocus aria-label={t('ai.rename')} maxlength="120" onkeydown={onRenameKey} onblur={() => void finishRename()} />
+    {:else}
+      <button type="button" class="title" title={t('ai.renameHint')} onclick={() => (renaming = chat.name ?? '')}>{chat.name ?? t('ai.newChatTitle')}</button>
+    {/if}
     <span class="spacer"></span>
     <IconButton icon="add" small label={t('ai.newChat')} disabled={chat.busy || chat.starting} onclick={() => void ai.reset(chat)} />
     <IconButton icon="history" small label={t('ai.history')} onclick={() => (historyOpen = true)} />
@@ -383,9 +430,29 @@
             </div>
           {/if}
         </div>
+        {#if modelSetting}
+          <div class="picker spread" bind:this={settingsPicker}>
+            <button type="button" class="pick" onclick={() => (settingsOpen = !settingsOpen)} aria-expanded={settingsOpen} title={t('ai.modelSettings')}>
+              <span class="pick-name">{choiceName(modelSetting)}</span><Icon name="chevronDown" size={11} />
+            </button>
+            {#if settingsOpen}
+              <div class="menu" role="menu" aria-label={t('ai.modelSettings')}>
+                {#each settings as option (option.id)}
+                  <p class="menu-title">{option.name}</p>
+                  {#each option.choices as entry (entry.value)}
+                    <button type="button" role="menuitemradio" aria-checked={entry.value === chat.optionValue(option)} class="menu-item" class:current={entry.value === chat.optionValue(option)} onclick={() => ((settingsOpen = false), void chat.setOption(option.id, entry.value))}>
+                      <span class="menu-name">{entry.name}</span>
+                      {#if entry.description}<span class="menu-detail wrap">{entry.description}</span>{/if}
+                    </button>
+                  {/each}
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
         <div class="picker spread" bind:this={modePicker}>
-          <button type="button" class="pick" onclick={() => (modeOpen = !modeOpen)} aria-expanded={modeOpen} title={t('ai.mode')}>
-            <Icon name={MODE_ICONS[chat.mode]} size={12} /><span class="pick-name">{t(`ai.mode.${chat.mode}`)}</span><Icon name="chevronDown" size={11} />
+          <button type="button" class="pick" onclick={() => (modeOpen = !modeOpen)} aria-expanded={modeOpen} title={`${t('ai.mode')}: ${t(`ai.mode.${chat.mode}`)}`} aria-label={`${t('ai.mode')}: ${t(`ai.mode.${chat.mode}`)}`}>
+            <Icon name={MODE_ICONS[chat.mode]} size={12} /><Icon name="chevronDown" size={11} />
           </button>
           {#if modeOpen}
             <div class="menu" role="menu" aria-label={t('ai.mode')}>
@@ -411,7 +478,7 @@
 </div>
 
 {#if historyOpen}
-  <AuditDialog initial={chat.id} onclose={() => (historyOpen = false)} />
+  <AuditDialog initial={chat.id ?? chat.resumeId} onclose={() => (historyOpen = false)} onresume={(summary, records) => void resume(summary, records)} />
 {/if}
 
 <style>
@@ -427,16 +494,35 @@
     gap: 2px;
     padding: 0 var(--space-2) var(--space-1) var(--space-3);
   }
-  .host {
-    display: flex;
-    align-items: center;
-    gap: 4px;
+  .title,
+  .rename {
     min-width: 0;
+    max-width: 100%;
+    height: 22px;
+    padding: 0 4px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--fg);
+    font: inherit;
+    font-size: var(--text-footnote);
+    font-weight: 600;
+    text-align: left;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--fg-muted);
-    font-size: var(--text-footnote);
+  }
+  .title {
+    cursor: text;
+  }
+  .title:hover {
+    background: var(--fill-hover);
+  }
+  .rename {
+    flex: 1;
+    background: var(--surface);
+    box-shadow: 0 0 0 1px var(--accent);
+    outline: none;
   }
   .spacer {
     flex: 1;
@@ -849,19 +935,24 @@
   .card-foot {
     display: flex;
     align-items: center;
-    gap: var(--space-1);
+    gap: 2px;
+    min-width: 0;
+  }
+  .card-foot .spacer {
+    min-width: 0;
   }
   .picker {
     position: relative;
+    flex: 0 1 auto;
     min-width: 0;
   }
   .pick {
     display: flex;
     align-items: center;
     gap: 4px;
-    max-width: 150px;
+    max-width: 100%;
     height: 24px;
-    padding: 0 6px;
+    padding: 0 4px;
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { approvalFor, commandOf, connectionProblem, outcomeState, rows, subject, toolSubject, type ChatItem } from './chatview.ts';
+import { itemsFromRecords, approvalFor, commandOf, connectionProblem, outcomeState, rows, subject, toolSubject, type ChatItem } from './chatview.ts';
 
 const readOnly = { risk: 'read_only' as const, programs: [], opaque: false, reasons: [] };
 const ran = (command: string, exit = 0): ChatItem => ({
@@ -65,4 +65,40 @@ test('an allowed agent tool shows once, as its tool row', () => {
   const tool: ChatItem = { kind: 'tool', call: { id: 'x', title: 'Run make', kind: 'execute', status: 'completed', content: [], locations: [], raw_input: null } };
   assert.deepEqual(rows([tool, approval('allow_once')]).map((row) => row.kind === 'item' && row.item.kind), ['tool']);
   assert.deepEqual(rows([tool, approval('deny')]).map((row) => row.kind === 'item' && row.item.kind), ['tool', 'approval']);
+});
+
+test('an earlier conversation is rebuilt from its records', () => {
+  const operation = { op: 'write_file', path: '/etc/motd' };
+  const items = itemsFromRecords([
+    { ts: 1, kind: 'ai/session_started', payload: { agent: 'X' } },
+    { ts: 2, kind: 'ai/prompt', payload: { text: 'check' } },
+    { ts: 3, kind: 'ai/message', payload: { text: 'Looking.' } },
+    { ts: 4, kind: 'ai/command', payload: { operation: { op: 'command', command: 'uptime' }, risk: 'read_only', approved: false, outcome: { result: 'command', exit_code: 0, stdout: 'up', stderr: '', truncated: false } } },
+    { ts: 5, kind: 'ai/approval', payload: { request_id: 7, asked: operation, risk: 'modify', reasons: [], agent_tool: false } },
+    { ts: 6, kind: 'ai/approval', payload: { request_id: 7, answer: 'allow_once' } },
+    { ts: 7, kind: 'ai/file_write', payload: { operation, risk: 'modify', approved: true, outcome: { result: 'written', bytes: 3 } } },
+    { ts: 8, kind: 'ai/tool_call', payload: { id: 't', title: 'Read x', kind: 'read', status: 'completed', locations: ['/x'], input: '{"command":"cat /x"}' } },
+    { ts: 9, kind: 'ai/approval', payload: { request_id: 8, asked: { op: 'command', command: 'reboot' }, risk: 'dangerous', reasons: [] } },
+    { ts: 10, kind: 'ai/turn_ended', payload: { stop_reason: 'error: rate limited' } },
+  ]);
+  assert.deepEqual(items.map((item) => item.kind), ['user', 'agent', 'operation', 'approval', 'tool', 'approval', 'notice']);
+  const command = items[2];
+  assert.ok(command?.kind === 'operation' && command.outcome.result === 'command' && command.outcome.output.stdout === 'up');
+  const write = items[3];
+  assert.ok(write?.kind === 'approval' && write.answer === 'allow_once' && write.outcome?.result === 'written');
+  const tool = items[4];
+  assert.ok(tool?.kind === 'tool' && toolSubject(tool.call) === 'cat /x');
+  const unanswered = items[5];
+  assert.ok(unanswered?.kind === 'approval' && unanswered.answer === null);
+});
+
+test('connection problems of an earlier conversation show as such', () => {
+  const warning = 'Falling back from WebSockets to HTTPS transport. stream disconnected before completion (os error 10061)';
+  const items = itemsFromRecords([
+    { ts: 1, kind: 'ai/prompt', payload: { text: 'hi' } },
+    { ts: 2, kind: 'ai/message', payload: { text: warning } },
+    { ts: 3, kind: 'ai/turn_ended', payload: { stop_reason: 'error: stream disconnected before completion (os error 10061)' } },
+  ]);
+  assert.deepEqual(items.map((item) => item.kind), ['user', 'connection']);
+  assert.ok(items[1]?.kind === 'connection' && items[1].state === 'failed');
 });

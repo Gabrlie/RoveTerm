@@ -8,7 +8,12 @@ import {
   aiStart,
   aiAgents,
   aiStop,
+  aiRename,
+  aiSetOption,
   onAiUpdate,
+  type AiSessionSummary,
+  type AiRecord,
+  type ConfigOption,
   type AiAnswer,
   type AiContext,
   type AiEvent,
@@ -22,7 +27,7 @@ import {
   type ToolCall,
 } from '../ipc';
 import { errorText, t, type MessageKey } from '../i18n';
-import { approvalFor, connectionProblem, type ChatItem } from './chatview';
+import { approvalFor, connectionProblem, itemsFromRecords, titleOf, type ChatItem } from './chatview';
 import { prefs } from '../settings/prefs.svelte';
 
 export type { ChatItem } from './chatview';
@@ -55,6 +60,21 @@ export class Chat {
   mode = $state<AiMode>('ask_by_risk');
   /** Let the agent read the user's terminal on the host (decided when the agent starts). */
   attachTerminal = $state(true);
+  /** The title the user gave; otherwise the first question names the chat. */
+  title = $state<string | null>(null);
+  /** Settings of the running agent the user can change (model, reasoning effort). */
+  options = $state<ConfigOption[]>([]);
+  /** Settings chosen before the agent started, applied once it has. */
+  wanted = $state<Record<string, string>>({});
+  /** An earlier session this chat continues; its id is reused when the agent starts. */
+  resumeId = $state<string | null>(null);
+
+  /** What the chat is called: the user's title, or its first question. */
+  get name(): string | null {
+    if (this.title) return this.title;
+    const first = this.items.find((item) => item.kind === 'user');
+    return first?.kind === 'user' ? titleOf(first.text) : null;
+  }
 
   constructor(
     readonly key: string,
@@ -130,6 +150,8 @@ export class Chat {
           }
         } else if (update.kind === 'plan') {
           this.plan = update.entries;
+        } else if (update.kind === 'config_options') {
+          this.options = update.options.filter((option) => option.category !== 'mode');
         }
         break;
       }
@@ -203,12 +225,19 @@ export class Chat {
         const agent = this.agent ?? ai.defaultAgent;
         if (!agent) throw { code: 'ai.no_agent', message: 'no agent' };
         this.agent = agent;
-        const started = await aiStart(this.context, agent, this.attachTerminal ? terminal : null);
+        const started = await aiStart(this.context, agent, this.attachTerminal ? terminal : null, this.resumeId);
         this.id = started.id;
+        this.resumeId = null;
         this.host = started.host;
         this.agentName = started.agent;
-        if (this.mode !== prefs.value.ai.mode) await aiSetMode(started.id, this.mode);
+        this.options = started.config_options;
         ai.byId[started.id] = this;
+        if (this.mode !== prefs.value.ai.mode) await aiSetMode(started.id, this.mode);
+        for (const [option, value] of Object.entries(this.wanted)) {
+          if (this.options.some((entry) => entry.id === option && entry.current !== value)) this.options = await aiSetOption(started.id, option, value);
+        }
+        this.wanted = {};
+        if (this.title) await aiRename(started.id, this.title);
       } catch (error) {
         this.notice(error);
         return;
@@ -238,6 +267,36 @@ export class Chat {
 
   async answer(requestId: number, answer: AiAnswer): Promise<void> {
     if (this.id) await aiAnswer(this.id, requestId, answer).catch((error: unknown) => this.notice(error));
+  }
+
+  /** The value of setting `option`: chosen, or as the agent reports it. */
+  optionValue(option: ConfigOption): string {
+    return this.wanted[option.id] ?? option.current;
+  }
+
+  /** Sets one of the agent's settings, or remembers it until the agent starts. */
+  async setOption(option: string, value: string): Promise<void> {
+    if (!this.id) {
+      this.wanted = { ...this.wanted, [option]: value };
+      return;
+    }
+    try {
+      this.options = await aiSetOption(this.id, option, value);
+    } catch (error) {
+      this.notice(error);
+    }
+  }
+
+  /** Names the chat (an empty title goes back to the first question). */
+  async rename(title: string): Promise<void> {
+    const trimmed = title.trim();
+    if (!trimmed) {
+      this.title = null;
+      return;
+    }
+    this.title = trimmed;
+    const id = this.id ?? this.resumeId;
+    if (id) this.title = await aiRename(id, trimmed).catch((error: unknown) => (this.notice(error), trimmed));
   }
 
   async setMode(mode: AiMode): Promise<void> {
@@ -295,6 +354,23 @@ class AiStore {
     next.mode = chat.mode;
     next.attachTerminal = chat.attachTerminal;
     this.chats.set(chat.key, next);
+    this.version += 1;
+  }
+
+  /** Opens earlier session `summary` (with its `records`) as the chat of its host: it is shown
+   *  again and goes on with the same agent at the next message. */
+  async resume(summary: AiSessionSummary, records: AiRecord[]): Promise<void> {
+    if (!summary.context || !summary.agent_ref) return;
+    const key = contextKey(summary.context);
+    const current = this.chats.get(key);
+    if (current?.id === summary.id) return;
+    if (current) await current.stop();
+    const chat = new Chat(key, summary.context);
+    chat.agent = summary.agent_ref;
+    chat.resumeId = summary.id;
+    chat.title = summary.title;
+    chat.items = itemsFromRecords(records);
+    this.chats.set(key, chat);
     this.version += 1;
   }
 

@@ -262,6 +262,8 @@ export interface ProviderPrefs {
   /** Including the API version path, such as `https://api.openai.com/v1`. */
   base_url: string;
   model: string;
+  /** Other models to switch to in a conversation. */
+  models: string[];
   max_tokens: number | null;
   effort: 'low' | 'medium' | 'high' | null;
 }
@@ -839,6 +841,20 @@ export interface AiStarted {
   agent_version: string | null;
   modes: AgentMode[];
   current_mode: string | null;
+  /** Settings the user can change in the conversation (model, reasoning effort, …). */
+  config_options: ConfigOption[];
+  /** An earlier conversation was continued. */
+  resumed: boolean;
+}
+
+/** A setting of a conversation (ACP session config option, or the built-in assistant's model). */
+export interface ConfigOption {
+  id: string;
+  name: string;
+  /** `model`, `thought_level`, or another category the agent names. */
+  category: string | null;
+  current: string;
+  choices: { value: string; name: string; description: string | null }[];
 }
 
 export type Risk = 'read_only' | 'modify' | 'dangerous';
@@ -898,7 +914,8 @@ export type SessionUpdate =
   | { kind: 'thought'; text: string }
   | { kind: 'tool_call'; call: ToolCall; changed: boolean }
   | { kind: 'plan'; entries: PlanEntry[] }
-  | { kind: 'mode_changed'; mode_id: string };
+  | { kind: 'mode_changed'; mode_id: string }
+  | { kind: 'config_options'; options: ConfigOption[] };
 
 export interface CommandOutput {
   stdout: string;
@@ -941,8 +958,20 @@ export function aiSetKey(agent: string, key: string | null): Promise<void> {
 }
 
 /** Starts `agent` on `context`; `terminal` is the user's terminal session there. */
-export function aiStart(context: AiContext, agent: string, terminal: SessionId | null): Promise<AiStarted> {
-  return invoke('ai_start', { context, agent, terminal });
+/** Starts `agent` on `context`; `terminal` is the user's terminal session there. `resume`
+ *  continues an earlier conversation of that agent (same id). */
+export function aiStart(context: AiContext, agent: string, terminal: SessionId | null, resume: string | null = null): Promise<AiStarted> {
+  return invoke('ai_start', { context, agent, terminal, resume });
+}
+
+/** Sets setting `option` (such as `model`) of session `id`; returns the settings as they now are. */
+export function aiSetOption(id: string, option: string, value: string): Promise<ConfigOption[]> {
+  return invoke('ai_set_option', { id, option, value });
+}
+
+/** Names AI session `id`; returns the title as stored. */
+export function aiRename(id: string, title: string): Promise<string> {
+  return invoke('ai_rename', { id, title });
 }
 
 /** Sends a prompt and resolves with the stop reason when the turn ends. */
@@ -977,6 +1006,11 @@ export interface AiSessionSummary {
   started: number;
   host: string | null;
   agent: string | null;
+  /** Given by the user, or the first question. */
+  title: string | null;
+  /** The agent to resume with; absent for conversations recorded before resuming existed. */
+  agent_ref: string | null;
+  context: AiContext | null;
 }
 
 /** One audit record of an AI session. */

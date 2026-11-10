@@ -855,6 +855,12 @@ fn ai_preferences_are_validated() {
         format: rove_vault::ProviderFormat::Chat,
         base_url: "https://api.deepseek.com/v1/".into(),
         model: "deepseek-chat".into(),
+        models: vec![
+            " deepseek-reasoner ".into(),
+            "deepseek-chat".into(),
+            "".into(),
+            "deepseek-reasoner".into(),
+        ],
         max_tokens: None,
         effort: None,
     }];
@@ -862,6 +868,8 @@ fn ai_preferences_are_validated() {
     let stored = vault.set_preferences(prefs.clone()).unwrap();
     assert_eq!(stored.ai.read_only, ["kubectx"]);
     assert_eq!(stored.ai.providers[0].name, "DeepSeek");
+    // Other models: trimmed, without the default, blanks or repeats.
+    assert_eq!(stored.ai.providers[0].models, ["deepseek-reasoner"]);
     assert_eq!(
         stored.ai.providers[0].base_url,
         "https://api.deepseek.com/v1"

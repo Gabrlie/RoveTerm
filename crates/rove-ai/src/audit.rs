@@ -5,10 +5,12 @@
 use std::sync::{Arc, Mutex};
 
 use rove_journal::NewRecord;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::acp::SessionUpdate;
+use crate::llm::Message;
 use crate::policy::Operation;
 use crate::session::{AiEvent, Outcome};
 
@@ -25,6 +27,105 @@ pub const KIND_LIST_DIR: &str = "ai/list_dir";
 pub const KIND_TERMINAL_READ: &str = "ai/terminal_read";
 pub const KIND_TURN_ENDED: &str = "ai/turn_ended";
 pub const KIND_ENDED: &str = "ai/session_ended";
+/// The session's title: written from the first prompt, and again when the user renames it.
+pub const KIND_RENAMED: &str = "ai/renamed";
+
+/// Longest title kept.
+pub const MAX_TITLE: usize = 120;
+
+/// What a session started with, as its `ai/session_started` record holds it; enough to resume it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionInfo {
+    pub agent: Option<String>,
+    pub agent_version: Option<String>,
+    pub mode: String,
+    /// `builtin:<id>` or `acp:<id>`.
+    #[serde(default)]
+    pub agent_ref: Option<String>,
+    /// The host context, as the app describes it.
+    #[serde(default)]
+    pub context: Option<Value>,
+    /// The agent's own session id, for `session/load`.
+    #[serde(default)]
+    pub agent_session: Option<String>,
+    /// This start continued an earlier run of the session.
+    #[serde(default)]
+    pub resumed: bool,
+}
+
+/// A title from a prompt: its first line, cut to 60 characters.
+pub fn title_of(text: &str) -> String {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    let mut title: String = line.chars().take(60).collect();
+    if line.chars().count() > 60 {
+        title.push('…');
+    }
+    title
+}
+
+/// The record that renames session `ai_session`.
+pub fn renamed(ai_session: &str, title: &str, auto: bool) -> NewRecord {
+    NewRecord {
+        kind: KIND_RENAMED.to_owned(),
+        session_id: Some(ai_session.to_owned()),
+        payload: json!({ "title": title, "auto": auto }),
+    }
+}
+
+/// The conversation of a session from its records (`kind`, `payload`, oldest first), for the
+/// built-in assistant to go on with: prompts and replies, with what ran noted in the replies.
+/// Tool output is left out.
+pub fn transcript(records: &[(String, Value)]) -> Vec<Message> {
+    fn reply(messages: &mut Vec<Message>, text: &str) {
+        if let Some(Message::Assistant { text: last, .. }) = messages.last_mut() {
+            if !last.is_empty() {
+                last.push_str("\n\n");
+            }
+            last.push_str(text);
+        } else {
+            messages.push(Message::Assistant {
+                text: text.to_owned(),
+                tool_calls: Vec::new(),
+                opaque: None,
+            });
+        }
+    }
+    let mut messages = Vec::new();
+    for (kind, payload) in records {
+        let text = |key: &str| payload.get(key).and_then(Value::as_str).unwrap_or("");
+        let subject = || {
+            let operation = &payload["operation"];
+            ["command", "path", "title"]
+                .iter()
+                .find_map(|key| operation.get(*key).and_then(Value::as_str))
+                .unwrap_or("")
+                .to_owned()
+        };
+        match kind.as_str() {
+            KIND_PROMPT if !text("text").is_empty() => messages.push(Message::User {
+                text: text("text").to_owned(),
+            }),
+            KIND_MESSAGE if !text("text").is_empty() => reply(&mut messages, text("text")),
+            KIND_COMMAND | KIND_FILE_READ | KIND_FILE_WRITE | KIND_LIST_DIR => {
+                let result = payload["outcome"]["result"].as_str().unwrap_or("");
+                let note = match (kind.as_str(), result) {
+                    (_, "denied") => "refused by the user".to_owned(),
+                    (_, "failed") => "failed".to_owned(),
+                    (KIND_COMMAND, _) => format!("exit {}", payload["outcome"]["exit_code"]),
+                    _ => "done".to_owned(),
+                };
+                let verb = kind.trim_start_matches("ai/");
+                reply(&mut messages, &format!("[{verb} `{}`: {note}]", subject()));
+            }
+            _ => {}
+        }
+    }
+    messages
+}
 
 /// Text kept per field in a record.
 const CLIP: usize = 16 * 1024;
@@ -59,6 +160,8 @@ pub struct Auditor {
     /// The reply and reasoning being streamed, written out when something else happens.
     message: Mutex<String>,
     thought: Mutex<String>,
+    /// The session has a title (written from the first prompt unless it had one).
+    titled: std::sync::atomic::AtomicBool,
 }
 
 impl Auditor {
@@ -69,7 +172,13 @@ impl Auditor {
             host: host.into(),
             message: Mutex::new(String::new()),
             thought: Mutex::new(String::new()),
+            titled: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// The session already has a title (it is resumed), so the first prompt does not give one.
+    pub fn set_titled(&self) {
+        self.titled.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn write(&self, kind: &str, mut payload: Value) {
@@ -101,10 +210,10 @@ impl Auditor {
         }
     }
 
-    pub fn started(&self, agent: Option<&str>, version: Option<&str>, mode: &str) {
+    pub fn started(&self, info: &SessionInfo) {
         self.write(
             KIND_STARTED,
-            json!({ "agent": agent, "agent_version": version, "mode": mode }),
+            serde_json::to_value(info).unwrap_or_else(|_| json!({})),
         );
     }
 
@@ -112,6 +221,12 @@ impl Auditor {
         self.flush();
         let (kept, clipped) = clip(text);
         self.write(KIND_PROMPT, json!({ "text": kept, "clipped": clipped }));
+        if !self.titled.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            self.write(
+                KIND_RENAMED,
+                json!({ "title": title_of(text), "auto": true }),
+            );
+        }
     }
 
     pub fn turn_ended(&self, stop_reason: &str) {
@@ -286,6 +401,7 @@ mod tests {
             kinds,
             [
                 KIND_PROMPT,
+                KIND_RENAMED,
                 KIND_MESSAGE,
                 KIND_APPROVAL,
                 KIND_APPROVAL,
@@ -299,8 +415,9 @@ mod tests {
                 .all(|record| record.session_id.as_deref() == Some("ai-1")
                     && record.payload["host"] == "demo@web")
         );
-        assert_eq!(records[1].payload["text"], "Restarting now.");
-        let command = &records[4].payload;
+        assert_eq!(records[1].payload["title"], "restart nginx");
+        assert_eq!(records[2].payload["text"], "Restarting now.");
+        let command = &records[5].payload;
         assert_eq!(command["risk"], "modify");
         assert_eq!(command["approved"], true);
         assert_eq!(command["outcome"]["clipped"], true);
@@ -320,7 +437,11 @@ mod tests {
             writer.append(record).unwrap();
         });
         let audit = Auditor::new(sink.clone(), "ai-1", "local");
-        audit.started(Some("Codex"), Some("1.0"), "ask_by_risk");
+        audit.started(&SessionInfo {
+            agent: Some("Codex".into()),
+            mode: "ask_by_risk".into(),
+            ..SessionInfo::default()
+        });
         audit.prompt("hello");
         audit.ended();
         Auditor::new(sink, "ai-2", "local").prompt("other");
@@ -334,6 +455,54 @@ mod tests {
             .into_iter()
             .map(|record| record.kind)
             .collect();
-        assert_eq!(kinds, [KIND_STARTED, KIND_PROMPT, KIND_ENDED]);
+        assert_eq!(kinds, [KIND_STARTED, KIND_PROMPT, KIND_RENAMED, KIND_ENDED]);
+    }
+
+    #[test]
+    fn titles_come_from_the_first_prompt() {
+        assert_eq!(
+            title_of("\n  check disk usage \nthen more"),
+            "check disk usage"
+        );
+        let long = "x".repeat(80);
+        assert_eq!(title_of(&long).chars().count(), 61);
+        let (audit, records) = auditor();
+        audit.prompt("first question");
+        audit.prompt("second");
+        let records = records.lock().unwrap();
+        let titles: Vec<&Value> = records
+            .iter()
+            .filter(|record| record.kind == KIND_RENAMED)
+            .map(|record| &record.payload["title"])
+            .collect();
+        assert_eq!(titles, [&json!("first question")]);
+    }
+
+    #[test]
+    fn a_transcript_keeps_prompts_replies_and_what_ran() {
+        let records = vec![
+            (KIND_STARTED.to_owned(), json!({})),
+            (KIND_PROMPT.to_owned(), json!({ "text": "disk?" })),
+            (KIND_MESSAGE.to_owned(), json!({ "text": "Checking." })),
+            (
+                KIND_COMMAND.to_owned(),
+                json!({ "operation": { "op": "command", "command": "df -h" }, "outcome": { "result": "command", "exit_code": 0 } }),
+            ),
+            (
+                KIND_FILE_WRITE.to_owned(),
+                json!({ "operation": { "op": "write_file", "path": "/a" }, "outcome": { "result": "denied" } }),
+            ),
+            (KIND_MESSAGE.to_owned(), json!({ "text": "80% used." })),
+            (KIND_PROMPT.to_owned(), json!({ "text": "thanks" })),
+        ];
+        let messages = transcript(&records);
+        assert_eq!(messages.len(), 3);
+        assert!(matches!(&messages[0], Message::User { text } if text == "disk?"));
+        assert!(
+            matches!(&messages[1], Message::Assistant { text, tool_calls, .. }
+            if tool_calls.is_empty()
+                && text == "Checking.\n\n[command `df -h`: exit 0]\n\n[file_write `/a`: refused by the user]\n\n80% used.")
+        );
+        assert!(matches!(&messages[2], Message::User { text } if text == "thanks"));
     }
 }

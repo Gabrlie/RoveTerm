@@ -113,7 +113,7 @@ pub struct AiSession {
     limits: Limits,
     sink: EventSink,
     /// The agent's id for this session, once known; requests for other sessions are refused.
-    acp_session: OnceLock<String>,
+    acp_session: std::sync::Mutex<Option<String>>,
     approvals: Mutex<HashMap<u64, oneshot::Sender<Answer>>>,
     next_id: AtomicU64,
     jobs: Mutex<HashMap<String, Job>>,
@@ -121,6 +121,9 @@ pub struct AiSession {
     /// The agent's tool calls by id, with every field reported so far: a permission request may
     /// name a call reported earlier and leave out what it does.
     calls: Mutex<HashMap<String, ToolCall>>,
+    /// The agent is replaying an earlier conversation (`session/load`): RoveTerm shows that
+    /// conversation from its own journal, so the replay is not reported again.
+    replaying: std::sync::atomic::AtomicBool,
 }
 
 /// Most tool calls remembered for permission requests; older ones are forgotten all at once.
@@ -255,13 +258,19 @@ impl AiSession {
             policy: Mutex::new(Policy::new(settings.mode, settings.rules)),
             limits: settings.limits,
             sink,
-            acp_session: OnceLock::new(),
+            acp_session: std::sync::Mutex::new(None),
             approvals: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             jobs: Mutex::new(HashMap::new()),
             terminal: OnceLock::new(),
             calls: Mutex::new(HashMap::new()),
+            replaying: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// While `on`, updates from the agent are dropped (it replays an earlier conversation).
+    pub fn set_replaying(&self, on: bool) {
+        self.replaying.store(on, Ordering::SeqCst);
     }
 
     /// Lets the agent read the user's terminal through [`AiSession::read_terminal`].
@@ -318,8 +327,19 @@ impl AiSession {
     }
 
     /// Binds the session to the agent's session id.
+    /// Binds the agent's session id; a later bind replaces it (a failed `session/load` falls
+    /// back to a new session).
     pub fn bind(&self, acp_session: &str) {
-        let _ = self.acp_session.set(acp_session.to_owned());
+        if let Ok(mut slot) = self.acp_session.lock() {
+            *slot = Some(acp_session.to_owned());
+        }
+    }
+
+    /// Forgets the bound session id until the next [`AiSession::bind`].
+    pub fn unbind(&self) {
+        if let Ok(mut slot) = self.acp_session.lock() {
+            *slot = None;
+        }
     }
 
     pub async fn set_mode(&self, mode: Mode) {
@@ -352,7 +372,8 @@ impl AiSession {
     }
 
     fn check_session(&self, session_id: &str) -> Result<(), ClientError> {
-        match self.acp_session.get() {
+        let own = self.acp_session.lock().ok().and_then(|slot| slot.clone());
+        match own {
             Some(own) if own != session_id => Err(ClientError::new(
                 acp::code::INVALID_PARAMS,
                 "unknown session",
@@ -597,7 +618,7 @@ impl AiSession {
 #[async_trait]
 impl Client for AiSession {
     async fn session_update(&self, session_id: &str, update: SessionUpdate) {
-        if self.check_session(session_id).is_err() {
+        if self.check_session(session_id).is_err() || self.replaying.load(Ordering::SeqCst) {
             return;
         }
         if let SessionUpdate::ToolCall { call, .. } = &update {
@@ -844,7 +865,9 @@ mod tests {
             Some("ls -la".into())
         );
         assert_eq!(
-            tool_command(Some(&json!({ "command": ["/bin/bash", "-lc", "rm -rf /"] }))),
+            tool_command(Some(
+                &json!({ "command": ["/bin/bash", "-lc", "rm -rf /"] })
+            )),
             Some("rm -rf /".into())
         );
         // Other argument lists keep each word quoted.

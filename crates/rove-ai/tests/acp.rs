@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use rove_ai::acp;
 use rove_ai::host::LocalHost;
+use rove_ai::policy::{Operation, ToolKind};
 use rove_ai::runner::{self, AgentSpec};
 use rove_ai::session::{AiEvent, AiSession, Outcome, SessionSettings};
-use rove_ai::policy::{Operation, ToolKind};
 use rove_ai::{Answer, Risk};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, Lines};
@@ -315,8 +315,11 @@ async fn a_failed_turn_reports_the_agents_detail() {
         next_id: 100,
     };
     let script = tokio::spawn(async move {
-        fake.answer("initialize", json!({ "protocolVersion": 1, "authMethods": [] }))
-            .await;
+        fake.answer(
+            "initialize",
+            json!({ "protocolVersion": 1, "authMethods": [] }),
+        )
+        .await;
         fake.answer("session/new", json!({ "sessionId": "s1" }))
             .await;
         let prompt = fake.receive().await;
@@ -332,5 +335,128 @@ async fn a_failed_turn_reports_the_agents_detail() {
         .unwrap();
     let error = running.prompt("hi").await.unwrap_err();
     assert!(error.to_string().contains("os error 10061"), "{error}");
+    drop(script.await.unwrap());
+}
+
+/// A session for the tests below, its events, and the fake agent's end.
+fn harness() -> (
+    Arc<AiSession>,
+    mpsc::UnboundedReceiver<AiEvent>,
+    FakeAgent,
+    (DuplexStream, DuplexStream),
+) {
+    let (events, received) = mpsc::unbounded_channel::<AiEvent>();
+    let session = Arc::new(AiSession::new(
+        Arc::new(LocalHost),
+        SessionSettings::default(),
+        Arc::new(move |event| {
+            let _ = events.send(event);
+        }),
+    ));
+    let (client_side, agent_side) = (tokio::io::duplex(1 << 16), tokio::io::duplex(1 << 16));
+    let fake = FakeAgent {
+        lines: BufReader::new(agent_side.0).lines(),
+        out: client_side.1,
+        next_id: 100,
+    };
+    (session, received, fake, (client_side.0, agent_side.1))
+}
+
+const MODEL_OPTIONS: &str = r#"[
+    { "id": "mode", "name": "Approval Preset", "type": "select", "category": "mode", "currentValue": "auto", "options": [{ "value": "auto", "name": "Auto" }] },
+    { "id": "model", "name": "Model", "type": "select", "category": "model", "currentValue": "gpt-5", "options": [{ "group": "openai", "name": "OpenAI", "options": [{ "value": "gpt-5", "name": "GPT-5" }, { "value": "gpt-5-mini", "name": "GPT-5 mini", "description": "Faster" }] }] },
+    { "id": "notes", "name": "Notes", "type": "text", "currentValue": "" }
+]"#;
+
+#[tokio::test]
+async fn a_session_is_resumed_and_its_settings_changed() {
+    let (session, mut received, mut fake, (read, write)) = harness();
+    let options: Value = serde_json::from_str(MODEL_OPTIONS).unwrap();
+    let script = tokio::spawn(async move {
+        fake.answer("initialize", json!({ "protocolVersion": 1, "agentCapabilities": { "loadSession": true }, "authMethods": [] }))
+            .await;
+        let load = fake.receive().await;
+        assert_eq!(load["method"], "session/load");
+        assert_eq!(load["params"]["sessionId"], "old-1");
+        // The replay of the earlier conversation comes before the answer.
+        fake.send(json!({ "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "old-1", "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "earlier reply" } } } })).await;
+        fake.send(
+            json!({ "jsonrpc": "2.0", "id": load["id"], "result": { "configOptions": options } }),
+        )
+        .await;
+        let set = fake.receive().await;
+        assert_eq!(set["method"], "session/set_config_option");
+        assert_eq!(
+            set["params"],
+            json!({ "sessionId": "old-1", "configId": "model", "value": "gpt-5-mini" })
+        );
+        let mut changed = options.clone();
+        changed[1]["currentValue"] = json!("gpt-5-mini");
+        fake.send(
+            json!({ "jsonrpc": "2.0", "id": set["id"], "result": { "configOptions": changed } }),
+        )
+        .await;
+        fake
+    });
+    let agent = acp::connect(read, write, session.clone()).await.unwrap();
+    let spec = AgentSpec {
+        resume: Some("old-1".into()),
+        ..AgentSpec::default()
+    };
+    let running = runner::open(agent, session.clone(), &spec).await.unwrap();
+    let started = running.started();
+    assert!(started.resumed);
+    assert_eq!(started.agent_session.as_deref(), Some("old-1"));
+    // Select options only, grouped choices flattened.
+    let ids: Vec<&str> = started
+        .config_options
+        .iter()
+        .map(|option| option.id.as_str())
+        .collect();
+    assert_eq!(ids, ["mode", "model"]);
+    let model = &started.config_options[1];
+    assert_eq!(model.category.as_deref(), Some("model"));
+    assert_eq!(model.choices.len(), 2);
+    assert_eq!(model.choices[1].description.as_deref(), Some("Faster"));
+
+    let options = running
+        .set_config_option("model", "gpt-5-mini")
+        .await
+        .unwrap();
+    assert_eq!(options[1].current, "gpt-5-mini");
+    drop(script.await.unwrap());
+    // The replay was not reported again.
+    assert!(received.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn a_session_that_cannot_be_reopened_starts_anew() {
+    let (session, _received, mut fake, (read, write)) = harness();
+    let script = tokio::spawn(async move {
+        fake.answer("initialize", json!({ "protocolVersion": 1, "agentCapabilities": { "loadSession": true }, "authMethods": [] }))
+            .await;
+        let load = fake.receive().await;
+        assert_eq!(load["method"], "session/load");
+        fake.send(json!({ "jsonrpc": "2.0", "id": load["id"], "error": { "code": -32002, "message": "Resource not found" } })).await;
+        fake.answer("session/new", json!({ "sessionId": "new-1" }))
+            .await;
+        // Requests for the new session are accepted.
+        let read = fake
+            .call(
+                "fs/read_text_file",
+                json!({ "sessionId": "new-1", "path": "/nonexistent-rove" }),
+            )
+            .await;
+        assert_ne!(read["error"]["message"], "unknown session", "{read}");
+        fake
+    });
+    let agent = acp::connect(read, write, session.clone()).await.unwrap();
+    let spec = AgentSpec {
+        resume: Some("old-1".into()),
+        ..AgentSpec::default()
+    };
+    let running = runner::open(agent, session.clone(), &spec).await.unwrap();
+    assert!(!running.started().resumed);
+    assert_eq!(running.started().agent_session.as_deref(), Some("new-1"));
     drop(script.await.unwrap());
 }

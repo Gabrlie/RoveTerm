@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::acp::{self, AcpError, Agent, McpServer, SessionMode};
+use crate::acp::{self, AcpError, Agent, ConfigOption, McpServer, NewSession, SessionMode};
 use crate::session::AiSession;
 
 /// How to run an agent.
@@ -24,6 +24,8 @@ pub struct AgentSpec {
     /// Agent modes to switch to, most preferred first (such as `read-only`, which makes the
     /// agent ask before its own tools change anything).
     pub preferred_modes: Vec<String>,
+    /// The agent's own id of an earlier session to reopen, when the agent can.
+    pub resume: Option<String>,
 }
 
 /// What the UI needs to know about a started session.
@@ -33,6 +35,12 @@ pub struct Started {
     pub agent_version: Option<String>,
     pub modes: Vec<SessionMode>,
     pub current_mode: Option<String>,
+    /// The session's settings the agent offers (model, reasoning effort, …).
+    pub config_options: Vec<ConfigOption>,
+    /// The agent's own id of the session, to reopen it later.
+    pub agent_session: Option<String>,
+    /// [`AgentSpec::resume`] reopened the earlier session.
+    pub resumed: bool,
 }
 
 /// An agent working in one AI session.
@@ -65,19 +73,31 @@ pub async fn open(
     spec: &AgentSpec,
 ) -> Result<Running, AcpError> {
     let cwd = spec.cwd.to_string_lossy().into_owned();
-    let created = match agent.new_session(&cwd, &spec.mcp).await {
-        Err(AcpError::AuthRequired(message)) => {
-            let offered = &agent.info().auth_methods;
-            let method = spec
-                .auth_methods
-                .iter()
-                .find(|wanted| offered.iter().any(|method| &method.id == *wanted))
-                .or(spec.auth_methods.first())
-                .ok_or(AcpError::AuthRequired(message))?;
-            agent.authenticate(method).await?;
-            agent.new_session(&cwd, &spec.mcp).await?
+    let resume = spec.resume.as_deref().filter(|_| agent.info().load_session);
+    // The id is known before `session/load` answers, and the replay arrives before it does.
+    if let Some(id) = resume {
+        session.bind(id);
+        session.set_replaying(true);
+    }
+    let opened = signed_in(&agent, spec, || async {
+        match resume {
+            Some(id) => agent.load_session(id, &cwd, &spec.mcp).await,
+            None => agent.new_session(&cwd, &spec.mcp).await,
         }
-        other => other?,
+    })
+    .await;
+    session.set_replaying(false);
+    let (created, resumed) = match (opened, resume) {
+        (Ok(created), resume) => (created, resume.is_some()),
+        // The earlier session is gone: start a new one.
+        (Err(AcpError::Rpc { .. }), Some(_)) => {
+            session.unbind();
+            (
+                signed_in(&agent, spec, || agent.new_session(&cwd, &spec.mcp)).await?,
+                false,
+            )
+        }
+        (Err(error), _) => return Err(error),
     };
     session.bind(&created.session_id);
     let mut current_mode = created.current_mode.clone();
@@ -96,6 +116,9 @@ pub async fn open(
         agent_version: agent.info().version.clone(),
         modes: created.modes,
         current_mode,
+        config_options: created.config_options,
+        agent_session: Some(created.session_id.clone()),
+        resumed,
     };
     Ok(Running {
         agent,
@@ -103,6 +126,28 @@ pub async fn open(
         acp_session: created.session_id,
         started,
     })
+}
+
+/// Runs `open` (`session/new` or `session/load`), signing in first when the agent asks for it.
+async fn signed_in<F, Fut>(agent: &Agent, spec: &AgentSpec, open: F) -> Result<NewSession, AcpError>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<NewSession, AcpError>>,
+{
+    match open().await {
+        Err(AcpError::AuthRequired(message)) => {
+            let offered = &agent.info().auth_methods;
+            let method = spec
+                .auth_methods
+                .iter()
+                .find(|wanted| offered.iter().any(|method| &method.id == *wanted))
+                .or(spec.auth_methods.first())
+                .ok_or(AcpError::AuthRequired(message))?;
+            agent.authenticate(method).await?;
+            open().await
+        }
+        other => other,
+    }
 }
 
 impl Running {
@@ -123,6 +168,17 @@ impl Running {
     pub async fn cancel(&self) -> Result<(), AcpError> {
         self.session.withdraw_approvals().await;
         self.agent.cancel(&self.acp_session)
+    }
+
+    /// Sets one of the agent's [`Started::config_options`]; returns them all as they now are.
+    pub async fn set_config_option(
+        &self,
+        id: &str,
+        value: &str,
+    ) -> Result<Vec<ConfigOption>, AcpError> {
+        self.agent
+            .set_config_option(&self.acp_session, id, value)
+            .await
     }
 
     /// Switches the agent to one of its [`Started::modes`].

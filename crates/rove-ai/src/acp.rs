@@ -94,6 +94,10 @@ pub enum SessionUpdate {
     ModeChanged {
         mode_id: String,
     },
+    /// The agent changed its session settings.
+    ConfigOptions {
+        options: Vec<ConfigOption>,
+    },
 }
 
 /// A tool call as reported by the agent; fields an update leaves out are `None` or empty.
@@ -228,6 +232,71 @@ pub struct AgentInfo {
     pub name: Option<String>,
     pub version: Option<String>,
     pub auth_methods: Vec<AuthMethod>,
+    /// The agent can reopen one of its earlier sessions (`session/load`).
+    pub load_session: bool,
+}
+
+/// A setting of a session the agent offers (ACP session config options), such as its model or
+/// reasoning effort; only select options are kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConfigOption {
+    pub id: String,
+    pub name: String,
+    /// `model`, `mode`, `thought_level`, or another category the agent names.
+    pub category: Option<String>,
+    pub current: String,
+    pub choices: Vec<ConfigChoice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConfigChoice {
+    pub value: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+/// Most options and choices kept from an agent.
+const MAX_OPTIONS: usize = 16;
+const MAX_CHOICES: usize = 200;
+
+/// The select options in an agent's `configOptions`; choices may be grouped.
+pub fn parse_config_options(value: Option<&Value>) -> Vec<ConfigOption> {
+    fn choice(value: &Value) -> Option<ConfigChoice> {
+        Some(ConfigChoice {
+            value: string(value, "value")?,
+            name: string(value, "name")?,
+            description: string(value, "description"),
+        })
+    }
+    let Some(options) = value.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    options
+        .iter()
+        .filter(|option| option.get("type").and_then(Value::as_str) == Some("select"))
+        .filter_map(|option| {
+            let choices: Vec<ConfigChoice> = option
+                .get("options")
+                .and_then(Value::as_array)?
+                .iter()
+                .flat_map(
+                    |entry| match entry.get("options").and_then(Value::as_array) {
+                        Some(group) => group.iter().filter_map(choice).collect::<Vec<_>>(),
+                        None => choice(entry).into_iter().collect(),
+                    },
+                )
+                .take(MAX_CHOICES)
+                .collect();
+            Some(ConfigOption {
+                id: string(option, "id")?,
+                name: string(option, "name")?,
+                category: string(option, "category"),
+                current: string(option, "currentValue")?,
+                choices,
+            })
+        })
+        .take(MAX_OPTIONS)
+        .collect()
 }
 
 /// A mode the agent can work in (`read-only`, `auto`, …).
@@ -245,6 +314,7 @@ pub struct NewSession {
     pub session_id: String,
     pub current_mode: Option<String>,
     pub modes: Vec<SessionMode>,
+    pub config_options: Vec<ConfigOption>,
 }
 
 /// An MCP server the agent should start for a session, speaking MCP over stdio.
@@ -593,6 +663,9 @@ pub fn parse_update(update: &Value) -> Option<SessionUpdate> {
         "current_mode_update" => Some(SessionUpdate::ModeChanged {
             mode_id: string(update, "currentModeId")?,
         }),
+        "config_option_update" => Some(SessionUpdate::ConfigOptions {
+            options: parse_config_options(update.get("configOptions")),
+        }),
         _ => None,
     }
 }
@@ -793,6 +866,42 @@ fn check_path(path: &str) -> Result<(), ClientError> {
     Ok(())
 }
 
+/// `mcpServers` of `session/new` and `session/load`.
+fn servers_json(mcp_servers: &[McpServer]) -> Vec<Value> {
+    mcp_servers
+        .iter()
+        .map(|server| {
+            json!({
+                "name": server.name,
+                "command": server.command,
+                "args": server.args,
+                "env": server.env.iter().map(|(name, value)| json!({ "name": name, "value": value })).collect::<Vec<_>>(),
+            })
+        })
+        .collect()
+}
+
+/// The session `session_id` from a `session/new` or `session/load` result.
+fn session_of(session_id: String, result: &Value) -> NewSession {
+    let modes = result.get("modes");
+    NewSession {
+        session_id,
+        current_mode: modes.and_then(|modes| string(modes, "currentModeId")),
+        modes: modes
+            .and_then(|modes| modes.get("availableModes"))
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .take(32)
+                    .filter_map(|item| serde_json::from_value(item.clone()).ok())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        config_options: parse_config_options(result.get("configOptions")),
+    }
+}
+
 impl Agent {
     pub fn info(&self) -> &AgentInfo {
         &self.info
@@ -839,6 +948,10 @@ impl Agent {
                         .collect()
                 })
                 .unwrap_or_default(),
+            load_session: result
+                .pointer("/agentCapabilities/loadSession")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         })
     }
 
@@ -855,38 +968,48 @@ impl Agent {
         cwd: &str,
         mcp_servers: &[McpServer],
     ) -> Result<NewSession, AcpError> {
-        let servers: Vec<Value> = mcp_servers
-            .iter()
-            .map(|server| {
-                json!({
-                    "name": server.name,
-                    "command": server.command,
-                    "args": server.args,
-                    "env": server.env.iter().map(|(name, value)| json!({ "name": name, "value": value })).collect::<Vec<_>>(),
-                })
-            })
-            .collect();
         let result = self
-            .request("session/new", json!({ "cwd": cwd, "mcpServers": servers }))
+            .request(
+                "session/new",
+                json!({ "cwd": cwd, "mcpServers": servers_json(mcp_servers) }),
+            )
             .await?;
         let session_id = string(&result, "sessionId")
             .ok_or_else(|| AcpError::Protocol("missing sessionId".into()))?;
-        let modes = result.get("modes");
-        Ok(NewSession {
-            session_id,
-            current_mode: modes.and_then(|modes| string(modes, "currentModeId")),
-            modes: modes
-                .and_then(|modes| modes.get("availableModes"))
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .take(32)
-                        .filter_map(|item| serde_json::from_value(item.clone()).ok())
-                        .collect()
-                })
-                .unwrap_or_default(),
-        })
+        Ok(session_of(session_id, &result))
+    }
+
+    /// Reopens the agent's earlier session `session_id` (when [`AgentInfo::load_session`]). The
+    /// agent replays the conversation as updates before answering.
+    pub async fn load_session(
+        &self,
+        session_id: &str,
+        cwd: &str,
+        mcp_servers: &[McpServer],
+    ) -> Result<NewSession, AcpError> {
+        let result = self
+            .request(
+                "session/load",
+                json!({ "sessionId": session_id, "cwd": cwd, "mcpServers": servers_json(mcp_servers) }),
+            )
+            .await?;
+        Ok(session_of(session_id.to_owned(), &result))
+    }
+
+    /// Sets one of the session's [`ConfigOption`]s; returns all of them as they now are.
+    pub async fn set_config_option(
+        &self,
+        session_id: &str,
+        config_id: &str,
+        value: &str,
+    ) -> Result<Vec<ConfigOption>, AcpError> {
+        let result = self
+            .request(
+                "session/set_config_option",
+                json!({ "sessionId": session_id, "configId": config_id, "value": value }),
+            )
+            .await?;
+        Ok(parse_config_options(result.get("configOptions")))
     }
 
     pub async fn set_mode(&self, session_id: &str, mode_id: &str) -> Result<(), AcpError> {

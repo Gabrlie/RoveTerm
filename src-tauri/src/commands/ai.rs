@@ -10,7 +10,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rove_ai::acp::{self, McpServer};
 use rove_ai::assistant::{Assistant, HostMeta};
-use rove_ai::audit::Auditor;
+use rove_ai::audit::{self, Auditor, SessionInfo};
 use rove_ai::backend::{AgentBackend, AgentRef, BackendError};
 use rove_ai::detect;
 use rove_ai::host::{ConnectionSource, Host, LocalHost, RemoteHost};
@@ -104,6 +104,7 @@ fn backend_error(error: BackendError) -> CommandError {
         BackendError::Acp(error) => acp_error(error),
         BackendError::Model(message) => CommandError::new("ai.model", message),
         BackendError::Busy => CommandError::new("ai.busy", "a turn is already running"),
+        BackendError::Invalid(message) => CommandError::new("input.invalid", message),
     }
 }
 
@@ -138,7 +139,7 @@ fn agent_ref(text: &str) -> Result<AgentRef, CommandError> {
 }
 
 /// Where the AI session works.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AiContext {
     Local,
@@ -182,6 +183,10 @@ pub struct AiStarted {
     pub agent_version: Option<String>,
     pub modes: Vec<acp::SessionMode>,
     pub current_mode: Option<String>,
+    /// Settings of the session the user can change (model, reasoning effort, …).
+    pub config_options: Vec<acp::ConfigOption>,
+    /// An earlier session was continued; for an ACP agent, whether it reopened its own session.
+    pub resumed: bool,
 }
 
 /// How an ACP agent runs.
@@ -469,15 +474,49 @@ pub async fn ai_start(
     context: AiContext,
     agent: String,
     terminal: Option<String>,
+    resume: Option<String>,
 ) -> Result<AiStarted, CommandError> {
-    let agent = agent_ref(&agent)?;
+    let agent_text = agent;
+    let agent = agent_ref(&agent_text)?;
     state.ensure_unlocked().await?;
     let prefs = state.vault.preferences()?;
     let (host, meta, cwd) = host_of(state.inner(), &context)?;
     std::fs::create_dir_all(&cwd)
         .map_err(|error| CommandError::new("app.io", error.to_string()))?;
 
-    let id = format!("ai-{}", uuid::Uuid::now_v7());
+    // Resuming continues the same session id, with the agent it had.
+    let earlier = match &resume {
+        Some(id) => {
+            check_session_id(id)?;
+            if state.ai.entries.lock().await.contains_key(id) {
+                return Err(CommandError::new("ai.busy", "the conversation is open"));
+            }
+            let records = session_records(state.inner(), id.clone()).await?;
+            let info = records
+                .iter()
+                .rev()
+                .find(|record| record.kind == audit::KIND_STARTED)
+                .and_then(|record| {
+                    serde_json::from_value::<SessionInfo>(record.payload.clone()).ok()
+                })
+                .ok_or_else(|| CommandError::new("input.invalid", "no such conversation"))?;
+            if info.agent_ref.as_deref() != Some(agent_text.as_str()) {
+                return Err(CommandError::new(
+                    "input.invalid",
+                    "the conversation was with another agent",
+                ));
+            }
+            let titled = records
+                .iter()
+                .any(|record| record.kind == audit::KIND_RENAMED);
+            Some((id.clone(), info, records, titled))
+        }
+        None => None,
+    };
+    let id = earlier.as_ref().map_or_else(
+        || format!("ai-{}", uuid::Uuid::now_v7()),
+        |(id, ..)| id.clone(),
+    );
     let auditor = Arc::new(Auditor::new(
         {
             let recorder = state.ai.recorder.clone();
@@ -486,6 +525,9 @@ pub async fn ai_start(
         id.clone(),
         host.label(),
     ));
+    if earlier.as_ref().is_some_and(|(.., titled)| *titled) {
+        auditor.set_titled();
+    }
     let sink = {
         let app = app.clone();
         let auditor = auditor.clone();
@@ -515,6 +557,7 @@ pub async fn ai_start(
         }));
     }
 
+    let mut agent_session = None;
     let (backend, mcp, started): (Arc<dyn AgentBackend>, _, AiStarted) = match agent {
         AgentRef::Builtin(provider_id) => {
             let provider = prefs
@@ -529,7 +572,14 @@ pub async fn ai_start(
                 .unwrap_or_default();
             let client = Client::new(endpoint(provider), &key, MODEL_IDLE)
                 .map_err(|error| CommandError::new("ai.model", error.to_string()))?;
-            let assistant = Arc::new(Assistant::new(client, session, &meta));
+            let assistant = Assistant::new(client, session, &meta).with_models(&provider.models);
+            if let Some((_, _, records, _)) = &earlier {
+                let records: Vec<(String, serde_json::Value)> = records
+                    .iter()
+                    .map(|record| (record.kind.clone(), record.payload.clone()))
+                    .collect();
+                assistant.seed(audit::transcript(&records)).await;
+            }
             let started = AiStarted {
                 id: id.clone(),
                 host: host.label(),
@@ -537,8 +587,10 @@ pub async fn ai_start(
                 agent_version: Some(provider.model.clone()),
                 modes: Vec::new(),
                 current_mode: None,
+                config_options: assistant.config_options(),
+                resumed: earlier.is_some(),
             };
-            (assistant as Arc<dyn AgentBackend>, None, started)
+            (Arc::new(assistant) as Arc<dyn AgentBackend>, None, started)
         }
         AgentRef::Acp(agent_id) => {
             let vault = state.vault.clone();
@@ -603,6 +655,9 @@ pub async fn ai_start(
                     .iter()
                     .map(|mode| (*mode).to_owned())
                     .collect(),
+                resume: earlier
+                    .as_ref()
+                    .and_then(|(_, info, ..)| info.agent_session.clone()),
             };
             // Serving first: the agent starts the MCP bridge before its session exists.
             let mcp = listener.serve(session.clone());
@@ -621,7 +676,15 @@ pub async fn ai_start(
                 agent_version: info.agent_version,
                 modes: info.modes,
                 current_mode: info.current_mode,
+                // Settings the user switches here; the mode is RoveTerm's approval mode.
+                config_options: info
+                    .config_options
+                    .into_iter()
+                    .filter(|option| option.category.as_deref() != Some("mode"))
+                    .collect(),
+                resumed: info.resumed,
             };
+            agent_session = info.agent_session;
             (
                 Arc::new(running) as Arc<dyn AgentBackend>,
                 Some(mcp),
@@ -633,11 +696,15 @@ pub async fn ai_start(
         .ok()
         .and_then(|mode| mode.as_str().map(str::to_owned))
         .unwrap_or_default();
-    auditor.started(
-        started.agent.as_deref(),
-        started.agent_version.as_deref(),
-        &mode_value,
-    );
+    auditor.started(&SessionInfo {
+        agent: started.agent.clone(),
+        agent_version: started.agent_version.clone(),
+        mode: mode_value,
+        agent_ref: Some(agent_text),
+        context: serde_json::to_value(&context).ok(),
+        agent_session,
+        resumed: earlier.is_some(),
+    });
     state.ai.entries.lock().await.insert(
         id,
         Arc::new(Entry {
@@ -730,10 +797,16 @@ pub async fn ai_stop(state: State<'_, AppState>, id: String) -> Result<(), Comma
 #[derive(Debug, Serialize)]
 pub struct AiSessionSummary {
     pub id: String,
-    /// Start time, Unix milliseconds.
+    /// The latest start, Unix milliseconds.
     pub started: i64,
     pub host: Option<String>,
     pub agent: Option<String>,
+    /// The title given by the user, or taken from the first prompt.
+    pub title: Option<String>,
+    /// The agent, to resume with (absent for sessions recorded before resuming existed).
+    pub agent_ref: Option<String>,
+    /// The host context, to resume on.
+    pub context: Option<serde_json::Value>,
 }
 
 /// One audit record of an AI session.
@@ -749,53 +822,19 @@ const MAX_SESSIONS: u32 = 100;
 /// Most records read of one session.
 const MAX_RECORDS: u32 = 5000;
 
-/// Lists recent AI sessions, newest first.
-#[tauri::command]
-pub async fn ai_sessions(
-    state: State<'_, AppState>,
-) -> Result<Vec<AiSessionSummary>, CommandError> {
-    let journal = state.journal.clone();
-    let records = tauri::async_runtime::spawn_blocking(move || {
-        journal.read(&rove_journal::JournalQuery {
-            kind: Some(rove_ai::audit::KIND_STARTED.to_owned()),
-            limit: Some(MAX_SESSIONS),
-            newest_first: true,
-            ..rove_journal::JournalQuery::default()
-        })
-    })
-    .await
-    .map_err(|error| CommandError::new("app.task", error.to_string()))?
-    .map_err(|error| CommandError::new("journal.read", error.to_string()))?;
-    Ok(records
-        .into_iter()
-        .filter_map(|record| {
-            Some(AiSessionSummary {
-                id: record.session_id?,
-                started: record.ts,
-                host: record
-                    .payload
-                    .get("host")
-                    .and_then(|value| value.as_str())
-                    .map(str::to_owned),
-                agent: record
-                    .payload
-                    .get("agent")
-                    .and_then(|value| value.as_str())
-                    .map(str::to_owned),
-            })
-        })
-        .collect())
-}
-
-/// The audit records of AI session `id`, oldest first.
-#[tauri::command]
-pub async fn ai_records(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<Vec<AiRecord>, CommandError> {
+/// Refuses anything but an AI session id.
+fn check_session_id(id: &str) -> Result<(), CommandError> {
     if !id.starts_with("ai-") || id.len() > 64 {
         return Err(CommandError::new("input.invalid", "not an AI session id"));
     }
+    Ok(())
+}
+
+/// The `ai/*` records of session `id`, oldest first.
+async fn session_records(
+    state: &AppState,
+    id: String,
+) -> Result<Vec<rove_journal::JournalRecord>, CommandError> {
     let journal = state.journal.clone();
     let records = tauri::async_runtime::spawn_blocking(move || {
         journal.read(&rove_journal::JournalQuery {
@@ -810,10 +849,146 @@ pub async fn ai_records(
     Ok(records
         .into_iter()
         .filter(|record| record.kind.starts_with("ai/"))
+        .collect())
+}
+
+/// The newest records of `kind`.
+async fn newest(
+    state: &AppState,
+    kind: &str,
+    limit: u32,
+) -> Result<Vec<rove_journal::JournalRecord>, CommandError> {
+    let journal = state.journal.clone();
+    let kind = kind.to_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        journal.read(&rove_journal::JournalQuery {
+            kind: Some(kind),
+            limit: Some(limit),
+            newest_first: true,
+            ..rove_journal::JournalQuery::default()
+        })
+    })
+    .await
+    .map_err(|error| CommandError::new("app.task", error.to_string()))?
+    .map_err(|error| CommandError::new("journal.read", error.to_string()))
+}
+
+/// Lists recent AI sessions, newest first; a resumed session is listed once, by its latest start.
+#[tauri::command]
+pub async fn ai_sessions(
+    state: State<'_, AppState>,
+) -> Result<Vec<AiSessionSummary>, CommandError> {
+    let starts = newest(state.inner(), audit::KIND_STARTED, MAX_SESSIONS * 4).await?;
+    let names = newest(state.inner(), audit::KIND_RENAMED, MAX_SESSIONS * 20).await?;
+    let mut titles: HashMap<String, String> = HashMap::new();
+    for record in names {
+        let (Some(id), Some(title)) = (
+            record.session_id,
+            record.payload.get("title").and_then(|value| value.as_str()),
+        ) else {
+            continue;
+        };
+        // Newest first: the first title seen is the current one.
+        titles.entry(id).or_insert_with(|| title.to_owned());
+    }
+    let mut seen = std::collections::HashSet::new();
+    Ok(starts
+        .into_iter()
+        .filter_map(|record| {
+            let id = record.session_id?;
+            if !seen.insert(id.clone()) {
+                return None;
+            }
+            let text = |key: &str| {
+                record
+                    .payload
+                    .get(key)
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned)
+            };
+            Some(AiSessionSummary {
+                title: titles.remove(&id),
+                started: record.ts,
+                host: text("host"),
+                agent: text("agent"),
+                agent_ref: text("agent_ref"),
+                context: record
+                    .payload
+                    .get("context")
+                    .filter(|value| !value.is_null())
+                    .cloned(),
+                id,
+            })
+        })
+        .take(MAX_SESSIONS as usize)
+        .collect())
+}
+
+/// The audit records of AI session `id`, oldest first.
+#[tauri::command]
+pub async fn ai_records(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Vec<AiRecord>, CommandError> {
+    check_session_id(&id)?;
+    Ok(session_records(state.inner(), id)
+        .await?
+        .into_iter()
         .map(|record| AiRecord {
             ts: record.ts,
             kind: record.kind,
             payload: record.payload,
         })
+        .collect())
+}
+
+/// Names AI session `id` (running or not).
+#[tauri::command]
+pub async fn ai_rename(
+    state: State<'_, AppState>,
+    id: String,
+    title: String,
+) -> Result<String, CommandError> {
+    check_session_id(&id)?;
+    let title = title.trim().to_owned();
+    if title.is_empty()
+        || title.chars().count() > audit::MAX_TITLE
+        || title.chars().any(char::is_control)
+    {
+        return Err(CommandError::new(
+            "input.invalid",
+            "the title is empty or too long",
+        ));
+    }
+    if let Ok(entry) = state.ai.get(&id).await {
+        entry.auditor.set_titled();
+    }
+    state.ai.recorder.record(audit::renamed(&id, &title, false));
+    Ok(title)
+}
+
+/// Sets setting `option` of session `id` (such as `model`) to `value`; returns the settings as
+/// they now are.
+#[tauri::command]
+pub async fn ai_set_option(
+    state: State<'_, AppState>,
+    id: String,
+    option: String,
+    value: String,
+) -> Result<Vec<acp::ConfigOption>, CommandError> {
+    if option.is_empty() || option.len() > 100 || value.is_empty() || value.len() > 500 {
+        return Err(CommandError::new("input.invalid", "not a setting"));
+    }
+    let options = state
+        .ai
+        .get(&id)
+        .await?
+        .backend
+        .set_config_option(&option, &value)
+        .await
+        .map_err(backend_error)?;
+    Ok(options
+        .into_iter()
+        .filter(|option| option.category.as_deref() != Some("mode"))
         .collect())
 }

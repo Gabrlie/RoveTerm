@@ -66,7 +66,11 @@ pub struct ProviderPrefs {
     pub format: ProviderFormat,
     /// Base URL including the API version path, such as `https://api.openai.com/v1`.
     pub base_url: String,
+    /// The model new conversations start with.
     pub model: String,
+    /// Other models of the provider to switch to in a conversation.
+    #[serde(default)]
+    pub models: Vec<String>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
     #[serde(default)]
@@ -587,12 +591,30 @@ impl ProviderPrefs {
         {
             return invalid("the address must be an http or https URL");
         }
-        if self.model.is_empty()
-            || self.model.len() > 200
-            || self.model.chars().any(char::is_control)
-        {
+        let bad_model = |model: &str| {
+            model.is_empty() || model.len() > 200 || model.chars().any(char::is_control)
+        };
+        if bad_model(&self.model) {
             return invalid("the model is not valid");
         }
+        // The default model is not repeated; the rest keep their order without repeats.
+        let mut seen = vec![self.model.clone()];
+        let mut models = Vec::new();
+        for model in &self.models {
+            let model = model.trim();
+            if model.is_empty() || seen.iter().any(|known| known == model) {
+                continue;
+            }
+            if bad_model(model) {
+                return invalid("a model is not valid");
+            }
+            seen.push(model.to_owned());
+            models.push(model.to_owned());
+        }
+        if models.len() > 32 {
+            return invalid("at most 32 more models");
+        }
+        self.models = models;
         if self
             .max_tokens
             .is_some_and(|max| max == 0 || max > 1_000_000)

@@ -8,7 +8,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::acp::SessionUpdate;
+use crate::acp::{ConfigChoice, ConfigOption, SessionUpdate};
 use crate::llm::{Client, Delta, LlmError, Message, ToolSpec};
 use crate::session::{AiEvent, AiSession};
 use crate::tools;
@@ -62,11 +62,16 @@ pub enum AssistantError {
     Llm(#[from] LlmError),
     #[error("a turn is already running")]
     Busy,
+    #[error("the model {0} is not offered")]
+    UnknownModel(String),
 }
 
 /// One conversation with a model about the session's host.
 pub struct Assistant {
-    client: Client,
+    /// Replaced when the user picks another model; a running turn uses it from its next step.
+    client: std::sync::RwLock<Client>,
+    /// The models the user may switch between (the provider's).
+    models: Vec<String>,
     session: Arc<AiSession>,
     system: String,
     tools: Vec<ToolSpec>,
@@ -91,8 +96,10 @@ impl Assistant {
                     .collect()
             })
             .unwrap_or_default();
+        let models = vec![client.endpoint().model.clone()];
         Self {
-            client,
+            client: std::sync::RwLock::new(client),
+            models,
             session,
             system: system_prompt(meta),
             tools,
@@ -104,6 +111,63 @@ impl Assistant {
 
     pub fn session(&self) -> &Arc<AiSession> {
         &self.session
+    }
+
+    /// Offers `models` to switch between; the current model stays first.
+    #[must_use]
+    pub fn with_models(mut self, models: &[String]) -> Self {
+        for model in models {
+            if !self.models.contains(model) {
+                self.models.push(model.clone());
+            }
+        }
+        self
+    }
+
+    /// Starts from an earlier conversation (resuming a session); only before the first turn.
+    pub async fn seed(&self, earlier: Vec<Message>) {
+        let mut history = self.history.lock().await;
+        if history.is_empty() {
+            *history = earlier;
+        }
+    }
+
+    fn model(&self) -> String {
+        self.client
+            .read()
+            .map(|client| client.endpoint().model.clone())
+            .unwrap_or_default()
+    }
+
+    /// The model to answer with, as a session setting.
+    pub fn config_options(&self) -> Vec<ConfigOption> {
+        vec![ConfigOption {
+            id: "model".into(),
+            name: "Model".into(),
+            category: Some("model".into()),
+            current: self.model(),
+            choices: self
+                .models
+                .iter()
+                .map(|model| ConfigChoice {
+                    value: model.clone(),
+                    name: model.clone(),
+                    description: None,
+                })
+                .collect(),
+        }]
+    }
+
+    /// Answers with `model` (one of the offered models) from the next request on; the
+    /// conversation carries over.
+    pub fn set_model(&self, model: &str) -> Result<(), AssistantError> {
+        if !self.models.iter().any(|offered| offered == model) {
+            return Err(AssistantError::UnknownModel(model.to_owned()));
+        }
+        if let Ok(mut client) = self.client.write() {
+            *client = client.with_model(model);
+        }
+        Ok(())
     }
 
     /// Stops the running turn: the model request is dropped and waiting approvals are refused.
@@ -157,8 +221,12 @@ impl Assistant {
                 };
                 session.emit(AiEvent::Update { update });
             };
-            let reply = self
+            let client = self
                 .client
+                .read()
+                .map_err(|_| AssistantError::Busy)?
+                .clone();
+            let reply = client
                 .complete(&self.system, &history, &self.tools, &mut on_delta)
                 .await?;
             let calls = reply.tool_calls.clone();

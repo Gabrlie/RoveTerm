@@ -125,6 +125,7 @@ pub enum LlmError {
 }
 
 /// A client for one endpoint.
+#[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
     endpoint: Endpoint,
@@ -178,6 +179,13 @@ impl Client {
 
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
+    }
+
+    /// The same client asking `model` instead.
+    pub fn with_model(&self, model: &str) -> Self {
+        let mut client = self.clone();
+        model.clone_into(&mut client.endpoint.model);
+        client
     }
 
     /// Removes the key from text that may quote the request.

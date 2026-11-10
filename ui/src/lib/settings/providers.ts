@@ -45,6 +45,7 @@ export function fromPreset(preset: ProviderPreset, taken: readonly string[]): Pr
     format: preset.format,
     base_url: preset.base_url,
     model: '',
+    models: [],
     max_tokens: null,
     effort: null,
   };

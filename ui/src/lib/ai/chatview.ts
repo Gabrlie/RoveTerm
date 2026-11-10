@@ -1,12 +1,19 @@
 // What an AI conversation shows: its items as the backend reported them, and how they are laid
 // out — an approval and the result of the operation it allowed are one row, and operations that
 // ran by themselves (read-only, without approval) fold into one line when several follow each other.
-import type { AiAnswer, AiOperation, AiOutcome, Assessment, ToolCall } from '../ipc';
+import type { AiAnswer, AiOperation, AiOutcome, AiRecord, Assessment, Risk, ToolCall } from '../ipc';
 
 /** Text that reports a lost or refused connection to the model service (as Codex warns while it
  *  retries, or as a turn fails), rather than a reply. */
 export function connectionProblem(text: string): boolean {
   return /stream disconnected|falling back from websockets|reconnecting\b|connection refused|actively refused|积极拒绝|os error (10061|10060|111|61)\b|econnrefused|error sending request|failed to connect|connection reset|timed out waiting/i.test(text);
+}
+
+/** A title from a question: its first line, at most 60 characters. */
+export function titleOf(text: string): string {
+  const line = text.split('\n').map((part) => part.trim()).find((part) => part.length > 0) ?? '';
+  const chars = [...line];
+  return chars.length > 60 ? `${chars.slice(0, 60).join('')}…` : line;
 }
 
 /** The command line in an agent tool's raw input: `{"command": "…"}`, or a word list where
@@ -134,4 +141,118 @@ export function outcomeState(outcome: AiOutcome | null): 'running' | 'done' | 'f
   if (outcome.result === 'failed') return 'failed';
   if (outcome.result === 'command' && outcome.output.exit_code !== 0) return 'failed';
   return 'done';
+}
+
+function assessed(risk: unknown): Assessment {
+  const level: Risk = risk === 'modify' || risk === 'dangerous' ? risk : 'read_only';
+  return { risk: level, programs: [], opaque: false, reasons: [] };
+}
+
+/** An outcome as the journal keeps it (a command's output flattened) as the live one. */
+function outcomeOf(value: unknown): AiOutcome {
+  const outcome = (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>;
+  if (outcome.result === 'command') {
+    const text = (key: string): string => (typeof outcome[key] === 'string' ? (outcome[key] as string) : '');
+    return {
+      result: 'command',
+      output: { stdout: text('stdout'), stderr: text('stderr'), exit_code: typeof outcome.exit_code === 'number' ? outcome.exit_code : null, truncated: outcome.truncated === true },
+    };
+  }
+  return outcome as unknown as AiOutcome;
+}
+
+/** The conversation of an earlier session from its journal records (oldest first), to show it
+ *  again when it is resumed. Approvals left unanswered count as withdrawn. */
+export function itemsFromRecords(records: AiRecord[]): ChatItem[] {
+  const items: ChatItem[] = [];
+  const text = (record: AiRecord): string => (typeof record.payload.text === 'string' ? record.payload.text : '');
+  for (const record of records) {
+    const payload = record.payload;
+    switch (record.kind) {
+      case 'ai/prompt':
+        items.push({ kind: 'user', text: text(record) });
+        break;
+      case 'ai/message':
+        // Warnings an agent passed on while reconnecting were recorded as its reply.
+        if (connectionProblem(text(record)) && text(record).length < 4000) items.push({ kind: 'connection', detail: text(record), retries: 1, state: 'retrying' });
+        else items.push({ kind: 'agent', text: text(record), messageId: null });
+        break;
+      case 'ai/thought':
+        items.push({ kind: 'thought', text: text(record) });
+        break;
+      case 'ai/approval':
+        if ('asked' in payload) {
+          items.push({
+            kind: 'approval',
+            requestId: Number(payload.request_id),
+            operation: payload.asked as AiOperation,
+            assessment: { ...assessed(payload.risk), reasons: Array.isArray(payload.reasons) ? (payload.reasons as Assessment['reasons']) : [] },
+            rememberable: false,
+            agentTool: payload.agent_tool === true,
+            answer: undefined,
+            outcome: null,
+          });
+        } else {
+          const asked = items.find((item) => item.kind === 'approval' && item.requestId === Number(payload.request_id));
+          if (asked?.kind === 'approval') asked.answer = (payload.answer as AiAnswer | null) ?? null;
+        }
+        break;
+      case 'ai/command':
+      case 'ai/file_read':
+      case 'ai/file_write':
+      case 'ai/list_dir':
+      case 'ai/terminal_read':
+      case 'ai/tool_call': {
+        if (!('operation' in payload)) {
+          // One of the agent's own tools, as it reported it.
+          if (record.kind === 'ai/tool_call') {
+            const call: ToolCall = {
+              id: String(payload.id ?? ''),
+              title: typeof payload.title === 'string' ? payload.title : null,
+              kind: typeof payload.kind === 'string' ? payload.kind : null,
+              status: typeof payload.status === 'string' ? payload.status : null,
+              content: [],
+              locations: Array.isArray(payload.locations) ? (payload.locations as string[]) : [],
+              raw_input: typeof payload.input === 'string' ? safeJson(payload.input) : null,
+            };
+            items.push({ kind: 'tool', call });
+          }
+          break;
+        }
+        const operation = payload.operation as AiOperation;
+        const outcome = outcomeOf(payload.outcome);
+        const approval = approvalFor(items, operation);
+        if (approval) approval.outcome = outcome;
+        else if (operation.op !== 'agent_tool') items.push({ kind: 'operation', operation, assessment: assessed(payload.risk), approved: payload.approved === true, outcome });
+        break;
+      }
+      case 'ai/turn_ended': {
+        const reason = typeof payload.stop_reason === 'string' ? payload.stop_reason : '';
+        if (!reason.startsWith('error: ')) break;
+        const detail = reason.slice('error: '.length);
+        const open = [...items].reverse().find((item) => item.kind === 'connection');
+        if (connectionProblem(detail)) {
+          if (open?.kind === 'connection' && open.state === 'retrying') {
+            open.state = 'failed';
+            open.detail = detail;
+          } else {
+            items.push({ kind: 'connection', detail, retries: 0, state: 'failed' });
+          }
+        } else {
+          items.push({ kind: 'notice', text: detail, code: null });
+        }
+        break;
+      }
+    }
+  }
+  for (const item of items) if (item.kind === 'approval' && item.answer === undefined) item.answer = null;
+  return items;
+}
+
+function safeJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }

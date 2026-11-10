@@ -101,10 +101,12 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 | `ai_agents()` | 本机可用的 Agent 与默认项：每个服务商对应一个内置助手（`builtin:<id>`，附模型），然后是检测到的 ACP 智能体与按命令添加的智能体（`acp:<id>`，附运行的程序、是否经 npx）；各项是否已存 key、是否启用（`enabled`，用户关闭的检测项仍列出，供设置页重新打开，`ai_start` 只启动启用的）、是否按命令添加（`custom`） |
 | `ai_set_key(agent, key)` | 密封保存或删除某个 Agent 的 API key |
 | `ai_provider_test(provider, key)` | 用一次最小请求检查服务商的地址、模型和 key（未给出时用已保存的），返回模型的回复 |
-| `ai_start(context, agent, terminal)` | 在 `local`、已保存主机或快速连接上启动 `agent`；内置助手直接构造 `Assistant`，ACP 智能体按检测结果启动并附带内置 MCP server；`terminal` 为用户在该主机的终端会话，供 `terminal_snapshot` 读取 |
+| `ai_start(context, agent, terminal, resume)` | 在 `local`、已保存主机或快速连接上启动 `agent`；内置助手直接构造 `Assistant`，ACP 智能体按检测结果启动并附带内置 MCP server；`terminal` 为用户在该主机的终端会话，供 `terminal_snapshot` 读取。返回会话设置（`config_options`，见下文）。`resume` 为之前的会话 id 时继续那段对话：须是同一 Agent、当前未打开，沿用同一 id |
+| `ai_set_option(id, option, value)` | 修改会话设置（如 `model`），返回修改后的全部设置 |
+| `ai_rename(id, title)` | 给会话起名（1–120 个字符，运行中或已结束均可），写入 `ai/renamed` 记录 |
 | `ai_prompt(id, text)` | 发出提示并等待回合结束，返回结束原因 |
 | `ai_cancel` / `ai_answer` / `ai_set_mode` / `ai_stop` | 取消回合、回答审批、切换审批模式、结束会话 |
-| `ai_sessions()` / `ai_records(id)` | 从 Journal 读出最近 100 个 AI 会话，以及某个会话的全部 `ai/*` 记录（最多 5000 条），供审计回看 |
+| `ai_sessions()` / `ai_records(id)` | 从 Journal 读出最近 100 个 AI 会话（同一 id 继续过的只列一次，按最近一次开始；附标题、`agent_ref` 与主机上下文），以及某个会话的全部 `ai/*` 记录（最多 5000 条），供审计回看与继续对话 |
 
 启动时：
 
@@ -114,6 +116,12 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 - 内置 MCP server 以应用自身的可执行文件加 `--mcp-bridge` 交给 Agent，并在启动 Agent 之前就开始接受桥接连接：Agent 在 `session/new` 返回前就会启动 MCP server 并等待它应答。
 
 应用退出时结束所有 AI 会话。
+
+会话设置与继续对话：
+
+- 会话设置采用 ACP 的 session config options（`configOptions`、`session/set_config_option`、`config_option_update` 通知），只保留单选项，分组的选项展平；类别为 `mode` 的项不交给界面，审批由 RoveTerm 的模式管理。Codex 以此提供模型与推理强度。内置助手提供一个 `model` 设置，选项为服务商的默认模型加 `models`；切换后从下一次请求起生效，对话历史保留。
+- `ai/session_started` 记录 `SessionInfo`：Agent 名称与版本、审批模式、`agent_ref`、主机上下文、Agent 自己的会话 id、是否为继续。会话的第一条提示写一条自动的 `ai/renamed`（第一行，最多 60 个字符），用户改名再写一条，最新的为准；继续时已有标题则不再自动命名。
+- 继续 ACP 会话：Agent 声明 `loadSession` 能力时用 `session/load` 重开它自己的会话，期间 Agent 回放的旧对话不再上报（界面从 Journal 还原）；重开失败则开新会话。继续内置助手：用 `audit::transcript` 从记录还原提示与回复（执行过的操作以一行说明附在回复中，不含工具输出）作为历史。
 
 ## 模型客户端
 

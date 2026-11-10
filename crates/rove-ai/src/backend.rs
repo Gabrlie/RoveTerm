@@ -7,6 +7,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use crate::acp::ConfigOption;
 use crate::assistant::{Assistant, AssistantError};
 use crate::runner::Running;
 use crate::session::AiSession;
@@ -31,6 +32,9 @@ pub enum BackendError {
     Model(String),
     #[error("a turn is already running")]
     Busy,
+    /// A setting or value the agent does not offer.
+    #[error("{0}")]
+    Invalid(String),
 }
 
 impl From<AssistantError> for BackendError {
@@ -38,6 +42,7 @@ impl From<AssistantError> for BackendError {
         match error {
             AssistantError::Busy => Self::Busy,
             AssistantError::Llm(error) => Self::Model(error.to_string()),
+            AssistantError::UnknownModel(_) => Self::Invalid(error.to_string()),
         }
     }
 }
@@ -52,6 +57,12 @@ pub trait AgentBackend: Send + Sync {
     async fn stop(&self);
     /// The session the agent works through.
     fn session(&self) -> &Arc<AiSession>;
+    /// Sets one of the session's settings (such as `model`); returns them all as they now are.
+    async fn set_config_option(
+        &self,
+        id: &str,
+        value: &str,
+    ) -> Result<Vec<ConfigOption>, BackendError>;
 }
 
 #[async_trait]
@@ -70,6 +81,14 @@ impl AgentBackend for Running {
 
     fn session(&self) -> &Arc<AiSession> {
         Running::session(self)
+    }
+
+    async fn set_config_option(
+        &self,
+        id: &str,
+        value: &str,
+    ) -> Result<Vec<ConfigOption>, BackendError> {
+        Ok(Running::set_config_option(self, id, value).await?)
     }
 }
 
@@ -90,5 +109,17 @@ impl AgentBackend for Assistant {
 
     fn session(&self) -> &Arc<AiSession> {
         Assistant::session(self)
+    }
+
+    async fn set_config_option(
+        &self,
+        id: &str,
+        value: &str,
+    ) -> Result<Vec<ConfigOption>, BackendError> {
+        if id != "model" {
+            return Err(BackendError::Invalid(format!("no setting {id}")));
+        }
+        self.set_model(value)?;
+        Ok(self.config_options())
     }
 }

@@ -26,7 +26,7 @@
   let dangerous = $state(prefs.value.ai.dangerous.join('\n'));
 
   /** The provider being added or edited, with the key typed for it. */
-  let editing = $state<{ original: string | null; draft: ProviderPrefs; key: string; hint: string; keyless: boolean } | null>(null);
+  let editing = $state<{ original: string | null; draft: ProviderPrefs; key: string; hint: string; keyless: boolean; others: string } | null>(null);
   let testing = $state(false);
   let testResult = $state<{ ok: boolean; text: string } | null>(null);
   let presetMenu = $state<{ x: number; y: number } | null>(null);
@@ -82,12 +82,12 @@
 
   function startAdding(preset: ProviderPreset): void {
     const draft = fromPreset(preset, providers.map((provider) => provider.id));
-    editing = { original: null, draft, key: '', hint: preset.modelHint, keyless: preset.keyless };
+    editing = { original: null, draft, key: '', hint: preset.modelHint, keyless: preset.keyless, others: '' };
     testResult = null;
   }
 
   function startEditing(provider: ProviderPrefs): void {
-    editing = { original: provider.id, draft: structuredClone($state.snapshot(provider)), key: '', hint: '', keyless: false };
+    editing = { original: provider.id, draft: structuredClone($state.snapshot(provider)), key: '', hint: '', keyless: false, others: provider.models.join(', ') };
     testResult = null;
   }
 
@@ -97,6 +97,10 @@
     draft.name = draft.name.trim();
     draft.base_url = draft.base_url.trim();
     draft.model = draft.model.trim();
+    draft.models = editing.others
+      .split(/[,\n]/)
+      .map((model) => model.trim())
+      .filter((model) => model.length > 0);
     await editPrefs((prefsDraft) => {
       const at = prefsDraft.ai.providers.findIndex((provider) => provider.id === original);
       if (at >= 0) prefsDraft.ai.providers[at] = draft;
@@ -199,7 +203,7 @@
 <div class="form-group">
   {#each providers as provider (provider.id)}
     <div class="form-row item">
-      <span class="form-label">{provider.name}<small class="mono">{provider.model} · {t(`ai.format.${provider.format}`)}{hasKey(`builtin:${provider.id}`) ? '' : ` · ${t('ai.noKey')}`}</small></span>
+      <span class="form-label">{provider.name}<small class="mono">{provider.model}{provider.models.length > 0 ? ` +${provider.models.length}` : ''} · {t(`ai.format.${provider.format}`)}{hasKey(`builtin:${provider.id}`) ? '' : ` · ${t('ai.noKey')}`}</small></span>
       <IconButton icon="edit" small label={t('ai.edit')} onclick={() => startEditing(provider)} />
       <IconButton icon="remove" small label={t('ai.remove')} onclick={() => void removeProvider(provider)} />
     </div>
@@ -224,6 +228,10 @@
       <div class="form-row">
         <span class="form-label">{t('ai.model')}</span>
         <input class="field mono" bind:value={editing.draft.model} spellcheck="false" placeholder={editing.hint ? t('ai.modelExample', { model: editing.hint }) : ''} aria-label={t('ai.model')} />
+      </div>
+      <div class="form-row">
+        <span class="form-label">{t('ai.otherModels')}<small>{t('ai.otherModelsHint')}</small></span>
+        <input class="field mono" bind:value={editing.others} spellcheck="false" aria-label={t('ai.otherModels')} />
       </div>
       <div class="form-row">
         <span class="form-label">{t('ai.effort')}<small>{t('ai.effortHint')}</small></span>

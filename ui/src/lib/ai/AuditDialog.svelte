@@ -3,22 +3,47 @@
   import { onMount } from 'svelte';
   import Dialog from '../ui/Dialog.svelte';
   import { errorText, t, type MessageKey } from '../i18n';
-  import { aiRecords, aiSessions, type AiSessionSummary } from '../ipc';
+  import { aiRecords, aiRename, aiSessions, type AiRecord, type AiSessionSummary } from '../ipc';
+  import IconButton from '../ui/IconButton.svelte';
   import { auditLine, type AuditLine } from './audit';
 
-  let { initial = null, onclose }: { initial?: string | null; onclose: () => void } = $props();
+  interface Props {
+    initial?: string | null;
+    onclose: () => void;
+    /** Continues a conversation in the panel. */
+    onresume?: (summary: AiSessionSummary, records: AiRecord[]) => void;
+  }
+
+  let { initial = null, onclose, onresume }: Props = $props();
+  let records = $state<AiRecord[]>([]);
+  /** The title being typed for the selected conversation. */
+  let renaming = $state<string | null>(null);
+
+  async function rename(): Promise<void> {
+    const session = current;
+    const title = renaming?.trim() ?? '';
+    renaming = null;
+    if (!session || !title || title === session.title) return;
+    try {
+      session.title = await aiRename(session.id, title);
+    } catch (caught) {
+      error = errorText(caught);
+    }
+  }
 
   let sessions = $state<AiSessionSummary[]>([]);
   // svelte-ignore state_referenced_locally
   let selected = $state<string | null>(initial);
   let lines = $state<{ ts: number; line: AuditLine }[]>([]);
   let error = $state('');
+  const current = $derived(sessions.find((session) => session.id === selected) ?? null);
 
   async function load(id: string): Promise<void> {
     selected = id;
     try {
-      const records = await aiRecords(id);
-      lines = records.flatMap((record) => {
+      const loaded = await aiRecords(id);
+      records = loaded;
+      lines = loaded.flatMap((record) => {
         const line = auditLine(record);
         return line ? [{ ts: record.ts, line }] : [];
       });
@@ -62,14 +87,29 @@
     <nav aria-label={t('ai.history')}>
       {#each sessions as session (session.id)}
         <button type="button" class:active={session.id === selected} onclick={() => void load(session.id)}>
-          <span class="host">{session.host ?? '–'}</span>
-          <small>{time(session.started)}{session.agent ? ` · ${session.agent}` : ''}</small>
+          <span class="host">{session.title ?? session.host ?? '–'}</span>
+          <small>{session.title && session.host ? `${session.host} · ` : ''}{time(session.started)}{session.agent ? ` · ${session.agent}` : ''}</small>
         </button>
       {:else}
         <p class="empty">{t('ai.historyEmpty')}</p>
       {/each}
     </nav>
     <div class="lines">
+      {#if current}
+        <div class="head">
+          {#if renaming !== null}
+            <!-- svelte-ignore a11y_autofocus -->
+            <input class="field" bind:value={renaming} autofocus maxlength="120" aria-label={t('ai.rename')} onkeydown={(event) => (event.key === 'Enter' ? void rename() : event.key === 'Escape' ? (renaming = null) : undefined)} onblur={() => void rename()} />
+          {:else}
+            <span class="head-title">{current.title ?? current.host ?? '–'}</span>
+            <IconButton icon="edit" small label={t('ai.rename')} onclick={() => (renaming = current?.title ?? '')} />
+          {/if}
+          <span class="spacer"></span>
+          {#if onresume}
+            <button type="button" class="secondary" disabled={!current.agent_ref || !current.context} title={current.agent_ref ? '' : t('ai.resumeUnavailable')} onclick={() => current && onresume?.(current, records)}>{t('ai.resume')}</button>
+          {/if}
+        </div>
+      {/if}
       {#if error}<p class="error">{error}</p>{/if}
       {#each lines as { ts, line }, index (index)}
         <div class="line {line.tone}">
@@ -144,6 +184,27 @@
     color: var(--fg-muted);
     font-size: var(--text-footnote);
   }
+  .head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) 0 var(--space-2);
+    box-shadow: inset 0 -1px 0 var(--separator);
+  }
+  .head-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+    font-size: var(--text-body);
+  }
+  .head .field {
+    flex: 1;
+  }
+  .spacer {
+    flex: 1;
+  }
   .lines {
     flex: 1;
     min-width: 0;
@@ -153,7 +214,7 @@
   }
   .line {
     display: grid;
-    grid-template-columns: 70px 110px 1fr;
+    grid-template-columns: max-content 100px 1fr;
     gap: var(--space-2);
     padding: var(--space-1) 0;
     box-shadow: inset 0 -1px 0 var(--separator);
