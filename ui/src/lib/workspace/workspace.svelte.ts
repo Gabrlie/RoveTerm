@@ -27,6 +27,8 @@ export interface PaneState {
   deferred: boolean;
   title: string;
   exited: ExitStatus | null;
+  /** When the session started (Unix milliseconds), for the status bar. */
+  connectedAt: number | null;
 }
 
 export type GroupId = string;
@@ -126,7 +128,7 @@ class Workspace {
 
   private createPane(target: PaneTarget, password: string | null = null, remember = false, passwordKind: PasswordKind = 'natural'): PaneId {
     const id = nextId('pane');
-    this.panes[id] = { id, target, password, passwordKind, remember, sessionId: null, failure: null, deferred: false, title: initialTitle(target), exited: null };
+    this.panes[id] = { id, target, password, passwordKind, remember, sessionId: null, failure: null, deferred: false, title: initialTitle(target), exited: null, connectedAt: null };
     return id;
   }
 
@@ -378,6 +380,7 @@ class Workspace {
     if (!state) return;
     state.sessionId = sessionId;
     state.password = null;
+    state.connectedAt = Date.now();
   }
 
   /** Drops one-shot credentials once a file pane has opened its session. */

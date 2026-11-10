@@ -18,6 +18,11 @@ class ForwardStatuses {
     }
   }
 
+  /** Number of running forwards of every host. */
+  get runningTotal(): number {
+    return Object.values(this.byId).filter((status) => status.state === 'running').length;
+  }
+
   /** Number of running forwards of `hostId`. */
   running(hostId: HostId): number {
     return Object.values(this.byId).filter((status) => status.host_id === hostId && status.state === 'running').length;

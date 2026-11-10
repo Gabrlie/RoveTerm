@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import TitleBar from './lib/layout/TitleBar.svelte';
   import ActivityRail from './lib/layout/ActivityRail.svelte';
+  import StatusBar from './lib/layout/StatusBar.svelte';
   import EditorGroups from './lib/layout/EditorGroups.svelte';
   import CommandPalette from './lib/ui/CommandPalette.svelte';
   import HostSidebar from './lib/hosts/HostSidebar.svelte';
@@ -437,6 +438,7 @@
   </div>
   <ActivityRail page={rightPage} {bottomOpen} remote={focusedRemote} onaction={run} />
   </div>
+  <StatusBar onaction={run} />
 </div>
 
 <Toaster />
@@ -506,8 +508,8 @@
     min-height: 0;
     display: flex;
     gap: var(--gap-panel);
-    /* The activity rail is the right edge, so no padding there. */
-    padding: 0 0 var(--gap-panel) var(--gap-panel);
+    /* The activity rail is the right edge and the status bar the bottom: no padding there. */
+    padding: 0 0 0 var(--gap-panel);
   }
   .main {
     flex: 1;

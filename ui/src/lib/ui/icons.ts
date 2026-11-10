@@ -59,7 +59,17 @@ import winClose from 'lucide-static/icons/x.svg?raw';
 import history from 'lucide-static/icons/history.svg?raw';
 import bot from 'lucide-static/icons/bot-message-square.svg?raw';
 import snippets from 'lucide-static/icons/scroll-text.svg?raw';
+import sun from 'lucide-static/icons/sun.svg?raw';
+import moon from 'lucide-static/icons/moon.svg?raw';
+import sunMoon from 'lucide-static/icons/sun-moon.svg?raw';
+import clock from 'lucide-static/icons/clock.svg?raw';
+import cloudCheck from 'lucide-static/icons/cloud-check.svg?raw';
 export const icons = {
+  sun,
+  moon,
+  sunMoon,
+  clock,
+  cloudCheck,
   bot,
   snippets,
   history,
