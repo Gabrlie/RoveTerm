@@ -206,10 +206,19 @@
     menu = { x: event.clientX, y: event.clientY, items };
   }
 
+  /** A click on empty space in the list clears the selection, as in a file manager. */
+  function clickBlank(event: MouseEvent): void {
+    if ((event.target as HTMLElement).closest('.entry')) return;
+    selected = new Set();
+    anchor = -1;
+  }
+
   /** Right-click on empty space in the list. */
   function listMenu(event: MouseEvent): void {
     event.preventDefault();
     if (!fsId) return;
+    selected = new Set();
+    anchor = -1;
     menu = {
       x: event.clientX,
       y: event.clientY,
@@ -480,7 +489,7 @@
     <span class="time">{t('files.modified')}</span>
     <span class="mode">{t('files.mode')}</span>
   </div>
-  <div class="list" tabindex="0" role="listbox" aria-multiselectable="true" aria-label={label} bind:this={list} onkeydown={onListKeydown} oncontextmenu={listMenu}>
+  <div class="list" tabindex="0" role="listbox" aria-multiselectable="true" aria-label={label} bind:this={list} onkeydown={onListKeydown} oncontextmenu={listMenu} onclick={clickBlank}>
     <!-- Connecting and the first listing both show the skeleton, so no empty list flashes in between. -->
     {#if loading && entries.length === 0}
       <FilesSkeleton />
