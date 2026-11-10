@@ -2,7 +2,7 @@
 //! found on the PATH a login shell would have (GUI apps on macOS and Linux start with a minimal
 //! one), or else runs through npx when Node.js is installed.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::Serialize;
 
@@ -170,7 +170,8 @@ fn compute_search_path() -> String {
 }
 
 /// `login`, then `current`, then common install directories under `/` and `home`, without repeats.
-fn merge(login: Option<&str>, current: &str, home: &Path) -> String {
+#[cfg(any(unix, test))]
+fn merge(login: Option<&str>, current: &str, home: &std::path::Path) -> String {
     let mut dirs: Vec<String> = Vec::new();
     let mut add = |dir: String| {
         if !dir.is_empty() && !dirs.contains(&dir) {
@@ -201,6 +202,8 @@ fn merge(login: Option<&str>, current: &str, home: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     fn tool(dir: &Path, name: &str) {
