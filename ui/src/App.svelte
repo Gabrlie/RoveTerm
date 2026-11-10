@@ -8,6 +8,7 @@
   import PasswordPrompt from './lib/hosts/PasswordPrompt.svelte';
   import SettingsDialog, { type SettingsSection } from './lib/settings/SettingsDialog.svelte';
   import ConfirmHost from './lib/ui/ConfirmHost.svelte';
+  import EditMenu from './lib/ui/EditMenu.svelte';
   import KeysDialog from './lib/keys/KeysDialog.svelte';
   import HomePage from './lib/home/HomePage.svelte';
   import RightPanel from './lib/panels/RightPanel.svelte';
@@ -436,6 +437,7 @@
 {/if}
 
 <ConfirmHost />
+<EditMenu />
 
 {#if settingsOpen}
   <SettingsDialog initial={settingsSection} onclose={() => (settingsOpen = false)} />
