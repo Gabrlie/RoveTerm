@@ -9,6 +9,7 @@ pub mod mcp;
 pub mod policy;
 pub mod risk;
 pub mod runner;
+pub mod screen;
 pub mod session;
 pub mod shell;
 

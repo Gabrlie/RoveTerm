@@ -185,7 +185,7 @@ async fn a_turn_goes_through_the_policy() {
     assert_eq!(agent.info().name.as_deref(), Some("fake"));
     let spec = AgentSpec {
         cwd: dir.path().to_path_buf(),
-        auth_method: Some("api-key".into()),
+        auth_methods: vec!["api-key".into()],
         preferred_modes: vec!["read-only".into()],
         ..AgentSpec::default()
     };

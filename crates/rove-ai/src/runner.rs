@@ -18,8 +18,9 @@ pub struct AgentSpec {
     pub env: Vec<(String, String)>,
     /// The agent's working directory; for a remote host, an empty scratch directory.
     pub cwd: PathBuf,
-    /// Sign-in method used when the agent asks for one.
-    pub auth_method: Option<String>,
+    /// Sign-in methods to use when the agent asks for one, most preferred first; the first the
+    /// agent offers is used.
+    pub auth_methods: Vec<String>,
     pub mcp: Vec<McpServer>,
     /// Agent modes to switch to, most preferred first (such as `read-only`, which makes the
     /// agent ask before its own tools change anything).
@@ -70,8 +71,14 @@ pub async fn open(
 ) -> Result<Running, AcpError> {
     let cwd = spec.cwd.to_string_lossy().into_owned();
     let created = match agent.new_session(&cwd, &spec.mcp).await {
-        Err(AcpError::AuthRequired(_)) if spec.auth_method.is_some() => {
-            let method = spec.auth_method.as_deref().unwrap_or_default();
+        Err(AcpError::AuthRequired(message)) => {
+            let offered = &agent.info().auth_methods;
+            let method = spec
+                .auth_methods
+                .iter()
+                .find(|wanted| offered.iter().any(|method| &method.id == *wanted))
+                .or(spec.auth_methods.first())
+                .ok_or(AcpError::AuthRequired(message))?;
             agent.authenticate(method).await?;
             agent.new_session(&cwd, &spec.mcp).await?
         }
@@ -129,7 +136,7 @@ impl Running {
     }
 
     /// Ends the session: running commands and the agent process.
-    pub async fn stop(self) {
+    pub async fn stop(&self) {
         self.session.withdraw_approvals().await;
         self.session.stop_jobs().await;
         self.agent.shutdown().await;

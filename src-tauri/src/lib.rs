@@ -55,7 +55,7 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = Runtime::boot_in(ctx.clone(), &profile, &profile::catalog())?;
     tracing::info!(profile = profile.name(), data_dir = %data_dir.display(), "runtime booted");
 
-    let state = AppState::new(runtime).map_err(|error| error.message)?;
+    let state = AppState::new(runtime, &data_dir).map_err(|error| error.message)?;
     match state.vault.device_preferences() {
         Ok(device) => {
             let transfers = state.transfers.clone();
@@ -108,6 +108,7 @@ fn shutdown(app: &tauri::AppHandle) {
     state.forwards.stop_all();
     state.fs_sessions.clear();
     tauri::async_runtime::block_on(async {
+        state.ai.stop_all().await;
         state.sessions.close_all().await;
         state.ssh.disconnect_all().await;
     });
@@ -121,7 +122,10 @@ fn shutdown(app: &tauri::AppHandle) {
 /// Runs the MCP bridge for an agent: connects stdin and stdout to the running app named by the
 /// environment. Returns the process exit code.
 pub fn mcp_bridge() -> i32 {
-    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
         Ok(runtime) => runtime,
         Err(error) => {
             eprintln!("roveterm --mcp-bridge: {error}");
@@ -201,6 +205,14 @@ pub fn run() {
             commands::snippets::snippet_create,
             commands::snippets::snippet_update,
             commands::snippets::snippet_delete,
+            commands::ai::ai_status,
+            commands::ai::ai_set_key,
+            commands::ai::ai_start,
+            commands::ai::ai_prompt,
+            commands::ai::ai_cancel,
+            commands::ai::ai_answer,
+            commands::ai::ai_set_mode,
+            commands::ai::ai_stop,
             commands::sync::sync_status,
             commands::sync::sync_connect,
             commands::sync::sync_probe,

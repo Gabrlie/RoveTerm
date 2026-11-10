@@ -34,6 +34,8 @@ pub struct AppState {
     /// Local PTY provider.
     #[cfg(desktop)]
     pub pty: Arc<rove_pty::LocalTerminals>,
+    /// Running AI sessions.
+    pub ai: crate::commands::ai::AiSessions,
     /// Held while a sync round runs, so rounds never overlap.
     pub sync_lock: tokio::sync::Mutex<()>,
     /// Plugin runtime and app-level registrations; taken on exit to unload plugins in order.
@@ -42,8 +44,11 @@ pub struct AppState {
 
 impl AppState {
     /// Resolves services from the booted runtime.
-    pub fn new(runtime: Runtime) -> Result<Self, CommandError> {
+    pub fn new(runtime: Runtime, data_dir: &std::path::Path) -> Result<Self, CommandError> {
         let ctx = runtime.context().clone();
+        let journal = ctx.require::<dyn rove_journal::JournalStore>()?;
+        let ai = crate::commands::ai::AiSessions::new(data_dir, journal.clone())
+            .map_err(|error| CommandError::new("app.io", error.to_string()))?;
         Ok(Self {
             sessions: ctx.require::<SessionManager>()?,
             vault: ctx.require::<Vault>()?,
@@ -53,7 +58,8 @@ impl AppState {
             fs_sessions: ctx.require::<FsSessions>()?,
             transfers: ctx.require::<TransferQueue>()?,
             local_fs: ctx.require::<LocalFs>()?,
-            journal: ctx.require::<dyn rove_journal::JournalStore>()?,
+            journal,
+            ai,
             #[cfg(desktop)]
             pty: ctx.require::<rove_pty::LocalTerminals>()?,
             sync_lock: tokio::sync::Mutex::new(()),

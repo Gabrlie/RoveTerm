@@ -276,7 +276,7 @@ impl Shared {
 /// A running agent.
 pub struct Agent {
     shared: Arc<Shared>,
-    child: Option<tokio::process::Child>,
+    child: std::sync::Mutex<Option<tokio::process::Child>>,
     info: AgentInfo,
 }
 
@@ -318,8 +318,10 @@ pub async fn spawn(
             tracing::debug!(target: "rove_ai::agent", "{}", truncate(&line, 2000));
         }
     });
-    let mut agent = connect(stdout, stdin, client).await?;
-    agent.child = Some(child);
+    let agent = connect(stdout, stdin, client).await?;
+    if let Ok(mut slot) = agent.child.lock() {
+        *slot = Some(child);
+    }
     Ok(agent)
 }
 
@@ -356,7 +358,7 @@ pub async fn connect(
     });
     let mut agent = Agent {
         shared,
-        child: None,
+        child: std::sync::Mutex::new(None),
         info: AgentInfo::default(),
     };
     agent.info = agent.initialize().await?;
@@ -910,9 +912,10 @@ impl Agent {
         self.shared.send(json!({ "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": session_id } }))
     }
 
-    /// Stops the agent process.
-    pub async fn shutdown(mut self) {
-        if let Some(mut child) = self.child.take() {
+    /// Stops the agent process; requests still waiting fail with [`AcpError::Closed`].
+    pub async fn shutdown(&self) {
+        let child = self.child.lock().ok().and_then(|mut slot| slot.take());
+        if let Some(mut child) = child {
             let _ = child.kill().await;
         }
     }
