@@ -1,0 +1,12 @@
+[package]
+name = "rove-ai"
+description = "AI agents for RoveTerm: ACP client, approval policy and host-bound tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

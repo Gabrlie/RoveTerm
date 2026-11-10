@@ -14,6 +14,7 @@ crates/      Rust 核心 crate，rove-<name>，每个 crate 负责一个 seam �
   rove-vault/     凭据加密存储
   rove-journal/   持久事件日志
   rove-sync/      端到端加密的多设备同步
+  rove-ai/        AI Agent：命令风险分级、审批策略、ACP 客户端
 src-tauri/   desktop / mobile profile 的应用外壳，只做 IPC 适配
 ui/          Svelte 5 + TypeScript + xterm.js 前端
 tools/       开发工具（devsshd 测试 SSH 服务器）

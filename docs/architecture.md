@@ -46,6 +46,7 @@ Profile 是一组启用的插件加一份 TOML 配置。随应用交付的 profi
 | [rove-vault](subsystems/vault.md) | 主机与凭据存储、字段级加密、设备主密钥 | `Vault`、`KeyCache` |
 | [rove-journal](subsystems/journal.md) | 持久事件日志 | `JournalStore` |
 | [rove-sync](subsystems/sync.md) | 端到端加密的多设备同步 | `SyncBackend`、`RecordStore`、`sync` |
+| [rove-ai](subsystems/ai.md) | AI Agent：命令风险分级、审批策略 | `Policy` |
 
 <a id="events"></a>
 
