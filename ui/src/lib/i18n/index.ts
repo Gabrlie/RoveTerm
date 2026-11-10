@@ -19,9 +19,11 @@ locale.messages = catalogs[pickLocale()] ?? en;
 
 export type { MessageKey };
 
-/** Formats `key`, replacing `{name}` placeholders with `params`. */
+/** Formats `key`, replacing `{name}` placeholders with `params`. A key built at run time that has
+ *  no message comes back as itself, so callers can fall back with `t(key) === key`. */
 export function t(key: MessageKey, params: Record<string, string | number> = {}): string {
-  const template = locale.messages[key] ?? en[key];
+  const template: string | undefined = locale.messages[key] ?? en[key];
+  if (template === undefined) return key;
   return template.replace(/\{(\w+)\}/g, (_, name: string) => String(params[name] ?? `{${name}}`));
 }
 
