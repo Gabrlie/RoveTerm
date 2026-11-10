@@ -4264,6 +4264,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rove-http"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "rustls",
+ "thiserror 2.0.21",
+ "webpki-roots",
+]
+
+[[package]]
 name = "rove-journal"
 version = "0.1.0"
 dependencies = [
@@ -4359,8 +4369,7 @@ dependencies = [
  "hkdf 0.12.4",
  "hmac 0.12.1",
  "quick-xml 0.42.0",
- "reqwest",
- "rustls",
+ "rove-http",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4370,7 +4379,6 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "webpki-roots",
  "zeroize",
 ]
 
