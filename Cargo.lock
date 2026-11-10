@@ -4230,8 +4230,10 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "devsshd",
+ "futures",
  "getrandom 0.3.4",
  "rove-fs",
+ "rove-http",
  "rove-journal",
  "rove-kernel",
  "rove-ssh",

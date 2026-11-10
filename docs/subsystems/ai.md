@@ -109,3 +109,17 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 - 内置 MCP server 以应用自身的可执行文件加 `--mcp-bridge` 交给 Agent，并在启动 Agent 之前就开始接受桥接连接：Agent 在 `session/new` 返回前就会启动 MCP server 并等待它应答。
 
 应用退出时结束所有 AI 会话。
+
+## 模型客户端
+
+内置助手不经外部程序，直接调用模型服务商（`llm::Client`）。服务商以 `Endpoint` 描述：格式、包含版本路径的基础地址（如 `https://api.openai.com/v1`、`https://api.anthropic.com/v1`、`http://localhost:11434/v1`）、模型、可选的 `max_tokens` 与推理强度。
+
+| 格式 | 路径 | 认证 | 流式事件 |
+|---|---|---|---|
+| `chat` | `/chat/completions` | `Authorization: Bearer` | `choices[0].delta` 的 `content`、`reasoning_content`、`tool_calls`（按 `index` 拼接参数），`[DONE]` 或 `finish_reason` 结束 |
+| `responses` | `/responses` | `Authorization: Bearer` | `response.output_text.delta`、`response.reasoning_summary_text.delta`、`response.output_item.done` 中的 `function_call`，`response.completed` 结束 |
+| `anthropic` | `/messages` | `x-api-key` 与 `anthropic-version` | 按内容块索引累积文本、思考（含签名）和 `tool_use` 的 `input_json_delta`，`message_stop` 结束 |
+
+对话以统一的 `Message`（用户、助手含工具调用、工具结果）传给客户端，由它转换成各格式的请求；Anthropic 的同一轮工具结果合并进一条用户消息，签名的思考块在下一轮原样回传。
+
+安全与限制：基础地址必须是 http(s)、不含凭据与查询；重定向只在同源内跟随，key 不会被带到别处；API key 只在请求头中，错误文本里出现的 key 替换为 `***`；单次回复最多 8 MiB；首包与两段之间超过空闲时限即超时；流没有正常结束视为错误。

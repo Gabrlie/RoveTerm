@@ -5,6 +5,7 @@
 pub mod acp;
 pub mod audit;
 pub mod host;
+pub mod llm;
 pub mod mcp;
 pub mod policy;
 pub mod risk;
