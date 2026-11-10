@@ -6,8 +6,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::acp::{self, AcpError, Agent, McpServer, SessionMode};
-use crate::host::Host;
-use crate::session::{AiSession, EventSink, SessionSettings};
+use crate::session::AiSession;
 
 /// How to run an agent.
 #[derive(Debug, Clone, Default)]
@@ -44,14 +43,10 @@ pub struct Running {
     started: Started,
 }
 
-/// Starts the agent of `spec` for a session on `host`.
-pub async fn start(
-    spec: &AgentSpec,
-    host: Arc<dyn Host>,
-    settings: SessionSettings,
-    sink: EventSink,
-) -> Result<Running, AcpError> {
-    let session = Arc::new(AiSession::new(host, settings, sink));
+/// Starts the agent of `spec` for `session`. Anything the agent connects to while starting (the
+/// built-in MCP server) must already be serving `session`: agents start their MCP servers before
+/// `session/new` returns.
+pub async fn start(spec: &AgentSpec, session: Arc<AiSession>) -> Result<Running, AcpError> {
     let agent = acp::spawn(
         &spec.program,
         &spec.args,

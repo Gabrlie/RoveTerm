@@ -105,6 +105,6 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 - 查找 Agent 用登录 shell 的 PATH（`$SHELL -ilc`，并补上 Homebrew、`~/.local/bin` 等常见目录），因为 macOS 与 Linux 的图形应用启动时 PATH 很短。
 - 登录方式按 `DevicePrefs.agent.auth`：用 API key 时以 `CODEX_API_KEY`、`OPENAI_API_KEY` 传入并优先选择 Agent 的 API key 登录方式，否则用 Agent 自己的账户登录（Codex 为 ChatGPT）。
 - 远程主机的会话以数据目录下的空目录 `ai-workspace` 为 Agent 的工作目录，本机会话以家目录为工作目录。
-- 内置 MCP server 以应用自身的可执行文件加 `--mcp-bridge` 交给 Agent。
+- 内置 MCP server 以应用自身的可执行文件加 `--mcp-bridge` 交给 Agent，并在启动 Agent 之前就开始接受桥接连接：Agent 在 `session/new` 返回前就会启动 MCP server 并等待它应答。
 
 应用退出时结束所有 AI 会话。

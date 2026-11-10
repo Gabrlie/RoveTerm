@@ -11,7 +11,7 @@ use rove_ai::audit::Auditor;
 use rove_ai::host::{ConnectionSource, Host, LocalHost, RemoteHost};
 use rove_ai::mcp::McpListener;
 use rove_ai::runner::{self, AgentSpec, Running};
-use rove_ai::session::{AiEvent, SessionSettings, TerminalSource};
+use rove_ai::session::{AiEvent, AiSession, SessionSettings, TerminalSource};
 use rove_ai::{Answer, Mode, Rules};
 use rove_session::{SessionId, SessionManager};
 use rove_ssh::{SshConnection, SshConnector, SshTarget};
@@ -416,22 +416,32 @@ pub async fn ai_start(
             .map(|mode| (*mode).to_owned())
             .collect(),
     };
-    let running = runner::start(&spec, host.clone(), settings, sink)
-        .await
-        .map_err(ai_error)?;
+    let session = Arc::new(AiSession::new(host.clone(), settings, sink));
     if let Some(terminal) = terminal {
         let id: SessionId = terminal.parse()?;
-        running.session().set_terminal_source(Arc::new(Screen {
+        session.set_terminal_source(Arc::new(Screen {
             sessions: state.sessions.clone(),
             id,
         }));
     }
-    let mcp = listener.serve(running.session().clone());
+    // Serving first: the agent starts the MCP bridge before its session exists.
+    let mcp = listener.serve(session.clone());
+    let running = match runner::start(&spec, session).await {
+        Ok(running) => running,
+        Err(error) => {
+            mcp.abort();
+            return Err(ai_error(error));
+        }
+    };
     let started = running.started().clone();
     auditor.started(
         started.agent.as_deref(),
         started.agent_version.as_deref(),
-        &format!("{:?}", prefs.ai.mode),
+        serde_json::to_value(prefs.ai.mode)
+            .ok()
+            .and_then(|mode| mode.as_str().map(str::to_owned))
+            .as_deref()
+            .unwrap_or_default(),
     );
     state.ai.entries.lock().await.insert(
         id.clone(),

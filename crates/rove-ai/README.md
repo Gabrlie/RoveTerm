@@ -17,7 +17,7 @@ RoveTerm 中的 AI Agent：ACP 客户端、审批策略和绑定主机的工具�
 - `mcp`：内置 MCP server（协议 2024-11-05 至 2025-06-18），工具 `run_command`、`read_file`、`write_file`、`list_dir`、`terminal_snapshot`，全部经 `AiSession` 审批并在会话主机上执行；路径必须是绝对路径。`McpListener` 在回环随机端口上监听，连接须先发送 token 行（10 秒内，常数时间比较）；`bridge_env` 给出桥接进程的环境变量。`bridge()` 是应用二进制 `--mcp-bridge` 模式的实现：连上应用后复制 stdin / stdout。
 - `AiSession::set_terminal_source` 提供用户终端的最近内容，`read_terminal` 读取它（只读操作，同样记录）。
 - `audit::Auditor` 把一个 AI 会话写成 Journal 记录（`session_id` 为 AI 会话 id，payload 带主机）：开始与结束、用户提示、回复与思考（按消息合并）、审批的请求与回答、每个已执行或被拒绝的操作、Agent 自带工具完成时的报告、回合结束。每个文本字段最多保留 16 KiB，超出时标出 `clipped` 并给出完整内容的 SHA-256。
-- `runner::start` 启动 Agent 并打开会话：需要登录时用 `AgentSpec.auth_method` 认证后重试，切换到 `preferred_modes` 中第一个可用的模式。`Running::cancel` 撤回等待中的审批并通知 Agent；`stop` 结束运行中的命令和 Agent 进程。
+- `runner::start(spec, session)` 为已建好的 `AiSession` 启动 Agent 并打开会话（内置 MCP server 须在此之前开始服务：Agent 在 `session/new` 返回前就会启动它）：需要登录时用 `AgentSpec.auth_method` 认证后重试，切换到 `preferred_modes` 中第一个可用的模式。`Running::cancel` 撤回等待中的审批并通知 Agent；`stop` 结束运行中的命令和 Agent 进程。
 
 ## 局限
 

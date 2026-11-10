@@ -324,8 +324,16 @@ mod tests {
         audit.prompt("hello");
         audit.ended();
         Auditor::new(sink, "ai-2", "local").prompt("other");
-        let query = JournalQuery { session_id: Some("ai-1".into()), ..JournalQuery::default() };
-        let kinds: Vec<String> = store.read(&query).unwrap().into_iter().map(|record| record.kind).collect();
+        let query = JournalQuery {
+            session_id: Some("ai-1".into()),
+            ..JournalQuery::default()
+        };
+        let kinds: Vec<String> = store
+            .read(&query)
+            .unwrap()
+            .into_iter()
+            .map(|record| record.kind)
+            .collect();
         assert_eq!(kinds, [KIND_STARTED, KIND_PROMPT, KIND_ENDED]);
     }
 }

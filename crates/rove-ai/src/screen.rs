@@ -69,7 +69,10 @@ mod tests {
     #[test]
     fn strips_escapes_and_applies_line_edits() {
         let raw = b"\x1b]0;user@host: ~\x07\x1b[1;32muser@host\x1b[0m:~$ ls\r\na  b\r\nprogress 10%\rprogress 100%\r\nab\x08c\r\n\x1b(B$ \r\n\r\n";
-        assert_eq!(recent_text(raw, 100), "user@host:~$ ls\na  b\nprogress 100%\nac\n$");
+        assert_eq!(
+            recent_text(raw, 100),
+            "user@host:~$ ls\na  b\nprogress 100%\nac\n$"
+        );
         assert_eq!(recent_text(raw, 2), "ac\n$");
     }
 }
