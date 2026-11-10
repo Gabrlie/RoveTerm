@@ -4,6 +4,7 @@
 //! XChaCha20-Poly1305 under a key derived from the per-device master key, which lives only in the
 //! platform key store behind the [`KeyCache`] seam. See `docs/subsystems/vault.md`.
 
+mod ai;
 mod crypto;
 mod forward;
 mod key_cache;
@@ -33,8 +34,9 @@ pub use model::{
     ProxyProtocol, Secret,
 };
 pub use prefs::{
-    Accent, AppearancePrefs, Bell, ConflictChoice, CursorStyle, DevicePrefs, FilePrefs, Language,
-    Preferences, RightClick, StatusPrefs, TerminalPrefs, Theme,
+    Accent, AgentAuth, AgentPrefs, AiMode, AiPrefs, AppearancePrefs, Bell, ConflictChoice,
+    CursorStyle, DevicePrefs, FilePrefs, Language, Preferences, RightClick, StatusPrefs,
+    TerminalPrefs, Theme,
 };
 pub use snippets::{Snippet, SnippetDraft, SnippetId};
 pub use store::{LockReason, LockState, MAX_JUMP_DEPTH, SCHEMA_VERSION, Vault};

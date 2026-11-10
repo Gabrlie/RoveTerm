@@ -23,9 +23,15 @@ const DEFAULTS: Preferences = {
   },
   files: { default_conflict: 'ask', show_hidden: false, confirm_delete: true },
   status: { interval_secs: 3 },
+  ai: { mode: 'ask_by_risk', read_only: [], dangerous: [] },
 };
 
-const DEVICE_DEFAULTS: DevicePrefs = { window_material: true, download_dir: '', max_transfers: 3 };
+const DEVICE_DEFAULTS: DevicePrefs = {
+  window_material: true,
+  download_dir: '',
+  max_transfers: 3,
+  agent: { command: '', args: [], auth: 'auto' },
+};
 
 /**
  * CSS font list for the terminal: `family` when set, then the built-in stack from the `--font-mono`

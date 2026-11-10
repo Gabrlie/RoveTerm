@@ -18,6 +18,57 @@ pub struct Preferences {
     pub files: FilePrefs,
     /// Server status panel.
     pub status: StatusPrefs,
+    /// AI approvals.
+    pub ai: AiPrefs,
+}
+
+/// How much the user is asked before an AI agent acts (see `rove_ai::Mode`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiMode {
+    /// Read-only operations run; modifications are asked about; dangerous ones always are.
+    #[default]
+    AskByRisk,
+    /// Everything is asked about.
+    AskAll,
+    /// Everything runs except dangerous operations.
+    Auto,
+}
+
+/// AI approval settings, which follow the user.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiPrefs {
+    /// Default approval mode of new AI sessions.
+    pub mode: AiMode,
+    /// Extra programs treated as read-only (base names).
+    pub read_only: Vec<String>,
+    /// Text that makes any command containing it dangerous.
+    pub dangerous: Vec<String>,
+}
+
+/// How the agent signs in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentAuth {
+    /// With the stored API key when there is one, else the agent's own sign-in.
+    #[default]
+    Auto,
+    /// With the stored API key.
+    ApiKey,
+    /// With the agent's own account sign-in (such as `codex login` with ChatGPT).
+    Account,
+}
+
+/// The AI agent program on this device.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentPrefs {
+    /// The agent's ACP program; empty finds Codex's adapter automatically.
+    pub command: String,
+    /// Arguments for `command`.
+    pub args: Vec<String>,
+    pub auth: AgentAuth,
 }
 
 /// Light or dark interface.
@@ -240,6 +291,8 @@ pub struct DevicePrefs {
     pub download_dir: String,
     /// Transfers copying at the same time (1–8).
     pub max_transfers: u8,
+    /// The AI agent program.
+    pub agent: AgentPrefs,
 }
 
 impl Default for DevicePrefs {
@@ -248,6 +301,7 @@ impl Default for DevicePrefs {
             window_material: true,
             download_dir: String::new(),
             max_transfers: 3,
+            agent: AgentPrefs::default(),
         }
     }
 }
@@ -312,7 +366,61 @@ impl Preferences {
         check_range("scrollback", terminal.scrollback, 1_000..=100_000)?;
         check_range("interface scale", self.appearance.ui_scale, 90..=125)?;
         check_range("status interval", self.status.interval_secs, 2..=30)?;
+        self.ai.validate()?;
         Ok(self)
+    }
+}
+
+/// Most entries in one AI rule list.
+const MAX_AI_RULES: usize = 200;
+/// Longest AI rule entry.
+const MAX_AI_RULE: usize = 100;
+
+impl AiPrefs {
+    /// Trims entries, drops empty ones and checks sizes; read-only entries must be program names.
+    fn validate(&mut self) -> Result<(), VaultError> {
+        for (name, list) in [
+            ("read-only", &mut self.read_only),
+            ("dangerous", &mut self.dangerous),
+        ] {
+            *list = list
+                .iter()
+                .map(|entry| entry.trim().to_owned())
+                .filter(|entry| !entry.is_empty())
+                .collect();
+            if list.len() > MAX_AI_RULES {
+                return Err(VaultError::Invalid(format!("too many {name} rules")));
+            }
+            if let Some(bad) = list.iter().find(|entry| {
+                entry.chars().count() > MAX_AI_RULE || entry.chars().any(char::is_control)
+            }) {
+                return Err(VaultError::Invalid(format!(
+                    "{name} rule {bad:?} is not valid"
+                )));
+            }
+        }
+        if let Some(bad) = self.read_only.iter().find(|entry| {
+            !entry
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_.+".contains(c))
+        }) {
+            return Err(VaultError::Invalid(format!(
+                "read-only rule {bad:?} is not a program name"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl AgentPrefs {
+    /// Trims the command and checks sizes.
+    fn validate(&mut self) -> Result<(), VaultError> {
+        self.command = self.command.trim().to_owned();
+        let bad = |text: &str| text.len() > 1024 || text.chars().any(char::is_control);
+        if bad(&self.command) || self.args.len() > 32 || self.args.iter().any(|arg| bad(arg)) {
+            return Err(VaultError::Invalid("the agent command is not valid".into()));
+        }
+        Ok(())
     }
 }
 
@@ -333,6 +441,7 @@ impl DevicePrefs {
             }
         }
         check_range("concurrent transfers", self.max_transfers, 1..=8)?;
+        self.agent.validate()?;
         Ok(self)
     }
 }

@@ -249,11 +249,23 @@ export interface StatusPrefs {
 }
 
 /** Preferences that follow the user; see `Preferences` in rove-vault. */
+/** How much the user is asked before an AI agent acts. */
+export type AiMode = 'ask_by_risk' | 'ask_all' | 'auto';
+
+export interface AiPrefs {
+  mode: AiMode;
+  /** Extra programs treated as read-only. */
+  read_only: string[];
+  /** Text that makes any command containing it dangerous. */
+  dangerous: string[];
+}
+
 export interface Preferences {
   appearance: AppearancePrefs;
   terminal: TerminalPrefs;
   files: FilePrefs;
   status: StatusPrefs;
+  ai: AiPrefs;
 }
 
 export function prefsGet(): Promise<Preferences> {
@@ -265,11 +277,22 @@ export function prefsSet(prefs: Preferences): Promise<Preferences> {
 }
 
 /** Preferences of this device only; see `DevicePrefs` in rove-vault. */
+/** How the agent signs in: the stored API key when there is one, the key, or its own account. */
+export type AgentAuth = 'auto' | 'api_key' | 'account';
+
+export interface AgentPrefs {
+  /** The agent's ACP program; empty finds Codex's adapter automatically. */
+  command: string;
+  args: string[];
+  auth: AgentAuth;
+}
+
 export interface DevicePrefs {
   window_material: boolean;
   /** Absolute path; empty uses the system download directory. */
   download_dir: string;
   max_transfers: number;
+  agent: AgentPrefs;
 }
 
 export function devicePrefsGet(): Promise<DevicePrefs> {

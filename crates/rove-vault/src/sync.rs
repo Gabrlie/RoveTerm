@@ -115,11 +115,11 @@ fn body<T: for<'de> Deserialize<'de>>(value: &Value) -> Result<T, VaultError> {
         .map_err(|error| VaultError::Invalid(format!("sync record: {error}")))
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn unhex(text: &str) -> Option<Vec<u8>> {
+pub(crate) fn unhex(text: &str) -> Option<Vec<u8>> {
     if !text.len().is_multiple_of(2) {
         return None;
     }

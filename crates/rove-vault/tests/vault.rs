@@ -786,3 +786,62 @@ fn sync_settings_keep_the_key_sealed() {
     vault.set_sync_local(None).unwrap();
     assert_eq!(vault.sync_local().unwrap(), None);
 }
+
+#[test]
+fn ai_key_is_sealed_and_needs_the_vault_unlocked() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.db");
+    let cache = Arc::new(MemoryKeyCache::default());
+    {
+        let vault = Vault::open(&path, cache.clone()).unwrap();
+        assert!(!vault.has_ai_key().unwrap());
+        assert!(
+            vault.set_ai_key(Some("sk-test")).is_err(),
+            "storing needs the vault unlocked"
+        );
+        assert_eq!(vault.try_unlock(), LockState::Unlocked);
+        assert!(matches!(
+            vault.set_ai_key(Some("has space")),
+            Err(VaultError::Invalid(_))
+        ));
+        vault.set_ai_key(Some(" sk-test-123 ")).unwrap();
+        assert_eq!(vault.ai_key().unwrap().unwrap().as_str(), "sk-test-123");
+    }
+    // Not in clear text on disk.
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(!bytes.windows(11).any(|window| window == b"sk-test-123"));
+    let vault = Vault::open(&path, cache).unwrap();
+    assert!(vault.has_ai_key().unwrap());
+    assert!(vault.ai_key().is_err(), "reading needs the vault unlocked");
+    assert_eq!(vault.try_unlock(), LockState::Unlocked);
+    assert_eq!(vault.ai_key().unwrap().unwrap().as_str(), "sk-test-123");
+    vault.set_ai_key(None).unwrap();
+    assert!(!vault.has_ai_key().unwrap());
+}
+
+#[test]
+fn ai_preferences_are_validated() {
+    let (vault, _) = vault();
+    let mut prefs = Preferences::default();
+    prefs.ai.mode = rove_vault::AiMode::AskAll;
+    prefs.ai.read_only = vec![" kubectx ".into(), "".into()];
+    prefs.ai.dangerous = vec!["prod-db".into()];
+    let stored = vault.set_preferences(prefs).unwrap();
+    assert_eq!(stored.ai.read_only, ["kubectx"]);
+    let mut bad = Preferences::default();
+    bad.ai.read_only = vec!["rm -rf".into()];
+    assert!(matches!(
+        vault.set_preferences(bad),
+        Err(VaultError::Invalid(_))
+    ));
+    let mut device = DevicePrefs::default();
+    device.agent.command = " /usr/local/bin/codex-acp ".into();
+    let stored = vault.set_device_preferences(device).unwrap();
+    assert_eq!(stored.agent.command, "/usr/local/bin/codex-acp");
+    let mut bad = DevicePrefs::default();
+    bad.agent.args = vec!["a\nb".into()];
+    assert!(matches!(
+        vault.set_device_preferences(bad),
+        Err(VaultError::Invalid(_))
+    ));
+}
