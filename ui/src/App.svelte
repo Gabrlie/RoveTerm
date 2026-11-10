@@ -9,6 +9,8 @@
   import SettingsDialog, { type SettingsSection } from './lib/settings/SettingsDialog.svelte';
   import ConfirmHost from './lib/ui/ConfirmHost.svelte';
   import EditMenu from './lib/ui/EditMenu.svelte';
+  import Toaster from './lib/ui/Toaster.svelte';
+  import { notify, type ToastKind } from './lib/ui/toast.svelte';
   import KeysDialog from './lib/keys/KeysDialog.svelte';
   import HomePage from './lib/home/HomePage.svelte';
   import RightPanel from './lib/panels/RightPanel.svelte';
@@ -123,17 +125,12 @@
       const report = await hosts.importSshConfig();
       showNotice(t('host.imported', { created: report.created.length, skipped: report.skipped.length }));
     } catch (error) {
-      showNotice(errorText(error));
+      showNotice(errorText(error), 'error');
     }
   }
   let keysOpen = $state(false);
-  let notice = $state('');
-  let noticeTimer = 0;
-
-  function showNotice(message: string): void {
-    notice = message;
-    clearTimeout(noticeTimer);
-    noticeTimer = window.setTimeout(() => (notice = ''), 4000);
+  function showNotice(message: string, kind: ToastKind = 'info'): void {
+    notify(message, kind);
   }
 
   function focusedTerminal() {
@@ -344,7 +341,7 @@
       .catch((error: unknown) => console.warn('workspace restore unavailable', error))
       .finally(() => (restored = true));
     vault.init().catch((error: unknown) => console.warn('vault state unavailable', error));
-    hosts.refresh().catch((error: unknown) => showNotice(errorText(error)));
+    hosts.refresh().catch((error: unknown) => showNotice(errorText(error), 'error'));
     keys.refresh().catch((error: unknown) => console.warn('key library unavailable', error));
     forwardStatuses.start().catch((error: unknown) => console.warn('forward events unavailable', error));
     const unlisten = onHostKeyPrompt((prompt) => (hostKeyPrompts = [...hostKeyPrompts, prompt]));
@@ -358,7 +355,7 @@
   <TitleBar {sidebarOpen} {rightOpen} {bottomOpen} onaction={run} />
   <div class="body">
   {#if sidebarOpen}
-    <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onnotice={showNotice} onsettings={() => (settingsOpen = true)} onkeys={() => (keysOpen = true)} />
+    <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onnotice={(message) => showNotice(message, 'error')} onsettings={() => (settingsOpen = true)} onkeys={() => (keysOpen = true)} />
   {/if}
   <div class="main">
     <div class="workarea">
@@ -371,7 +368,7 @@
         onquick={() => (quickOpen = true)}
         onlocal={() => run('tab.newLocal')}
         onforwards={(host) => (forwardsHost = host)}
-        onnotice={showNotice}
+        onnotice={(message) => showNotice(message, 'error')}
         onaction={run}
       />
     {/snippet}
@@ -397,9 +394,7 @@
   </div>
 </div>
 
-{#if notice}
-  <div class="notice" role="status">{notice}</div>
-{/if}
+<Toaster />
 
 {#if paletteOpen}
   <CommandPalette onrun={run} onclose={() => (paletteOpen = false)} />
@@ -536,28 +531,5 @@
     bottom: var(--space-3);
     left: calc(50% - 1px);
     width: 2px;
-  }
-  .notice {
-    position: fixed;
-    bottom: var(--space-5);
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 40;
-    padding: var(--space-2) var(--space-4);
-    border-radius: var(--radius-pill);
-    background: var(--material-popover);
-    backdrop-filter: var(--material-blur);
-    -webkit-backdrop-filter: var(--material-blur);
-    box-shadow: var(--glass-edge), var(--shadow-md);
-    color: var(--fg);
-    font-size: var(--text-footnote);
-    font-weight: 500;
-    animation: notice-in var(--dur-slow) var(--ease);
-  }
-  @keyframes notice-in {
-    from {
-      opacity: 0;
-      transform: translate(-50%, 8px);
-    }
   }
 </style>

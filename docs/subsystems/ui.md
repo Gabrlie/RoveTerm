@@ -182,6 +182,8 @@
 
 右键菜单统一使用 `ContextMenu`：在指定坐标弹出并移到 `<body>`，自动避开窗口边缘，支持方向键和 Enter，选中、Escape、点击别处或窗口缩放时关闭。
 
+不需要用户回答的通知统一用右上角的悬浮通知（`src/lib/ui/toast.svelte.ts` 的 `notify(message, kind)`，由 `Toaster` 绘制在对话框之上）：`info` / `success` 停留 4 秒，`error` 停留 8 秒且文字可选中；指针悬停时不消失，可手动关闭；最多同时显示 4 条，相同内容只重新计时。
+
 WebView 的原生右键菜单在任何位置都不出现：`EditMenu`（挂在 `App` 上，监听 `window` 的 `contextmenu`）对没有被组件自行处理的右键调用 `preventDefault`；在文本输入框里右键弹出剪切、复制、粘贴、全选（密码框不提供剪切和复制），其他位置右键没有反应。
 
 界面文字默认不可选中（`body` 设 `user-select: none`），与原生应用一致；输入框、文本域，以及需要复制的内容（加 `.selectable`：错误信息 `.error`、连接失败原因、主机指纹、密钥指纹）可以选中。
