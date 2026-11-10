@@ -3,7 +3,7 @@
   // splitting or closing the group.
   import IconButton from '../ui/IconButton.svelte';
   import Icon from '../ui/Icon.svelte';
-  import { workspace, type Group } from '../workspace/workspace.svelte';
+  import { hostOf, workspace, type Group } from '../workspace/workspace.svelte';
   import type { PaneId } from '../layout/layout';
   import { t } from '../i18n';
   import type { IconName } from '../ui/icons';
@@ -31,8 +31,8 @@
     const pane = workspace.panes[paneId];
     if (!pane) return '';
     const target = pane.target;
-    if (target.kind === 'ssh') return hosts.find(target.hostId)?.name || target.title;
-    if (target.kind === 'sftp' && 'hostId' in target.source) return hosts.find(target.source.hostId)?.name || target.title;
+    const hostId = hostOf(target);
+    if (hostId && target.kind !== 'local' && target.kind !== 'quick') return hosts.find(hostId)?.name || target.title;
     return pane.title;
   }
 

@@ -58,6 +58,13 @@ function initialTitle(target: PaneTarget): string {
   }
 }
 
+/** The saved host a tab belongs to, or null for local terminals and ad-hoc connections. */
+export function hostOf(target: PaneTarget): HostId | null {
+  if (target.kind === 'ssh') return target.hostId;
+  if (target.kind === 'sftp' && 'hostId' in target.source) return target.source.hostId;
+  return null;
+}
+
 /** The SFTP target for the same remote as `target`, or null for local terminals. */
 export function filesTargetFor(target: PaneTarget): PaneTarget | null {
   switch (target.kind) {
@@ -183,6 +190,13 @@ class Workspace {
    * Closes a tab and its session. The group then shows its neighbouring tab; a group left without
    * tabs is removed when other groups remain, and otherwise shows the home page.
    */
+  /** Tabs (terminals and files) of saved host `hostId`. */
+  tabsOfHost(hostId: HostId): PaneId[] {
+    return Object.values(this.panes)
+      .filter((pane) => hostOf(pane.target) === hostId)
+      .map((pane) => pane.id);
+  }
+
   closePane(paneId: PaneId): void {
     const group = this.groupOf(paneId);
     if (!group) return;

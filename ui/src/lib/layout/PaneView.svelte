@@ -4,7 +4,7 @@
   import TermView from '../terminal/TermView.svelte';
   import FileBrowser from '../files/FileBrowser.svelte';
   import { terminals } from '../terminal/registry';
-  import { workspace, type PaneState } from '../workspace/workspace.svelte';
+  import { hostOf, workspace, type PaneState } from '../workspace/workspace.svelte';
   import { sessionOpenLocal, sessionOpenQuick, sessionOpenSsh, credentialKindOf, type CredentialKind, type OutputMessage, type TermSize } from '../ipc';
   import type { PaneId } from './layout';
   import { errorText, t } from '../i18n';
@@ -28,6 +28,13 @@
 
   let { pane, shown, focused, oncredentials, onedithost }: Props = $props();
   let view = $state<TermView>();
+
+  /** The saved host was deleted (here or on another device) and the tab holds no live session:
+   *  it can never connect again, so it says so instead of failing with a lookup error. */
+  const orphaned = $derived.by(() => {
+    const hostId = hostOf(pane.target);
+    return hostId !== null && hosts.loaded && !hosts.find(hostId) && !pane.sessionId;
+  });
 
   /** Records the failure; a missing password or passphrase is asked for right away. */
   function onOpenError(error: unknown): void {
@@ -69,7 +76,13 @@
 </script>
 
 <div class="pane-view" class:hidden={!shown} role="group" onfocusin={() => workspace.focus(pane.id)}>
-  {#if pane.deferred}
+  {#if orphaned}
+    <div class="gone">
+      <Icon name="server" size={28} />
+      <p>{t('tab.hostDeleted')}</p>
+      <button type="button" class="secondary" onclick={() => workspace.closePane(pane.id)}>{t('common.close')}</button>
+    </div>
+  {:else if pane.deferred}
     <div class="deferred">{pane.title}</div>
   {:else if pane.target.kind === 'sftp'}
     <FileBrowser
@@ -137,6 +150,19 @@
     height: 100%;
     color: var(--fg-muted);
     font-size: var(--text-footnote);
+  }
+  .gone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-3);
+    height: 100%;
+    color: var(--fg-muted);
+  }
+  .gone p {
+    margin: 0;
+    font-size: var(--text-body);
   }
   .failure {
     position: absolute;

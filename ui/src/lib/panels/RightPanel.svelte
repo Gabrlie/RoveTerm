@@ -4,7 +4,8 @@
   import StatusPanel from './StatusPanel.svelte';
   import SnippetsPanel from './SnippetsPanel.svelte';
   import { t } from '../i18n';
-  import { remoteSourceOf, sourceKey, workspace } from '../workspace/workspace.svelte';
+  import { remoteSourceOf, sourceKey, workspace, hostOf } from '../workspace/workspace.svelte';
+  import { hosts } from '../hosts/hosts.svelte';
 
   type Page = 'status' | 'snippets';
 
@@ -12,7 +13,11 @@
 
   const source = $derived.by(() => {
     const pane = workspace.focusedPane;
-    return pane ? remoteSourceOf(pane.target) : null;
+    if (!pane) return null;
+    // A deleted host has nothing to sample: show the skeleton, not a lookup error.
+    const hostId = hostOf(pane.target);
+    if (hostId && hosts.loaded && !hosts.find(hostId)) return null;
+    return remoteSourceOf(pane.target);
   });
 </script>
 

@@ -4,6 +4,8 @@ import { hostDelete, hostDetectOs, hostImportSshConfig, hostList, type HostEntry
 class HostStore {
   items = $state<HostEntry[]>([]);
   query = $state('');
+  /** The list has been read at least once, so a missing host really is gone. */
+  loaded = $state(false);
 
   /** Hosts matching the search query, grouped by `group` (ungrouped first). */
   get grouped(): [string | null, HostEntry[]][] {
@@ -21,6 +23,7 @@ class HostStore {
 
   async refresh(): Promise<void> {
     this.items = await hostList();
+    this.loaded = true;
   }
 
   /** Hosts whose system was detected since the app started. */

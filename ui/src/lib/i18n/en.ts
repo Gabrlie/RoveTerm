@@ -338,6 +338,8 @@ export const en = {
   'host.empty': 'No saved hosts',
   'host.noMatch': 'No matching hosts',
   'host.confirmDelete': 'Delete host "{name}" and its stored credentials?',
+  'host.confirmDeleteTabs': 'Its {count} open tabs will be closed.',
+  'tab.hostDeleted': 'This host has been deleted.',
   'host.hostname': 'Host',
   'host.port': 'Port',
   'host.username': 'User',

@@ -340,6 +340,8 @@ export const zhCN: Messages = {
   'host.empty': '还没有保存的主机',
   'host.noMatch': '没有匹配的主机',
   'host.confirmDelete': '删除主机“{name}”及其保存的凭据？',
+  'host.confirmDeleteTabs': '它的 {count} 个已打开标签将被关闭。',
+  'tab.hostDeleted': '这台主机已被删除。',
   'host.hostname': '主机地址',
   'host.port': '端口',
   'host.username': '用户名',

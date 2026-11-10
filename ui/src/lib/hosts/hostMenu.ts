@@ -4,6 +4,7 @@ import { ask } from '../ui/confirm.svelte';
 import { errorText, t } from '../i18n';
 import { hostCreate, type HostEntry } from '../ipc';
 import { hosts } from './hosts.svelte';
+import { workspace } from '../workspace/workspace.svelte';
 
 export interface HostMenuHandlers {
   onconnect: (host: HostEntry) => void;
@@ -25,10 +26,19 @@ async function duplicate(host: HostEntry, onnotice: (message: string) => void): 
   }
 }
 
+/** Deletes `host` after confirmation and closes its tabs, which could no longer reconnect. */
 async function remove(host: HostEntry, onnotice: (message: string) => void): Promise<void> {
-  const confirmed = await ask({ title: t('host.delete'), message: t('host.confirmDelete', { name: host.name }), confirmLabel: t('common.delete'), danger: true });
+  const open = workspace.tabsOfHost(host.id).length;
+  const message = t('host.confirmDelete', { name: host.name }) + (open > 0 ? ` ${t('host.confirmDeleteTabs', { count: open })}` : '');
+  const confirmed = await ask({ title: t('host.delete'), message, confirmLabel: t('common.delete'), danger: true });
   if (!confirmed) return;
-  await hosts.remove(host.id).catch((error: unknown) => onnotice(errorText(error)));
+  try {
+    await hosts.remove(host.id);
+  } catch (error) {
+    onnotice(errorText(error));
+    return;
+  }
+  for (const paneId of workspace.tabsOfHost(host.id)) workspace.closePane(paneId);
 }
 
 export function hostMenuItems(host: HostEntry, handlers: HostMenuHandlers): MenuItem[] {
