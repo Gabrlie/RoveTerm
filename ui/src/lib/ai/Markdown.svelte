@@ -3,7 +3,26 @@
   // Links show their address on hover rather than navigating the WebView.
   import { parseMarkdown, type Inline } from './markdown';
 
-  let { text }: { text: string } = $props();
+  import Icon from '../ui/Icon.svelte';
+  import { t } from '../i18n';
+
+  interface Props {
+    text: string;
+    /** Puts a code block's text into the user's terminal; offered on shell code when given. */
+    oninsert?: (code: string) => void;
+  }
+
+  let { text, oninsert }: Props = $props();
+  let copied = $state<number | null>(null);
+
+  const SHELL = new Set(['sh', 'bash', 'zsh', 'shell', 'console', 'fish', 'powershell', 'ps1']);
+
+  function copy(code: string, index: number): void {
+    void navigator.clipboard.writeText(code).then(() => {
+      copied = index;
+      setTimeout(() => (copied = copied === index ? null : copied), 1500);
+    });
+  }
   const blocks = $derived(parseMarkdown(text));
 </script>
 
@@ -20,7 +39,17 @@
     {:else if block.kind === 'paragraph'}
       <p>{@render inline(block.content)}</p>
     {:else if block.kind === 'code'}
-      <pre><code>{block.text}</code></pre>
+      <div class="code">
+        <div class="code-head">
+          <span class="lang">{block.lang || 'text'}</span>
+          <span class="spacer"></span>
+          {#if oninsert && SHELL.has(block.lang.toLowerCase())}
+            <button type="button" title={t('ai.insertHint')} onclick={() => oninsert?.(block.text)}><Icon name="terminal" size={12} />{t('ai.insert')}</button>
+          {/if}
+          <button type="button" onclick={() => copy(block.text, index)}><Icon name={copied === index ? 'check' : 'copy'} size={12} />{copied === index ? t('ai.copied') : t('edit.copy')}</button>
+        </div>
+        <pre><code>{block.text}</code></pre>
+      </div>
     {:else if block.kind === 'list'}
       {#if block.ordered}
         <ol>{#each block.items as item, at (at)}<li>{@render inline(item)}</li>{/each}</ol>
@@ -65,10 +94,42 @@
     font-family: var(--font-mono);
     font-size: 0.92em;
   }
-  pre {
-    padding: var(--space-2) var(--space-3);
+  .code {
     border-radius: var(--radius-sm);
     background: var(--fill);
+    overflow: hidden;
+  }
+  .code-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 2px var(--space-1) 2px var(--space-3);
+    box-shadow: inset 0 -1px 0 var(--separator);
+    color: var(--fg-muted);
+    font-size: 11px;
+  }
+  .code-head .spacer {
+    flex: 1;
+  }
+  .code-head button {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 20px;
+    padding: 0 6px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  .code-head button:hover {
+    background: var(--fill-hover);
+    color: var(--fg);
+  }
+  pre {
+    padding: var(--space-2) var(--space-3);
     overflow-x: auto;
   }
   pre code {

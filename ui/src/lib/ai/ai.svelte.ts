@@ -22,25 +22,10 @@ import {
   type ToolCall,
 } from '../ipc';
 import { errorText, t, type MessageKey } from '../i18n';
+import { approvalFor, type ChatItem } from './chatview';
 import { prefs } from '../settings/prefs.svelte';
 
-export type ChatItem =
-  | { kind: 'user'; text: string }
-  | { kind: 'agent'; text: string; messageId: string | null }
-  | { kind: 'thought'; text: string }
-  | { kind: 'tool'; call: ToolCall }
-  | {
-      kind: 'approval';
-      requestId: number;
-      operation: AiOperation;
-      assessment: Assessment;
-      rememberable: boolean;
-      agentTool: boolean;
-      /** `undefined` while waiting; `null` when withdrawn. */
-      answer: AiAnswer | null | undefined;
-    }
-  | { kind: 'operation'; operation: AiOperation; assessment: Assessment; approved: boolean; outcome: AiOutcome }
-  | { kind: 'notice'; text: string; code: string | null };
+export type { ChatItem } from './chatview';
 
 /** Stable key of a context, to find its chat. */
 export function contextKey(context: AiContext): string {
@@ -68,6 +53,8 @@ export class Chat {
   /** A turn is running. */
   busy = $state(false);
   mode = $state<AiMode>('ask_by_risk');
+  /** Let the agent read the user's terminal on the host (decided when the agent starts). */
+  attachTerminal = $state(true);
 
   constructor(
     readonly key: string,
@@ -127,6 +114,7 @@ export class Chat {
           rememberable: event.rememberable,
           agentTool: event.agent_tool,
           answer: undefined,
+          outcome: null,
         });
         break;
       case 'approved': {
@@ -135,11 +123,16 @@ export class Chat {
         break;
       }
       case 'executed':
+      {
+        // The result of an approved operation completes its approval's row.
+        const approval = approvalFor(this.items, event.operation);
+        if (approval) approval.outcome = event.outcome;
         // The agent's own tools show as tool items; operations here are RoveTerm's.
-        if (event.operation.op !== 'agent_tool') {
+        else if (event.operation.op !== 'agent_tool') {
           this.items.push({ kind: 'operation', operation: event.operation, assessment: event.assessment, approved: event.approved, outcome: event.outcome });
         }
         break;
+      }
     }
   }
 
@@ -158,7 +151,7 @@ export class Chat {
         const agent = this.agent ?? ai.defaultAgent;
         if (!agent) throw { code: 'ai.no_agent', message: 'no agent' };
         this.agent = agent;
-        const started = await aiStart(this.context, agent, terminal);
+        const started = await aiStart(this.context, agent, this.attachTerminal ? terminal : null);
         this.id = started.id;
         this.host = started.host;
         this.agentName = started.agent;
@@ -242,11 +235,22 @@ class AiStore {
     return chat;
   }
 
-  /** Starts a new conversation for `chat`'s context. */
-  async reset(chat: Chat): Promise<void> {
+  /** Starts a new conversation for `chat`'s context, with `agent` when given. */
+  async reset(chat: Chat, agent: string | null = chat.agent): Promise<void> {
     await chat.stop();
-    this.chats.set(chat.key, new Chat(chat.key, chat.context));
+    const next = new Chat(chat.key, chat.context);
+    next.agent = agent;
+    next.mode = chat.mode;
+    next.attachTerminal = chat.attachTerminal;
+    this.chats.set(chat.key, next);
     this.version += 1;
+  }
+
+  /** Switches `chat` to `agent`: the conversation starts over when an agent was already talking. */
+  async switchAgent(chat: Chat, agent: string): Promise<void> {
+    if (chat.agent === agent) return;
+    if (chat.id || chat.items.length > 0) await this.reset(chat, agent);
+    else chat.agent = agent;
   }
 
   async refreshAgents(): Promise<void> {
