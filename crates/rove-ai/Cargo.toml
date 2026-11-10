@@ -10,6 +10,7 @@ rust-version.workspace = true
 async-trait.workspace = true
 getrandom = "0.3"
 rove-fs = { path = "../rove-fs" }
+rove-journal = { path = "../rove-journal" }
 rove-ssh = { path = "../rove-ssh" }
 serde.workspace = true
 serde_json.workspace = true

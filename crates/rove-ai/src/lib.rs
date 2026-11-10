@@ -3,6 +3,7 @@
 //! runs or needs the user's approval. See `docs/subsystems/ai.md`.
 
 pub mod acp;
+pub mod audit;
 pub mod host;
 pub mod mcp;
 pub mod policy;

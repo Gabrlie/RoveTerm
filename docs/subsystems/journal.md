@@ -37,3 +37,18 @@ pub trait JournalStore: Send + Sync {
 ## 工作区快照
 
 应用命令 `workspace_save(snapshot)` 把界面的标签与分屏布局作为 `ui/workspace` 记录追加到 journal（必须是对象，序列化后不超过 256 KiB，面板只以主机 id 引用已保存主机，不含秘密）；`workspace_load()` 返回最新一条，没有时返回 `null`。快照的结构由界面定义（[ui](ui.md)）。
+
+## AI 会话的审计记录
+
+`rove-ai` 的 `Auditor` 以 AI 会话 id 作为 `session_id` 写入以下记录，payload 都带 `host`（会话主机）：
+
+| kind | payload |
+|---|---|
+| `ai/session_started` | Agent 名称、版本、审批模式 |
+| `ai/prompt` | 用户发出的文本 |
+| `ai/message`、`ai/thought` | 一条完整的回复或思考（流式片段合并后） |
+| `ai/approval` | 请求：操作、风险、原因、是否 Agent 自带工具；回答：`answer`（`null` 为回合取消时撤回） |
+| `ai/command`、`ai/file_read`、`ai/file_write`、`ai/list_dir`、`ai/terminal_read`、`ai/tool_call` | 操作、风险、是否经用户批准、结果（命令的退出码与输出、文件的字节数与 SHA-256、写入前后的哈希与行数、拒绝或失败原因） |
+| `ai/turn_ended`、`ai/session_ended` | 回合的结束原因；会话结束 |
+
+文本字段最多保留 16 KiB，超出部分不记录，以 `clipped` 标出并记下完整内容的 SHA-256。

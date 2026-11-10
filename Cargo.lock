@@ -4232,6 +4232,7 @@ dependencies = [
  "devsshd",
  "getrandom 0.3.4",
  "rove-fs",
+ "rove-journal",
  "rove-kernel",
  "rove-ssh",
  "rove-vault",
