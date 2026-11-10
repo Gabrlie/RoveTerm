@@ -26,11 +26,13 @@ async fn model(replies: Vec<String>) -> (String, Arc<Mutex<Vec<Value>>>) {
             let (read, mut write) = stream.into_split();
             let mut reader = BufReader::new(read);
             let mut length = 0;
+            let mut request = false;
             loop {
                 let mut line = String::new();
                 if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
                     break;
                 }
+                request = true;
                 let line = line.trim_end().to_ascii_lowercase();
                 if line.is_empty() {
                     break;
@@ -38,6 +40,10 @@ async fn model(replies: Vec<String>) -> (String, Arc<Mutex<Vec<Value>>>) {
                 if let Some(value) = line.strip_prefix("content-length:") {
                     length = value.trim().parse().unwrap();
                 }
+            }
+            // A connection the client opened and closed again without a request.
+            if !request {
+                continue;
             }
             let mut raw = vec![0u8; length];
             reader.read_exact(&mut raw).await.unwrap();
