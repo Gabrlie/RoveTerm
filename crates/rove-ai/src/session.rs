@@ -85,6 +85,13 @@ pub enum Outcome {
 /// Receives a session's events.
 pub type EventSink = Arc<dyn Fn(AiEvent) + Send + Sync>;
 
+/// Gives the recent text of the user's terminal on the session's host, for the agent to see.
+#[async_trait]
+pub trait TerminalSource: Send + Sync {
+    /// The last `lines` lines, or `None` when no terminal of the host is open.
+    async fn recent(&self, lines: usize) -> Option<String>;
+}
+
 /// Settings of one session.
 #[derive(Debug, Clone, Default)]
 pub struct SessionSettings {
@@ -110,6 +117,7 @@ pub struct AiSession {
     approvals: Mutex<HashMap<u64, oneshot::Sender<Answer>>>,
     next_id: AtomicU64,
     jobs: Mutex<HashMap<String, Job>>,
+    terminal: OnceLock<Arc<dyn TerminalSource>>,
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -176,7 +184,51 @@ impl AiSession {
             approvals: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             jobs: Mutex::new(HashMap::new()),
+            terminal: OnceLock::new(),
         }
+    }
+
+    /// Lets the agent read the user's terminal through [`AiSession::read_terminal`].
+    pub fn set_terminal_source(&self, source: Arc<dyn TerminalSource>) {
+        let _ = self.terminal.set(source);
+    }
+
+    /// The last `lines` lines of the user's terminal on the host, after the policy allows it.
+    pub async fn read_terminal(&self, lines: usize) -> Result<String, ClientError> {
+        let operation = Operation::ReadTerminal;
+        let assessment = self.assess(&operation).await;
+        let (allowed, approved) = self.authorize(&operation, &assessment, false).await;
+        if !allowed {
+            self.report(operation, assessment, approved, Outcome::Denied);
+            return Err(ClientError::denied(
+                "the user did not allow reading the terminal",
+            ));
+        }
+        let text = match self.terminal.get() {
+            Some(source) => source.recent(lines).await,
+            None => None,
+        };
+        let Some(text) = text else {
+            self.report(
+                operation,
+                assessment,
+                approved,
+                Outcome::Failed {
+                    error: "no terminal is open".into(),
+                },
+            );
+            return Err(ClientError::new(
+                acp::code::NOT_FOUND,
+                "no terminal of this host is open",
+            ));
+        };
+        let outcome = Outcome::Read {
+            bytes: text.len(),
+            sha256: sha256(text.as_bytes()),
+            truncated: false,
+        };
+        self.report(operation, assessment, approved, outcome);
+        Ok(text)
     }
 
     pub fn host(&self) -> &Arc<dyn Host> {

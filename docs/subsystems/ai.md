@@ -74,3 +74,16 @@ Agent 发来的请求由 `AiSession` 回答，全部经过审批：
 Agent 的环境变量只从白名单（`acp::ENV_ALLOWED`：`PATH`、`HOME`、`LANG`、`LC_*`、`TMPDIR`、代理与证书变量、Windows 的系统目录变量等）继承，再加上调用方给出的变量（如从 vault 解密的 API key）。消息单条最大 8 MiB，转发给界面的文本按 256 KiB 截断。
 
 取消回合时撤回所有等待中的审批（视为拒绝）并发送 `session/cancel`；结束会话时中止运行中的命令并结束 Agent 进程。
+
+## 内置 MCP 工具
+
+Agent 自带的 shell 在本机运行，到不了远程主机，因此 RoveTerm 在 `session/new` 中附带自己的 MCP server，工具作用于会话主机并经过同一审批：
+
+| 工具 | 作用 |
+|---|---|
+| `run_command` | 运行 shell 命令，返回退出码与输出；可指定工作目录和超时（最多 600 秒） |
+| `read_file` / `write_file` | 读写文本文件，可按行截取 |
+| `list_dir` | 列目录 |
+| `terminal_snapshot` | 读取用户在该主机上的终端最近显示的内容 |
+
+Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接模式：`roveterm --mcp-bridge` 从环境变量 `ROVETERM_MCP_ADDR`、`ROVETERM_MCP_TOKEN` 得知运行中应用的回环端口和 token，连上后先发送 token，再把 stdin / stdout 原样转发。应用为每个 AI 会话监听一个随机回环端口，token 随机生成、只在内存中，经环境变量（而非命令行参数）交给桥接进程；token 不对的连接直接关闭。

@@ -4230,6 +4230,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "devsshd",
+ "getrandom 0.3.4",
  "rove-fs",
  "rove-kernel",
  "rove-ssh",
@@ -4399,6 +4400,7 @@ name = "roveterm"
 version = "0.1.0"
 dependencies = [
  "fontdb",
+ "rove-ai",
  "rove-fs",
  "rove-journal",
  "rove-kernel",

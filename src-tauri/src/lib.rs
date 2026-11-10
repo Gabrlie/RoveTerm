@@ -118,6 +118,25 @@ fn shutdown(app: &tauri::AppHandle) {
     }
 }
 
+/// Runs the MCP bridge for an agent: connects stdin and stdout to the running app named by the
+/// environment. Returns the process exit code.
+pub fn mcp_bridge() -> i32 {
+    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("roveterm --mcp-bridge: {error}");
+            return 1;
+        }
+    };
+    match runtime.block_on(rove_ai::mcp::bridge()) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("roveterm --mcp-bridge: {error}");
+            1
+        }
+    }
+}
+
 /// Starts the Tauri application. Shared by the desktop binary and the mobile entry point.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

@@ -4,6 +4,7 @@
 
 pub mod acp;
 pub mod host;
+pub mod mcp;
 pub mod policy;
 pub mod risk;
 pub mod runner;

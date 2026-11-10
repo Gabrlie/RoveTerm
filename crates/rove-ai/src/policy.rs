@@ -55,6 +55,8 @@ pub enum Operation {
     ListDir {
         path: String,
     },
+    /// Read what the user's terminal on the host shows.
+    ReadTerminal,
     /// One of the agent's own tools; `command` is set when it runs a shell command.
     AgentTool {
         kind: ToolKind,
@@ -69,6 +71,7 @@ impl Operation {
         match self {
             Self::Command { command } => risk::assess_command(command, rules),
             Self::ReadFile { path } | Self::ListDir { path } => risk::assess_read(path),
+            Self::ReadTerminal => Assessment::new(),
             Self::WriteFile { path } => risk::assess_write(path),
             Self::AgentTool {
                 command: Some(command),
@@ -125,6 +128,7 @@ impl Operation {
             // Writes are remembered per directory, secret reads per file.
             Self::WriteFile { path } => Some(vec![format!("write:{}", parent(path))]),
             Self::ReadFile { path } | Self::ListDir { path } => Some(vec![format!("read:{path}")]),
+            Self::ReadTerminal => Some(vec!["terminal".to_owned()]),
             Self::AgentTool { kind, .. } => Some(vec![format!("tool:{kind:?}")]),
         }
     }
