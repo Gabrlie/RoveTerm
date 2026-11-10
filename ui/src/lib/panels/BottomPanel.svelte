@@ -19,9 +19,14 @@
   const KEEP = 4;
   let kept = $state<{ key: string; source: RemoteSource }[]>([]);
 
+  /** The remote a key belongs to, without how it is reached. */
+  const remoteOf = (key: string): string => key.split('=')[0] ?? key;
+
   $effect(() => {
     if (!source || !current) return;
-    const others = untrack(() => kept).filter((entry) => entry.key !== current);
+    // A browser of the same host reached another way (its address or route was edited) is
+    // closed: it still works on the old connection.
+    const others = untrack(() => kept).filter((entry) => entry.key !== current && remoteOf(entry.key) !== remoteOf(current));
     kept = [...others.slice(Math.max(0, others.length - (KEEP - 1))), { key: current, source }];
   });
 </script>

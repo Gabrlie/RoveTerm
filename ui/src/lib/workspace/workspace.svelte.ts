@@ -1,6 +1,8 @@
 // Editor groups, their tabs, and what each tab (pane) is connected to. The work area is a split
 // tree of groups; each group has its own tabs and shows one of them, or the home page.
 import { sessionClose, type CommandError, type ExitStatus, type HostId, type PasswordKind, type RemoteSource, type SessionId } from '../ipc';
+import { hosts } from '../hosts/hosts.svelte';
+import { reachKey } from '../hosts/reach';
 import { terminals } from '../terminal/registry';
 import { SNAPSHOT_VERSION, type Snapshot, type SnapshotNode } from './snapshot';
 import { computeLayout, pane, paneIds, removePane, setRatio, splitPane, type LayoutNode, type PaneId, type Path, type SplitDir } from '../layout/layout';
@@ -95,9 +97,10 @@ export function remoteSourceOf(target: PaneTarget): RemoteSource | null {
   }
 }
 
-/** Stable key of a remote, to remount views when it changes. */
+/** Stable key of a remote, to remount views when it changes: for a saved host, also how it is
+ *  reached, so editing its address, user, port or route starts its views over. */
 export function sourceKey(source: RemoteSource): string {
-  return 'hostId' in source ? `host:${source.hostId}` : `quick:${source.address}`;
+  return 'hostId' in source ? `host:${reachKey(source.hostId, (id) => hosts.find(id))}` : `quick:${source.address}`;
 }
 
 class Workspace {
