@@ -224,6 +224,8 @@
       lineHeight,
       scrollback,
       theme: currentTheme(),
+      // Programs that assume a dark terminal print light text; keep it readable on any background.
+      minimumContrastRatio: 4.5,
     });
     fit = new FitAddon();
     term.loadAddon(fit);
