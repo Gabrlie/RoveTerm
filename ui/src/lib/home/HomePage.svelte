@@ -100,14 +100,13 @@
           oncontextmenu={(event) => hostMenu(event, host)}
           title={hostAddress(host)}
         >
-          <HostIcon os={host.os} size={38} />
+          <HostIcon os={host.os} size={28} />
           <div class="text">
             <span class="name">
               <span class="label">{host.name}</span>
               {#if forwardStatuses.running(host.id) > 0}<span class="forwarding"><Icon name="forwards" size={11} />{forwardStatuses.running(host.id)}</span>{/if}
             </span>
-            <span class="address">{hostSubtitle(host)}</span>
-            <span class="seen">{lastSeen(host)}</span>
+            <span class="address">{hostSubtitle(host)}<span class="seen">{` · ${lastSeen(host)}`}</span></span>
           </div>
           <div class="actions">
             <IconButton
@@ -146,7 +145,7 @@
     position: absolute;
     inset: 0;
     overflow-y: auto;
-    padding: var(--space-8) var(--space-8) var(--space-6);
+    padding: var(--space-6) var(--space-6) var(--space-5);
     background: var(--surface);
   }
   header {
@@ -155,7 +154,7 @@
     align-items: center;
     gap: var(--space-2);
     max-width: 1100px;
-    margin: 0 auto var(--space-8);
+    margin: 0 auto var(--space-5);
   }
   .search {
     flex: 1 1 260px;
@@ -196,8 +195,8 @@
   }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-    gap: var(--space-3);
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: var(--space-2);
     max-width: 1100px;
     margin: 0 auto;
   }
@@ -205,8 +204,9 @@
     position: relative;
     display: flex;
     align-items: center;
-    gap: var(--space-3);
-    padding: var(--space-3) var(--space-4);
+    gap: var(--space-2);
+    min-height: 48px;
+    padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-md);
     background: var(--surface-raised);
     box-shadow:
@@ -219,7 +219,7 @@
       box-shadow var(--dur) var(--ease);
   }
   .card:hover {
-    transform: translateY(-2px);
+    transform: translateY(-1px);
     box-shadow:
       0 0 0 0.5px var(--separator),
       var(--shadow-md);
@@ -237,7 +237,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
   }
   .name {
     display: flex;
@@ -265,7 +265,6 @@
   }
   .seen {
     color: var(--fg-subtle);
-    font-size: var(--text-caption);
   }
   .forwarding {
     display: inline-flex;
@@ -282,10 +281,14 @@
   }
   .actions {
     position: absolute;
-    top: var(--space-2);
+    top: 50%;
     right: var(--space-2);
+    transform: translateY(-50%);
     display: flex;
     gap: 2px;
+    padding-left: var(--space-3);
+    /* Covers the end of the text it sits over. */
+    background: linear-gradient(to right, transparent, var(--surface-raised) var(--space-3));
     opacity: 0;
     transition: opacity var(--dur-fast) var(--ease-out);
   }
