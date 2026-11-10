@@ -216,11 +216,18 @@
 
     <section class="card">
       <h4><Icon name="terminal" size={14} />CPU <span class="aside">{t('status.cores', { n: stats.cores })}</span></h4>
-      <div class="headline">
-        <strong class:hot={(cpu ?? 0) > 85}>{cpu === null ? '…' : `${cpu.toFixed(0)}%`}</strong>
-        <span class="muted">{t('status.average')}</span>
-      </div>
-      {#if coreHistory.length > 0}
+      <!-- Usage needs two samples, so it arrives one round after the rest: keep its skeleton
+           (the same shape as the panel skeleton) until then. -->
+      {#if cpu === null || coreHistory.length === 0}
+        <div class="headline"><span class="skeleton" style:width="64px" style:height="24px"></span></div>
+        <div class="cores skeleton-cores">
+          {#each [0, 1, 2, 3] as index (index)}<span class="skeleton"></span>{/each}
+        </div>
+      {:else}
+        <div class="headline">
+          <strong class:hot={cpu > 85}>{`${cpu.toFixed(0)}%`}</strong>
+          <span class="muted">{t('status.average')}</span>
+        </div>
         <div class="cores" bind:clientWidth={coresWidth} style:grid-template-columns="repeat({coreColumns}, minmax(0, 1fr))" aria-label={t('status.perCore')}>
           {#each coreHistory as points, index (index)}
             <CoreChart label={`CPU ${index}`} {points} capacity={HISTORY} compact={coreMinWidth < 110} />
