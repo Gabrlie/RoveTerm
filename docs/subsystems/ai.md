@@ -134,3 +134,18 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 - 每轮：模型有工具调用时逐个经 `tools::call` 执行（评估、审批、审计都在 `AiSession` 中），结果回填后再次调用模型，直到它只给出文字；一轮最多 40 次模型调用，超出时以 `max_turn_requests` 结束。
 - 回复与思考以 `AiEvent::Update` 流式发出（每次模型调用一个消息 id），执行结果照常以 `AiEvent::Executed` 报告，界面与审计不区分内置助手和 ACP 智能体。
 - 取消时丢弃进行中的模型请求、撤回待审批项；被打断的工具调用在下一轮开始时补上“已取消”的结果，保证对话对服务商仍然有效。对话过长时从最早的工具结果开始省略内容。
+
+## Agent 与检测
+
+应用以 `AgentBackend`（`prompt`、`cancel`、`stop`、`session`）驱动 AI 会话，内置助手与 ACP 智能体都实现它；`AgentRef` 为 `builtin:<服务商 id>` 或 `acp:<智能体 id>`。以后接管服务器上已有的智能体时，新增一种 `AgentRef` 与一个实现即可，界面和审计不变。
+
+`detect` 中的内置表：
+
+| id | 名称 | ACP 程序 | npx 包 | API key 变量 |
+|---|---|---|---|---|
+| `codex` | Codex | `codex-acp` | `@agentclientprotocol/codex-acp` | `CODEX_API_KEY`、`OPENAI_API_KEY` |
+| `claude` | Claude Code | `claude-agent-acp`（或旧的 `claude-code-acp`） | `@agentclientprotocol/claude-agent-acp` | `ANTHROPIC_API_KEY` |
+| `gemini` | Gemini CLI | `gemini --experimental-acp` | `@google/gemini-cli` | `GEMINI_API_KEY` |
+| `qwen` | Qwen Code | `qwen --experimental-acp` | `@qwen-code/qwen-code` | `OPENAI_API_KEY` |
+
+在 `search_path()`（登录 shell 的 PATH、本进程的 PATH、Homebrew、`~/.local/bin`、`~/.cargo/bin`、`~/.npm-global/bin`、`~/.bun/bin`、`~/.volta/bin`）上找到程序即为已安装；否则有 npx 时经 `npx -y <包>` 运行（首次使用时下载）；两者都没有的智能体不列出。

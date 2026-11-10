@@ -136,77 +136,6 @@ pub struct AiStarted {
     pub current_mode: Option<String>,
 }
 
-/// The PATH a login shell would have: GUI apps on macOS and Linux start with a minimal one, which
-/// misses Homebrew, npm and version-manager directories where agents are installed.
-fn search_path() -> String {
-    static PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    PATH.get_or_init(|| {
-        let current = std::env::var("PATH").unwrap_or_default();
-        #[cfg(unix)]
-        {
-            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-            let output = std::process::Command::new(&shell)
-                .args(["-ilc", "printf '%s' \"$PATH\""])
-                .stdin(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .output();
-            let login = output
-                .ok()
-                .filter(|output| output.status.success())
-                .and_then(|output| String::from_utf8(output.stdout).ok())
-                .map(|text| text.lines().last().unwrap_or_default().trim().to_owned())
-                .filter(|path| !path.is_empty());
-            let home = std::env::home_dir().unwrap_or_default();
-            let mut dirs: Vec<String> = Vec::new();
-            for part in login
-                .iter()
-                .flat_map(|path| path.split(':'))
-                .chain(current.split(':'))
-            {
-                if !part.is_empty() && !dirs.iter().any(|dir| dir == part) {
-                    dirs.push(part.to_owned());
-                }
-            }
-            for extra in ["/opt/homebrew/bin", "/usr/local/bin"] {
-                if !dirs.iter().any(|dir| dir == extra) {
-                    dirs.push(extra.to_owned());
-                }
-            }
-            for extra in [".local/bin", ".cargo/bin", ".npm-global/bin", ".bun/bin"] {
-                let dir = home.join(extra).to_string_lossy().into_owned();
-                if !dirs.contains(&dir) {
-                    dirs.push(dir);
-                }
-            }
-            dirs.join(":")
-        }
-        #[cfg(not(unix))]
-        {
-            current
-        }
-    })
-    .clone()
-}
-
-/// Finds `name` on `path`, as the shell would.
-fn which(name: &str, path: &str) -> Option<PathBuf> {
-    let candidates: Vec<String> = if cfg!(windows) {
-        let extensions = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".into());
-        extensions
-            .split(';')
-            .map(|extension| format!("{name}{}", extension.to_lowercase()))
-            .collect()
-    } else {
-        vec![name.to_owned()]
-    };
-    std::env::split_paths(path).find_map(|dir| {
-        candidates
-            .iter()
-            .map(|candidate| dir.join(candidate))
-            .find(|file| file.is_file())
-    })
-}
-
 fn find_agent(state: &AppState) -> Result<Option<AgentFound>, CommandError> {
     let prefs = state.vault.device_preferences()?.agent;
     if !prefs.command.is_empty() {
@@ -216,15 +145,15 @@ fn find_agent(state: &AppState) -> Result<Option<AgentFound>, CommandError> {
             source: "configured",
         }));
     }
-    let path = search_path();
-    if let Some(program) = which("codex-acp", &path) {
+    let path = rove_ai::detect::search_path();
+    if let Some(program) = rove_ai::detect::which("codex-acp", &path) {
         return Ok(Some(AgentFound {
             program: program.to_string_lossy().into_owned(),
             args: Vec::new(),
             source: "path",
         }));
     }
-    Ok(which("npx", &path).map(|npx| AgentFound {
+    Ok(rove_ai::detect::which("npx", &path).map(|npx| AgentFound {
         program: npx.to_string_lossy().into_owned(),
         args: vec!["-y".into(), CODEX_PACKAGE.into()],
         source: "npx",
@@ -350,7 +279,7 @@ pub async fn ai_start(
                 .ok_or_else(|| CommandError::new("ai.no_key", "no API key is stored"))?,
         ),
     };
-    let mut extra = vec![("PATH".to_owned(), search_path())];
+    let mut extra = vec![("PATH".to_owned(), rove_ai::detect::search_path())];
     let auth_methods: Vec<String> = match &key {
         Some(key) => {
             extra.push(("CODEX_API_KEY".into(), key.to_string()));
@@ -636,20 +565,3 @@ pub async fn ai_records(
         .collect())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn finds_programs_on_a_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let name = if cfg!(windows) { "tool.exe" } else { "tool" };
-        std::fs::write(dir.path().join(name), b"").unwrap();
-        let path = std::env::join_paths([dir.path()])
-            .unwrap()
-            .into_string()
-            .unwrap();
-        assert_eq!(which("tool", &path), Some(dir.path().join(name)));
-        assert_eq!(which("missing", &path), None);
-    }
-}
