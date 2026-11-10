@@ -223,6 +223,14 @@ class AiStore {
   agents = $state<AgentList | null>(null);
   private listening = false;
 
+  /** Approvals waiting for the user, across all conversations. */
+  get waiting(): number {
+    void this.version;
+    let count = 0;
+    for (const chat of this.chats.values()) count += chat.waiting;
+    return count;
+  }
+
   chat(context: AiContext): Chat {
     void this.version;
     const key = contextKey(context);

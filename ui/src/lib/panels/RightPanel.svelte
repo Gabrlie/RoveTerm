@@ -3,7 +3,8 @@
 </script>
 
 <script lang="ts">
-  // The right-hand panel: server status of the focused pane's remote, snippets, and the AI chat.
+  // The right-hand panel: one page at a time — server status of the focused pane's remote,
+  // snippets, or the AI chat — chosen from the activity rail.
   import IconButton from '../ui/IconButton.svelte';
   import StatusPanel from './StatusPanel.svelte';
   import SnippetsPanel from './SnippetsPanel.svelte';
@@ -13,7 +14,13 @@
 
   import AiPanel from '../ai/AiPanel.svelte';
 
-  let { page = $bindable('status'), onclose, onsettings }: { page?: RightPage; onclose: () => void; onsettings: () => void } = $props();
+  let { page, onclose, onsettings }: { page: RightPage; onclose: () => void; onsettings: () => void } = $props();
+
+  const TITLES: Record<RightPage, 'action.panel.status' | 'action.panel.snippets' | 'ai.title'> = {
+    status: 'action.panel.status',
+    snippets: 'action.panel.snippets',
+    ai: 'ai.title',
+  };
 
   const source = $derived.by(() => {
     const pane = workspace.focusedPane;
@@ -27,11 +34,7 @@
 
 <aside class="panel">
   <div class="tabs">
-    <div class="segmented" role="tablist">
-    <button type="button" role="tab" aria-selected={page === 'status'} class:active={page === 'status'} onclick={() => (page = 'status')}>{t('status.title')}</button>
-    <button type="button" role="tab" aria-selected={page === 'snippets'} class:active={page === 'snippets'} onclick={() => (page = 'snippets')}>{t('snippets.title')}</button>
-    <button type="button" role="tab" aria-selected={page === 'ai'} class:active={page === 'ai'} onclick={() => (page = 'ai')}>{t('ai.title')}</button>
-    </div>
+    <h3 class="title">{t(TITLES[page])}</h3>
     <span class="spacer"></span>
     <IconButton icon="close" label={t('common.close')} small onclick={onclose} />
   </div>
@@ -66,6 +69,11 @@
   }
   .spacer {
     flex: 1;
+  }
+  .title {
+    margin: 0;
+    font-size: var(--text-body);
+    font-weight: 600;
   }
   .body {
     flex: 1;

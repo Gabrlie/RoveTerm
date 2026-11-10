@@ -57,7 +57,11 @@ import restore from 'lucide-static/icons/copy.svg?raw';
 import winClose from 'lucide-static/icons/x.svg?raw';
 
 import history from 'lucide-static/icons/history.svg?raw';
+import bot from 'lucide-static/icons/bot-message-square.svg?raw';
+import snippets from 'lucide-static/icons/scroll-text.svg?raw';
 export const icons = {
+  bot,
+  snippets,
   history,
   add,
   close,

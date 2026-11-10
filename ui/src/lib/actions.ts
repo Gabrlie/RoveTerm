@@ -24,6 +24,8 @@ export type ActionId =
   | 'panel.right'
   | 'panel.bottom'
   | 'ai.open'
+  | 'panel.status'
+  | 'panel.snippets'
   | 'host.import'
   | 'help.shortcuts'
   | 'help.about'
@@ -64,6 +66,8 @@ export const actions: Action[] = [
   { id: 'panel.right', label: 'action.panel.right', keys: ['App+L'] },
   { id: 'panel.bottom', label: 'action.panel.bottom', keys: ['App+J'] },
   { id: 'ai.open', label: 'action.ai.open', keys: ['App+I'] },
+  { id: 'panel.status', label: 'action.panel.status', keys: [] },
+  { id: 'panel.snippets', label: 'action.panel.snippets', keys: [] },
   { id: 'host.import', label: 'action.host.import', keys: [] },
   { id: 'help.shortcuts', label: 'action.help.shortcuts', keys: [] },
   { id: 'help.about', label: 'action.help.about', keys: [] },

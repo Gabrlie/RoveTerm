@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import TitleBar from './lib/layout/TitleBar.svelte';
+  import ActivityRail from './lib/layout/ActivityRail.svelte';
   import EditorGroups from './lib/layout/EditorGroups.svelte';
   import CommandPalette from './lib/ui/CommandPalette.svelte';
   import HostSidebar from './lib/hosts/HostSidebar.svelte';
@@ -74,10 +75,38 @@
 
   let sidebarOpen = $state(stored('ui.sidebar', true));
   $effect(() => store('ui.sidebar', sidebarOpen));
-  let rightOpen = $state(stored('ui.panel.right', false));
-  /** The right panel's page. */
-  let rightPage = $state<RightPage>('status');
-  $effect(() => store('ui.panel.right', rightOpen));
+  const RIGHT_PAGES: RightPage[] = ['status', 'ai', 'snippets'];
+  function storedPage(key: string): RightPage | null {
+    try {
+      const value = localStorage.getItem(key);
+      return RIGHT_PAGES.find((page) => page === value) ?? null;
+    } catch {
+      return null;
+    }
+  }
+  /** The right panel's open page; `null` when closed. One page at a time, as in VSCode. */
+  let rightPage = $state<RightPage | null>(storedPage('ui.panel.rightPage'));
+  /** The page `panel.right` reopens. */
+  let lastRightPage: RightPage = storedPage('ui.panel.rightPage') ?? 'status';
+  $effect(() => {
+    try {
+      localStorage.setItem('ui.panel.rightPage', rightPage ?? '');
+    } catch {
+      // Storage unavailable: the panel resets next run.
+    }
+  });
+
+  /** Opens `page`, or closes the panel when `page` is already open. */
+  function toggleRight(page: RightPage): void {
+    rightPage = rightPage === page ? null : page;
+    lastRightPage = page;
+  }
+
+  /** The focused tab is on a remote host. */
+  const focusedRemote = $derived.by(() => {
+    const pane = workspace.focusedPane;
+    return !!pane && pane.target.kind !== 'local';
+  });
   let bottomOpen = $state(stored('ui.panel.bottom', false));
   $effect(() => store('ui.panel.bottom', bottomOpen));
   let bottomMounted = $state(false);
@@ -277,14 +306,19 @@
         keysOpen = true;
         break;
       case 'panel.right':
-        rightOpen = !rightOpen;
+        rightPage = rightPage ? null : lastRightPage;
+        break;
+      case 'panel.status':
+        toggleRight('status');
+        break;
+      case 'panel.snippets':
+        toggleRight('snippets');
         break;
       case 'panel.bottom':
         bottomOpen = !bottomOpen;
         break;
       case 'ai.open':
-        rightOpen = true;
-        rightPage = 'ai';
+        toggleRight('ai');
         break;
       case 'host.quickConnect':
         quickOpen = true;
@@ -362,7 +396,7 @@
 <svelte:window onkeydowncapture={onKeydown} />
 
 <div class="app">
-  <TitleBar {sidebarOpen} {rightOpen} {bottomOpen} onaction={run} />
+  <TitleBar {sidebarOpen} onaction={run} />
   <div class="body">
   {#if sidebarOpen}
     <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onnotice={(message) => showNotice(message, 'error')} onsettings={() => (settingsOpen = true)} onkeys={() => (keysOpen = true)} />
@@ -393,14 +427,15 @@
       </div>
     {/if}
     </div>
-    {#if rightOpen}
+    {#if rightPage}
       <div class="edge vertical" role="separator" aria-orientation="vertical" onpointerdown={resizeRight}></div>
       <div class="right" style:width="{rightSize}px">
-        <RightPanel bind:page={rightPage} onclose={() => (rightOpen = false)} onsettings={() => openSettings('ai')} />
+        <RightPanel page={rightPage} onclose={() => (rightPage = null)} onsettings={() => openSettings('ai')} />
       </div>
     {/if}
     </div>
   </div>
+  <ActivityRail page={rightPage} {bottomOpen} remote={focusedRemote} onaction={run} />
   </div>
 </div>
 
@@ -471,7 +506,8 @@
     min-height: 0;
     display: flex;
     gap: var(--gap-panel);
-    padding: 0 var(--gap-panel) var(--gap-panel);
+    /* The activity rail is the right edge, so no padding there. */
+    padding: 0 0 var(--gap-panel) var(--gap-panel);
   }
   .main {
     flex: 1;
