@@ -29,6 +29,7 @@ export const MENUS: Menu[] = [
       'sidebar.toggle',
       'panel.right',
       'panel.bottom',
+      'ai.open',
       '-',
       'pane.splitRight',
       'pane.splitDown',

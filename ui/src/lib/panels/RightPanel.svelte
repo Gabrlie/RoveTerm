@@ -1,5 +1,9 @@
+<script lang="ts" module>
+  export type RightPage = 'status' | 'snippets' | 'ai';
+</script>
+
 <script lang="ts">
-  // The right-hand panel: server status of the focused pane's remote, and snippets.
+  // The right-hand panel: server status of the focused pane's remote, snippets, and the AI chat.
   import IconButton from '../ui/IconButton.svelte';
   import StatusPanel from './StatusPanel.svelte';
   import SnippetsPanel from './SnippetsPanel.svelte';
@@ -7,9 +11,9 @@
   import { remoteSourceOf, sourceKey, workspace, hostOf } from '../workspace/workspace.svelte';
   import { hosts } from '../hosts/hosts.svelte';
 
-  type Page = 'status' | 'snippets';
+  import AiPanel from '../ai/AiPanel.svelte';
 
-  let { page = $bindable('status'), onclose }: { page?: Page; onclose: () => void } = $props();
+  let { page = $bindable('status'), onclose, onsettings }: { page?: RightPage; onclose: () => void; onsettings: () => void } = $props();
 
   const source = $derived.by(() => {
     const pane = workspace.focusedPane;
@@ -26,12 +30,15 @@
     <div class="segmented" role="tablist">
     <button type="button" role="tab" aria-selected={page === 'status'} class:active={page === 'status'} onclick={() => (page = 'status')}>{t('status.title')}</button>
     <button type="button" role="tab" aria-selected={page === 'snippets'} class:active={page === 'snippets'} onclick={() => (page = 'snippets')}>{t('snippets.title')}</button>
+    <button type="button" role="tab" aria-selected={page === 'ai'} class:active={page === 'ai'} onclick={() => (page = 'ai')}>{t('ai.title')}</button>
     </div>
     <span class="spacer"></span>
     <IconButton icon="close" label={t('common.close')} small onclick={onclose} />
   </div>
-  <div class="body">
-    {#if page === 'status'}
+  <div class="body" class:fill={page === 'ai'}>
+    {#if page === 'ai'}
+      <AiPanel {onsettings} />
+    {:else if page === 'status'}
       {#key source ? sourceKey(source) : ''}
         <StatusPanel {source} visible={true} />
       {/key}
@@ -64,5 +71,9 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+  }
+  /* The AI chat scrolls its own list and keeps its composer in view. */
+  .body.fill {
+    overflow: hidden;
   }
 </style>

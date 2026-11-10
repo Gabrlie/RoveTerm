@@ -14,7 +14,7 @@
   import { readClipboard } from './lib/ui/clipboard';
   import KeysDialog from './lib/keys/KeysDialog.svelte';
   import HomePage from './lib/home/HomePage.svelte';
-  import RightPanel from './lib/panels/RightPanel.svelte';
+  import RightPanel, { type RightPage } from './lib/panels/RightPanel.svelte';
   import BottomPanel from './lib/panels/BottomPanel.svelte';
   import { keys } from './lib/keys/keys.svelte';
   import QuickConnect from './lib/hosts/QuickConnect.svelte';
@@ -75,6 +75,8 @@
   let sidebarOpen = $state(stored('ui.sidebar', true));
   $effect(() => store('ui.sidebar', sidebarOpen));
   let rightOpen = $state(stored('ui.panel.right', false));
+  /** The right panel's page. */
+  let rightPage = $state<RightPage>('status');
   $effect(() => store('ui.panel.right', rightOpen));
   let bottomOpen = $state(stored('ui.panel.bottom', false));
   $effect(() => store('ui.panel.bottom', bottomOpen));
@@ -120,6 +122,12 @@
   let settingsOpen = $state(false);
   /** Section the settings dialog opens on; the first one when unset. */
   let settingsSection = $state<SettingsSection | undefined>(undefined);
+
+  /** Opens settings on `section` (the first one when unset). */
+  function openSettings(section?: SettingsSection): void {
+    settingsSection = section;
+    settingsOpen = true;
+  }
 
   async function importSshConfig(): Promise<void> {
     try {
@@ -274,6 +282,10 @@
       case 'panel.bottom':
         bottomOpen = !bottomOpen;
         break;
+      case 'ai.open':
+        rightOpen = true;
+        rightPage = 'ai';
+        break;
       case 'host.quickConnect':
         quickOpen = true;
         break;
@@ -384,7 +396,7 @@
     {#if rightOpen}
       <div class="edge vertical" role="separator" aria-orientation="vertical" onpointerdown={resizeRight}></div>
       <div class="right" style:width="{rightSize}px">
-        <RightPanel onclose={() => (rightOpen = false)} />
+        <RightPanel bind:page={rightPage} onclose={() => (rightOpen = false)} onsettings={() => openSettings()} />
       </div>
     {/if}
     </div>

@@ -760,3 +760,144 @@ export function syncNow(): Promise<SyncReport> {
 export function syncDisable(): Promise<void> {
   return invoke('sync_disable');
 }
+
+// ---- AI ------------------------------------------------------------------------------------
+
+/** Where an AI session works. */
+export type AiContext = { kind: 'local' } | { kind: 'host'; host_id: HostId } | { kind: 'quick'; address: string };
+
+export interface AiStatus {
+  /** The agent this device would start; `null` when none is found. */
+  agent: { program: string; args: string[]; source: 'configured' | 'path' | 'npx' } | null;
+  has_key: boolean;
+}
+
+/** A mode the agent itself offers (such as read-only). */
+export interface AgentMode {
+  id: string;
+  name: string;
+  description: string | null;
+}
+
+export interface AiStarted {
+  id: string;
+  /** The host the session works on. */
+  host: string;
+  agent: string | null;
+  agent_version: string | null;
+  modes: AgentMode[];
+  current_mode: string | null;
+}
+
+export type Risk = 'read_only' | 'modify' | 'dangerous';
+
+export interface RiskReason {
+  code: string;
+  detail: string;
+}
+
+export interface Assessment {
+  risk: Risk;
+  programs: string[];
+  opaque: boolean;
+  reasons: RiskReason[];
+}
+
+export type AiOperation =
+  | { op: 'command'; command: string }
+  | { op: 'read_file'; path: string }
+  | { op: 'write_file'; path: string }
+  | { op: 'list_dir'; path: string }
+  | { op: 'read_terminal' }
+  | { op: 'agent_tool'; kind: string; title: string; command: string | null };
+
+export type ToolContent =
+  | { type: 'text'; text: string }
+  | { type: 'diff'; path: string; old_text: string | null; new_text: string }
+  | { type: 'terminal'; terminal_id: string };
+
+export interface ToolCall {
+  id: string;
+  title: string | null;
+  kind: string | null;
+  status: string | null;
+  content: ToolContent[];
+  locations: string[];
+  raw_input: unknown;
+}
+
+export interface PlanEntry {
+  content: string;
+  priority: string;
+  status: string;
+}
+
+export type SessionUpdate =
+  | { kind: 'message'; text: string; message_id: string | null }
+  | { kind: 'thought'; text: string }
+  | { kind: 'tool_call'; call: ToolCall; changed: boolean }
+  | { kind: 'plan'; entries: PlanEntry[] }
+  | { kind: 'mode_changed'; mode_id: string };
+
+export interface CommandOutput {
+  stdout: string;
+  stderr: string;
+  exit_code: number | null;
+  truncated: boolean;
+}
+
+export type AiOutcome =
+  | { result: 'command'; output: CommandOutput }
+  | { result: 'agent_tool' }
+  | { result: 'read'; bytes: number; sha256: string; truncated: boolean }
+  | { result: 'written'; bytes: number; sha256: string; previous_sha256: string | null; lines_before: number; lines_after: number }
+  | { result: 'listed'; entries: number }
+  | { result: 'denied' }
+  | { result: 'failed'; error: string };
+
+export type AiAnswer = 'allow_once' | 'allow_session' | 'deny';
+
+export type AiEvent =
+  | { event: 'update'; update: SessionUpdate }
+  | { event: 'approval'; request_id: number; operation: AiOperation; assessment: Assessment; rememberable: boolean; agent_tool: boolean }
+  | { event: 'approved'; request_id: number; answer: AiAnswer | null }
+  | { event: 'executed'; operation: AiOperation; assessment: Assessment; approved: boolean; outcome: AiOutcome };
+
+export function aiStatus(): Promise<AiStatus> {
+  return invoke('ai_status');
+}
+
+/** Stores the API key sealed on this device; `null` removes it. */
+export function aiSetKey(key: string | null): Promise<void> {
+  return invoke('ai_set_key', { key });
+}
+
+/** Starts an agent on `context`; `terminal` is the user's terminal session there. */
+export function aiStart(context: AiContext, terminal: SessionId | null): Promise<AiStarted> {
+  return invoke('ai_start', { context, terminal });
+}
+
+/** Sends a prompt and resolves with the stop reason when the turn ends. */
+export function aiPrompt(id: string, text: string): Promise<string> {
+  return invoke('ai_prompt', { id, text });
+}
+
+export function aiCancel(id: string): Promise<void> {
+  return invoke('ai_cancel', { id });
+}
+
+export function aiAnswer(id: string, requestId: number, answer: AiAnswer): Promise<boolean> {
+  return invoke('ai_answer', { id, requestId, answer });
+}
+
+export function aiSetMode(id: string, mode: AiMode): Promise<void> {
+  return invoke('ai_set_mode', { id, mode });
+}
+
+export function aiStop(id: string): Promise<void> {
+  return invoke('ai_stop', { id });
+}
+
+export function onAiUpdate(handler: (id: string, event: AiEvent) => void): Promise<UnlistenFn> {
+  return listen<{ id: string; event: AiEvent }>('ai-update', (event) => handler(event.payload.id, event.payload.event));
+}
