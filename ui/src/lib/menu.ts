@@ -39,7 +39,7 @@ export const MENUS: Menu[] = [
       'tab.prev',
     ],
   },
-  { id: 'host', label: 'menu.host', items: ['files.open', 'forward.manage', 'keys.manage'] },
+  { id: 'host', label: 'menu.host', items: ['files.open', 'forward.manage'] },
   { id: 'help', label: 'menu.help', items: ['help.shortcuts', 'help.about'] },
 ];
 

@@ -358,7 +358,7 @@
   <TitleBar {sidebarOpen} {rightOpen} {bottomOpen} onaction={run} />
   <div class="body">
   {#if sidebarOpen}
-    <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onnotice={showNotice} onsettings={() => (settingsOpen = true)} />
+    <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onnotice={showNotice} onsettings={() => (settingsOpen = true)} onkeys={() => (keysOpen = true)} />
   {/if}
   <div class="main">
     <div class="workarea">

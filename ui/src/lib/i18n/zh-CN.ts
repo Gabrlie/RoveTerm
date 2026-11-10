@@ -386,7 +386,6 @@ export const zhCN: Messages = {
   'hostkey.trust': '信任并连接',
   'hostkey.reject': '拒绝',
   'vault.locked': '凭据库已锁定，点击解锁',
-  'vault.unlocked': '凭据库已解锁',
   'vault.keyLost': '设备密钥丢失，点击重置',
   'vault.unlockFailed': '无法解锁凭据库',
   'vault.confirmReset': '设备密钥丢失，已保存的凭据无法解密。删除这些凭据并重新开始吗？',

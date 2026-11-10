@@ -384,7 +384,6 @@ export const en = {
   'hostkey.trust': 'Trust and connect',
   'hostkey.reject': 'Reject',
   'vault.locked': 'Credentials locked — click to unlock',
-  'vault.unlocked': 'Credentials unlocked',
   'vault.keyLost': 'Device key missing — click to reset',
   'vault.unlockFailed': 'Could not unlock the credential vault',
   'vault.confirmReset': 'The device key is missing, so saved credentials cannot be decrypted. Delete them and start over?',

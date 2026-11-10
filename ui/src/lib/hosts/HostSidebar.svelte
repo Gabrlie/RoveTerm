@@ -19,9 +19,11 @@
     onedit: (host: HostEntry | null) => void;
     onnotice: (message: string) => void;
     onsettings: () => void;
+    /** Opens the key library. */
+    onkeys: () => void;
   }
 
-  let { onconnect, onfiles, onforwards, onedit, onnotice, onsettings }: Props = $props();
+  let { onconnect, onfiles, onforwards, onedit, onnotice, onsettings, onkeys }: Props = $props();
 
   let menu = $state<{ x: number; y: number; host: HostEntry } | null>(null);
 
@@ -107,10 +109,18 @@
     <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.host)} onclose={() => (menu = null)} />
   {/if}
   <footer>
-    <button type="button" class="vault" class:unlocked={vault.unlocked} onclick={unlock} disabled={vault.unlocked}>
-      <Icon name={vault.unlocked ? 'unlock' : 'lock'} size={14} />
-      <span>{vault.unlocked ? t('vault.unlocked') : vault.keyLost ? t('vault.keyLost') : t('vault.locked')}</span>
+    <button type="button" class="footer-button" onclick={onkeys}>
+      <Icon name="key" size={14} />
+      <span>{t('keys.title')}</span>
     </button>
+    <span class="spacer"></span>
+    <!-- Only a vault that needs attention shows up here; an unlocked one is the normal state. -->
+    {#if !vault.unlocked}
+      <button type="button" class="footer-button vault" onclick={unlock} title={vault.keyLost ? t('vault.keyLost') : t('vault.locked')}>
+        <Icon name="lock" size={14} />
+        <span>{vault.keyLost ? t('vault.keyLost') : t('vault.locked')}</span>
+      </button>
+    {/if}
     <IconButton icon="settings" label={t('action.settings.open')} small onclick={onsettings} />
   </footer>
 </aside>
@@ -242,14 +252,18 @@
   footer {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: var(--space-1);
     padding: var(--space-2);
     box-shadow: inset 0 1px 0 var(--separator);
   }
-  .vault {
+  .spacer {
+    flex: 1;
+  }
+  .footer-button {
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    min-width: 0;
     height: 26px;
     padding: 0 var(--space-2);
     border: none;
@@ -260,17 +274,20 @@
     font-size: var(--text-footnote);
     cursor: pointer;
   }
-  .vault :global(svg) {
-    color: var(--warning);
+  .footer-button span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .vault.unlocked :global(svg) {
-    color: var(--success);
-  }
-  .vault:hover:not(:disabled) {
+  .footer-button:hover {
     background: var(--fill-hover);
     color: var(--fg);
   }
-  .vault.unlocked {
-    cursor: default;
+  .vault :global(svg) {
+    color: var(--warning);
+  }
+  /* The key library keeps its label; a vault warning shrinks first. */
+  .footer-button:not(.vault) {
+    flex: none;
   }
 </style>
