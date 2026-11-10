@@ -235,6 +235,12 @@ impl AiSession {
         &self.host
     }
 
+    /// Reports `event` to the session's sink, for backends that stream on their own (the built-in
+    /// assistant).
+    pub fn emit(&self, event: AiEvent) {
+        (self.sink)(event);
+    }
+
     /// Binds the session to the agent's session id.
     pub fn bind(&self, acp_session: &str) {
         let _ = self.acp_session.set(acp_session.to_owned());
