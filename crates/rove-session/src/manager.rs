@@ -226,6 +226,11 @@ impl SessionManager {
         Ok((snapshot, output.exited.clone()))
     }
 
+    /// The replay buffer's contents, without touching the session's sink.
+    pub fn snapshot(&self, id: SessionId) -> Result<Bytes, SessionError> {
+        Ok(self.entry(id)?.output.lock().replay.snapshot())
+    }
+
     /// Lists sessions in no particular order.
     pub fn list(&self) -> Vec<SessionSummary> {
         self.sessions

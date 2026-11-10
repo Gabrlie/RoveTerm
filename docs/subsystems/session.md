@@ -32,6 +32,7 @@ pub trait TerminalSession: Send + Sync {
 | `write` / `resize` | 转发给对应的 `TerminalSession`；未知 ID 返回 `NotFound` |
 | `close(id)` | 从表中移除、断开 sink、调用 `TerminalSession::close` |
 | `reattach(id, sink) -> (Bytes, Option<ExitStatus>)` | 原子地取回放快照并替换 sink |
+| `snapshot(id) -> Bytes` | 只读取回放缓冲，sink 不变 |
 | `list()` | 列出会话及其退出状态 |
 | `close_all()` | 关闭全部会话，用于退出应用时 |
 

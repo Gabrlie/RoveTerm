@@ -153,6 +153,24 @@ async fn reattach_replays_history_and_switches_sink() {
 }
 
 #[tokio::test]
+async fn snapshot_reads_history_and_keeps_the_sink() {
+    let manager = SessionManager::new(SessionConfig::default(), EventBus::default());
+    let sink = Arc::new(RecordingSink::default());
+    let (id, _session, tx) = open(&manager, sink.clone());
+    tx.send(TerminalOutput::Data(Bytes::from_static(b"a")))
+        .await
+        .unwrap();
+    settle().await;
+    assert_eq!(&manager.snapshot(id).unwrap()[..], b"a");
+    tx.send(TerminalOutput::Data(Bytes::from_static(b"b")))
+        .await
+        .unwrap();
+    settle().await;
+    assert_eq!(sink.data(), b"ab");
+    assert_eq!(&manager.snapshot(id).unwrap()[..], b"ab");
+}
+
+#[tokio::test]
 async fn exit_is_forwarded_and_announced() {
     let events = EventBus::default();
     let exits = Arc::new(Mutex::new(Vec::new()));

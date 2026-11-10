@@ -8,6 +8,7 @@
 - `SessionManager::attach` 必须在 Tokio 运行时内调用；它为每个会话启动一个输出泵任务，任务在输出 channel 关闭时结束。
 - `OutputSink::send` 不能阻塞；返回 `false` 表示接收方已经消失，此后不再转发，但仍继续记录回放。
 - `reattach` 在同一把锁内取回放快照并替换 sink，新 sink 收到的恰好是快照之后的输出。
+- `snapshot` 只读取回放缓冲，不影响当前 sink（供 AI 读取终端内容）。
 - 会话结束后仍保留在表中，直到调用 `close`；`TerminalSession::close` 是幂等的。
 
 ## 配置（`[plugin.session]`）
