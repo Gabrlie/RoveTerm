@@ -544,6 +544,98 @@ pub async fn ai_stop(state: State<'_, AppState>, id: String) -> Result<(), Comma
     Ok(())
 }
 
+/// A past AI session, from the journal.
+#[derive(Debug, Serialize)]
+pub struct AiSessionSummary {
+    pub id: String,
+    /// Start time, Unix milliseconds.
+    pub started: i64,
+    pub host: Option<String>,
+    pub agent: Option<String>,
+}
+
+/// One audit record of an AI session.
+#[derive(Debug, Serialize)]
+pub struct AiRecord {
+    pub ts: i64,
+    pub kind: String,
+    pub payload: serde_json::Value,
+}
+
+/// Most sessions listed.
+const MAX_SESSIONS: u32 = 100;
+/// Most records read of one session.
+const MAX_RECORDS: u32 = 5000;
+
+/// Lists recent AI sessions, newest first.
+#[tauri::command]
+pub async fn ai_sessions(
+    state: State<'_, AppState>,
+) -> Result<Vec<AiSessionSummary>, CommandError> {
+    let journal = state.journal.clone();
+    let records = tauri::async_runtime::spawn_blocking(move || {
+        journal.read(&rove_journal::JournalQuery {
+            kind: Some(rove_ai::audit::KIND_STARTED.to_owned()),
+            limit: Some(MAX_SESSIONS),
+            newest_first: true,
+            ..rove_journal::JournalQuery::default()
+        })
+    })
+    .await
+    .map_err(|error| CommandError::new("app.task", error.to_string()))?
+    .map_err(|error| CommandError::new("journal.read", error.to_string()))?;
+    Ok(records
+        .into_iter()
+        .filter_map(|record| {
+            Some(AiSessionSummary {
+                id: record.session_id?,
+                started: record.ts,
+                host: record
+                    .payload
+                    .get("host")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned),
+                agent: record
+                    .payload
+                    .get("agent")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned),
+            })
+        })
+        .collect())
+}
+
+/// The audit records of AI session `id`, oldest first.
+#[tauri::command]
+pub async fn ai_records(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Vec<AiRecord>, CommandError> {
+    if !id.starts_with("ai-") || id.len() > 64 {
+        return Err(CommandError::new("input.invalid", "not an AI session id"));
+    }
+    let journal = state.journal.clone();
+    let records = tauri::async_runtime::spawn_blocking(move || {
+        journal.read(&rove_journal::JournalQuery {
+            session_id: Some(id),
+            limit: Some(MAX_RECORDS),
+            ..rove_journal::JournalQuery::default()
+        })
+    })
+    .await
+    .map_err(|error| CommandError::new("app.task", error.to_string()))?
+    .map_err(|error| CommandError::new("journal.read", error.to_string()))?;
+    Ok(records
+        .into_iter()
+        .filter(|record| record.kind.starts_with("ai/"))
+        .map(|record| AiRecord {
+            ts: record.ts,
+            kind: record.kind,
+            payload: record.payload,
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

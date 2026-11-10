@@ -56,7 +56,9 @@ import maximize from 'lucide-static/icons/square.svg?raw';
 import restore from 'lucide-static/icons/copy.svg?raw';
 import winClose from 'lucide-static/icons/x.svg?raw';
 
+import history from 'lucide-static/icons/history.svg?raw';
 export const icons = {
+  history,
   add,
   close,
   splitRight,

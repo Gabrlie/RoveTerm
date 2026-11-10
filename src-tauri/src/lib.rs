@@ -213,6 +213,8 @@ pub fn run() {
             commands::ai::ai_answer,
             commands::ai::ai_set_mode,
             commands::ai::ai_stop,
+            commands::ai::ai_sessions,
+            commands::ai::ai_records,
             commands::sync::sync_status,
             commands::sync::sync_connect,
             commands::sync::sync_probe,

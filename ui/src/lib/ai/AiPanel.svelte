@@ -7,6 +7,7 @@
   import IconButton from '../ui/IconButton.svelte';
   import Select from '../ui/Select.svelte';
   import Markdown from './Markdown.svelte';
+  import AuditDialog from './AuditDialog.svelte';
   import { ai, type ChatItem } from './ai.svelte';
   import { hostOf, workspace } from '../workspace/workspace.svelte';
   import { hosts } from '../hosts/hosts.svelte';
@@ -41,6 +42,7 @@
   const hostInText = $derived(context.kind === 'local' ? t('ai.localInText') : hostName);
 
   let draft = $state('');
+  let historyOpen = $state(false);
   let list = $state<HTMLDivElement>();
   /** Dangerous approvals the user has acknowledged, by request id. */
   let acknowledged = $state<Record<number, boolean>>({});
@@ -122,6 +124,7 @@
     <span class="host" title={hostName}><Icon name={context.kind === 'local' ? 'terminal' : 'server'} size={13} />{hostName}</span>
     <span class="spacer"></span>
     <div class="mode"><Select label={t('ai.mode')} value={chat.mode} options={MODES} onchange={(mode) => void chat.setMode(mode)} /></div>
+    <IconButton icon="history" label={t('ai.history')} small onclick={() => (historyOpen = true)} />
     <IconButton icon="add" label={t('ai.newChat')} small disabled={chat.busy || chat.starting} onclick={() => void ai.reset(chat)} />
   </div>
 
@@ -231,6 +234,10 @@
     {/if}
   </div>
 </div>
+
+{#if historyOpen}
+  <AuditDialog initial={chat.id} onclose={() => (historyOpen = false)} />
+{/if}
 
 <style>
   .ai {

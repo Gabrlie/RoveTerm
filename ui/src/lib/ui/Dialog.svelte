@@ -32,6 +32,13 @@
     };
   });
 
+  /** Moves the dialog to <body>: inside a translucent panel (backdrop-filter) a fixed element
+   *  would be positioned and clipped by the panel instead of the window. */
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return { destroy: () => node.remove() };
+  }
+
   function onKeydown(event: KeyboardEvent): void {
     if (event.key !== 'Escape' || stack.at(-1) !== id || event.defaultPrevented) return;
     event.preventDefault();
@@ -41,7 +48,7 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="backdrop" role="presentation">
+<div class="backdrop" role="presentation" use:portal>
   <div class="dialog" role="dialog" aria-modal="true" aria-label={title} tabindex="-1" style:width="min({width}px, 92vw)" bind:this={panel}>
     <header>{title}</header>
     <div class="body">{@render children()}</div>

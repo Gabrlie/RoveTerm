@@ -901,3 +901,29 @@ export function aiStop(id: string): Promise<void> {
 export function onAiUpdate(handler: (id: string, event: AiEvent) => void): Promise<UnlistenFn> {
   return listen<{ id: string; event: AiEvent }>('ai-update', (event) => handler(event.payload.id, event.payload.event));
 }
+
+/** A past AI session. */
+export interface AiSessionSummary {
+  id: string;
+  /** Unix milliseconds. */
+  started: number;
+  host: string | null;
+  agent: string | null;
+}
+
+/** One audit record of an AI session. */
+export interface AiRecord {
+  ts: number;
+  kind: string;
+  payload: Record<string, unknown>;
+}
+
+/** Recent AI sessions, newest first. */
+export function aiSessions(): Promise<AiSessionSummary[]> {
+  return invoke('ai_sessions');
+}
+
+/** The audit records of AI session `id`, oldest first. */
+export function aiRecords(id: string): Promise<AiRecord[]> {
+  return invoke('ai_records', { id });
+}

@@ -99,6 +99,7 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 | `ai_start(context, terminal)` | 在 `local`、已保存主机或快速连接上启动 Agent；`terminal` 为用户在该主机的终端会话，供 `terminal_snapshot` 读取 |
 | `ai_prompt(id, text)` | 发出提示并等待回合结束，返回结束原因 |
 | `ai_cancel` / `ai_answer` / `ai_set_mode` / `ai_stop` | 取消回合、回答审批、切换审批模式、结束会话 |
+| `ai_sessions()` / `ai_records(id)` | 从 Journal 读出最近 100 个 AI 会话，以及某个会话的全部 `ai/*` 记录（最多 5000 条），供审计回看 |
 
 启动时：
 
