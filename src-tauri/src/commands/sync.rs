@@ -71,8 +71,10 @@ impl SyncTarget {
 /// Sync as the settings page shows it.
 #[derive(Debug, Serialize)]
 pub struct SyncStatus {
-    /// Sync is set up on this device.
+    /// Storage is chosen on this device.
     pub configured: bool,
+    /// The storage can be reached: a folder, or WebDAV with its password on this device.
+    pub connected: bool,
     pub target: Option<SyncTarget>,
     /// The sync key is available (the vault is unlocked and holds it).
     pub ready: bool,
@@ -160,7 +162,7 @@ fn write_local(
     vault: &Vault,
     target: &SyncTarget,
     state: &SyncState,
-    key: &SyncKey,
+    key: Option<&SyncKey>,
     secret: Option<&Zeroizing<String>>,
 ) -> Result<(), CommandError> {
     let local = SyncLocal {
@@ -168,19 +170,26 @@ fn write_local(
             .map_err(|error| CommandError::new("sync.format", error.to_string()))?,
         state: serde_json::to_value(state)
             .map_err(|error| CommandError::new("sync.format", error.to_string()))?,
-        key: Some(key.to_bytes()),
+        key: key.map(SyncKey::to_bytes),
         secret: secret.cloned(),
     };
     Ok(vault.set_sync_local(Some(&local))?)
 }
 
-/// The state a set-up round starts from. Re-entering the password for the space this device
-/// already syncs with keeps its device id and history; otherwise every local record would look
-/// new, win over newer edits from other devices, and the old segments would be orphaned.
-fn initial_state(previous: Option<Local>, target: &SyncTarget, create: bool) -> SyncState {
+/// What connecting to the storage found.
+#[derive(Debug, Serialize)]
+pub struct SyncProbe {
+    /// A sync space already exists there: the next step joins it rather than creating one.
+    pub exists: bool,
+}
+
+/// The state and key kept when connecting to `target`. Reconnecting to the storage this device
+/// already syncs with keeps its device id, history and key; otherwise every local record would
+/// look new and win over newer edits from other devices, and the old segments would be orphaned.
+fn kept_state(previous: Option<Local>, target: &SyncTarget) -> (SyncState, Option<SyncKey>) {
     match previous {
-        Some(local) if !create && local.target == *target => local.state,
-        _ => SyncState::new(&uuid::Uuid::now_v7().to_string()),
+        Some(local) if local.target == *target => (local.state, local.key),
+        _ => (SyncState::new(&uuid::Uuid::now_v7().to_string()), None),
     }
 }
 
@@ -188,21 +197,26 @@ fn initial_state(previous: Option<Local>, target: &SyncTarget, create: bool) -> 
 #[tauri::command]
 pub fn sync_status(state: State<'_, AppState>) -> Result<SyncStatus, CommandError> {
     Ok(match read_local(&state.vault)? {
-        Some(local) => SyncStatus {
-            configured: true,
-            ready: local.key.is_some()
-                && (local.secret.is_some() || matches!(local.target, SyncTarget::Folder { .. })),
-            target: Some(local.target),
-            device: Some(local.state.device),
-            records: local
-                .state
-                .known
-                .values()
-                .filter(|known| !known.deleted)
-                .count(),
-        },
+        Some(local) => {
+            let connected =
+                local.secret.is_some() || matches!(local.target, SyncTarget::Folder { .. });
+            SyncStatus {
+                configured: true,
+                connected,
+                ready: connected && local.key.is_some(),
+                target: Some(local.target),
+                device: Some(local.state.device),
+                records: local
+                    .state
+                    .known
+                    .values()
+                    .filter(|known| !known.deleted)
+                    .count(),
+            }
+        }
         None => SyncStatus {
             configured: false,
+            connected: false,
             target: None,
             ready: false,
             device: None,
@@ -211,18 +225,15 @@ pub fn sync_status(state: State<'_, AppState>) -> Result<SyncStatus, CommandErro
     })
 }
 
-/// Sets up sync on this device: creates a new space at `target` protected by `password`
-/// (`create`), or joins the existing one there. Then runs a first round. `storage_password` is
-/// the WebDAV password; it is stored sealed with the device key.
+/// Connects to the storage at `target` (checking the address and, for WebDAV,
+/// `storage_password`), stores both on this device (the password sealed) and reports whether a
+/// sync space exists there. Sync starts with [`sync_setup`].
 #[tauri::command]
-pub async fn sync_setup(
+pub async fn sync_connect(
     state: State<'_, AppState>,
     target: SyncTarget,
-    password: String,
-    create: bool,
     storage_password: Option<String>,
-) -> Result<Report, CommandError> {
-    let password = Zeroizing::new(password);
+) -> Result<SyncProbe, CommandError> {
     let secret = storage_password
         .filter(|value| !value.is_empty())
         .map(Zeroizing::new);
@@ -235,22 +246,77 @@ pub async fn sync_setup(
             "storage password too long",
         ));
     }
-    if password.len() > MAX_PASSWORD || (create && password.chars().count() < MIN_PASSWORD) {
+    state.ensure_unlocked().await?;
+    let backend = target.backend(secret.as_deref().map(String::as_str))?;
+    let exists = rove_sync::space_exists(backend.as_ref())
+        .await
+        .map_err(sync_error)?;
+    let _guard = state.sync_lock.lock().await;
+    let (sync_state, key) = kept_state(read_local(&state.vault)?, &target);
+    write_local(
+        &state.vault,
+        &target,
+        &sync_state,
+        key.as_ref(),
+        secret.as_ref(),
+    )?;
+    Ok(SyncProbe { exists })
+}
+
+/// Looks again whether a space exists at the connected storage.
+#[tauri::command]
+pub async fn sync_probe(state: State<'_, AppState>) -> Result<SyncProbe, CommandError> {
+    state.ensure_unlocked().await?;
+    let local = read_local(&state.vault)?
+        .ok_or_else(|| CommandError::new("sync.not_configured", "sync is not set up"))?;
+    let backend = local
+        .target
+        .backend(local.secret.as_deref().map(String::as_str))?;
+    let exists = rove_sync::space_exists(backend.as_ref())
+        .await
+        .map_err(sync_error)?;
+    Ok(SyncProbe { exists })
+}
+
+/// Starts syncing with the connected storage: joins the space there with `password`, or creates
+/// one protected by it when there is none (at least 8 characters). Then runs a first round.
+#[tauri::command]
+pub async fn sync_setup(
+    state: State<'_, AppState>,
+    password: String,
+) -> Result<Report, CommandError> {
+    let password = Zeroizing::new(password);
+    if password.len() > MAX_PASSWORD {
+        return Err(CommandError::new("input.invalid", "sync password too long"));
+    }
+    state.ensure_unlocked().await?;
+    let _guard = state.sync_lock.lock().await;
+    let local = read_local(&state.vault)?
+        .ok_or_else(|| CommandError::new("sync.not_configured", "sync is not set up"))?;
+    let backend = local
+        .target
+        .backend(local.secret.as_deref().map(String::as_str))?;
+    let create = !rove_sync::space_exists(backend.as_ref())
+        .await
+        .map_err(sync_error)?;
+    if create && password.chars().count() < MIN_PASSWORD {
         return Err(CommandError::new(
             "sync.weak_password",
             "the sync password must have at least 8 characters",
         ));
     }
-    state.ensure_unlocked().await?;
-    let backend = target.backend(secret.as_deref().map(String::as_str))?;
     let key = if create {
         rove_sync::create_space(backend.as_ref(), &password, KdfParams::default()).await
     } else {
         rove_sync::join_space(backend.as_ref(), &password).await
     }
     .map_err(sync_error)?;
-    let _guard = state.sync_lock.lock().await;
-    let mut sync_state = initial_state(read_local(&state.vault)?, &target, create);
+    // A new space starts a new history.
+    let mut sync_state = if create {
+        SyncState::new(&uuid::Uuid::now_v7().to_string())
+    } else {
+        local.state
+    };
     let report = rove_sync::sync(
         backend.as_ref(),
         &key,
@@ -259,7 +325,13 @@ pub async fn sync_setup(
     )
     .await
     .map_err(sync_error)?;
-    write_local(&state.vault, &target, &sync_state, &key, secret.as_ref())?;
+    write_local(
+        &state.vault,
+        &local.target,
+        &sync_state,
+        Some(&key),
+        local.secret.as_ref(),
+    )?;
     Ok(report)
 }
 
@@ -291,7 +363,13 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<Report, CommandError
     )
     .await
     .map_err(sync_error)?;
-    write_local(&state.vault, &target, &sync_state, &key, secret.as_ref())?;
+    write_local(
+        &state.vault,
+        &target,
+        &sync_state,
+        Some(&key),
+        secret.as_ref(),
+    )?;
     Ok(report)
 }
 
@@ -310,13 +388,13 @@ mod tests {
         Local {
             target,
             state: SyncState::new(device),
-            key: None,
+            key: Some(SyncKey::from_bytes([7; 32])),
             secret: None,
         }
     }
 
     #[test]
-    fn rejoining_the_same_space_keeps_the_device_state() {
+    fn reconnecting_to_the_same_storage_keeps_the_device_state() {
         let folder = SyncTarget::Folder {
             path: "/sync".into(),
         };
@@ -324,15 +402,14 @@ mod tests {
             url: "https://dav.example/sync".into(),
             username: "me".into(),
         };
-        let kept = initial_state(Some(local(folder.clone(), "device-1")), &folder, false);
+        let (kept, key) = kept_state(Some(local(folder.clone(), "device-1")), &folder);
         assert_eq!(kept.device, "device-1");
-        // Another target, a new space, or no previous setup each start fresh.
-        for (previous, target, create) in [
-            (Some(local(folder.clone(), "device-1")), &other, false),
-            (Some(local(folder.clone(), "device-1")), &folder, true),
-            (None, &folder, false),
-        ] {
-            assert_ne!(initial_state(previous, target, create).device, "device-1");
+        assert!(key.is_some());
+        // Other storage, or no previous setup, start fresh and without a key.
+        for previous in [Some(local(folder.clone(), "device-1")), None] {
+            let (fresh, key) = kept_state(previous, &other);
+            assert_ne!(fresh.device, "device-1");
+            assert!(key.is_none());
         }
     }
 }

@@ -182,6 +182,8 @@ pub fn run() {
             commands::snippets::snippet_update,
             commands::snippets::snippet_delete,
             commands::sync::sync_status,
+            commands::sync::sync_connect,
+            commands::sync::sync_probe,
             commands::sync::sync_setup,
             commands::sync::sync_now,
             commands::sync::sync_disable,

@@ -1,5 +1,5 @@
 // Sync state for the UI: status, the last round, and automatic rounds while the app runs.
-import { syncDisable, syncNow, syncSetup, syncStatus, type SyncReport, type SyncStatus, type SyncTarget } from '../ipc';
+import { syncConnect, syncDisable, syncNow, syncProbe, syncSetup, syncStatus, type SyncReport, type SyncStatus, type SyncTarget } from '../ipc';
 import { errorText } from '../i18n';
 import { hosts } from '../hosts/hosts.svelte';
 import { keys } from '../keys/keys.svelte';
@@ -10,6 +10,10 @@ const AUTO_MINUTES = 5;
 
 class SyncStore {
   status = $state<SyncStatus | null>(null);
+  /** Whether a space exists at the connected storage; null until looked up. */
+  spaceExists = $state<boolean | null>(null);
+  /** Connecting to the storage or looking for a space. */
+  connecting = $state(false);
   running = $state(false);
   lastReport = $state<SyncReport | null>(null);
   lastAt = $state<number | null>(null);
@@ -48,8 +52,30 @@ class SyncStore {
     }
   }
 
-  setup(target: SyncTarget, password: string, create: boolean, storagePassword: string | null = null): Promise<boolean> {
-    return this.round(() => syncSetup(target, password, create, storagePassword));
+  /** Checks and stores the storage, then looks for a space there. */
+  async connect(target: SyncTarget, storagePassword: string | null): Promise<void> {
+    this.connecting = true;
+    try {
+      this.spaceExists = (await syncConnect(target, storagePassword)).exists;
+      await this.refreshStatus();
+    } finally {
+      this.connecting = false;
+    }
+  }
+
+  /** Looks up whether a space exists at the connected storage, once per settings visit. */
+  async probe(): Promise<void> {
+    this.connecting = true;
+    try {
+      this.spaceExists = (await syncProbe()).exists;
+    } finally {
+      this.connecting = false;
+    }
+  }
+
+  /** Joins the space at the connected storage, or creates one there. */
+  setup(password: string): Promise<boolean> {
+    return this.round(() => syncSetup(password));
   }
 
   syncNow(): Promise<boolean> {
@@ -58,6 +84,7 @@ class SyncStore {
 
   async disable(): Promise<void> {
     await syncDisable();
+    this.spaceExists = null;
     this.lastReport = null;
     this.lastAt = null;
     this.lastError = '';
@@ -77,3 +104,17 @@ class SyncStore {
 }
 
 export const sync = new SyncStore();
+
+/** What the settings page has typed so far. Kept outside the page so switching sections, the
+ *  storage kind or closing settings after an error loses nothing; the passwords stay in memory
+ *  only and are cleared once used. */
+export const draft = $state({
+  storage: 'folder' as 'folder' | 'webdav',
+  folder: '',
+  server: '',
+  remoteFolder: 'RoveTerm',
+  username: '',
+  storagePassword: '',
+  password: '',
+  confirm: '',
+});

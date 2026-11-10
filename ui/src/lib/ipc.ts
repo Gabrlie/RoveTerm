@@ -686,7 +686,10 @@ export function onMenuAction(handler: (id: string) => void): Promise<UnlistenFn>
 export type SyncTarget = { kind: 'folder'; path: string } | { kind: 'webdav'; url: string; username: string };
 
 export interface SyncStatus {
+  /** Storage is chosen on this device. */
   configured: boolean;
+  /** The storage can be reached: a folder, or WebDAV with its password on this device. */
+  connected: boolean;
   target: SyncTarget | null;
   /** The sync key is on this device and the vault is unlocked. */
   ready: boolean;
@@ -706,10 +709,25 @@ export function syncStatus(): Promise<SyncStatus> {
   return invoke('sync_status');
 }
 
-/** Creates a space at `target` (`create`) or joins the one there, then syncs once.
- *  `storagePassword` is the WebDAV password, stored sealed on this device. */
-export function syncSetup(target: SyncTarget, password: string, create: boolean, storagePassword: string | null = null): Promise<SyncReport> {
-  return invoke('sync_setup', { target, password, create, storagePassword });
+/** What connecting to the storage found. */
+export interface SyncProbe {
+  /** A sync space exists there already: the next step joins it. */
+  exists: boolean;
+}
+
+/** Checks and stores the storage (`storagePassword` is the WebDAV password, sealed on this device). */
+export function syncConnect(target: SyncTarget, storagePassword: string | null): Promise<SyncProbe> {
+  return invoke('sync_connect', { target, storagePassword });
+}
+
+/** Looks again whether a space exists at the connected storage. */
+export function syncProbe(): Promise<SyncProbe> {
+  return invoke('sync_probe');
+}
+
+/** Joins the space at the connected storage, or creates one when there is none; then syncs once. */
+export function syncSetup(password: string): Promise<SyncReport> {
+  return invoke('sync_setup', { password });
 }
 
 export function syncNow(): Promise<SyncReport> {
