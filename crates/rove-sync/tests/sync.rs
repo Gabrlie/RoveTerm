@@ -290,3 +290,161 @@ async fn a_joining_device_takes_the_space_version_of_shared_records() {
     a.sync(&backend, &key).await;
     assert_eq!(a.store.get("prefs", "app"), Some(json!({"theme": "light"})));
 }
+
+/// A folder whose writes fail while `failing` is set.
+struct Flaky {
+    inner: FolderBackend,
+    failing: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl SyncBackend for Flaky {
+    async fn list(&self, dir: &str) -> Result<Vec<String>, SyncError> {
+        self.inner.list(dir).await
+    }
+    async fn get(&self, path: &str) -> Result<Option<Vec<u8>>, SyncError> {
+        self.inner.get(path).await
+    }
+    async fn put(&self, path: &str, data: &[u8]) -> Result<(), SyncError> {
+        if self.failing.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(SyncError::Backend("offline".into()));
+        }
+        self.inner.put(path, data).await
+    }
+    async fn put_new(&self, path: &str, data: &[u8]) -> Result<bool, SyncError> {
+        self.inner.put_new(path, data).await
+    }
+    async fn delete(&self, path: &str) -> Result<(), SyncError> {
+        self.inner.delete(path).await
+    }
+}
+
+async fn tick() {
+    tokio::time::sleep(std::time::Duration::from_millis(3)).await;
+}
+
+#[tokio::test]
+async fn a_failed_round_does_not_send_what_it_received_as_new() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = FolderBackend::new(dir.path());
+    let key = create_space(&backend, "password", fast()).await.unwrap();
+    let flaky = Flaky {
+        inner: FolderBackend::new(dir.path()),
+        failing: std::sync::atomic::AtomicBool::new(false),
+    };
+    let (mut a, mut b, mut c) = (Device::new("a"), Device::new("b"), Device::new("c"));
+    b.store.set("host", "r", json!("v1"));
+    b.sync(&backend, &key).await;
+    a.sync(&backend, &key).await;
+    tick().await;
+    b.store.set("host", "r", json!("v2"));
+    b.sync(&backend, &key).await;
+
+    // A receives v2, but cannot send its own edit.
+    a.store.set("snippet", "x", json!(1));
+    flaky
+        .failing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(sync(&flaky, &key, &mut a.state, &a.store).await.is_err());
+    assert_eq!(a.store.get("host", "r"), Some(json!("v2")));
+
+    // Meanwhile C edits the record again.
+    tick().await;
+    c.sync(&backend, &key).await;
+    c.store.set("host", "r", json!("v3"));
+    c.sync(&backend, &key).await;
+
+    // A's next round sends only its own edit and takes C's version.
+    flaky
+        .failing
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let report = sync(&flaky, &key, &mut a.state, &a.store).await.unwrap();
+    assert_eq!(report.pushed, 1);
+    assert_eq!(a.store.get("host", "r"), Some(json!("v3")));
+    b.sync(&backend, &key).await;
+    assert_eq!(b.store.get("host", "r"), Some(json!("v3")));
+    assert_eq!(b.store.get("snippet", "x"), Some(json!(1)));
+}
+
+#[tokio::test]
+async fn lost_records_come_back_from_the_space_instead_of_being_deleted() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = FolderBackend::new(dir.path());
+    let key = create_space(&backend, "password", fast()).await.unwrap();
+    let (mut a, mut b) = (Device::new("a"), Device::new("b"));
+    // One secret written by A itself, one by B.
+    a.store.set("host", "h1", json!({ "name": "one" }));
+    a.store.set("host_secret", "h1", json!("pw-a"));
+    a.sync(&backend, &key).await;
+    b.sync(&backend, &key).await;
+    tick().await;
+    b.store.set("host_secret", "h2", json!("pw-b"));
+    b.sync(&backend, &key).await;
+    a.sync(&backend, &key).await;
+    tick().await;
+    // An unsent local edit of another kind is kept.
+    a.store.set("host", "h1", json!({ "name": "renamed" }));
+
+    // A loses its secrets (its device key is gone) and defers to the space for them.
+    a.store.remove("host_secret", "h1");
+    a.store.remove("host_secret", "h2");
+    a.state.defer_to_space(&["host_secret"]);
+    a.sync(&backend, &key).await;
+    assert_eq!(a.store.get("host_secret", "h1"), Some(json!("pw-a")));
+    assert_eq!(a.store.get("host_secret", "h2"), Some(json!("pw-b")));
+    assert_eq!(
+        a.store.get("host", "h1"),
+        Some(json!({ "name": "renamed" }))
+    );
+    assert!(a.state.defer.is_empty());
+
+    b.sync(&backend, &key).await;
+    assert_eq!(b.store.get("host_secret", "h1"), Some(json!("pw-a")));
+    assert_eq!(b.store.get("host_secret", "h2"), Some(json!("pw-b")));
+    assert_eq!(
+        b.store.get("host", "h1"),
+        Some(json!({ "name": "renamed" }))
+    );
+}
+
+#[tokio::test]
+async fn a_space_is_created_once_even_by_two_devices_at_a_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = FolderBackend::new(dir.path());
+    assert!(backend.put_new("a/b.txt", b"first").await.unwrap());
+    assert!(!backend.put_new("a/b.txt", b"second").await.unwrap());
+    assert_eq!(backend.get("a/b.txt").await.unwrap().unwrap(), b"first");
+    assert_eq!(
+        backend.list("a").await.unwrap(),
+        ["b.txt"],
+        "no temporary files left"
+    );
+
+    let one = FolderBackend::new(dir.path());
+    let two = FolderBackend::new(dir.path());
+    let (first, second) = tokio::join!(
+        create_or_join_space(&one, "password", fast()),
+        create_or_join_space(&two, "password", fast()),
+    );
+    let (first, created_first) = first.unwrap();
+    let (second, created_second) = second.unwrap();
+    assert!(
+        created_first ^ created_second,
+        "exactly one created the space"
+    );
+    assert_eq!(first.fingerprint(b"x"), second.fingerprint(b"x"));
+    assert!(matches!(
+        create_space(&backend, "password", fast()).await,
+        Err(SyncError::SpaceExists)
+    ));
+    verify_space(&backend, &first).await.unwrap();
+
+    let other_dir = tempfile::tempdir().unwrap();
+    let other = create_space(&FolderBackend::new(other_dir.path()), "password", fast())
+        .await
+        .unwrap();
+    assert!(matches!(
+        verify_space(&backend, &other).await,
+        Err(SyncError::SpaceChanged)
+    ));
+}

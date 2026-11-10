@@ -98,14 +98,29 @@ impl WebDavBackend {
         body: Option<Vec<u8>>,
         depth: Option<&str>,
     ) -> Result<rove_http::reqwest::Response, SyncError> {
+        let headers: &[(&str, &str)] = match depth {
+            Some(depth) => &[
+                ("Depth", depth),
+                ("Content-Type", "application/xml; charset=utf-8"),
+            ],
+            None => &[],
+        };
+        self.send_with(method, url, body, headers).await
+    }
+
+    async fn send_with(
+        &self,
+        method: Method,
+        url: Url,
+        body: Option<Vec<u8>>,
+        headers: &[(&str, &str)],
+    ) -> Result<rove_http::reqwest::Response, SyncError> {
         let mut request = self
             .client
             .request(method, url)
             .basic_auth(&self.user, Some(self.password.as_str()));
-        if let Some(depth) = depth {
-            request = request
-                .header("Depth", depth)
-                .header("Content-Type", "application/xml; charset=utf-8");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
         }
         if let Some(body) = body {
             request = request.body(body);
@@ -337,6 +352,26 @@ impl SyncBackend for WebDavBackend {
             Ok(())
         } else {
             Err(Self::unexpected(&response))
+        }
+    }
+
+    async fn put_new(&self, path: &str, data: &[u8]) -> Result<bool, SyncError> {
+        check_path(path)?;
+        self.ensure_dir(path.rsplit_once('/').map_or("", |(dir, _)| dir))
+            .await?;
+        // RFC 7232: the server refuses the write with 412 when the file exists.
+        let response = self
+            .send_with(
+                Method::PUT,
+                self.url(path, false)?,
+                Some(data.to_vec()),
+                &[("If-None-Match", "*")],
+            )
+            .await?;
+        match response.status() {
+            status if status.is_success() => Ok(true),
+            StatusCode::PRECONDITION_FAILED => Ok(false),
+            _ => Err(Self::unexpected(&response)),
         }
     }
 

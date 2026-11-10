@@ -9,6 +9,8 @@
 | `space.json` | 格式版本、Argon2id 参数（`m` KiB、`t` 轮、`p` 线程）、16 字节盐、用同步密钥密封的校验串 |
 | `devices/<设备 id>/<序号>.seg` | 一个分段：`{ device, seq, changes }` 经 XChaCha20-Poly1305 密封，AAD 为 `rove/sync/segment/v1:<设备>:<序号>`；序号 16 位补零，写后不改 |
 
+创建空间时 `space.json` 只在不存在时写入（`SyncBackend::put_new`：文件夹先写临时文件再硬链接到位，不支持硬链接时独占创建；WebDAV 用 `If-None-Match: *`，已存在时服务器返回 412），写后再读回比对，不是自己写的就视为已存在；`create_or_join_space` 此时改为用同一密码加入，两台设备同时创建也只会得到一个空间。每轮开始前 `verify_space` 确认清单仍能用本机的同步密钥打开，否则返回 `SpaceChanged`，应用忘掉密钥并要求重新输入密码，不会写入用别的密钥密封的数据。
+
 打开空间时先校验 KDF 参数（内存 8 MiB–1 GiB、1–10 轮、1–8 线程），拒绝恶意清单让设备耗尽内存或时间；新空间默认 64 MiB、3 轮、1 线程。
 
 ## 类型
@@ -31,7 +33,9 @@
 
 5. **压缩**：本设备的分段超过 32 个时，把它作为最后修改者的每条记录（含删除）的最新变更写成一个新分段，再删除更早的分段；被其他设备覆盖的旧变更直接丢弃。新分段序号更大，正在读取的设备不会漏掉内容。
 
-失败的一轮不改变 `SyncState`；已经写入 `store` 的远程变更在下一轮会再次写入，结果相同。
+一轮在写入远程变更之后失败（推送分段出错）时，`SyncState` 仍记下已读位置、时钟和已写入的记录，但不记未发出的本地变更；调用方失败时也要保存状态。否则下一轮会把刚写入的远程内容当成本地修改、以新的时间戳重新推送，压过其他设备在此期间的更新。分段已发出后压缩失败，状态按已发出保存。
+
+`SyncState.defer` 列出本机不可信的记录类型（`defer_to_space(kinds)` 设置，同时忘掉这些类型的已知状态）：下一轮重新读取所有分段（包括本设备自己的），这些类型的记录由空间的版本胜出，本地缺少的不会被当作删除推送；成功后清空。凭据库重置后用它恢复密码与私钥（见下文）。
 
 ## 应用中的同步
 
@@ -39,6 +43,8 @@
 
 - `sync_connect(target, storage_password)` 连接存储：检查地址与 WebDAV 凭据（错误立即返回），把目标和密封后的 WebDAV 密码存入 vault（见 [vault](vault.md#同步)），返回该位置是否已有空间 `{ exists }`。重新连接本机已在同步的同一位置时沿用原有的设备 id、同步状态与密钥，避免本地记录被当成新变更覆盖其他设备更新的修改；换位置则生成新的 UUIDv7 设备 id。
 - `sync_probe()` 对已连接的存储再次查看是否已有空间。
-- `sync_setup(password)` 在已连接的存储上加入已有空间，没有空间时创建（密码至少 8 个字符，新空间从新的同步状态开始），跑第一轮后存入同步密钥。
+- `sync_setup(password)` 在已连接的存储上加入已有空间，没有空间时创建（密码至少 8 个字符，新空间从新的同步状态开始；其他设备恰好同时创建时改为加入），跑第一轮后存入同步密钥。
+- 每轮（`sync_setup` 与 `sync_now`）先 `verify_space`，结束后无论成败都保存同步状态；空间被替换（`sync.space_changed`）时清除本机的同步密钥。
+- `vault_reset_secrets` 重置凭据后调用 `after_secrets_reset`：同步状态对 `rove_vault::SYNC_SECRET_KINDS`（`host_secret`、`key`）`defer_to_space`，并清除随设备密钥失效的同步密钥与存储密码；重新输入同步密码后的第一轮从空间恢复这些凭据，而不是把它们的缺失同步给其他设备。
 
-`SyncTarget` 为 `Folder { path }`（绝对路径）或 `WebDav { url, username }`，WebDAV 密码不进入目标的 JSON。`sync_status` 报告 `configured`（已选存储）、`connected`（文件夹，或本机有 WebDAV 密码）和 `ready`（还有同步密钥）。`sync_now` 运行一轮，`sync_disable` 清除本机的同步设置。各轮由 `AppState.sync_lock` 串行执行，需要 vault 已解锁；本机没有同步密钥时 `sync_now` 返回 `sync.needs_password`。错误码为 `sync.*`（`wrong_password`、`no_space`、`space_exists`、`rejected`、`backend`、`format`、`crypto`、`unauthorized`、`store`、`not_configured`、`needs_password`、`weak_password`）。
+`SyncTarget` 为 `Folder { path }`（绝对路径）或 `WebDav { url, username }`，WebDAV 密码不进入目标的 JSON。`sync_status` 报告 `configured`（已选存储）、`connected`（文件夹，或本机有 WebDAV 密码）和 `ready`（还有同步密钥）。`sync_now` 运行一轮，`sync_disable` 清除本机的同步设置。各轮由 `AppState.sync_lock` 串行执行，需要 vault 已解锁；本机没有同步密钥时 `sync_now` 返回 `sync.needs_password`。错误码为 `sync.*`（`wrong_password`、`no_space`、`space_exists`、`space_changed`、`rejected`、`backend`、`format`、`crypto`、`unauthorized`、`store`、`not_configured`、`needs_password`、`weak_password`）。

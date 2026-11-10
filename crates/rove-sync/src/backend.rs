@@ -20,6 +20,9 @@ pub trait SyncBackend: Send + Sync {
     async fn get(&self, path: &str) -> Result<Option<Vec<u8>>, SyncError>;
     /// Writes `path` whole, creating parent directories. Readers never see a partial file.
     async fn put(&self, path: &str, data: &[u8]) -> Result<(), SyncError>;
+    /// Writes `path` only when it does not exist yet, without ever replacing it; returns whether
+    /// it was written. Two devices creating the same file concurrently cannot both succeed.
+    async fn put_new(&self, path: &str, data: &[u8]) -> Result<bool, SyncError>;
     /// Removes `path`; succeeds when it is already gone.
     async fn delete(&self, path: &str) -> Result<(), SyncError>;
 }
@@ -118,6 +121,41 @@ impl SyncBackend for FolderBackend {
             return Err(io(error));
         }
         Ok(())
+    }
+
+    async fn put_new(&self, path: &str, data: &[u8]) -> Result<bool, SyncError> {
+        let target = self.resolve(path)?;
+        if let Some(parent) = target.parent() {
+            tokio::fs::create_dir_all(parent).await.map_err(io)?;
+        }
+        // Written aside, then linked into place: the link fails when the file exists, and a
+        // reader never sees it half written.
+        let temp = target.with_extension(format!("{}.tmp", uuid::Uuid::now_v7().simple()));
+        tokio::fs::write(&temp, data).await.map_err(io)?;
+        let linked = tokio::fs::hard_link(&temp, &target).await;
+        let _ = tokio::fs::remove_file(&temp).await;
+        match linked {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            // File systems without hard links: create the file exclusively instead.
+            Err(_) => {
+                use tokio::io::AsyncWriteExt;
+                match tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&target)
+                    .await
+                {
+                    Ok(mut file) => {
+                        file.write_all(data).await.map_err(io)?;
+                        file.sync_all().await.map_err(io)?;
+                        Ok(true)
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+                    Err(error) => Err(io(error)),
+                }
+            }
+        }
     }
 
     async fn delete(&self, path: &str) -> Result<(), SyncError> {

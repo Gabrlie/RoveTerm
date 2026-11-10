@@ -36,7 +36,8 @@ async fn derive(password: &str, salt: Vec<u8>, kdf: KdfParams) -> Result<SyncKey
 }
 
 /// Creates a new space protected by `password` with `kdf` costs. Fails with
-/// [`SyncError::SpaceExists`] when the backend already holds one.
+/// [`SyncError::SpaceExists`] when the backend already holds one, including one another device
+/// created at the same moment: the manifest is written only if absent, then read back.
 pub async fn create_space(
     backend: &dyn SyncBackend,
     password: &str,
@@ -55,8 +56,46 @@ pub async fn create_space(
     };
     let json = serde_json::to_vec_pretty(&manifest)
         .map_err(|error| SyncError::Format(error.to_string()))?;
-    backend.put(MANIFEST, &json).await?;
+    if !backend.put_new(MANIFEST, &json).await? {
+        return Err(SyncError::SpaceExists);
+    }
+    // A server that ignores the condition lets the last writer win: only the manifest that is
+    // there now counts.
+    if backend.get(MANIFEST).await?.as_deref() != Some(json.as_slice()) {
+        return Err(SyncError::SpaceExists);
+    }
     Ok(key)
+}
+
+/// Creates a space with `password`, or joins the one that is already there (or that another
+/// device created meanwhile) with the same password; returns the key and whether it created.
+pub async fn create_or_join_space(
+    backend: &dyn SyncBackend,
+    password: &str,
+    kdf: KdfParams,
+) -> Result<(SyncKey, bool), SyncError> {
+    match create_space(backend, password, kdf).await {
+        Ok(key) => Ok((key, true)),
+        Err(SyncError::SpaceExists) => Ok((join_space(backend, password).await?, false)),
+        Err(error) => Err(error),
+    }
+}
+
+/// Checks that the space's manifest still opens with `key`; fails with
+/// [`SyncError::SpaceChanged`] when it does not, so a device never writes data sealed with a key
+/// the space no longer uses.
+pub async fn verify_space(backend: &dyn SyncBackend, key: &SyncKey) -> Result<(), SyncError> {
+    let bytes = backend.get(MANIFEST).await?.ok_or(SyncError::NoSpace)?;
+    let manifest: Manifest =
+        serde_json::from_slice(&bytes).map_err(|error| SyncError::Format(error.to_string()))?;
+    let check = BASE64
+        .decode(&manifest.check)
+        .map_err(|error| SyncError::Format(error.to_string()))?;
+    match key.open(&check, CHECK_AAD) {
+        Ok(plain) if plain.as_slice() == CHECK => Ok(()),
+        Ok(_) | Err(SyncError::Rejected) => Err(SyncError::SpaceChanged),
+        Err(error) => Err(error),
+    }
 }
 
 /// Joins the space in `backend` with `password`. Fails with [`SyncError::NoSpace`] when there is

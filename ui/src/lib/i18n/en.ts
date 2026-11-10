@@ -529,6 +529,7 @@ export const en = {
   'error.sync.wrong_password': 'Wrong sync password',
   'error.sync.no_space': 'There is no sync space in this folder yet; create one first',
   'error.sync.space_exists': 'This folder already holds a sync space; join it instead',
+  'error.sync.space_changed': 'The sync space was replaced by another device; enter the sync password again',
   'error.sync.crypto': 'Encryption failed',
   'error.sync.store': 'Synced data could not be saved',
   'error.sync.not_configured': 'Sync is not set up',

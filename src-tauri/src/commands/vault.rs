@@ -21,8 +21,11 @@ pub async fn vault_unlock(state: State<'_, AppState>) -> Result<LockState, Comma
         .map_err(|error| CommandError::new("app.task", error.to_string()))
 }
 
-/// Discards every stored secret and unlocks with a new device key.
+/// Discards every stored secret and unlocks with a new device key. Sync then restores the
+/// secrets from the space rather than deleting them on the other devices.
 #[tauri::command]
-pub fn vault_reset_secrets(state: State<'_, AppState>) -> Result<LockState, CommandError> {
-    Ok(state.vault.reset_secrets()?)
+pub async fn vault_reset_secrets(state: State<'_, AppState>) -> Result<LockState, CommandError> {
+    let lock = state.vault.reset_secrets()?;
+    crate::commands::sync::after_secrets_reset(state.inner()).await?;
+    Ok(lock)
 }

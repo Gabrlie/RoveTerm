@@ -31,6 +31,7 @@ fn handle(
     method: &str,
     path: &str,
     auth: Option<&str>,
+    if_none_match: bool,
     body: Vec<u8>,
 ) -> Vec<u8> {
     if auth != Some(AUTH) {
@@ -62,6 +63,9 @@ fn handle(
         "PUT" => {
             if !exists(&dav, &parent) {
                 return reply(409, b"");
+            }
+            if if_none_match && dav.files.contains_key(&path) {
+                return reply(412, b"");
             }
             dav.files.insert(path, body);
             reply(201, b"")
@@ -118,7 +122,7 @@ async fn serve() -> String {
                     let mut parts = line.split_whitespace();
                     let method = parts.next().unwrap_or_default().to_owned();
                     let path = parts.next().unwrap_or_default().to_owned();
-                    let (mut length, mut auth) = (0usize, None);
+                    let (mut length, mut auth, mut if_none_match) = (0usize, None, false);
                     loop {
                         let mut header = String::new();
                         reader.read_line(&mut header).await.unwrap();
@@ -130,12 +134,14 @@ async fn serve() -> String {
                         match name.to_ascii_lowercase().as_str() {
                             "content-length" => length = value.trim().parse().unwrap(),
                             "authorization" => auth = Some(value.trim().to_owned()),
+                            "if-none-match" => if_none_match = value.trim() == "*",
                             _ => {}
                         }
                     }
                     let mut body = vec![0u8; length];
                     reader.read_exact(&mut body).await.unwrap();
-                    let response = handle(&dav, &method, &path, auth.as_deref(), body);
+                    let response =
+                        handle(&dav, &method, &path, auth.as_deref(), if_none_match, body);
                     if write.write_all(&response).await.is_err() {
                         return;
                     }
@@ -234,6 +240,22 @@ async fn a_missing_sync_folder_is_created() {
         join_space(&other, "pw").await.unwrap().to_bytes(),
         key.to_bytes()
     );
+}
+
+#[tokio::test]
+async fn a_space_is_never_replaced() {
+    let url = serve().await;
+    let backend = WebDavBackend::new(&url, "user", "pass").unwrap();
+    let key = create_space(&backend, "pw", fast()).await.unwrap();
+    assert!(!backend.put_new(MANIFEST, b"{}").await.unwrap());
+    assert!(matches!(
+        create_space(&backend, "other", fast()).await,
+        Err(SyncError::SpaceExists)
+    ));
+    let (joined, created) = create_or_join_space(&backend, "pw", fast()).await.unwrap();
+    assert!(!created);
+    assert_eq!(joined.to_bytes(), key.to_bytes());
+    verify_space(&backend, &key).await.unwrap();
 }
 
 #[tokio::test]

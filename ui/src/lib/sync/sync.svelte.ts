@@ -46,6 +46,10 @@ class SyncStore {
       return true;
     } catch (error) {
       this.lastError = errorText(error);
+      // A failed round may still have written other devices' changes, or dropped the key of a
+      // space that changed: reload what may differ.
+      this.generation += 1;
+      await Promise.all([hosts.refresh(), keys.refresh(), prefs.load(), this.refreshStatus()]).catch((reload: unknown) => console.warn('reload after sync failed', reload));
       throw error;
     } finally {
       this.running = false;

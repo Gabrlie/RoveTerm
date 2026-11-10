@@ -19,6 +19,9 @@ use crate::{
 
 /// Record kinds, in the order changes are applied (parents first).
 pub const SYNC_KINDS: [&str; 6] = ["prefs", "host", "key", "host_secret", "forward", "snippet"];
+/// Kinds that carry secrets, which [`Vault::reset_secrets`] discards on this device: after a
+/// reset the sync space has to restore them rather than learn that they are gone.
+pub const SYNC_SECRET_KINDS: [&str; 2] = ["host_secret", "key"];
 
 /// One syncable record.
 #[derive(Debug, Clone, PartialEq)]

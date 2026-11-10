@@ -1,7 +1,7 @@
 //! One sync round: detect local changes, pull and merge other devices' segments, push this
 //! device's changes as a new segment. See docs/decisions/0005-sync.md.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -65,6 +65,11 @@ pub struct SyncState {
     pub seen: BTreeMap<String, u64>,
     /// State of every record seen, by `kind:id`.
     pub known: BTreeMap<String, Known>,
+    /// Record kinds whose local copies are not to be trusted in the next round (this device lost
+    /// them, e.g. secrets after the device key was lost): the space's versions win, and that
+    /// round reads every segment again, this device's own included.
+    #[serde(default)]
+    pub defer: BTreeSet<String>,
 }
 
 impl SyncState {
@@ -76,7 +81,23 @@ impl SyncState {
             next_seq: 1,
             seen: BTreeMap::new(),
             known: BTreeMap::new(),
+            defer: BTreeSet::new(),
         }
+    }
+
+    /// Forgets what this device knew of records of `kinds` and lets the space's versions of them
+    /// win in the next round. For records this device lost: without it, their absence would be
+    /// sent to the other devices as deletions.
+    pub fn defer_to_space(&mut self, kinds: &[&str]) {
+        self.known.retain(|record_id, _| {
+            !kinds.iter().any(|kind| {
+                record_id
+                    .split_once(':')
+                    .is_some_and(|(own, _)| own == *kind)
+            })
+        });
+        self.defer
+            .extend(kinds.iter().map(|kind| (*kind).to_owned()));
     }
 }
 
@@ -133,8 +154,11 @@ async fn segments_in(backend: &dyn SyncBackend, dir: &str) -> Result<Vec<u64>, S
     Ok(seqs)
 }
 
-/// Runs one sync round against `backend`. `state` is updated only when the round succeeds;
-/// remote changes already written to `store` are written again, harmlessly, by the next round.
+/// Runs one sync round against `backend` and updates `state`. When the round fails after remote
+/// changes were written to `store`, `state` still records them (what was read, the merged
+/// records and the clock) but not the local changes that were not sent, so the caller must save
+/// `state` after a failure too: otherwise the next round would take the applied remote changes
+/// for local edits and send them again as newer than they are.
 pub async fn sync(
     backend: &dyn SyncBackend,
     key: &SyncKey,
@@ -145,6 +169,8 @@ pub async fn sync(
     let mut report = Report::default();
     // A device's first round: it has never read nor written anything in this space.
     let joining = state.known.is_empty() && state.seen.is_empty() && state.next_seq <= 1;
+    // Lost records are recovered from every segment, this device's own included.
+    let deferring = !state.defer.is_empty();
     let own_dir = format!("{DEVICES}/{}", next.device);
     crate::backend::check_path(&own_dir)?;
 
@@ -210,11 +236,16 @@ pub async fn sync(
     // Pull every other device's new segments.
     let mut remote: Vec<Change> = Vec::new();
     for device in backend.list(DEVICES).await? {
-        if device == next.device || crate::backend::check_path(&device).is_err() {
+        let own = device == next.device;
+        if (own && !deferring) || crate::backend::check_path(&device).is_err() {
             continue;
         }
         let dir = format!("{DEVICES}/{device}");
-        let seen = next.seen.get(&device).copied().unwrap_or(0);
+        let seen = if deferring {
+            0
+        } else {
+            next.seen.get(&device).copied().unwrap_or(0)
+        };
         for seq in segments_in(backend, &dir)
             .await?
             .into_iter()
@@ -232,7 +263,10 @@ pub async fn sync(
             remote.extend(segment.changes.into_iter().filter(|change| {
                 valid_id(&change.kind) && valid_id(&change.id) && !change.kind.contains(':')
             }));
-            next.seen.insert(device.clone(), seq);
+            if !own {
+                let read = next.seen.entry(device.clone()).or_insert(0);
+                *read = (*read).max(seq);
+            }
             report.segments += 1;
         }
     }
@@ -245,7 +279,8 @@ pub async fn sync(
     for change in remote {
         next.clock.observe(&change.hlc);
         let record_id = record_key(&change.kind, &change.id);
-        let space_wins = joining && pending.contains_key(&record_id);
+        let space_wins =
+            (joining || next.defer.contains(&change.kind)) && pending.contains_key(&record_id);
         if !space_wins
             && next
                 .known
@@ -270,30 +305,52 @@ pub async fn sync(
         next.known.insert(record_id.clone(), known);
         winners.insert(record_id, change);
     }
+    // What the store holds once the remote changes are in: kept even if sending fails below.
+    let mut applied = state.clone();
+    applied.clock = next.clock.clone();
+    applied.seen = next.seen.clone();
     if !winners.is_empty() {
+        for record_id in winners.keys() {
+            if let Some(known) = next.known.get(record_id) {
+                applied.known.insert(record_id.clone(), known.clone());
+            }
+        }
         let mut ordered: Vec<Change> = winners.into_values().collect();
         ordered.sort_by(|a, b| a.hlc.cmp(&b.hlc));
         store.apply(&ordered)?;
         report.applied = ordered.len();
     }
 
-    // Push what is left as one new segment, numbered after anything already written.
-    let mut written = segments_in(backend, &own_dir).await?;
-    if !pending.is_empty() {
-        let seq = next.next_seq.max(written.last().map_or(1, |last| last + 1));
-        let changes: Vec<Change> = pending.into_values().collect();
-        report.pushed = changes.len();
-        write_segment(backend, key, &next.device, seq, changes).await?;
-        next.next_seq = seq + 1;
-        written.push(seq);
+    // Send what is left as one new segment, numbered after anything already written.
+    let sent = async {
+        let mut written = segments_in(backend, &own_dir).await?;
+        if !pending.is_empty() {
+            let seq = next.next_seq.max(written.last().map_or(1, |last| last + 1));
+            let changes: Vec<Change> = pending.into_values().collect();
+            report.pushed = changes.len();
+            write_segment(backend, key, &next.device, seq, changes).await?;
+            next.next_seq = seq + 1;
+            written.push(seq);
+        }
+        Ok::<_, SyncError>(written)
     }
-
-    if written.len() > COMPACT_AFTER {
-        compact(backend, key, &mut next, store, &written).await?;
-        report.compacted = true;
-    }
-
+    .await;
+    let written = match sent {
+        Ok(written) => written,
+        Err(error) => {
+            *state = applied;
+            return Err(error);
+        }
+    };
+    next.defer.clear();
+    // The segment is out: from here on `next` is the truth, even if compacting fails.
+    let compacted = if written.len() > COMPACT_AFTER {
+        compact(backend, key, &mut next, store, &written).await
+    } else {
+        Ok(false)
+    };
     *state = next;
+    report.compacted = compacted?;
     Ok(report)
 }
 
@@ -331,7 +388,7 @@ async fn compact(
     state: &mut SyncState,
     store: &dyn RecordStore,
     written: &[u64],
-) -> Result<(), SyncError> {
+) -> Result<bool, SyncError> {
     let mut bodies: HashMap<String, Value> = store
         .records()?
         .into_iter()
@@ -375,5 +432,5 @@ async fn compact(
             ))
             .await?;
     }
-    Ok(())
+    Ok(true)
 }

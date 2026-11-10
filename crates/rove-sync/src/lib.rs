@@ -14,7 +14,9 @@ pub use backend::{FolderBackend, MAX_FILE, SyncBackend, check_path};
 pub use crypto::{KdfParams, SyncKey};
 pub use engine::{COMPACT_AFTER, Change, Known, Record, RecordStore, Report, SyncState, sync};
 pub use hlc::{Clock, Hlc};
-pub use space::{MANIFEST, create_space, join_space, space_exists};
+pub use space::{
+    MANIFEST, create_or_join_space, create_space, join_space, space_exists, verify_space,
+};
 pub use webdav::WebDavBackend;
 
 /// Errors of the sync engine and its backends.
@@ -41,6 +43,10 @@ pub enum SyncError {
     /// The backend already holds a space.
     #[error("a sync space already exists here")]
     SpaceExists,
+    /// The space's manifest no longer opens with this device's key (another device created or
+    /// replaced the space); the password has to be entered again.
+    #[error("the sync space was replaced; enter the sync password again")]
+    SpaceChanged,
     /// Key derivation or encryption failed.
     #[error("sync crypto: {0}")]
     Crypto(String),

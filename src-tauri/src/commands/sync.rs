@@ -92,6 +92,7 @@ fn sync_error(error: SyncError) -> CommandError {
         SyncError::WrongPassword => "sync.wrong_password",
         SyncError::NoSpace => "sync.no_space",
         SyncError::SpaceExists => "sync.space_exists",
+        SyncError::SpaceChanged => "sync.space_changed",
         SyncError::Crypto(_) => "sync.crypto",
         SyncError::Unauthorized => "sync.unauthorized",
         SyncError::Store(_) => "sync.store",
@@ -305,34 +306,64 @@ pub async fn sync_setup(
             "the sync password must have at least 8 characters",
         ));
     }
-    let key = if create {
-        rove_sync::create_space(backend.as_ref(), &password, KdfParams::default()).await
+    // Another device may create the space at the same moment: then this one joins it.
+    let (key, created) = if create {
+        rove_sync::create_or_join_space(backend.as_ref(), &password, KdfParams::default()).await
     } else {
-        rove_sync::join_space(backend.as_ref(), &password).await
+        rove_sync::join_space(backend.as_ref(), &password)
+            .await
+            .map(|key| (key, false))
     }
     .map_err(sync_error)?;
     // A new space starts a new history.
-    let mut sync_state = if create {
+    let sync_state = if created {
         SyncState::new(&uuid::Uuid::now_v7().to_string())
     } else {
         local.state
     };
-    let report = rove_sync::sync(
+    round(
+        &state.vault,
         backend.as_ref(),
+        &local.target,
         &key,
-        &mut sync_state,
-        &VaultStore(state.vault.clone()),
+        sync_state,
+        local.secret.as_ref(),
     )
     .await
-    .map_err(sync_error)?;
-    write_local(
-        &state.vault,
-        &local.target,
-        &sync_state,
-        Some(&key),
-        local.secret.as_ref(),
-    )?;
-    Ok(report)
+}
+
+/// Runs one round with `key` and saves the state afterwards, also when the round failed (it
+/// then holds the remote changes already written to the vault). A space that no longer opens
+/// with `key` stops syncing until the password is entered again.
+async fn round(
+    vault: &Arc<Vault>,
+    backend: &dyn SyncBackend,
+    target: &SyncTarget,
+    key: &SyncKey,
+    mut sync_state: SyncState,
+    secret: Option<&Zeroizing<String>>,
+) -> Result<Report, CommandError> {
+    if let Err(error) = rove_sync::verify_space(backend, key).await {
+        if matches!(error, SyncError::SpaceChanged) {
+            write_local(vault, target, &sync_state, None, secret)?;
+        }
+        return Err(sync_error(error));
+    }
+    let result = rove_sync::sync(backend, key, &mut sync_state, &VaultStore(vault.clone())).await;
+    write_local(vault, target, &sync_state, Some(key), secret)?;
+    result.map_err(sync_error)
+}
+
+/// After the vault's secrets were reset: the sync state forgets them, so the next round
+/// restores them from the space instead of sending their absence to the other devices. The
+/// sync key went with the device key; the password has to be entered again.
+pub(crate) async fn after_secrets_reset(state: &AppState) -> Result<(), CommandError> {
+    let _guard = state.sync_lock.lock().await;
+    let Some(mut local) = read_local(&state.vault)? else {
+        return Ok(());
+    };
+    local.state.defer_to_space(&rove_vault::SYNC_SECRET_KINDS);
+    write_local(&state.vault, &local.target, &local.state, None, None)
 }
 
 /// Runs one sync round. Fails with `sync.not_configured` when sync is not set up and with
@@ -343,7 +374,7 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<Report, CommandError
     let _guard = state.sync_lock.lock().await;
     let Local {
         target,
-        state: mut sync_state,
+        state: sync_state,
         key,
         secret,
     } = read_local(&state.vault)?
@@ -355,22 +386,15 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<Report, CommandError
         )
     })?;
     let backend = target.backend(secret.as_deref().map(String::as_str))?;
-    let report = rove_sync::sync(
+    round(
+        &state.vault,
         backend.as_ref(),
+        &target,
         &key,
-        &mut sync_state,
-        &VaultStore(state.vault.clone()),
+        sync_state,
+        secret.as_ref(),
     )
     .await
-    .map_err(sync_error)?;
-    write_local(
-        &state.vault,
-        &target,
-        &sync_state,
-        Some(&key),
-        secret.as_ref(),
-    )?;
-    Ok(report)
 }
 
 /// Turns sync off on this device. The space and the data on other devices are left alone.

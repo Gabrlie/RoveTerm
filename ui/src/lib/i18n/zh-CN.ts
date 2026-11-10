@@ -531,6 +531,7 @@ export const zhCN: Messages = {
   'error.sync.wrong_password': '同步密码错误',
   'error.sync.no_space': '该文件夹中还没有同步空间，请先创建',
   'error.sync.space_exists': '该文件夹中已有同步空间，请选择加入',
+  'error.sync.space_changed': '同步空间已被其他设备替换，请重新输入同步密码',
   'error.sync.crypto': '加密失败',
   'error.sync.store': '无法保存同步来的数据',
   'error.sync.not_configured': '尚未设置同步',
