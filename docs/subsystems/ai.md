@@ -69,9 +69,11 @@ Agent 发来的请求由 `AiSession` 回答，全部经过审批：
 |---|---|
 | `fs/read_text_file`、`fs/write_text_file` | 在会话主机上读写；路径必须是绝对路径，可按行号与行数截取 |
 | `terminal/create` 等 | 把程序、参数和环境变量拼成一行 shell 命令后评估，在会话主机上运行；`output`、`wait_for_exit`、`kill`、`release` 操作这次运行 |
-| `session/request_permission` | Agent 自带工具（在本机运行）：按 `rawInput.command` 与涉及的文件评估；放行或拒绝时只选择 Agent 的一次性选项，"始终允许"由本地策略管理 |
+| `session/request_permission` | Agent 自带工具（在本机运行）：请求只带工具调用 id 时，用之前 `tool_call` 通知报告过的字段补全（标题、`rawInput`、涉及的文件、说明文字）；按 `rawInput.command` 评估（`bash -lc "<脚本>"` 按脚本本身评估与显示）与涉及的文件评估，审批卡片显示标题、命令或第一个文件、Agent 给出的理由或参数（`AgentTool.path`、`detail`）。Codex 在调用 RoveTerm 自己的 MCP 工具前发来的请求（`rawInput.server_name` 为 `roveterm`）直接放行，工具内部仍走策略，避免同一操作问两次。放行或拒绝时只选择 Agent 的一次性选项，"始终允许"由本地策略管理 |
 
 Agent 的环境变量只从白名单（`acp::ENV_ALLOWED`：`PATH`、`HOME`、`LANG`、`LC_*`、`TMPDIR`、代理与证书变量、Windows 的系统目录变量等）继承，再加上调用方给出的变量（如从 vault 解密的 API key）。消息单条最大 8 MiB，转发给界面的文本按 256 KiB 截断。
+
+Agent 的错误响应若在 `data.message` 中给出原因（Codex 的回合失败），显示这段原因而不是笼统的 `Internal error`。
 
 取消回合时撤回所有等待中的审批（视为拒绝）并发送 `session/cancel`；结束会话时中止运行中的命令并结束 Agent 进程。
 

@@ -585,7 +585,7 @@ pub async fn ai_start(
             let exe = std::env::current_exe()
                 .map_err(|error| CommandError::new("app.io", error.to_string()))?;
             let mcp_server = McpServer {
-                name: "roveterm".into(),
+                name: rove_ai::mcp::SERVER_NAME.into(),
                 command: exe.to_string_lossy().into_owned(),
                 args: vec!["--mcp-bridge".into()],
                 env: listener

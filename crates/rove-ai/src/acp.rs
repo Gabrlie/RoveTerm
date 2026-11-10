@@ -441,9 +441,12 @@ async fn dispatch(message: Value, shared: &Arc<Shared>, client: &Arc<dyn Client>
                         .get("code")
                         .and_then(Value::as_i64)
                         .unwrap_or(code::INTERNAL);
+                    // The detail some agents put in `data.message` (Codex: why the turn failed)
+                    // says more than the generic message.
                     let text = error
-                        .get("message")
+                        .pointer("/data/message")
                         .and_then(Value::as_str)
+                        .or_else(|| error.get("message").and_then(Value::as_str))
                         .unwrap_or("error");
                     let text = truncate(text, 2000).to_owned();
                     Err(if code == code::AUTH_REQUIRED {

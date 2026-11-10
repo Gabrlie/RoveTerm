@@ -14,6 +14,8 @@ use tokio::net::{TcpListener, TcpStream};
 
 use crate::session::AiSession;
 
+/// The name the server is given to agents, and reports itself.
+pub const SERVER_NAME: &str = "roveterm";
 /// Where the bridge connects (`127.0.0.1:port`).
 pub const ENV_ADDR: &str = "ROVETERM_MCP_ADDR";
 /// The token the bridge presents.
@@ -177,7 +179,7 @@ async fn handle(method: &str, params: &Value, session: &AiSession) -> Result<Val
             Ok(json!({
                 "protocolVersion": version,
                 "capabilities": { "tools": {} },
-                "serverInfo": { "name": "roveterm", "title": "RoveTerm", "version": env!("CARGO_PKG_VERSION") },
+                "serverInfo": { "name": SERVER_NAME, "title": "RoveTerm", "version": env!("CARGO_PKG_VERSION") },
                 "instructions": format!("Tools here act on {}, the host the user is working on in RoveTerm. Use them for anything on that host instead of local shells.", session.host().label()),
             }))
         }

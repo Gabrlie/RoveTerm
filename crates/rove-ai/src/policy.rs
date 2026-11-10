@@ -62,6 +62,12 @@ pub enum Operation {
         kind: ToolKind,
         title: String,
         command: Option<String>,
+        /// The first file the tool touches, when it named one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        /// What the agent said about the call: its reason, or the arguments of a tool it calls.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
     },
 }
 
@@ -368,24 +374,32 @@ mod tests {
             kind: ToolKind::Read,
             title: "Read file".into(),
             command: None,
+            path: None,
+            detail: None,
         };
         assert_eq!(decide(&policy, &read), Decision::Allow);
         let edit = Operation::AgentTool {
             kind: ToolKind::Edit,
             title: "Edit".into(),
             command: None,
+            path: None,
+            detail: None,
         };
         assert_eq!(decide(&policy, &edit), ASK);
         let shell = Operation::AgentTool {
             kind: ToolKind::Execute,
             title: "Run".into(),
             command: Some("rm -rf ~".into()),
+            path: None,
+            detail: None,
         };
         assert_eq!(decide(&policy, &shell), ASK_ONCE);
         let hidden = Operation::AgentTool {
             kind: ToolKind::Execute,
             title: "Run".into(),
             command: None,
+            path: None,
+            detail: None,
         };
         assert_eq!(decide(&policy, &hidden), ASK_ONCE);
         let unknown: ToolKind = serde_json::from_str("\"something_new\"").unwrap();

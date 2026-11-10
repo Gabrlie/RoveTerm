@@ -6,6 +6,7 @@ use rove_ai::acp;
 use rove_ai::host::LocalHost;
 use rove_ai::runner::{self, AgentSpec};
 use rove_ai::session::{AiEvent, AiSession, Outcome, SessionSettings};
+use rove_ai::policy::{Operation, ToolKind};
 use rove_ai::{Answer, Risk};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, Lines};
@@ -145,17 +146,32 @@ async fn a_turn_goes_through_the_policy() {
             )
             .await;
         assert!(write.get("error").is_none(), "{write}");
-        // The agent's own dangerous tool is refused with its reject option.
+        // The agent's own dangerous tool, reported first and then asked about by id only, is
+        // refused with its reject option.
+        fake.notify(json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Run", "kind": "execute", "status": "pending", "rawInput": { "command": ["bash", "-lc", "rm -rf ~"] }, "content": [{ "type": "content", "content": { "type": "text", "text": "Clean up the home directory" } }] })).await;
         let permission = fake
             .call("session/request_permission", json!({
                 "sessionId": "s1",
-                "toolCall": { "toolCallId": "t1", "title": "Run", "kind": "execute", "rawInput": { "command": ["bash", "-lc", "rm -rf ~"] } },
+                "toolCall": { "toolCallId": "t1" },
                 "options": [{ "optionId": "yes", "name": "Allow", "kind": "allow_always" }, { "optionId": "no", "name": "Reject", "kind": "reject_once" }],
             }))
             .await;
         assert_eq!(
             permission["result"]["outcome"],
             json!({ "outcome": "selected", "optionId": "no" })
+        );
+        // Codex asking before a call to RoveTerm's own MCP tools is allowed without asking: the
+        // tool goes through the policy itself.
+        let own = fake
+            .call("session/request_permission", json!({
+                "sessionId": "s1",
+                "toolCall": { "toolCallId": "mcp-1", "title": "Approve run_command", "rawInput": { "server_name": "roveterm", "id": 1 } },
+                "options": [{ "optionId": "approved", "name": "Allow", "kind": "allow_once" }, { "optionId": "cancel", "name": "Cancel", "kind": "reject_once" }],
+            }))
+            .await;
+        assert_eq!(
+            own["result"]["outcome"],
+            json!({ "outcome": "selected", "optionId": "approved" })
         );
         // Paths must be absolute; requests for other sessions are refused.
         let relative = fake
@@ -232,13 +248,28 @@ async fn a_turn_goes_through_the_policy() {
         .await
         .unwrap()
         .unwrap();
-    let approvals = seen
+    let approvals: Vec<&Operation> = seen
         .iter()
-        .filter(|event| matches!(event, AiEvent::Approval { .. }))
-        .count();
+        .filter_map(|event| match event {
+            AiEvent::Approval { operation, .. } => Some(operation),
+            _ => None,
+        })
+        .collect();
     assert_eq!(
-        approvals, 2,
+        approvals.len(),
+        2,
         "the write and the dangerous tool were asked about"
+    );
+    // The request named the call only; what it runs came from the earlier report.
+    assert_eq!(
+        approvals[1],
+        &Operation::AgentTool {
+            kind: ToolKind::Execute,
+            title: "Run".into(),
+            command: Some("rm -rf ~".into()),
+            path: None,
+            detail: Some("Clean up the home directory".into()),
+        }
     );
     let outcomes: Vec<&Outcome> = seen
         .iter()
@@ -268,4 +299,38 @@ async fn a_turn_goes_through_the_policy() {
         seen.iter()
             .any(|event| matches!(event, AiEvent::Update { .. }))
     );
+}
+
+#[tokio::test]
+async fn a_failed_turn_reports_the_agents_detail() {
+    let session = Arc::new(AiSession::new(
+        Arc::new(LocalHost),
+        SessionSettings::default(),
+        Arc::new(|_| {}),
+    ));
+    let (client_side, agent_side) = (tokio::io::duplex(1 << 16), tokio::io::duplex(1 << 16));
+    let mut fake = FakeAgent {
+        lines: BufReader::new(agent_side.0).lines(),
+        out: client_side.1,
+        next_id: 100,
+    };
+    let script = tokio::spawn(async move {
+        fake.answer("initialize", json!({ "protocolVersion": 1, "authMethods": [] }))
+            .await;
+        fake.answer("session/new", json!({ "sessionId": "s1" }))
+            .await;
+        let prompt = fake.receive().await;
+        // Codex reports why the turn failed in `data.message`.
+        fake.send(json!({ "jsonrpc": "2.0", "id": prompt["id"], "error": { "code": -32603, "message": "Internal error", "data": { "message": "stream disconnected before completion: connection refused (os error 10061)" } } })).await;
+        fake
+    });
+    let agent = acp::connect(client_side.0, agent_side.1, session.clone())
+        .await
+        .unwrap();
+    let running = runner::open(agent, session.clone(), &AgentSpec::default())
+        .await
+        .unwrap();
+    let error = running.prompt("hi").await.unwrap_err();
+    assert!(error.to_string().contains("os error 10061"), "{error}");
+    drop(script.await.unwrap());
 }

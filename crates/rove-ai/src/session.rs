@@ -15,7 +15,7 @@ use tokio::sync::{Mutex, oneshot, watch};
 
 use crate::acp::{
     self, Client, ClientError, PermissionOption, PermissionOutcome, SessionUpdate, TerminalState,
-    ToolCall,
+    ToolCall, ToolContent,
 };
 use crate::host::{self, CommandOutput, Entry, Host, HostError, Limits, shell_quote};
 use crate::policy::{Answer, Decision, Mode, Operation, Policy, ToolKind};
@@ -118,6 +118,72 @@ pub struct AiSession {
     next_id: AtomicU64,
     jobs: Mutex<HashMap<String, Job>>,
     terminal: OnceLock<Arc<dyn TerminalSource>>,
+    /// The agent's tool calls by id, with every field reported so far: a permission request may
+    /// name a call reported earlier and leave out what it does.
+    calls: Mutex<HashMap<String, ToolCall>>,
+}
+
+/// Most tool calls remembered for permission requests; older ones are forgotten all at once.
+const MAX_CALLS: usize = 512;
+/// Longest detail kept for an agent tool.
+const MAX_DETAIL: usize = 2000;
+
+/// Fills `base` with the fields `update` reported.
+fn merge_call(base: &mut ToolCall, update: &ToolCall) {
+    if update.title.is_some() {
+        base.title.clone_from(&update.title);
+    }
+    if update.kind.is_some() {
+        base.kind.clone_from(&update.kind);
+    }
+    if update.status.is_some() {
+        base.status.clone_from(&update.status);
+    }
+    if !update.content.is_empty() {
+        base.content.clone_from(&update.content);
+    }
+    if !update.locations.is_empty() {
+        base.locations.clone_from(&update.locations);
+    }
+    if update.raw_input.is_some() {
+        base.raw_input.clone_from(&update.raw_input);
+    }
+}
+
+/// A permission request for a tool of RoveTerm's own MCP server (Codex asks before MCP calls).
+/// The call itself goes through the policy inside the tool, so asking here would ask twice.
+fn own_tool(call: &ToolCall) -> bool {
+    call.raw_input
+        .as_ref()
+        .and_then(|input| input.get("server_name"))
+        .and_then(Value::as_str)
+        == Some(crate::mcp::SERVER_NAME)
+}
+
+/// The text an agent attached to a tool call (its reason, or the arguments of a tool it calls).
+fn call_detail(call: &ToolCall) -> Option<String> {
+    let text: Vec<&str> = call
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            ToolContent::Text { text } => Some(text.trim()),
+            _ => None,
+        })
+        .filter(|text| !text.is_empty())
+        .collect();
+    if text.is_empty() {
+        return None;
+    }
+    let mut detail = text.join("\n\n");
+    if detail.len() > MAX_DETAIL {
+        let mut end = MAX_DETAIL;
+        while !detail.is_char_boundary(end) {
+            end -= 1;
+        }
+        detail.truncate(end);
+        detail.push('…');
+    }
+    Some(detail)
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -144,9 +210,18 @@ fn tool_command(raw_input: Option<&Value>) -> Option<String> {
     match command {
         Value::String(line) => Some(line.clone()),
         Value::Array(words) => {
-            let words: Option<Vec<&str>> = words.iter().map(Value::as_str).collect();
+            let words: Vec<&str> = words.iter().map(Value::as_str).collect::<Option<_>>()?;
+            // `bash -lc "<script>"` runs the script: show (and assess) the script itself.
+            if let [shell, flag, script] = words.as_slice() {
+                let shell = shell.rsplit('/').next().unwrap_or(shell);
+                if matches!(shell, "sh" | "bash" | "zsh" | "dash")
+                    && matches!(*flag, "-c" | "-lc" | "-ic" | "-lic")
+                {
+                    return Some((*script).to_owned());
+                }
+            }
             Some(
-                words?
+                words
                     .iter()
                     .map(|word| shell_quote(word))
                     .collect::<Vec<_>>()
@@ -185,6 +260,7 @@ impl AiSession {
             next_id: AtomicU64::new(1),
             jobs: Mutex::new(HashMap::new()),
             terminal: OnceLock::new(),
+            calls: Mutex::new(HashMap::new()),
         }
     }
 
@@ -521,9 +597,17 @@ impl AiSession {
 #[async_trait]
 impl Client for AiSession {
     async fn session_update(&self, session_id: &str, update: SessionUpdate) {
-        if self.check_session(session_id).is_ok() {
-            (self.sink)(AiEvent::Update { update });
+        if self.check_session(session_id).is_err() {
+            return;
         }
+        if let SessionUpdate::ToolCall { call, .. } = &update {
+            let mut calls = self.calls.lock().await;
+            if calls.len() >= MAX_CALLS && !calls.contains_key(&call.id) {
+                calls.clear();
+            }
+            merge_call(calls.entry(call.id.clone()).or_default(), call);
+        }
+        (self.sink)(AiEvent::Update { update });
     }
 
     async fn request_permission(
@@ -535,6 +619,16 @@ impl Client for AiSession {
         if self.check_session(session_id).is_err() {
             return PermissionOutcome::Cancelled;
         }
+        let call = {
+            let mut calls = self.calls.lock().await;
+            let known = calls.entry(call.id.clone()).or_default();
+            merge_call(known, &call);
+            known.id.clone_from(&call.id);
+            known.clone()
+        };
+        if own_tool(&call) {
+            return pick(&options, true);
+        }
         let kind: ToolKind = call
             .kind
             .as_deref()
@@ -544,6 +638,8 @@ impl Client for AiSession {
             kind,
             title: call.title.clone().unwrap_or_default(),
             command: tool_command(call.raw_input.as_ref()),
+            path: call.locations.first().cloned(),
+            detail: call_detail(&call),
         };
         let mut assessment = self.assess(&operation).await;
         // Files the tool changes count as writes.
@@ -748,8 +844,13 @@ mod tests {
             Some("ls -la".into())
         );
         assert_eq!(
-            tool_command(Some(&json!({ "command": ["bash", "-lc", "rm -rf /"] }))),
-            Some("'bash' '-lc' 'rm -rf /'".into())
+            tool_command(Some(&json!({ "command": ["/bin/bash", "-lc", "rm -rf /"] }))),
+            Some("rm -rf /".into())
+        );
+        // Other argument lists keep each word quoted.
+        assert_eq!(
+            tool_command(Some(&json!({ "command": ["python3", "-c", "print(1)"] }))),
+            Some("'python3' '-c' 'print(1)'".into())
         );
         assert_eq!(tool_command(Some(&json!({ "path": "/a" }))), None);
     }
