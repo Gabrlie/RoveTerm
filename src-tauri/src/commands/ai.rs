@@ -160,6 +160,10 @@ pub struct AgentChoice {
     pub via_npx: bool,
     /// An API key is stored on this device.
     pub has_key: bool,
+    /// Offered in the panel; a detected agent the user turned off is listed for the settings only.
+    pub enabled: bool,
+    /// Added by the user's own command rather than detected.
+    pub custom: bool,
 }
 
 /// The agents of this device, with the default.
@@ -187,16 +191,19 @@ struct AcpAgent {
     args: Vec<String>,
     known: Option<&'static detect::KnownAgent>,
     via_npx: bool,
+    enabled: bool,
+    custom: bool,
 }
 
-/// The ACP agents of this device: detected (unless turned off), then added by command.
+/// The ACP agents of this device: detected (with whether the user turned them off), then added
+/// by command.
 fn acp_agents(vault: &rove_vault::Vault) -> Result<Vec<(String, AcpAgent)>, CommandError> {
     let agents = vault.device_preferences()?.agents;
     let mut list: Vec<(String, AcpAgent)> = detect::detect(&detect::search_path())
         .into_iter()
-        .filter(|found| !agents.disabled.contains(&found.id))
         .map(|found| {
             let known = detect::known(&found.id);
+            let enabled = !agents.disabled.contains(&found.id);
             (
                 found.id,
                 AcpAgent {
@@ -205,6 +212,8 @@ fn acp_agents(vault: &rove_vault::Vault) -> Result<Vec<(String, AcpAgent)>, Comm
                     args: found.args,
                     known,
                     via_npx: found.via_npx,
+                    enabled,
+                    custom: false,
                 },
             )
         })
@@ -218,6 +227,8 @@ fn acp_agents(vault: &rove_vault::Vault) -> Result<Vec<(String, AcpAgent)>, Comm
                 args: custom.args,
                 known: None,
                 via_npx: false,
+                enabled: true,
+                custom: true,
             },
         ));
     }
@@ -242,6 +253,8 @@ pub async fn ai_agents(state: State<'_, AppState>) -> Result<AgentList, CommandE
                 name: provider.name.clone(),
                 detail: provider.model.clone(),
                 via_npx: false,
+                enabled: true,
+                custom: false,
             }
         })
         .collect();
@@ -263,6 +276,8 @@ pub async fn ai_agents(state: State<'_, AppState>) -> Result<AgentList, CommandE
             name: found.name,
             detail,
             via_npx: found.via_npx,
+            enabled: found.enabled,
+            custom: found.custom,
         });
     }
     Ok(AgentList {
@@ -531,7 +546,7 @@ pub async fn ai_start(
                 .await
                 .map_err(|error| CommandError::new("app.task", error.to_string()))??
                 .into_iter()
-                .find(|(id, _)| *id == agent_id)
+                .find(|(id, agent)| *id == agent_id && agent.enabled)
                 .map(|(_, agent)| agent)
                 .ok_or_else(|| CommandError::new("ai.no_agent", "no such agent"))?;
             let device = state.vault.device_preferences()?;

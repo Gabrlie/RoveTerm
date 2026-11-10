@@ -261,7 +261,8 @@ class AiStore {
   get defaultAgent(): string | null {
     const list = this.agents;
     if (!list) return null;
-    return list.agents.some((agent) => agent.agent === list.default) ? list.default : (list.agents[0]?.agent ?? null);
+    const usable = list.agents.filter((agent) => agent.enabled);
+    return usable.some((agent) => agent.agent === list.default) ? list.default : (usable[0]?.agent ?? null);
   }
 
   /** Routes backend events to their chats; called once. */

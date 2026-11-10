@@ -46,7 +46,7 @@
   });
   const hostInText = $derived(context.kind === 'local' ? t('ai.localInText') : hostName);
 
-  const agents = $derived(ai.agents?.agents ?? []);
+  const agents = $derived((ai.agents?.agents ?? []).filter((entry) => entry.enabled));
   const agentRef = $derived(chat.agent ?? ai.defaultAgent);
   const agent = $derived(agents.find((entry) => entry.agent === agentRef) ?? null);
   const laidOut = $derived(rows(chat.items));

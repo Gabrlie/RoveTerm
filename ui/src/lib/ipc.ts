@@ -813,6 +813,10 @@ export interface AgentChoice {
   /** Runs through npx (downloaded on first use). */
   via_npx: boolean;
   has_key: boolean;
+  /** Offered in the panel; detected agents the user turned off are listed for the settings. */
+  enabled: boolean;
+  /** Added by the user's own command. */
+  custom: boolean;
 }
 
 export interface AgentList {

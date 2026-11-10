@@ -1,6 +1,6 @@
 # ai
 
-`rove-ai` 让外部 AI Agent（首先是经 `codex-acp` 适配器的 Codex）在当前主机上协作。Agent 不可信：它的每个操作都由本地 `Policy` 决定放行还是请用户审批，并写入 Journal。设计理由见 [决策 0006](../decisions/0006-ai-acp.md)。
+`rove-ai` 让 AI Agent 在当前主机上协作：内置助手（用户自己的模型服务商与 key），或本机安装的 ACP 智能体（Codex、Claude Code、Gemini CLI、Qwen Code 等）。Agent 不可信：它的每个操作都由本地 `Policy` 决定放行还是请用户审批，并写入 Journal。设计理由见 [决策 0006](../decisions/0006-ai-acp.md)。
 
 ## 风险分级
 
@@ -96,7 +96,7 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 
 | 命令 | 作用 |
 |---|---|
-| `ai_agents()` | 本机可用的 Agent 与默认项：每个服务商对应一个内置助手（`builtin:<id>`，附模型），然后是检测到且未关闭的 ACP 智能体与按命令添加的智能体（`acp:<id>`，附运行的程序、是否经 npx）；各项是否已存 key |
+| `ai_agents()` | 本机可用的 Agent 与默认项：每个服务商对应一个内置助手（`builtin:<id>`，附模型），然后是检测到的 ACP 智能体与按命令添加的智能体（`acp:<id>`，附运行的程序、是否经 npx）；各项是否已存 key、是否启用（`enabled`，用户关闭的检测项仍列出，供设置页重新打开，`ai_start` 只启动启用的）、是否按命令添加（`custom`） |
 | `ai_set_key(agent, key)` | 密封保存或删除某个 Agent 的 API key |
 | `ai_provider_test(provider, key)` | 用一次最小请求检查服务商的地址、模型和 key（未给出时用已保存的），返回模型的回复 |
 | `ai_start(context, agent, terminal)` | 在 `local`、已保存主机或快速连接上启动 `agent`；内置助手直接构造 `Assistant`，ACP 智能体按检测结果启动并附带内置 MCP server；`terminal` 为用户在该主机的终端会话，供 `terminal_snapshot` 读取 |
