@@ -13,6 +13,7 @@ pub mod runner;
 pub mod screen;
 pub mod session;
 pub mod shell;
+pub mod tools;
 
 pub use policy::{Answer, Decision, Mode, Operation, Policy, ToolKind};
 pub use risk::{Assessment, Reason, Risk, Rules};

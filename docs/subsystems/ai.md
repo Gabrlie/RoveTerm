@@ -75,7 +75,9 @@ Agent 的环境变量只从白名单（`acp::ENV_ALLOWED`：`PATH`、`HOME`、`L
 
 取消回合时撤回所有等待中的审批（视为拒绝）并发送 `session/cancel`；结束会话时中止运行中的命令并结束 Agent 进程。
 
-## 内置 MCP 工具
+## 工具与内置 MCP server
+
+工具的名称、说明、参数和实现集中在 `tools.rs`，内置 MCP server 与内置助手提供的是同一套工具。
 
 Agent 自带的 shell 在本机运行，到不了远程主机，因此 RoveTerm 在 `session/new` 中附带自己的 MCP server，工具作用于会话主机并经过同一审批：
 
