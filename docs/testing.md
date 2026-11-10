@@ -13,7 +13,7 @@
 |---|---|---|
 | 单元测试 | 各 crate 的 `#[cfg(test)]` 模块 | 不依赖网络和系统钥匙串 |
 | 集成测试 | 各 crate 的 `tests/` | SSH 相关测试连接进程内启动的 [devsshd](../tools/devsshd/README.md)；devsshd 在本机执行命令，依赖本机系统特性的测试（如读取 `/proc` 的服务器状态）用 `#[cfg(target_os = "linux")]` 限定平台 |
-| 前端逻辑测试 | `ui/src/**/*.test.ts` | 只测不依赖界面的纯函数（如会话快照解析与迁移）；`pnpm test:ui` 用 Node 自带的测试运行器和类型剥离执行，被测模块只能有类型导入或带 `.ts` 后缀的导入；这些文件不参与 `svelte-check` |
+| 前端逻辑测试 | `ui/src/**/*.test.ts` | 只测不依赖界面的纯函数（如会话快照解析与迁移）；`pnpm test:ui` 用 Node 自带的测试运行器和类型剥离执行，被测模块只能有类型导入或带 `.ts` 后缀的导入；这些文件不参与 `svelte-check`；脚本中的通配符加了引号，由 Node 展开，任意深度的测试文件都会运行 |
 | 手工端到端 | `pnpm tauri dev` | 按下方清单逐项确认 |
 
 需要系统钥匙串的测试用 `KeyCache` 的内存实现代替；该实现只在测试和 `dev` 构建中可用。
