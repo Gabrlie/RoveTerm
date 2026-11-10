@@ -481,7 +481,8 @@
     <span class="mode">{t('files.mode')}</span>
   </div>
   <div class="list" tabindex="0" role="listbox" aria-multiselectable="true" aria-label={label} bind:this={list} onkeydown={onListKeydown} oncontextmenu={listMenu}>
-    {#if !fsId && loading}
+    <!-- Connecting and the first listing both show the skeleton, so no empty list flashes in between. -->
+    {#if loading && entries.length === 0}
       <FilesSkeleton />
     {:else if shown.length === 0 && !loading && fsId}
       <p class="placeholder">{t('files.empty')}</p>
