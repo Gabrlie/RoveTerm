@@ -7,6 +7,7 @@
   import type { PaneId } from '../layout/layout';
   import { t } from '../i18n';
   import type { IconName } from '../ui/icons';
+  import { hosts } from '../hosts/hosts.svelte';
 
   interface Props {
     group: Group;
@@ -21,6 +22,18 @@
   function tabIcon(paneId: PaneId): IconName {
     const kind = workspace.panes[paneId]?.target.kind;
     return kind === 'local' ? 'terminal' : kind === 'sftp' ? 'files' : 'server';
+  }
+
+  /** A saved host's tab is named after the host (following renames), so tabs of different
+   *  servers stay apart; the title the shell sets (`user@host: dir`) is only the tooltip. Other
+   *  tabs show the shell's title. */
+  function tabTitle(paneId: PaneId): string {
+    const pane = workspace.panes[paneId];
+    if (!pane) return '';
+    const target = pane.target;
+    if (target.kind === 'ssh') return hosts.find(target.hostId)?.name || target.title;
+    if (target.kind === 'sftp' && 'hostId' in target.source) return hosts.find(target.source.hostId)?.name || target.title;
+    return pane.title;
   }
 
   /** Connection state of a tab, shown as a dot. */
@@ -61,12 +74,13 @@
       onclick={() => workspace.activate(group.id, paneId)}
       onkeydown={(event) => event.key === 'Enter' && workspace.activate(group.id, paneId)}
       onauxclick={(event) => onAuxClick(event, paneId)}
+      title={workspace.panes[paneId]?.title}
     >
       <span class="glyph">
         <Icon name={tabIcon(paneId)} size={14} />
         <span class="dot {tabState(paneId)}"></span>
       </span>
-      <span class="title">{workspace.panes[paneId]?.title ?? ''}</span>
+      <span class="title">{tabTitle(paneId)}</span>
       <IconButton icon="close" label={t('action.tab.close')} small onclick={(event) => { event.stopPropagation(); workspace.closePane(paneId); }} />
     </div>
   {/each}
