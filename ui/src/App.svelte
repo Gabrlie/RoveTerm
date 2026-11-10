@@ -396,7 +396,7 @@
     {#if rightOpen}
       <div class="edge vertical" role="separator" aria-orientation="vertical" onpointerdown={resizeRight}></div>
       <div class="right" style:width="{rightSize}px">
-        <RightPanel bind:page={rightPage} onclose={() => (rightOpen = false)} onsettings={() => openSettings()} />
+        <RightPanel bind:page={rightPage} onclose={() => (rightOpen = false)} onsettings={() => openSettings('ai')} />
       </div>
     {/if}
     </div>

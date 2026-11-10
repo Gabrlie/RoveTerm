@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  export type SettingsSection = 'appearance' | 'terminal' | 'files' | 'status' | 'sync' | 'shortcuts' | 'about';
+  export type SettingsSection = 'appearance' | 'terminal' | 'files' | 'status' | 'ai' | 'sync' | 'shortcuts' | 'about';
 </script>
 
 <script lang="ts">
@@ -16,6 +16,7 @@
   import StatusSettings from './sections/StatusSettings.svelte';
   import ShortcutsSettings from './sections/ShortcutsSettings.svelte';
   import SyncSettings from './sections/SyncSettings.svelte';
+  import AiSettings from './sections/AiSettings.svelte';
   import AboutSettings from './sections/AboutSettings.svelte';
 
   let { initial = 'appearance', onclose }: { initial?: SettingsSection; onclose: () => void } = $props();
@@ -27,6 +28,7 @@
     { id: 'terminal', label: 'settings.section.terminal', icon: 'terminal', tint: 'graphite' },
     { id: 'files', label: 'settings.section.files', icon: 'folder', tint: 'teal' },
     { id: 'status', label: 'settings.section.status', icon: 'pulse', tint: 'green' },
+    { id: 'ai', label: 'settings.section.ai', icon: 'command', tint: 'pink' },
     { id: 'sync', label: 'settings.section.sync', icon: 'cloud', tint: 'teal' },
     { id: 'shortcuts', label: 'settings.section.shortcuts', icon: 'keyboard', tint: 'orange' },
     { id: 'about', label: 'settings.section.about', icon: 'info', tint: 'purple' },
@@ -57,6 +59,8 @@
         <FilesSettings />
       {:else if section === 'status'}
         <StatusSettings />
+      {:else if section === 'ai'}
+        <AiSettings />
       {:else if section === 'sync'}
         <SyncSettings />
       {:else if section === 'shortcuts'}
