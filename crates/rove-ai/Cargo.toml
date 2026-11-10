@@ -7,6 +7,18 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait.workspace = true
+rove-fs = { path = "../rove-fs" }
+rove-ssh = { path = "../rove-ssh" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["process", "io-util", "time", "sync", "fs", "rt"] }
+
+[dev-dependencies]
+devsshd = { path = "../../tools/devsshd" }
+rove-kernel = { path = "../rove-kernel" }
+rove-vault = { path = "../rove-vault", features = ["memory-key-cache"] }
+tempfile = "3"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+zeroize = "1"

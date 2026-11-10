@@ -2,6 +2,7 @@
 //! host goes through [`Policy`], which decides from the operation's assessed [`Risk`] whether it
 //! runs or needs the user's approval. See `docs/subsystems/ai.md`.
 
+pub mod host;
 pub mod policy;
 pub mod risk;
 pub mod shell;
