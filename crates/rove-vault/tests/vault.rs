@@ -95,6 +95,7 @@ fn lost_key_locks_until_reset_which_discards_secrets_only() {
             .create_host(draft("d.example", AuthMethod::Password))
             .unwrap();
         vault.set_secret(host.id, &password("pw")).unwrap();
+        vault.set_ai_key("acp:codex", Some("sk-test")).unwrap();
         host.id
     };
     cache.clear();
@@ -107,6 +108,9 @@ fn lost_key_locks_until_reset_which_discards_secrets_only() {
     ));
     assert_eq!(vault.reset_secrets().unwrap(), LockState::Unlocked);
     assert_eq!(vault.secret(id).unwrap(), None);
+    // AI keys sealed with the lost key go too, instead of failing to open later.
+    assert!(vault.ai_key_ids().unwrap().is_empty());
+    assert_eq!(vault.ai_key("acp:codex").unwrap(), None);
     assert_eq!(vault.host(id).unwrap().hostname, "d.example");
 }
 

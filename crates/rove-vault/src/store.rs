@@ -177,6 +177,7 @@ impl Vault {
             let tx = conn.transaction()?;
             tx.execute("DELETE FROM host_secrets", [])?;
             tx.execute("UPDATE ssh_keys SET sealed = NULL", [])?;
+            tx.execute("DELETE FROM preferences WHERE key LIKE 'ai_key:%'", [])?;
             tx.execute("DELETE FROM meta WHERE key = 'key_check'", [])?;
             tx.commit()?;
         }
