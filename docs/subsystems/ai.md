@@ -53,3 +53,24 @@ AI 会话绑定一台主机（`host::Host`），会话中的命令与文件操�
 - Agent 自带工具：按工具种类。
 
 Agent 在权限请求中附带的选项（如"始终允许"）不参与决策。
+
+## ACP 会话
+
+`runner::start` 以子进程启动 Agent，经 stdio 上按行分隔的 JSON-RPC（ACP 版本 1）通信：
+
+1. `initialize`：声明客户端能力 `fs.readTextFile`、`fs.writeTextFile`、`terminal`，读取 Agent 名称与登录方式。
+2. `session/new`：工作目录为会话主机对应的目录，附带内置 MCP server。Agent 要求登录时，用配置的方式 `authenticate` 后重试。
+3. 若 Agent 提供配置中偏好的模式（Codex 为 `read-only`），用 `session/set_mode` 切换过去，使 Agent 自带的工具在改动任何东西前都发出权限请求。
+4. `session/prompt` 发出用户的话，等待回合结束；期间 `session/update` 转为 `AiEvent::Update`（回复与思考片段、工具调用、计划、模式变化），其余类型忽略。
+
+Agent 发来的请求由 `AiSession` 回答，全部经过审批：
+
+| 请求 | 处理 |
+|---|---|
+| `fs/read_text_file`、`fs/write_text_file` | 在会话主机上读写；路径必须是绝对路径，可按行号与行数截取 |
+| `terminal/create` 等 | 把程序、参数和环境变量拼成一行 shell 命令后评估，在会话主机上运行；`output`、`wait_for_exit`、`kill`、`release` 操作这次运行 |
+| `session/request_permission` | Agent 自带工具（在本机运行）：按 `rawInput.command` 与涉及的文件评估；放行或拒绝时只选择 Agent 的一次性选项，"始终允许"由本地策略管理 |
+
+Agent 的环境变量只从白名单（`acp::ENV_ALLOWED`：`PATH`、`HOME`、`LANG`、`LC_*`、`TMPDIR`、代理与证书变量、Windows 的系统目录变量等）继承，再加上调用方给出的变量（如从 vault 解密的 API key）。消息单条最大 8 MiB，转发给界面的文本按 256 KiB 截断。
+
+取消回合时撤回所有等待中的审批（视为拒绝）并发送 `session/cancel`；结束会话时中止运行中的命令并结束 Agent 进程。

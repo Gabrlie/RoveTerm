@@ -89,14 +89,23 @@ pub trait Host: Send + Sync {
     fn label(&self) -> String;
 
     /// Runs `command` through the host's shell in `cwd` (the login directory when `None`).
-    async fn run(&self, command: &str, cwd: Option<&str>, limits: &Limits) -> Result<CommandOutput, HostError>;
+    async fn run(
+        &self,
+        command: &str,
+        cwd: Option<&str>,
+        limits: &Limits,
+    ) -> Result<CommandOutput, HostError>;
 
     /// The host's file system.
     async fn files(&self) -> Result<Arc<dyn FileSystem>, HostError>;
 }
 
 /// Reads the text file `path`, keeping at most `limits.file` bytes.
-pub async fn read_text(host: &dyn Host, path: &str, limits: &Limits) -> Result<FileText, HostError> {
+pub async fn read_text(
+    host: &dyn Host,
+    path: &str,
+    limits: &Limits,
+) -> Result<FileText, HostError> {
     let files = host.files().await?;
     let mut reader = files.open_read(path).await?;
     let mut bytes = Vec::new();
@@ -116,7 +125,12 @@ pub async fn read_text(host: &dyn Host, path: &str, limits: &Limits) -> Result<F
 }
 
 /// Creates or replaces the file `path` with `content`.
-pub async fn write_text(host: &dyn Host, path: &str, content: &str, limits: &Limits) -> Result<(), HostError> {
+pub async fn write_text(
+    host: &dyn Host,
+    path: &str,
+    content: &str,
+    limits: &Limits,
+) -> Result<(), HostError> {
     if content.len() > limits.file {
         return Err(HostError::TooLarge(path.to_owned(), limits.file));
     }
@@ -134,7 +148,11 @@ pub async fn write_text(host: &dyn Host, path: &str, content: &str, limits: &Lim
 }
 
 /// Lists `path`, sorted by name, keeping at most `limits.entries`; returns whether more were left.
-pub async fn list_dir(host: &dyn Host, path: &str, limits: &Limits) -> Result<(Vec<Entry>, bool), HostError> {
+pub async fn list_dir(
+    host: &dyn Host,
+    path: &str,
+    limits: &Limits,
+) -> Result<(Vec<Entry>, bool), HostError> {
     let files = host.files().await?;
     let mut entries: Vec<Entry> = files
         .list(path)
@@ -171,7 +189,12 @@ impl Host for LocalHost {
         "local".into()
     }
 
-    async fn run(&self, command: &str, cwd: Option<&str>, limits: &Limits) -> Result<CommandOutput, HostError> {
+    async fn run(
+        &self,
+        command: &str,
+        cwd: Option<&str>,
+        limits: &Limits,
+    ) -> Result<CommandOutput, HostError> {
         #[cfg(windows)]
         let mut process = {
             let mut process = tokio::process::Command::new("cmd");
@@ -194,13 +217,19 @@ impl Host for LocalHost {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
-        let mut child = process.spawn().map_err(|error| HostError::Failed(error.to_string()))?;
+        let mut child = process
+            .spawn()
+            .map_err(|error| HostError::Failed(error.to_string()))?;
         let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
             return Err(HostError::Failed("no output pipes".into()));
         };
         let limit = limits.output;
         let work = async {
-            let (out, err, status) = tokio::join!(read_capped(stdout, limit), read_capped(stderr, limit), child.wait());
+            let (out, err, status) = tokio::join!(
+                read_capped(stdout, limit),
+                read_capped(stderr, limit),
+                child.wait()
+            );
             let status = status.map_err(|error| HostError::Failed(error.to_string()))?;
             let ((stdout, cut_out), (stderr, cut_err)) = (out, err);
             Ok(CommandOutput {
@@ -222,7 +251,10 @@ impl Host for LocalHost {
 }
 
 /// Reads all of `stream`, keeping the first `limit` bytes; returns whether some were dropped.
-async fn read_capped(mut stream: impl tokio::io::AsyncRead + Unpin, limit: usize) -> (Vec<u8>, bool) {
+async fn read_capped(
+    mut stream: impl tokio::io::AsyncRead + Unpin,
+    limit: usize,
+) -> (Vec<u8>, bool) {
     let mut kept = Vec::new();
     let mut dropped = false;
     let mut buffer = [0u8; 8192];
@@ -279,7 +311,12 @@ impl Host for RemoteHost {
         self.label.clone()
     }
 
-    async fn run(&self, command: &str, cwd: Option<&str>, limits: &Limits) -> Result<CommandOutput, HostError> {
+    async fn run(
+        &self,
+        command: &str,
+        cwd: Option<&str>,
+        limits: &Limits,
+    ) -> Result<CommandOutput, HostError> {
         let connection = self.connection().await?;
         let line = match cwd {
             Some(dir) => format!("cd {} && {command}", shell_quote(dir)),
@@ -331,21 +368,39 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let limits = Limits::default();
         let output = LocalHost
-            .run("echo out; echo err >&2; pwd; exit 3", dir.path().to_str(), &limits)
+            .run(
+                "echo out; echo err >&2; pwd; exit 3",
+                dir.path().to_str(),
+                &limits,
+            )
             .await
             .unwrap();
         assert_eq!(output.stderr, "err\n");
         assert!(output.stdout.starts_with("out\n"));
-        assert!(output.stdout.trim_end().ends_with(dir.path().file_name().unwrap().to_str().unwrap()));
+        assert!(
+            output
+                .stdout
+                .trim_end()
+                .ends_with(dir.path().file_name().unwrap().to_str().unwrap())
+        );
         assert_eq!(output.exit_code, Some(3));
 
-        let small = Limits { output: 10, ..limits };
+        let small = Limits {
+            output: 10,
+            ..limits
+        };
         let output = LocalHost.run("seq 1 1000", None, &small).await.unwrap();
         assert_eq!(output.stdout.len(), 10);
         assert!(output.truncated);
 
-        let quick = Limits { timeout: Duration::from_millis(200), ..limits };
-        assert_eq!(LocalHost.run("sleep 5", None, &quick).await, Err(HostError::Timeout(0)));
+        let quick = Limits {
+            timeout: Duration::from_millis(200),
+            ..limits
+        };
+        assert_eq!(
+            LocalHost.run("sleep 5", None, &quick).await,
+            Err(HostError::Timeout(0))
+        );
     }
 
     #[tokio::test]
@@ -354,21 +409,65 @@ mod tests {
         let path = dir.path().join("notes.txt");
         let path = path.to_str().unwrap();
         let limits = Limits::default();
-        write_text(&LocalHost, path, "hello\nworld\n", &limits).await.unwrap();
+        write_text(&LocalHost, path, "hello\nworld\n", &limits)
+            .await
+            .unwrap();
         let text = read_text(&LocalHost, path, &limits).await.unwrap();
-        assert_eq!(text, FileText { content: "hello\nworld\n".into(), truncated: false });
-        let short = read_text(&LocalHost, path, &Limits { file: 5, ..limits }).await.unwrap();
-        assert_eq!(short, FileText { content: "hello".into(), truncated: true });
-        assert!(matches!(write_text(&LocalHost, path, "too long", &Limits { file: 3, ..limits }).await, Err(HostError::TooLarge(..))));
+        assert_eq!(
+            text,
+            FileText {
+                content: "hello\nworld\n".into(),
+                truncated: false
+            }
+        );
+        let short = read_text(&LocalHost, path, &Limits { file: 5, ..limits })
+            .await
+            .unwrap();
+        assert_eq!(
+            short,
+            FileText {
+                content: "hello".into(),
+                truncated: true
+            }
+        );
+        assert!(matches!(
+            write_text(&LocalHost, path, "too long", &Limits { file: 3, ..limits }).await,
+            Err(HostError::TooLarge(..))
+        ));
 
         std::fs::write(dir.path().join("blob.bin"), [0u8, 1, 2]).unwrap();
-        assert!(matches!(read_text(&LocalHost, dir.path().join("blob.bin").to_str().unwrap(), &limits).await, Err(HostError::Binary(_))));
+        assert!(matches!(
+            read_text(
+                &LocalHost,
+                dir.path().join("blob.bin").to_str().unwrap(),
+                &limits
+            )
+            .await,
+            Err(HostError::Binary(_))
+        ));
         std::fs::create_dir(dir.path().join("sub")).unwrap();
-        let (entries, more) = list_dir(&LocalHost, dir.path().to_str().unwrap(), &limits).await.unwrap();
-        let names: Vec<(&str, &str)> = entries.iter().map(|entry| (entry.name.as_str(), entry.kind)).collect();
-        assert_eq!(names, [("blob.bin", "file"), ("notes.txt", "file"), ("sub", "dir")]);
+        let (entries, more) = list_dir(&LocalHost, dir.path().to_str().unwrap(), &limits)
+            .await
+            .unwrap();
+        let names: Vec<(&str, &str)> = entries
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.kind))
+            .collect();
+        assert_eq!(
+            names,
+            [("blob.bin", "file"), ("notes.txt", "file"), ("sub", "dir")]
+        );
         assert!(!more);
-        let (entries, more) = list_dir(&LocalHost, dir.path().to_str().unwrap(), &Limits { entries: 1, ..limits }).await.unwrap();
+        let (entries, more) = list_dir(
+            &LocalHost,
+            dir.path().to_str().unwrap(),
+            &Limits {
+                entries: 1,
+                ..limits
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(entries.len(), 1);
         assert!(more);
     }

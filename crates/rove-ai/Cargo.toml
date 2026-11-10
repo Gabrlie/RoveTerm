@@ -12,8 +12,10 @@ rove-fs = { path = "../rove-fs" }
 rove-ssh = { path = "../rove-ssh" }
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["process", "io-util", "time", "sync", "fs", "rt"] }
+tracing.workspace = true
 
 [dev-dependencies]
 devsshd = { path = "../../tools/devsshd" }

@@ -63,7 +63,8 @@ impl Assessment {
         }
     }
 
-    fn merge(&mut self, other: Assessment) {
+    /// Combines `other` into this assessment: the higher risk, all programs and reasons.
+    pub fn merge(&mut self, other: Assessment) {
         self.risk = self.risk.max(other.risk);
         self.programs.extend(other.programs);
         self.opaque |= other.opaque;
