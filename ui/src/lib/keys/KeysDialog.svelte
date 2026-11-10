@@ -283,7 +283,7 @@
             <IconButton icon="remove" label={t('keys.delete')} small danger onclick={() => void remove()} />
           {/if}
         </div>
-        <p class="meta">{selected.algorithm} · {selected.fingerprint}</p>
+        <p class="meta selectable">{selected.algorithm} · {selected.fingerprint}</p>
 
         {#if editingPublic}
           <label

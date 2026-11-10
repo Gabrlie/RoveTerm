@@ -18,10 +18,10 @@
     <dt>{t('hostkey.algorithm')}</dt>
     <dd>{prompt.key.algorithm}</dd>
     <dt>{t('hostkey.fingerprint')}</dt>
-    <dd class="fingerprint">{prompt.key.fingerprint}</dd>
+    <dd class="fingerprint selectable">{prompt.key.fingerprint}</dd>
     {#if prompt.route}
       <dt>{t('hostkey.route')}</dt>
-      <dd class="fingerprint">{prompt.route}</dd>
+      <dd class="fingerprint selectable">{prompt.route}</dd>
     {/if}
   </dl>
   {#snippet actions()}

@@ -101,7 +101,7 @@
       {@const failure = pane.failure}
       <div class="failure" role="alert">
         <Icon name="warning" size={16} />
-        <span class="reason">{t('connect.failed', { reason: errorText(failure) })}</span>
+        <span class="reason selectable">{t('connect.failed', { reason: errorText(failure) })}</span>
         <div class="buttons">
           <button type="button" class="primary" onclick={() => workspace.reopen(pane.id, null, false)}>{t('connect.retry')}</button>
           {#if failure.code === 'ssh.passphrase_required'}
