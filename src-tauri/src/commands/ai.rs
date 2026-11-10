@@ -1,23 +1,30 @@
-//! AI sessions: start an agent on a host context, send prompts, answer approvals, stop. Events
-//! stream to the WebView as `ai-update` and are recorded in the journal.
+//! AI sessions: start an agent (the built-in assistant with a model provider, or a local ACP
+//! agent) on a host context, send prompts, answer approvals, stop. Events stream to the WebView
+//! as `ai-update` and are recorded in the journal.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use rove_ai::acp::{self, McpServer};
+use rove_ai::assistant::{Assistant, HostMeta};
 use rove_ai::audit::Auditor;
+use rove_ai::backend::{AgentBackend, AgentRef, BackendError};
+use rove_ai::detect;
 use rove_ai::host::{ConnectionSource, Host, LocalHost, RemoteHost};
+use rove_ai::llm::{self, Client, Endpoint};
 use rove_ai::mcp::McpListener;
-use rove_ai::runner::{self, AgentSpec, Running};
+use rove_ai::runner::{self, AgentSpec};
 use rove_ai::session::{AiEvent, AiSession, SessionSettings, TerminalSource};
 use rove_ai::{Answer, Mode, Rules};
 use rove_session::{SessionId, SessionManager};
 use rove_ssh::{SshConnection, SshConnector, SshTarget};
-use rove_vault::{AgentAuth, AiMode};
+use rove_vault::{AgentAuth, AiMode, ProviderFormat, ProviderPrefs, ReasoningEffort};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
+use zeroize::Zeroizing;
 
 use crate::connect::{host_target, quick_target};
 use crate::error::CommandError;
@@ -27,18 +34,17 @@ use crate::state::AppState;
 pub const AI_EVENT: &str = "ai-update";
 /// Longest prompt accepted.
 const MAX_PROMPT: usize = 100_000;
-/// Where the API key of the Codex agent is stored.
-const CODEX_KEY: &str = "acp:codex";
-/// Codex's ACP adapter, run through npx when it is not installed.
-const CODEX_PACKAGE: &str = "@agentclientprotocol/codex-acp";
-/// Agent modes that make the agent ask before its own tools change anything.
-const PREFERRED_MODES: &[&str] = &["read-only", "read_only", "readonly"];
+/// Agent modes that make an ACP agent ask before its own tools change anything.
+const PREFERRED_MODES: &[&str] = &["read-only", "read_only", "readonly", "default", "plan"];
+/// How long a model may stay silent before its reply counts as stalled.
+const MODEL_IDLE: Duration = Duration::from_secs(180);
 
 /// One running AI session.
 struct Entry {
-    running: Running,
+    backend: Arc<dyn AgentBackend>,
     auditor: Arc<Auditor>,
-    mcp: tokio::task::JoinHandle<()>,
+    /// The built-in MCP server of an ACP agent.
+    mcp: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// AI sessions of this app.
@@ -86,12 +92,22 @@ impl AiSessions {
 }
 
 async fn stop(entry: &Entry) {
-    entry.running.stop().await;
-    entry.mcp.abort();
+    entry.backend.stop().await;
+    if let Some(mcp) = &entry.mcp {
+        mcp.abort();
+    }
     entry.auditor.ended();
 }
 
-fn ai_error(error: acp::AcpError) -> CommandError {
+fn backend_error(error: BackendError) -> CommandError {
+    match error {
+        BackendError::Acp(error) => acp_error(error),
+        BackendError::Model(message) => CommandError::new("ai.model", message),
+        BackendError::Busy => CommandError::new("ai.busy", "a turn is already running"),
+    }
+}
+
+fn acp_error(error: acp::AcpError) -> CommandError {
     let code = match &error {
         acp::AcpError::Spawn(_) => "ai.spawn",
         acp::AcpError::Closed => "ai.closed",
@@ -100,6 +116,25 @@ fn ai_error(error: acp::AcpError) -> CommandError {
         acp::AcpError::Rpc { .. } => "ai.agent",
     };
     CommandError::new(code, error.to_string())
+}
+
+/// Parses `builtin:<id>` or `acp:<id>` from the WebView.
+fn agent_ref(text: &str) -> Result<AgentRef, CommandError> {
+    let invalid = || CommandError::new("input.invalid", "not an agent reference");
+    let (kind, id) = text.split_once(':').ok_or_else(invalid)?;
+    if id.is_empty()
+        || id.len() > 48
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Err(invalid());
+    }
+    match kind {
+        "builtin" => Ok(AgentRef::Builtin(id.to_owned())),
+        "acp" => Ok(AgentRef::Acp(id.to_owned())),
+        _ => Err(invalid()),
+    }
 }
 
 /// Where the AI session works.
@@ -111,20 +146,27 @@ pub enum AiContext {
     Quick { address: String },
 }
 
-/// The agent program found for this device.
+/// An agent the user can talk to, as the panel lists it.
 #[derive(Debug, Clone, Serialize)]
-pub struct AgentFound {
-    pub program: String,
-    pub args: Vec<String>,
-    /// `configured`, `path` or `npx`.
-    pub source: &'static str,
+pub struct AgentChoice {
+    /// `builtin:<provider id>` or `acp:<agent id>`.
+    pub agent: String,
+    /// `builtin` or `acp`.
+    pub kind: &'static str,
+    pub name: String,
+    /// The model, or the program that runs.
+    pub detail: String,
+    /// Runs through npx (downloaded on first use).
+    pub via_npx: bool,
+    /// An API key is stored on this device.
+    pub has_key: bool,
 }
 
+/// The agents of this device, with the default.
 #[derive(Debug, Serialize)]
-pub struct AiStatus {
-    /// `None` when no agent can be found.
-    pub agent: Option<AgentFound>,
-    pub has_key: bool,
+pub struct AgentList {
+    pub agents: Vec<AgentChoice>,
+    pub default: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -138,54 +180,170 @@ pub struct AiStarted {
     pub current_mode: Option<String>,
 }
 
-fn find_agent(state: &AppState) -> Result<Option<AgentFound>, CommandError> {
-    let agents = state.vault.device_preferences()?.agents;
-    if let Some(custom) = agents.custom.into_iter().next() {
-        return Ok(Some(AgentFound {
-            program: custom.command,
-            args: custom.args,
-            source: "configured",
-        }));
-    }
-    let path = rove_ai::detect::search_path();
-    if let Some(program) = rove_ai::detect::which("codex-acp", &path) {
-        return Ok(Some(AgentFound {
-            program: program.to_string_lossy().into_owned(),
-            args: Vec::new(),
-            source: "path",
-        }));
-    }
-    Ok(rove_ai::detect::which("npx", &path).map(|npx| AgentFound {
-        program: npx.to_string_lossy().into_owned(),
-        args: vec!["-y".into(), CODEX_PACKAGE.into()],
-        source: "npx",
-    }))
+/// How an ACP agent runs.
+struct AcpAgent {
+    name: String,
+    program: String,
+    args: Vec<String>,
+    known: Option<&'static detect::KnownAgent>,
+    via_npx: bool,
 }
 
-/// Reports the agent this device would start and whether an API key is stored.
+/// The ACP agents of this device: detected (unless turned off), then added by command.
+fn acp_agents(vault: &rove_vault::Vault) -> Result<Vec<(String, AcpAgent)>, CommandError> {
+    let agents = vault.device_preferences()?.agents;
+    let mut list: Vec<(String, AcpAgent)> = detect::detect(&detect::search_path())
+        .into_iter()
+        .filter(|found| !agents.disabled.contains(&found.id))
+        .map(|found| {
+            let known = detect::known(&found.id);
+            (
+                found.id,
+                AcpAgent {
+                    name: found.name,
+                    program: found.program,
+                    args: found.args,
+                    known,
+                    via_npx: found.via_npx,
+                },
+            )
+        })
+        .collect();
+    for custom in agents.custom {
+        list.push((
+            custom.id,
+            AcpAgent {
+                name: custom.name,
+                program: custom.command,
+                args: custom.args,
+                known: None,
+                via_npx: false,
+            },
+        ));
+    }
+    Ok(list)
+}
+
+/// Lists the agents of this device: the built-in assistant with each provider, then ACP agents.
 #[tauri::command]
-pub async fn ai_status(state: State<'_, AppState>) -> Result<AiStatus, CommandError> {
-    let agent = {
-        let state = state.inner();
-        find_agent(state)?
-    };
-    Ok(AiStatus {
-        agent,
-        has_key: state.vault.ai_key_ids()?.iter().any(|id| id == CODEX_KEY),
+pub async fn ai_agents(state: State<'_, AppState>) -> Result<AgentList, CommandError> {
+    let prefs = state.vault.preferences()?;
+    let keys = state.vault.ai_key_ids()?;
+    let mut agents: Vec<AgentChoice> = prefs
+        .ai
+        .providers
+        .iter()
+        .map(|provider| {
+            let agent = format!("builtin:{}", provider.id);
+            AgentChoice {
+                has_key: keys.contains(&agent),
+                agent,
+                kind: "builtin",
+                name: provider.name.clone(),
+                detail: provider.model.clone(),
+                via_npx: false,
+            }
+        })
+        .collect();
+    // Looking at the PATH may run a login shell once: off the async threads.
+    let vault = state.vault.clone();
+    let found = tauri::async_runtime::spawn_blocking(move || acp_agents(&vault))
+        .await
+        .map_err(|error| CommandError::new("app.task", error.to_string()))??;
+    for (id, found) in found {
+        let agent = format!("acp:{id}");
+        let detail = [found.program, found.args.join(" ")]
+            .join(" ")
+            .trim()
+            .to_owned();
+        agents.push(AgentChoice {
+            has_key: keys.contains(&agent),
+            agent,
+            kind: "acp",
+            name: found.name,
+            detail,
+            via_npx: found.via_npx,
+        });
+    }
+    Ok(AgentList {
+        agents,
+        default: prefs.ai.default_agent,
     })
 }
 
-/// Stores the API key sealed on this device, or removes it with `None`.
+/// Stores the API key of agent `agent` (`builtin:<id>` or `acp:<id>`) sealed on this device, or
+/// removes it with `None`.
 #[tauri::command]
 pub async fn ai_set_key(
     state: State<'_, AppState>,
+    agent: String,
     key: Option<String>,
 ) -> Result<(), CommandError> {
+    let agent = agent_ref(&agent)?;
+    let id = match agent {
+        AgentRef::Builtin(id) => format!("builtin:{id}"),
+        AgentRef::Acp(id) => format!("acp:{id}"),
+    };
     state.ensure_unlocked().await?;
-    let key = key.map(zeroize::Zeroizing::new);
+    let key = key.map(Zeroizing::new);
     Ok(state
         .vault
-        .set_ai_key(CODEX_KEY, key.as_deref().map(String::as_str))?)
+        .set_ai_key(&id, key.as_deref().map(String::as_str))?)
+}
+
+fn endpoint(provider: &ProviderPrefs) -> Endpoint {
+    Endpoint {
+        format: match provider.format {
+            ProviderFormat::Chat => llm::Format::Chat,
+            ProviderFormat::Responses => llm::Format::Responses,
+            ProviderFormat::Anthropic => llm::Format::Anthropic,
+        },
+        base_url: provider.base_url.clone(),
+        model: provider.model.clone(),
+        max_tokens: provider.max_tokens,
+        effort: provider.effort.map(|effort| match effort {
+            ReasoningEffort::Low => llm::Effort::Low,
+            ReasoningEffort::Medium => llm::Effort::Medium,
+            ReasoningEffort::High => llm::Effort::High,
+        }),
+    }
+}
+
+/// Checks `provider` with a tiny request: its address, its model and `key` (the stored key of a
+/// saved provider when `None`). Returns the model's reply.
+#[tauri::command]
+pub async fn ai_provider_test(
+    state: State<'_, AppState>,
+    provider: ProviderPrefs,
+    key: Option<String>,
+) -> Result<String, CommandError> {
+    let mut prefs = rove_vault::Preferences::default();
+    prefs.ai.providers = vec![provider];
+    let provider = prefs.validate()?.ai.providers.remove(0);
+    let key = match key.filter(|key| !key.trim().is_empty()) {
+        Some(key) => Zeroizing::new(key.trim().to_owned()),
+        None => {
+            state.ensure_unlocked().await?;
+            state
+                .vault
+                .ai_key(&format!("builtin:{}", provider.id))?
+                .unwrap_or_default()
+        }
+    };
+    let client = Client::new(endpoint(&provider), &key, Duration::from_secs(30))
+        .map_err(|error| CommandError::new("ai.model", error.to_string()))?;
+    let reply = client
+        .complete(
+            "Reply with the single word OK.",
+            &[llm::Message::User {
+                text: "ping".into(),
+            }],
+            &[],
+            &mut |_| {},
+        )
+        .await
+        .map_err(|error| CommandError::new("ai.model", error.to_string()))?;
+    Ok(reply.text.chars().take(200).collect())
 }
 
 /// A remote host's live connection, from the app's pool.
@@ -223,92 +381,88 @@ fn mode(mode: AiMode) -> Mode {
     }
 }
 
-/// Starts an agent working on `context`; `terminal` is the user's terminal session there, which
-/// the agent may read.
-#[tauri::command]
-pub async fn ai_start(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    context: AiContext,
-    terminal: Option<String>,
-) -> Result<AiStarted, CommandError> {
-    state.ensure_unlocked().await?;
-    let found = find_agent(state.inner())?
-        .ok_or_else(|| CommandError::new("ai.no_agent", "no agent found"))?;
-    let device = state.vault.device_preferences()?;
-    let prefs = state.vault.preferences()?;
-
-    let (host, cwd): (Arc<dyn Host>, PathBuf) = match &context {
-        AiContext::Local => (
-            Arc::new(LocalHost),
-            std::env::home_dir().unwrap_or_else(|| PathBuf::from(".")),
-        ),
+/// The session's host and what the assistant is told about it.
+fn host_of(
+    state: &AppState,
+    context: &AiContext,
+) -> Result<(Arc<dyn Host>, HostMeta, PathBuf), CommandError> {
+    Ok(match context {
+        AiContext::Local => {
+            let meta = HostMeta {
+                name: "this computer".into(),
+                address: "local".into(),
+                system: Some(std::env::consts::OS.into()),
+            };
+            (
+                Arc::new(LocalHost),
+                meta,
+                std::env::home_dir().unwrap_or_else(|| PathBuf::from(".")),
+            )
+        }
         AiContext::Host { host_id } => {
             let host = state.vault.host(host_id.parse()?)?;
-            let target = host_target(&state, &host)?;
+            let target = host_target(state, &host)?;
             let label = format!("{} ({}@{})", host.name, target.username, target.hostname);
+            let meta = HostMeta {
+                name: host.name.clone(),
+                address: format!("{}@{}:{}", target.username, target.hostname, target.port),
+                system: host.os.as_ref().map(|os| {
+                    if os.name.is_empty() {
+                        os.id.clone()
+                    } else {
+                        os.name.clone()
+                    }
+                }),
+            };
             let source = Arc::new(Pooled {
                 ssh: state.ssh.clone(),
                 target,
             });
             (
                 Arc::new(RemoteHost::new(label, source)),
+                meta,
                 state.ai.workspace.clone(),
             )
         }
         AiContext::Quick { address } => {
             let target = quick_target(address)?;
             let label = target.address();
+            let meta = HostMeta {
+                name: label.clone(),
+                address: label.clone(),
+                system: None,
+            };
             let source = Arc::new(Pooled {
                 ssh: state.ssh.clone(),
                 target,
             });
             (
                 Arc::new(RemoteHost::new(label, source)),
+                meta,
                 state.ai.workspace.clone(),
             )
         }
-    };
+    })
+}
+
+/// Starts `agent` (`builtin:<provider id>` or `acp:<agent id>`) working on `context`; `terminal`
+/// is the user's terminal session there, which the agent may read.
+#[tauri::command]
+pub async fn ai_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    context: AiContext,
+    agent: String,
+    terminal: Option<String>,
+) -> Result<AiStarted, CommandError> {
+    let agent = agent_ref(&agent)?;
+    state.ensure_unlocked().await?;
+    let prefs = state.vault.preferences()?;
+    let (host, meta, cwd) = host_of(state.inner(), &context)?;
     std::fs::create_dir_all(&cwd)
         .map_err(|error| CommandError::new("app.io", error.to_string()))?;
 
-    // Credentials: the stored key, or the agent's own sign-in.
-    let key = match device.agents.auth {
-        AgentAuth::Account => None,
-        AgentAuth::Auto => state.vault.ai_key(CODEX_KEY)?,
-        AgentAuth::ApiKey => Some(
-            state
-                .vault
-                .ai_key(CODEX_KEY)?
-                .ok_or_else(|| CommandError::new("ai.no_key", "no API key is stored"))?,
-        ),
-    };
-    let mut extra = vec![("PATH".to_owned(), rove_ai::detect::search_path())];
-    let auth_methods: Vec<String> = match &key {
-        Some(key) => {
-            extra.push(("CODEX_API_KEY".into(), key.to_string()));
-            extra.push(("OPENAI_API_KEY".into(), key.to_string()));
-            vec!["codex-api-key".into(), "openai-api-key".into()]
-        }
-        None => vec!["chatgpt".into()],
-    };
-    let env = acp::agent_env(acp::ENV_ALLOWED, &extra);
-
     let id = format!("ai-{}", uuid::Uuid::now_v7());
-    let listener = McpListener::bind()
-        .await
-        .map_err(|error| CommandError::new("app.io", error.to_string()))?;
-    let exe =
-        std::env::current_exe().map_err(|error| CommandError::new("app.io", error.to_string()))?;
-    let mcp = vec![McpServer {
-        name: "roveterm".into(),
-        command: exe.to_string_lossy().into_owned(),
-        args: vec!["--mcp-bridge".into()],
-        env: listener
-            .bridge_env()
-            .map_err(|error| CommandError::new("app.io", error.to_string()))?,
-    }];
-
     let auditor = Arc::new(Auditor::new(
         {
             let recorder = state.ai.recorder.clone();
@@ -337,18 +491,6 @@ pub async fn ai_start(
         },
         ..SessionSettings::default()
     };
-    let spec = AgentSpec {
-        program: found.program,
-        args: found.args,
-        env,
-        cwd,
-        auth_methods,
-        mcp,
-        preferred_modes: PREFERRED_MODES
-            .iter()
-            .map(|mode| (*mode).to_owned())
-            .collect(),
-    };
     let session = Arc::new(AiSession::new(host.clone(), settings, sink));
     if let Some(terminal) = terminal {
         let id: SessionId = terminal.parse()?;
@@ -357,41 +499,139 @@ pub async fn ai_start(
             id,
         }));
     }
-    // Serving first: the agent starts the MCP bridge before its session exists.
-    let mcp = listener.serve(session.clone());
-    let running = match runner::start(&spec, session).await {
-        Ok(running) => running,
-        Err(error) => {
-            mcp.abort();
-            return Err(ai_error(error));
+
+    let (backend, mcp, started): (Arc<dyn AgentBackend>, _, AiStarted) = match agent {
+        AgentRef::Builtin(provider_id) => {
+            let provider = prefs
+                .ai
+                .providers
+                .iter()
+                .find(|provider| provider.id == provider_id)
+                .ok_or_else(|| CommandError::new("ai.no_agent", "no such provider"))?;
+            let key = state
+                .vault
+                .ai_key(&format!("builtin:{provider_id}"))?
+                .unwrap_or_default();
+            let client = Client::new(endpoint(provider), &key, MODEL_IDLE)
+                .map_err(|error| CommandError::new("ai.model", error.to_string()))?;
+            let assistant = Arc::new(Assistant::new(client, session, &meta));
+            let started = AiStarted {
+                id: id.clone(),
+                host: host.label(),
+                agent: Some(provider.name.clone()),
+                agent_version: Some(provider.model.clone()),
+                modes: Vec::new(),
+                current_mode: None,
+            };
+            (assistant as Arc<dyn AgentBackend>, None, started)
+        }
+        AgentRef::Acp(agent_id) => {
+            let vault = state.vault.clone();
+            let found = tauri::async_runtime::spawn_blocking(move || acp_agents(&vault))
+                .await
+                .map_err(|error| CommandError::new("app.task", error.to_string()))??
+                .into_iter()
+                .find(|(id, _)| *id == agent_id)
+                .map(|(_, agent)| agent)
+                .ok_or_else(|| CommandError::new("ai.no_agent", "no such agent"))?;
+            let device = state.vault.device_preferences()?;
+            let key = match device.agents.auth {
+                AgentAuth::Account => None,
+                AgentAuth::Auto => state.vault.ai_key(&format!("acp:{agent_id}"))?,
+                AgentAuth::ApiKey => Some(
+                    state
+                        .vault
+                        .ai_key(&format!("acp:{agent_id}"))?
+                        .ok_or_else(|| CommandError::new("ai.no_key", "no API key is stored"))?,
+                ),
+            };
+            let mut extra = vec![("PATH".to_owned(), detect::search_path())];
+            let auth_methods: Vec<String> = match (&key, found.known) {
+                (Some(key), Some(known)) => {
+                    for var in known.key_vars {
+                        extra.push(((*var).to_owned(), key.to_string()));
+                    }
+                    known
+                        .key_methods
+                        .iter()
+                        .map(|method| (*method).to_owned())
+                        .collect()
+                }
+                (None, Some(known)) => known
+                    .account_methods
+                    .iter()
+                    .map(|method| (*method).to_owned())
+                    .collect(),
+                (_, None) => Vec::new(),
+            };
+            let listener = McpListener::bind()
+                .await
+                .map_err(|error| CommandError::new("app.io", error.to_string()))?;
+            let exe = std::env::current_exe()
+                .map_err(|error| CommandError::new("app.io", error.to_string()))?;
+            let mcp_server = McpServer {
+                name: "roveterm".into(),
+                command: exe.to_string_lossy().into_owned(),
+                args: vec!["--mcp-bridge".into()],
+                env: listener
+                    .bridge_env()
+                    .map_err(|error| CommandError::new("app.io", error.to_string()))?,
+            };
+            let spec = AgentSpec {
+                program: found.program,
+                args: found.args,
+                env: acp::agent_env(acp::ENV_ALLOWED, &extra),
+                cwd,
+                auth_methods,
+                mcp: vec![mcp_server],
+                preferred_modes: PREFERRED_MODES
+                    .iter()
+                    .map(|mode| (*mode).to_owned())
+                    .collect(),
+            };
+            // Serving first: the agent starts the MCP bridge before its session exists.
+            let mcp = listener.serve(session.clone());
+            let running = match runner::start(&spec, session).await {
+                Ok(running) => running,
+                Err(error) => {
+                    mcp.abort();
+                    return Err(acp_error(error));
+                }
+            };
+            let info = running.started().clone();
+            let started = AiStarted {
+                id: id.clone(),
+                host: host.label(),
+                agent: info.agent.or(Some(found.name)),
+                agent_version: info.agent_version,
+                modes: info.modes,
+                current_mode: info.current_mode,
+            };
+            (
+                Arc::new(running) as Arc<dyn AgentBackend>,
+                Some(mcp),
+                started,
+            )
         }
     };
-    let started = running.started().clone();
+    let mode_value = serde_json::to_value(prefs.ai.mode)
+        .ok()
+        .and_then(|mode| mode.as_str().map(str::to_owned))
+        .unwrap_or_default();
     auditor.started(
         started.agent.as_deref(),
         started.agent_version.as_deref(),
-        serde_json::to_value(prefs.ai.mode)
-            .ok()
-            .and_then(|mode| mode.as_str().map(str::to_owned))
-            .as_deref()
-            .unwrap_or_default(),
+        &mode_value,
     );
     state.ai.entries.lock().await.insert(
-        id.clone(),
+        id,
         Arc::new(Entry {
-            running,
+            backend,
             auditor,
             mcp,
         }),
     );
-    Ok(AiStarted {
-        id,
-        host: host.label(),
-        agent: started.agent,
-        agent_version: started.agent_version,
-        modes: started.modes,
-        current_mode: started.current_mode,
-    })
+    Ok(started)
 }
 
 /// Sends `text` to session `id` and waits for the turn to end; returns the stop reason.
@@ -409,26 +649,20 @@ pub async fn ai_prompt(
     }
     let entry = state.ai.get(&id).await?;
     entry.auditor.prompt(&text);
-    let result = entry.running.prompt(&text).await;
+    let result = entry.backend.prompt(&text).await;
     let stop = match &result {
         Ok(reason) => reason.clone(),
         Err(error) => format!("error: {error}"),
     };
     entry.auditor.turn_ended(&stop);
-    result.map_err(ai_error)
+    result.map_err(backend_error)
 }
 
 /// Stops the current turn of session `id`.
 #[tauri::command]
 pub async fn ai_cancel(state: State<'_, AppState>, id: String) -> Result<(), CommandError> {
-    state
-        .ai
-        .get(&id)
-        .await?
-        .running
-        .cancel()
-        .await
-        .map_err(ai_error)
+    state.ai.get(&id).await?.backend.cancel().await;
+    Ok(())
 }
 
 /// Answers approval `request_id` of session `id`.
@@ -443,7 +677,7 @@ pub async fn ai_answer(
         .ai
         .get(&id)
         .await?
-        .running
+        .backend
         .session()
         .answer(request_id, answer)
         .await)
@@ -460,7 +694,7 @@ pub async fn ai_set_mode(
         .ai
         .get(&id)
         .await?
-        .running
+        .backend
         .session()
         .set_mode(self::mode(mode))
         .await;

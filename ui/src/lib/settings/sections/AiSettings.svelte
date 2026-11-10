@@ -38,14 +38,14 @@
       const rest = draft.agents.custom.slice(1);
       draft.agents.custom = command.trim() ? [{ id: 'custom-1', name: 'Agent', command: command.trim(), args: args.trim() ? args.trim().split(/\s+/) : [] }, ...rest] : rest;
     });
-    await ai.refreshStatus().catch(() => undefined);
+    await ai.refreshAgents().catch(() => undefined);
   }
 
   async function saveKey(value: string | null): Promise<void> {
     try {
-      await aiSetKey(value);
+      await aiSetKey('acp:codex', value);
       key = '';
-      await ai.refreshStatus();
+      await ai.refreshAgents();
       notify(value ? t('ai.keySaved') : t('ai.keyRemoved'), 'success');
     } catch (error) {
       notify(errorText(error), 'error');
@@ -53,7 +53,7 @@
   }
 
   onMount(() => {
-    ai.refreshStatus().catch((error: unknown) => console.warn('AI status unavailable', error));
+    ai.refreshAgents().catch((error: unknown) => console.warn('AI status unavailable', error));
   });
 </script>
 
@@ -63,8 +63,8 @@
 <div class="form-group">
   <div class="form-row">
     <span class="form-label">{t('ai.detected')}
-      <small class="path" title={ai.status?.agent ? [ai.status.agent.program, ...ai.status.agent.args].join(' ') : ''}>
-        {#if !ai.status}…{:else if ai.status.agent}{t(`ai.source.${ai.status.agent.source}`)} · {[ai.status.agent.program, ...ai.status.agent.args].join(' ')}{:else}{t('ai.noAgentShort')}{/if}
+      <small class="path">
+        {#if !ai.agents}…{:else if ai.agents.agents.length > 0}{ai.agents.agents.map((agent) => agent.name).join(' · ')}{:else}{t('ai.noAgentShort')}{/if}
       </small>
     </span>
   </div>
@@ -85,10 +85,10 @@
     <div class="control"><Select label={t('ai.auth')} value={agent.auth} options={AUTH} onchange={(value) => void editDevice((draft) => (draft.agents.auth = value))} /></div>
   </div>
   <div class="form-row">
-    <span class="form-label">{t('ai.key')}<small>{ai.status?.has_key ? t('ai.keyStored') : t('ai.keyHint')}</small></span>
-    <input class="field" type="password" bind:value={key} autocomplete="off" placeholder={ai.status?.has_key ? '••••••••' : 'sk-…'} aria-label={t('ai.key')} />
+    <span class="form-label">{t('ai.key')}<small>{ai.agents?.agents.some((agent) => agent.agent === 'acp:codex' && agent.has_key) ? t('ai.keyStored') : t('ai.keyHint')}</small></span>
+    <input class="field" type="password" bind:value={key} autocomplete="off" placeholder={ai.agents?.agents.some((agent) => agent.agent === 'acp:codex' && agent.has_key) ? '••••••••' : 'sk-…'} aria-label={t('ai.key')} />
     <button type="button" class="secondary" disabled={!key.trim()} onclick={() => void saveKey(key)}>{t('ai.keySave')}</button>
-    {#if ai.status?.has_key}
+    {#if ai.agents?.agents.some((agent) => agent.agent === 'acp:codex' && agent.has_key)}
       <button type="button" class="plain danger-text" onclick={() => void saveKey(null)}>{t('ai.keyRemove')}</button>
     {/if}
   </div>

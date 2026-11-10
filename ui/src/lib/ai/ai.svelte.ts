@@ -6,7 +6,7 @@ import {
   aiPrompt,
   aiSetMode,
   aiStart,
-  aiStatus,
+  aiAgents,
   aiStop,
   onAiUpdate,
   type AiAnswer,
@@ -15,7 +15,7 @@ import {
   type AiMode,
   type AiOperation,
   type AiOutcome,
-  type AiStatus,
+  type AgentList,
   type Assessment,
   type PlanEntry,
   type SessionId,
@@ -57,8 +57,11 @@ export function contextKey(context: AiContext): string {
 export class Chat {
   /** The backend session, once started. */
   id = $state<string | null>(null);
-  host = $state('');
+  /** The agent answering (`builtin:<id>` or `acp:<id>`); the default when not chosen. */
   agent = $state<string | null>(null);
+  host = $state('');
+  /** The agent's name as it introduced itself. */
+  agentName = $state<string | null>(null);
   items = $state<ChatItem[]>([]);
   plan = $state<PlanEntry[]>([]);
   starting = $state(false);
@@ -152,10 +155,13 @@ export class Chat {
     if (!this.id) {
       this.starting = true;
       try {
-        const started = await aiStart(this.context, terminal);
+        const agent = this.agent ?? ai.defaultAgent;
+        if (!agent) throw { code: 'ai.no_agent', message: 'no agent' };
+        this.agent = agent;
+        const started = await aiStart(this.context, agent, terminal);
         this.id = started.id;
         this.host = started.host;
-        this.agent = started.agent;
+        this.agentName = started.agent;
         if (this.mode !== prefs.value.ai.mode) await aiSetMode(started.id, this.mode);
         ai.byId[started.id] = this;
       } catch (error) {
@@ -213,7 +219,8 @@ class AiStore {
   version = $state(0);
   /** Chats by backend session id, for routing events. */
   byId: Record<string, Chat> = {};
-  status = $state<AiStatus | null>(null);
+  /** The agents of this device; `null` until listed. */
+  agents = $state<AgentList | null>(null);
   private listening = false;
 
   chat(context: AiContext): Chat {
@@ -234,8 +241,15 @@ class AiStore {
     this.version += 1;
   }
 
-  async refreshStatus(): Promise<void> {
-    this.status = await aiStatus();
+  async refreshAgents(): Promise<void> {
+    this.agents = await aiAgents();
+  }
+
+  /** The agent new conversations use: the default when it is available, else the first. */
+  get defaultAgent(): string | null {
+    const list = this.agents;
+    if (!list) return null;
+    return list.agents.some((agent) => agent.agent === list.default) ? list.default : (list.agents[0]?.agent ?? null);
   }
 
   /** Routes backend events to their chats; called once. */

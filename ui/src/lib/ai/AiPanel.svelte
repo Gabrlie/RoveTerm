@@ -115,7 +115,7 @@
 
   onMount(() => {
     ai.listen();
-    ai.refreshStatus().catch((error: unknown) => console.warn('AI status unavailable', error));
+    ai.refreshAgents().catch((error: unknown) => console.warn('AI agents unavailable', error));
   });
 </script>
 
@@ -141,7 +141,7 @@
       <div class="empty">
         <Icon name="command" size={26} />
         <p>{t('ai.intro', { host: hostInText })}</p>
-        {#if ai.status && !ai.status.agent}
+        {#if ai.agents && ai.agents.agents.length === 0}
           <p class="guide">{t('ai.noAgent')}</p>
           <code class="selectable">npm install -g @agentclientprotocol/codex-acp</code>
           <button type="button" class="secondary" onclick={onsettings}>{t('ai.openSettings')}</button>

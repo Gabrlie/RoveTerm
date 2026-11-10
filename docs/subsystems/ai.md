@@ -96,17 +96,18 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 
 | 命令 | 作用 |
 |---|---|
-| `ai_status()` | 本机会启动的 Agent（来源：配置、PATH 中的 `codex-acp`、或 `npx -y @agentclientprotocol/codex-acp`）与是否已存 API key |
-| `ai_set_key(key)` | 密封保存或删除 API key |
-| `ai_start(context, terminal)` | 在 `local`、已保存主机或快速连接上启动 Agent；`terminal` 为用户在该主机的终端会话，供 `terminal_snapshot` 读取 |
+| `ai_agents()` | 本机可用的 Agent 与默认项：每个服务商对应一个内置助手（`builtin:<id>`，附模型），然后是检测到且未关闭的 ACP 智能体与按命令添加的智能体（`acp:<id>`，附运行的程序、是否经 npx）；各项是否已存 key |
+| `ai_set_key(agent, key)` | 密封保存或删除某个 Agent 的 API key |
+| `ai_provider_test(provider, key)` | 用一次最小请求检查服务商的地址、模型和 key（未给出时用已保存的），返回模型的回复 |
+| `ai_start(context, agent, terminal)` | 在 `local`、已保存主机或快速连接上启动 `agent`；内置助手直接构造 `Assistant`，ACP 智能体按检测结果启动并附带内置 MCP server；`terminal` 为用户在该主机的终端会话，供 `terminal_snapshot` 读取 |
 | `ai_prompt(id, text)` | 发出提示并等待回合结束，返回结束原因 |
 | `ai_cancel` / `ai_answer` / `ai_set_mode` / `ai_stop` | 取消回合、回答审批、切换审批模式、结束会话 |
 | `ai_sessions()` / `ai_records(id)` | 从 Journal 读出最近 100 个 AI 会话，以及某个会话的全部 `ai/*` 记录（最多 5000 条），供审计回看 |
 
 启动时：
 
-- 查找 Agent 用登录 shell 的 PATH（`$SHELL -ilc`，并补上 Homebrew、`~/.local/bin` 等常见目录），因为 macOS 与 Linux 的图形应用启动时 PATH 很短。
-- 登录方式按 `DevicePrefs.agent.auth`：用 API key 时以 `CODEX_API_KEY`、`OPENAI_API_KEY` 传入并优先选择 Agent 的 API key 登录方式，否则用 Agent 自己的账户登录（Codex 为 ChatGPT）。
+- 查找 ACP 智能体用登录 shell 的 PATH（`$SHELL -ilc`，并补上 Homebrew、`~/.local/bin` 等常见目录），因为 macOS 与 Linux 的图形应用启动时 PATH 很短。
+- ACP 智能体的登录方式按 `DevicePrefs.agents.auth`：使用该智能体保存的 key 时，按检测表放进它的 key 环境变量并优先选择 key 登录方式，否则用它自己的账户登录。内置助手用对应服务商保存的 key（没有时不带 key，适用于本地模型）。
 - 远程主机的会话以数据目录下的空目录 `ai-workspace` 为 Agent 的工作目录，本机会话以家目录为工作目录。
 - 内置 MCP server 以应用自身的可执行文件加 `--mcp-bridge` 交给 Agent，并在启动 Agent 之前就开始接受桥接连接：Agent 在 `session/new` 返回前就会启动 MCP server 并等待它应答。
 

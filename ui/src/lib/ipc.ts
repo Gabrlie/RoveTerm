@@ -252,8 +252,25 @@ export interface StatusPrefs {
 /** How much the user is asked before an AI agent acts. */
 export type AiMode = 'ask_by_risk' | 'ask_all' | 'auto';
 
+export type ProviderFormat = 'chat' | 'responses' | 'anthropic';
+
+/** A model provider of the built-in assistant; its key is kept apart, on each device. */
+export interface ProviderPrefs {
+  id: string;
+  name: string;
+  format: ProviderFormat;
+  /** Including the API version path, such as `https://api.openai.com/v1`. */
+  base_url: string;
+  model: string;
+  max_tokens: number | null;
+  effort: 'low' | 'medium' | 'high' | null;
+}
+
 export interface AiPrefs {
   mode: AiMode;
+  providers: ProviderPrefs[];
+  /** `builtin:<provider id>` or `acp:<agent id>`. */
+  default_agent: string | null;
   /** Extra programs treated as read-only. */
   read_only: string[];
   /** Text that makes any command containing it dangerous. */
@@ -785,10 +802,22 @@ export function syncDisable(): Promise<void> {
 /** Where an AI session works. */
 export type AiContext = { kind: 'local' } | { kind: 'host'; host_id: HostId } | { kind: 'quick'; address: string };
 
-export interface AiStatus {
-  /** The agent this device would start; `null` when none is found. */
-  agent: { program: string; args: string[]; source: 'configured' | 'path' | 'npx' } | null;
+/** An agent the user can talk to. */
+export interface AgentChoice {
+  /** `builtin:<provider id>` or `acp:<agent id>`. */
+  agent: string;
+  kind: 'builtin' | 'acp';
+  name: string;
+  /** The model, or the program that runs. */
+  detail: string;
+  /** Runs through npx (downloaded on first use). */
+  via_npx: boolean;
   has_key: boolean;
+}
+
+export interface AgentList {
+  agents: AgentChoice[];
+  default: string | null;
 }
 
 /** A mode the agent itself offers (such as read-only). */
@@ -882,18 +911,25 @@ export type AiEvent =
   | { event: 'approved'; request_id: number; answer: AiAnswer | null }
   | { event: 'executed'; operation: AiOperation; assessment: Assessment; approved: boolean; outcome: AiOutcome };
 
-export function aiStatus(): Promise<AiStatus> {
-  return invoke('ai_status');
+/** The agents of this device: the built-in assistant with each provider, then ACP agents. */
+export function aiAgents(): Promise<AgentList> {
+  return invoke('ai_agents');
 }
 
-/** Stores the API key sealed on this device; `null` removes it. */
-export function aiSetKey(key: string | null): Promise<void> {
-  return invoke('ai_set_key', { key });
+/** Checks a provider with a tiny request; resolves with the model's reply. `key` defaults to
+ *  the stored key of a saved provider. */
+export function aiProviderTest(provider: ProviderPrefs, key: string | null): Promise<string> {
+  return invoke('ai_provider_test', { provider, key });
 }
 
-/** Starts an agent on `context`; `terminal` is the user's terminal session there. */
-export function aiStart(context: AiContext, terminal: SessionId | null): Promise<AiStarted> {
-  return invoke('ai_start', { context, terminal });
+/** Stores the API key of `agent` sealed on this device; `null` removes it. */
+export function aiSetKey(agent: string, key: string | null): Promise<void> {
+  return invoke('ai_set_key', { agent, key });
+}
+
+/** Starts `agent` on `context`; `terminal` is the user's terminal session there. */
+export function aiStart(context: AiContext, agent: string, terminal: SessionId | null): Promise<AiStarted> {
+  return invoke('ai_start', { context, agent, terminal });
 }
 
 /** Sends a prompt and resolves with the stop reason when the turn ends. */

@@ -23,7 +23,7 @@ const DEFAULTS: Preferences = {
   },
   files: { default_conflict: 'ask', show_hidden: false, confirm_delete: true },
   status: { interval_secs: 3 },
-  ai: { mode: 'ask_by_risk', read_only: [], dangerous: [] },
+  ai: { mode: 'ask_by_risk', providers: [], default_agent: null, read_only: [], dangerous: [] },
 };
 
 const DEVICE_DEFAULTS: DevicePrefs = {
