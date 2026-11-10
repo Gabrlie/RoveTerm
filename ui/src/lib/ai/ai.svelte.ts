@@ -22,7 +22,7 @@ import {
   type ToolCall,
 } from '../ipc';
 import { errorText, t, type MessageKey } from '../i18n';
-import { approvalFor, type ChatItem } from './chatview';
+import { approvalFor, connectionProblem, type ChatItem } from './chatview';
 import { prefs } from '../settings/prefs.svelte';
 
 export type { ChatItem } from './chatview';
@@ -72,10 +72,38 @@ export class Chat {
     return this.items[this.items.length - 1];
   }
 
+  /** The connection row of the latest turn, if it has one. */
+  private connection(): Extract<ChatItem, { kind: 'connection' }> | undefined {
+    for (let at = this.items.length - 1; at >= 0; at -= 1) {
+      const item = this.items[at];
+      if (item?.kind === 'user') return undefined;
+      if (item?.kind === 'connection') return item;
+    }
+    return undefined;
+  }
+
+  /** The agent went on after a connection problem. */
+  private reconnected(): void {
+    const open = this.connection();
+    if (open?.state === 'retrying') open.state = 'recovered';
+  }
+
   handle(event: AiEvent): void {
     switch (event.event) {
       case 'update': {
         const update = event.update;
+        if (update.kind === 'message' && connectionProblem(update.text) && update.text.length < 2000) {
+          // A warning the agent passes on while it reconnects, not part of its reply.
+          const open = this.connection();
+          if (open?.state === 'retrying') {
+            open.retries += 1;
+            open.detail = update.text.trim();
+          } else {
+            this.items.push({ kind: 'connection', detail: update.text.trim(), retries: 1, state: 'retrying' });
+          }
+          break;
+        }
+        this.reconnected();
         if (update.kind === 'message') {
           const last = this.last();
           if (last?.kind === 'agent' && last.messageId === update.message_id) last.text += update.text;
@@ -137,14 +165,38 @@ export class Chat {
   }
 
   private notice(error: unknown): void {
+    const text = errorText(error);
+    if (connectionProblem(text)) {
+      const open = this.connection();
+      if (open) {
+        open.state = 'failed';
+        open.detail = text;
+      } else {
+        this.items.push({ kind: 'connection', detail: text, retries: 0, state: 'failed' });
+      }
+      return;
+    }
     const code = typeof error === 'object' && error !== null && 'code' in error ? String((error as { code: unknown }).code) : null;
-    this.items.push({ kind: 'notice', text: errorText(error), code });
+    this.items.push({ kind: 'notice', text, code });
   }
 
-  /** Sends `text`, starting the agent first when needed. `terminal` is the user's terminal on the host. */
-  async send(text: string, terminal: SessionId | null): Promise<void> {
+  /** Sends the last message again, after the connection failed. */
+  async retry(terminal: SessionId | null): Promise<void> {
+    const last = [...this.items].reverse().find((item) => item.kind === 'user');
+    if (last?.kind !== 'user') return;
+    const open = this.connection();
+    if (open) {
+      open.state = 'retrying';
+      open.retries = 0;
+    }
+    await this.send(last.text, terminal, true);
+  }
+
+  /** Sends `text`, starting the agent first when needed. `terminal` is the user's terminal on the
+   *  host; `again` sends the last message once more without repeating it in the conversation. */
+  async send(text: string, terminal: SessionId | null, again = false): Promise<void> {
     if (this.busy || this.starting || !text.trim()) return;
-    this.items.push({ kind: 'user', text });
+    if (!again) this.items.push({ kind: 'user', text });
     if (!this.id) {
       this.starting = true;
       try {

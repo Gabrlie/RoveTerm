@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { approvalFor, outcomeState, rows, type ChatItem } from './chatview.ts';
+import { approvalFor, commandOf, connectionProblem, outcomeState, rows, subject, toolSubject, type ChatItem } from './chatview.ts';
 
 const readOnly = { risk: 'read_only' as const, programs: [], opaque: false, reasons: [] };
 const ran = (command: string, exit = 0): ChatItem => ({
@@ -38,4 +38,31 @@ test('outcome states', () => {
   assert.equal(outcomeState({ result: 'denied' }), 'denied');
   assert.equal(outcomeState({ result: 'command', output: { stdout: '', stderr: '', exit_code: 2, truncated: false } }), 'failed');
   assert.equal(outcomeState({ result: 'written', bytes: 1, sha256: '', previous_sha256: null, lines_before: 0, lines_after: 1 }), 'done');
+});
+
+test('connection problems are told apart from replies', () => {
+  assert.ok(connectionProblem('Falling back from WebSockets to HTTPS transport. stream disconnected before completion: 由于目标计算机积极拒绝，无法连接。 (os error 10061)'));
+  assert.ok(connectionProblem('Reconnecting... 2/5'));
+  assert.ok(connectionProblem('The model provider reported an error: error sending request for url'));
+  assert.ok(!connectionProblem('The disk is 80% full; the connection pool looks fine.'));
+});
+
+test('agent tools show their command or file', () => {
+  assert.equal(commandOf({ command: ['/bin/bash', '-lc', 'df -h'] }), 'df -h');
+  assert.equal(commandOf({ command: ['git', 'commit', '-m', "it's done"] }), "git commit -m 'it'\\''s done'");
+  assert.equal(commandOf({ cmd: 'ls' }), 'ls');
+  assert.equal(commandOf({ path: '/a' }), null);
+  assert.equal(commandOf('ls'), null);
+  const call = { id: 't', title: 'Read', kind: 'read', status: null, content: [], locations: ['/etc/hosts'], raw_input: null };
+  assert.equal(toolSubject(call), '/etc/hosts');
+  assert.equal(subject({ op: 'agent_tool', kind: 'edit', title: 'Edit', command: null, path: '/a/b' }), '/a/b');
+  assert.equal(subject({ op: 'agent_tool', kind: 'other', title: 'Approve x', command: null }), '');
+});
+
+test('an allowed agent tool shows once, as its tool row', () => {
+  const operation = { op: 'agent_tool' as const, kind: 'execute', title: 'Run make', command: 'make' };
+  const approval = (answer: 'allow_once' | 'deny'): ChatItem => ({ kind: 'approval', requestId: 1, operation, assessment: readOnly, rememberable: false, agentTool: true, answer, outcome: null });
+  const tool: ChatItem = { kind: 'tool', call: { id: 'x', title: 'Run make', kind: 'execute', status: 'completed', content: [], locations: [], raw_input: null } };
+  assert.deepEqual(rows([tool, approval('allow_once')]).map((row) => row.kind === 'item' && row.item.kind), ['tool']);
+  assert.deepEqual(rows([tool, approval('deny')]).map((row) => row.kind === 'item' && row.item.kind), ['tool', 'approval']);
 });

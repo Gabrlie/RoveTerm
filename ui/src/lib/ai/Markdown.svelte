@@ -88,6 +88,7 @@
     padding-left: var(--space-5);
   }
   code {
+    overflow-wrap: anywhere;
     padding: 0 3px;
     border-radius: 4px;
     background: var(--fill);

@@ -5,11 +5,10 @@
   import { onMount, tick } from 'svelte';
   import Icon from '../ui/Icon.svelte';
   import IconButton from '../ui/IconButton.svelte';
-  import Select from '../ui/Select.svelte';
   import Markdown from './Markdown.svelte';
   import AuditDialog from './AuditDialog.svelte';
   import { ai } from './ai.svelte';
-  import { outcomeState, rows, subject, type ApprovalItem } from './chatview';
+  import { outcomeState, rows, subject, toolSubject, type ApprovalItem } from './chatview';
   import { hostOf, workspace } from '../workspace/workspace.svelte';
   import { hosts } from '../hosts/hosts.svelte';
   import { terminals } from '../terminal/registry';
@@ -57,6 +56,8 @@
   let list = $state<HTMLDivElement>();
   let pickerOpen = $state(false);
   let picker = $state<HTMLDivElement>();
+  let modeOpen = $state(false);
+  let modePicker = $state<HTMLDivElement>();
   let historyOpen = $state(false);
   /** Dangerous approvals the user acknowledged, by request id. */
   let acknowledged = $state<Record<number, boolean>>({});
@@ -68,6 +69,7 @@
     { value: 'ask_by_risk', label: t('ai.mode.ask_by_risk') },
     { value: 'auto', label: t('ai.mode.auto') },
   ];
+  const MODE_ICONS: Record<AiMode, IconName> = { ask_all: 'lock', ask_by_risk: 'eye', auto: 'play' };
   const EXAMPLES: MessageKey[] = ['ai.example.health', 'ai.example.logs', 'ai.example.disk'];
   const GROUPS: { kind: AgentChoice['kind']; title: MessageKey }[] = [
     { kind: 'builtin', title: 'ai.group.builtin' },
@@ -129,6 +131,7 @@
   }
 
   function verb(operation: AiOperation): string {
+    if (operation.op === 'agent_tool' && operation.title.trim()) return operation.title.trim();
     return t(`ai.verb.${operation.op}` as MessageKey);
   }
 
@@ -186,6 +189,7 @@
 
   function onWindowPointer(event: PointerEvent): void {
     if (pickerOpen && picker && !picker.contains(event.target as Node)) pickerOpen = false;
+    if (modeOpen && modePicker && !modePicker.contains(event.target as Node)) modeOpen = false;
   }
 
   onMount(() => {
@@ -200,8 +204,8 @@
   {@const output = outputOf(outcome)}
   <button type="button" class="op {state}" aria-expanded={!!expanded[key]} disabled={!output} onclick={() => toggle(key)}>
     <span class="op-icon"><Icon name={verbIcon(operation)} size={13} /></span>
-    <span class="op-verb">{verb(operation)}</span>
-    {#if subject(operation)}<code class="op-subject">{subject(operation)}</code>{/if}
+    <span class="op-verb" title={verb(operation)}>{verb(operation)}</span>
+    {#if subject(operation)}<code class="op-subject" title={subject(operation)}>{subject(operation)}</code>{/if}
     <span class="op-state" title={t(`ai.state.${state}` as MessageKey)}><Icon name={stateIcon(state)} size={12} /></span>
   </button>
   {#if expanded[key] && output}<pre class="op-output selectable">{output}</pre>{/if}
@@ -272,10 +276,12 @@
           <details class="thought"><summary>{t('ai.thought')}</summary><p class="selectable">{item.text}</p></details>
         {:else if item.kind === 'tool'}
           {@const state = item.call.status === 'completed' ? 'done' : item.call.status === 'failed' ? 'failed' : 'running'}
+          {@const what = toolSubject(item.call)}
           {@const text = item.call.content.map((part) => (part.type === 'text' ? part.text : part.type === 'diff' ? `${part.path}\n${part.new_text}` : '')).join('\n')}
           <button type="button" class="op {state}" aria-expanded={!!expanded[key]} disabled={!text} onclick={() => toggle(key)}>
             <span class="op-icon"><Icon name="command" size={13} /></span>
-            <span class="op-verb">{item.call.title ?? item.call.kind ?? item.call.id}</span>
+            <span class="op-verb" title={item.call.title ?? ''}>{item.call.title ?? item.call.kind ?? item.call.id}</span>
+            {#if what && what !== item.call.title}<code class="op-subject" title={what}>{what}</code>{/if}
             <span class="op-state"><Icon name={stateIcon(state)} size={12} /></span>
           </button>
           {#if expanded[key] && text}<pre class="op-output selectable">{text}</pre>{/if}
@@ -291,6 +297,7 @@
                 <span class="badge">{riskLabel(item.assessment.risk)}</span>
               </div>
               {#if subject(item.operation)}<pre class="approval-subject selectable">{subject(item.operation)}</pre>{/if}
+              {#if item.operation.op === 'agent_tool' && item.operation.detail}<p class="approval-detail selectable">{item.operation.detail}</p>{/if}
               <p class="approval-where">{item.agentTool ? t('ai.agentTool') : t('ai.on', { host: hostInText })}</p>
               {#if item.assessment.reasons.length > 0}
                 <ul class="reasons">
@@ -312,6 +319,17 @@
             {@const state = item.answer === 'deny' || item.answer === null ? 'denied' : outcomeState(item.outcome)}
             {@render operationRow(key, item.operation, item.outcome, state)}
           {/if}
+        {:else if item.kind === 'connection'}
+          <div class="connection {item.state}">
+            <button type="button" class="op" aria-expanded={!!expanded[key]} onclick={() => toggle(key)}>
+              <span class="op-icon"><Icon name={item.state === 'recovered' ? 'check' : 'warning'} size={13} /></span>
+              <span class="op-verb">{item.state === 'retrying' ? t('ai.connection.retrying', { n: item.retries }) : item.state === 'failed' ? t('ai.connection.failed') : t('ai.connection.recovered')}</span>
+            </button>
+            {#if item.state === 'failed'}
+              <button type="button" class="link" disabled={chat.busy || chat.starting} onclick={() => void chat.retry(terminalPane?.sessionId ?? null)}>{t('ai.connection.retry')}</button>
+            {/if}
+          </div>
+          {#if expanded[key]}<pre class="op-output selectable">{item.detail}</pre>{/if}
         {:else}
           <div class="notice">
             <Icon name="warning" size={13} />
@@ -365,7 +383,22 @@
             </div>
           {/if}
         </div>
-        <div class="mode"><Select label={t('ai.mode')} value={chat.mode} options={MODES} onchange={(mode) => void chat.setMode(mode)} /></div>
+        <div class="picker spread" bind:this={modePicker}>
+          <button type="button" class="pick" onclick={() => (modeOpen = !modeOpen)} aria-expanded={modeOpen} title={t('ai.mode')}>
+            <Icon name={MODE_ICONS[chat.mode]} size={12} /><span class="pick-name">{t(`ai.mode.${chat.mode}`)}</span><Icon name="chevronDown" size={11} />
+          </button>
+          {#if modeOpen}
+            <div class="menu" role="menu" aria-label={t('ai.mode')}>
+              <p class="menu-title">{t('ai.mode')}</p>
+              {#each MODES as entry (entry.value)}
+                <button type="button" role="menuitemradio" aria-checked={entry.value === chat.mode} class="menu-item" class:current={entry.value === chat.mode} onclick={() => ((modeOpen = false), void chat.setMode(entry.value))}>
+                  <span class="menu-name with-icon"><Icon name={MODE_ICONS[entry.value]} size={12} />{entry.label}</span>
+                  <span class="menu-detail wrap">{t(`ai.modeHint.${entry.value}`)}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
         <span class="spacer"></span>
         {#if chat.busy}
           <button type="button" class="send stop" title={t('ai.stop')} aria-label={t('ai.stop')} onclick={() => void chat.cancel()}><Icon name="stop" size={12} /></button>
@@ -440,6 +473,8 @@
   .list {
     flex: 1;
     min-height: 0;
+    min-width: 0;
+    overflow-x: hidden;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -548,12 +583,16 @@
     flex: none;
   }
   .op-verb {
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     color: var(--fg);
   }
   .op-subject {
-    flex: 1;
-    min-width: 0;
+    flex: 1 1 0;
+    min-width: 3em;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -615,6 +654,8 @@
     color: var(--risk);
   }
   .approval-title {
+    min-width: 0;
+    overflow-wrap: anywhere;
     color: var(--fg);
     font-weight: 600;
     font-size: var(--text-footnote);
@@ -639,6 +680,37 @@
     font-size: 11.5px;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+  .approval-detail {
+    margin: var(--space-2) 0 0;
+    max-height: 160px;
+    overflow: auto;
+    color: var(--fg-muted);
+    font-size: 11.5px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .connection {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    color: var(--warning);
+  }
+  .connection .op {
+    flex: 1;
+    min-width: 0;
+    color: inherit;
+  }
+  .connection .op-verb {
+    white-space: normal;
+    color: inherit;
+  }
+  .connection.failed {
+    color: var(--danger);
+  }
+  .connection.recovered {
+    color: var(--fg-muted);
   }
   .approval-where {
     margin: var(--space-1) 0 0;
@@ -718,6 +790,7 @@
     }
   }
   .card {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
@@ -856,17 +929,27 @@
     opacity: 0.7;
     font-size: 11px;
   }
+  /* Spans the input card rather than starting at its button. */
+  .picker.spread {
+    position: static;
+  }
+  .picker.spread .menu {
+    right: 0;
+    width: auto;
+    bottom: calc(100% + 6px);
+  }
+  .menu-detail.wrap {
+    white-space: normal;
+  }
+  .with-icon {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
   .menu-item.manage {
     margin-top: var(--space-1);
     box-shadow: inset 0 1px 0 var(--separator);
     font-size: var(--text-footnote);
-  }
-  .mode {
-    width: 110px;
-  }
-  .mode :global(button) {
-    height: 24px;
-    font-size: 11.5px;
   }
   .send {
     display: grid;

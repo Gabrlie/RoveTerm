@@ -861,7 +861,16 @@ export type AiOperation =
   | { op: 'write_file'; path: string }
   | { op: 'list_dir'; path: string }
   | { op: 'read_terminal' }
-  | { op: 'agent_tool'; kind: string; title: string; command: string | null };
+  | {
+      op: 'agent_tool';
+      kind: string;
+      title: string;
+      command: string | null;
+      /** The first file the tool touches. */
+      path?: string;
+      /** The agent's reason, or the arguments of a tool it calls. */
+      detail?: string;
+    };
 
 export type ToolContent =
   | { type: 'text'; text: string }
