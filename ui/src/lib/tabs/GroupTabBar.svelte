@@ -8,6 +8,8 @@
   import { t } from '../i18n';
   import type { IconName } from '../ui/icons';
   import { hosts } from '../hosts/hosts.svelte';
+  import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
+  import { justDragged, pressTab, tabDrag } from './tabDrag.svelte';
 
   interface Props {
     group: Group;
@@ -45,13 +47,51 @@
     return pane.sessionId || pane.target.kind === 'sftp' ? 'live' : 'connecting';
   }
 
+  let menu = $state<{ x: number; y: number; paneId: PaneId } | null>(null);
+
+  /** The tab menu: closing, splitting, moving into a new group, and reordering. */
+  function menuItems(paneId: PaneId): MenuItem[] {
+    const index = group.tabs.indexOf(paneId);
+    const alone = group.tabs.length === 1;
+    const groups = workspace.groupIds;
+    const next = groups[(groups.indexOf(group.id) + 1) % groups.length];
+    const items: MenuItem[] = [
+      { label: t('common.close'), icon: 'close', onselect: () => workspace.closePane(paneId) },
+      { label: t('tab.closeOthers'), onselect: () => workspace.closeTabsBeside(paneId, 'others') },
+      { label: t('tab.closeRight'), onselect: () => workspace.closeTabsBeside(paneId, 'right') },
+      { label: t('action.pane.splitRight'), icon: 'splitRight', separated: true, onselect: () => workspace.splitTab(paneId, 'row') },
+      { label: t('action.pane.splitDown'), icon: 'splitDown', onselect: () => workspace.splitTab(paneId, 'column') },
+    ];
+    if (!alone) {
+      items.push(
+        { label: t('tab.moveRightGroup'), separated: true, onselect: () => workspace.moveTabToNewGroup(paneId, 'row') },
+        { label: t('tab.moveDownGroup'), onselect: () => workspace.moveTabToNewGroup(paneId, 'column') },
+      );
+    }
+    if (next && next !== group.id) {
+      items.push({ label: t('tab.moveNextGroup'), separated: alone, onselect: () => workspace.moveTab(paneId, next) });
+    }
+    if (index > 0) items.push({ label: t('tab.moveLeft'), separated: true, onselect: () => workspace.shiftTab(paneId, -1) });
+    if (index < group.tabs.length - 1) items.push({ label: t('tab.moveRight'), separated: index === 0, onselect: () => workspace.shiftTab(paneId, 1) });
+    return items;
+  }
+
+  function openMenu(event: MouseEvent, paneId: PaneId): void {
+    event.preventDefault();
+    workspace.activate(group.id, paneId);
+    menu = { x: event.clientX, y: event.clientY, paneId };
+  }
+
+  /** Where a dragged tab would land in this bar, as an insertion index. */
+  const dropIndex = $derived(tabDrag.target?.kind === 'tabs' && tabDrag.target.groupId === group.id ? tabDrag.target.index : null);
+
   function onAuxClick(event: MouseEvent, paneId: PaneId): void {
     if (event.button === 1) workspace.closePane(paneId);
   }
 
 </script>
 
-<div class="tabbar" class:focused role="tablist">
+<div class="tabbar" class:focused role="tablist" data-tabbar={group.id}>
   <div
     class="tab home"
     class:active={group.active === null}
@@ -64,14 +104,20 @@
   >
     <Icon name="home" size={14} />
   </div>
-  {#each group.tabs as paneId (paneId)}
+  {#each group.tabs as paneId, index (paneId)}
     <div
       class="tab"
       class:active={paneId === group.active}
+      class:dragging={tabDrag.paneId === paneId}
+      class:drop-before={dropIndex === index}
+      class:drop-after={dropIndex === group.tabs.length && index === group.tabs.length - 1}
       role="tab"
       tabindex="0"
       aria-selected={paneId === group.active}
-      onclick={() => workspace.activate(group.id, paneId)}
+      data-tab-index={index}
+      onpointerdown={(event) => pressTab(event, paneId)}
+      oncontextmenu={(event) => openMenu(event, paneId)}
+      onclick={() => !justDragged() && workspace.activate(group.id, paneId)}
       onkeydown={(event) => event.key === 'Enter' && workspace.activate(group.id, paneId)}
       onauxclick={(event) => onAuxClick(event, paneId)}
       title={workspace.panes[paneId]?.title}
@@ -91,8 +137,32 @@
     <IconButton icon="close" label={t('tab.closeGroup')} small onclick={() => workspace.closeGroupWithTabs(group.id)} />
   {/if}
 </div>
+{#if menu}
+  {@const menuPane = menu.paneId}
+  <ContextMenu x={menu.x} y={menu.y} items={menuItems(menuPane)} onclose={() => (menu = null)} />
+{/if}
 
 <style>
+  .tab.dragging {
+    opacity: 0.45;
+  }
+  /* Where a dragged tab would be inserted. */
+  .tab.drop-before::before,
+  .tab.drop-after::after {
+    content: '';
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--accent);
+  }
+  .tab.drop-before::before {
+    left: -2px;
+  }
+  .tab.drop-after::after {
+    right: -2px;
+  }
   .tabbar {
     flex: none;
     display: flex;

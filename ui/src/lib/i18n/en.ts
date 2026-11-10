@@ -130,6 +130,13 @@ export const en = {
 
   'tab.new': 'New tab',
   'tab.closeGroup': 'Close group',
+  'tab.closeOthers': 'Close other tabs',
+  'tab.closeRight': 'Close tabs to the right',
+  'tab.moveRightGroup': 'Move into new group right',
+  'tab.moveDownGroup': 'Move into new group below',
+  'tab.moveNextGroup': 'Move to next group',
+  'tab.moveLeft': 'Move left',
+  'tab.moveRight': 'Move right',
   'home.hosts': 'Hosts',
   'home.empty': 'No saved hosts yet. Add one to see it here.',
   'home.never': 'Never connected',

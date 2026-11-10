@@ -132,6 +132,13 @@ export const zhCN: Messages = {
 
   'tab.new': '新标签',
   'tab.closeGroup': '关闭分组',
+  'tab.closeOthers': '关闭其他标签',
+  'tab.closeRight': '关闭右侧标签',
+  'tab.moveRightGroup': '移到右侧新分组',
+  'tab.moveDownGroup': '移到下方新分组',
+  'tab.moveNextGroup': '移到下一个分组',
+  'tab.moveLeft': '左移',
+  'tab.moveRight': '右移',
   'home.hosts': '主机',
   'home.empty': '还没有保存的主机，新建后会显示在这里。',
   'home.never': '从未连接',

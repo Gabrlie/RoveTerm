@@ -163,6 +163,72 @@ class Workspace {
     this.focusedGroupId = added.id;
   }
 
+  /** Opens tab `paneId`'s target again in a new group beside (`row`) or below (`column`) its group. */
+  splitTab(paneId: PaneId, dir: SplitDir): void {
+    const group = this.groupOf(paneId);
+    const source = this.panes[paneId];
+    if (!group || !source) return;
+    const added = this.createGroup([this.createPane(source.target)]);
+    this.root = splitPane(this.root, group.id, dir, added.id);
+    this.focusedGroupId = added.id;
+  }
+
+  /**
+   * Moves tab `paneId`, keeping its view and session, into group `groupId` at `index` (the end
+   * when omitted) and shows it there. A group it leaves empty is removed.
+   */
+  moveTab(paneId: PaneId, groupId: GroupId, index?: number): void {
+    const from = this.groupOf(paneId);
+    const to = this.groups[groupId];
+    if (!from || !to) return;
+    const position = from.tabs.indexOf(paneId);
+    from.tabs.splice(position, 1);
+    if (from.active === paneId) from.active = from.tabs[Math.min(position, from.tabs.length - 1)] ?? null;
+    // Within a group, positions after the old one shift left by one.
+    let at = index ?? to.tabs.length;
+    if (from === to && index !== undefined && index > position) at -= 1;
+    to.tabs.splice(Math.max(0, Math.min(at, to.tabs.length)), 0, paneId);
+    to.active = paneId;
+    this.focusedGroupId = to.id;
+    if (from !== to && from.tabs.length === 0) this.closeGroup(from.id);
+  }
+
+  /**
+   * Moves tab `paneId` into a new group placed beside group `groupId` (its own group by default):
+   * right or below, or left or above with `before`.
+   */
+  moveTabToNewGroup(paneId: PaneId, dir: SplitDir, before = false, groupId?: GroupId): void {
+    const from = this.groupOf(paneId);
+    const beside = groupId ?? from?.id;
+    if (!from || !beside || !this.groups[beside]) return;
+    // Moving a group's only tab beside itself would leave it where it is.
+    if (beside === from.id && from.tabs.length === 1) return;
+    const added = this.createGroup();
+    this.root = splitPane(this.root, beside, dir, added.id, before);
+    this.moveTab(paneId, added.id);
+  }
+
+  /** Moves tab `paneId` one place left (`-1`) or right (`1`) within its group. */
+  shiftTab(paneId: PaneId, offset: -1 | 1): void {
+    const group = this.groupOf(paneId);
+    if (!group) return;
+    const index = group.tabs.indexOf(paneId);
+    const target = index + offset;
+    if (target < 0 || target >= group.tabs.length) return;
+    group.tabs.splice(index, 1);
+    group.tabs.splice(target, 0, paneId);
+  }
+
+  /** Closes the other tabs of `paneId`'s group (`'others'`) or those to its right (`'right'`). */
+  closeTabsBeside(paneId: PaneId, which: 'others' | 'right'): void {
+    const group = this.groupOf(paneId);
+    if (!group) return;
+    const index = group.tabs.indexOf(paneId);
+    const closing = group.tabs.filter((id, at) => id !== paneId && (which === 'others' || at > index));
+    for (const id of closing) this.closePane(id);
+    group.active = paneId;
+  }
+
   /**
    * Opens a file browser for the focused tab's remote in a new group to its right. Returns false
    * when the focused tab is not remote.

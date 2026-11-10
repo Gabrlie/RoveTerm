@@ -38,12 +38,14 @@ export function paneIds(node: LayoutNode): PaneId[] {
   return node.kind === 'pane' ? [node.id] : [...paneIds(node.a), ...paneIds(node.b)];
 }
 
-/** Replaces pane `target` with a split holding it and `added`; `added` goes right or below. */
-export function splitPane(node: LayoutNode, target: PaneId, dir: SplitDir, added: PaneId): LayoutNode {
+/** Replaces pane `target` with a split holding it and `added`; `added` goes right or below, or
+ *  left or above with `before`. */
+export function splitPane(node: LayoutNode, target: PaneId, dir: SplitDir, added: PaneId, before = false): LayoutNode {
   if (node.kind === 'pane') {
-    return node.id === target ? { kind: 'split', dir, ratio: 0.5, a: node, b: pane(added) } : node;
+    if (node.id !== target) return node;
+    return before ? { kind: 'split', dir, ratio: 0.5, a: pane(added), b: node } : { kind: 'split', dir, ratio: 0.5, a: node, b: pane(added) };
   }
-  return { ...node, a: splitPane(node.a, target, dir, added), b: splitPane(node.b, target, dir, added) };
+  return { ...node, a: splitPane(node.a, target, dir, added, before), b: splitPane(node.b, target, dir, added, before) };
 }
 
 /** Renames pane `target` to `replacement`, keeping its position. */
