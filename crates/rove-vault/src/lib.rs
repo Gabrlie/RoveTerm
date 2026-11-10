@@ -35,8 +35,8 @@ pub use model::{
 };
 pub use prefs::{
     Accent, AgentAuth, AgentPrefs, AiMode, AiPrefs, AppearancePrefs, Bell, ConflictChoice,
-    CursorStyle, DevicePrefs, FilePrefs, Language, Preferences, RightClick, StatusPrefs,
-    TerminalPrefs, Theme,
+    ConnectionPrefs, CursorStyle, DevicePrefs, FilePrefs, Language, Preferences, RightClick,
+    StatusPrefs, TerminalPrefs, Theme,
 };
 pub use snippets::{Snippet, SnippetDraft, SnippetId};
 pub use store::{LockReason, LockState, MAX_JUMP_DEPTH, SCHEMA_VERSION, Vault};

@@ -31,6 +31,7 @@ const DEVICE_DEFAULTS: DevicePrefs = {
   download_dir: '',
   max_transfers: 3,
   agent: { command: '', args: [], auth: 'auto' },
+  connection: { connect_timeout_secs: 15, keepalive_secs: 30, keepalive_max: 3 },
 };
 
 /**

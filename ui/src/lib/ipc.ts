@@ -293,6 +293,14 @@ export interface DevicePrefs {
   download_dir: string;
   max_transfers: number;
   agent: AgentPrefs;
+  connection: ConnectionPrefs;
+}
+
+/** SSH connection timing on this device; applies to new connections. */
+export interface ConnectionPrefs {
+  connect_timeout_secs: number;
+  keepalive_secs: number;
+  keepalive_max: number;
 }
 
 export function devicePrefsGet(): Promise<DevicePrefs> {

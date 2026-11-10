@@ -129,3 +129,7 @@
 `parse_ssh_config` 为 `Host` 行中每个不含通配符的别名生成一条 `SshConfigHost`。每个字段按 OpenSSH 的首次匹配规则取值：按文件顺序遍历所有与该别名匹配的块（包括 `Host *`、带 `!` 的排除模式，以及第一个 `Host` 行之前的全局设置），采用第一个出现的值。读取的字段有 `HostName`、`Port`、`User`、`IdentityFile`（取第一个）和 `ProxyJump`；`Match` 块和 `Include` 指令被忽略。
 
 `import_ssh_config(vault, text, home, default_user)` 的转换规则：有 `IdentityFile` 时认证方式为 `KeyFile`，并把 `~` 展开为 `home`；否则为 `Agent`。`ProxyJump` 的最后一跳是本次导入的别名或已有主机的名称时，设为经该主机跳转；带 `user@`、端口的跳板写法不导入。缺少 `User` 时使用 `default_user`，导入的主机带 `ssh-config` 标签。用户名、主机名（不区分大小写）、端口都相同的已有主机会被跳过。
+
+## 连接计时
+
+`SshConfig` 的 `connect_timeout_secs`、`keepalive_secs`、`keepalive_max` 是启动时的默认值；应用按本机偏好 `DevicePrefs.connection` 调用 `SshConnector::set_timing` 覆盖它们（启动时与保存设置时），只影响之后建立的连接。数值被限制在 `SshConfig::validate` 接受的范围内。

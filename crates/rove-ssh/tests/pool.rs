@@ -143,3 +143,18 @@ async fn equal_addresses_on_different_routes_do_not_share() {
     ));
     assert_eq!(server.connections(), 2);
 }
+
+#[tokio::test]
+async fn connection_timing_can_change_and_is_clamped() {
+    let (_server, connector, _listener) = setup(60).await;
+    connector.set_timing(20, 45, 4);
+    let timing = connector.timing();
+    assert_eq!(timing.connect_timeout, Duration::from_secs(20));
+    assert_eq!(timing.keepalive_interval, Duration::from_secs(45));
+    assert_eq!(timing.keepalive_max, 4);
+    connector.set_timing(0, 100_000, 99);
+    let timing = connector.timing();
+    assert_eq!(timing.connect_timeout, Duration::from_secs(1));
+    assert_eq!(timing.keepalive_interval, Duration::from_secs(600));
+    assert_eq!(timing.keepalive_max, 10);
+}

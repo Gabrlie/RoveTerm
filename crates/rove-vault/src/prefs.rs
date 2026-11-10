@@ -293,6 +293,30 @@ pub struct DevicePrefs {
     pub max_transfers: u8,
     /// The AI agent program.
     pub agent: AgentPrefs,
+    /// SSH connection timing on this device's networks.
+    pub connection: ConnectionPrefs,
+}
+
+/// SSH connection timing; applies to connections opened after a change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConnectionPrefs {
+    /// Seconds allowed to open a connection (5–120).
+    pub connect_timeout_secs: u16,
+    /// Seconds between keepalives (5–600).
+    pub keepalive_secs: u16,
+    /// Unanswered keepalives before a connection counts as lost (1–10).
+    pub keepalive_max: u8,
+}
+
+impl Default for ConnectionPrefs {
+    fn default() -> Self {
+        Self {
+            connect_timeout_secs: 15,
+            keepalive_secs: 30,
+            keepalive_max: 3,
+        }
+    }
 }
 
 impl Default for DevicePrefs {
@@ -302,6 +326,7 @@ impl Default for DevicePrefs {
             download_dir: String::new(),
             max_transfers: 3,
             agent: AgentPrefs::default(),
+            connection: ConnectionPrefs::default(),
         }
     }
 }
@@ -442,6 +467,17 @@ impl DevicePrefs {
         }
         check_range("concurrent transfers", self.max_transfers, 1..=8)?;
         self.agent.validate()?;
+        check_range(
+            "connect timeout",
+            self.connection.connect_timeout_secs,
+            5..=120,
+        )?;
+        check_range(
+            "keepalive interval",
+            self.connection.keepalive_secs,
+            5..=600,
+        )?;
+        check_range("keepalive limit", self.connection.keepalive_max, 1..=10)?;
         Ok(self)
     }
 }

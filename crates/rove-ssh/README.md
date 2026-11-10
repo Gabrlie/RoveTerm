@@ -39,3 +39,4 @@ SSH Provider：认证、host key 校验，打开 PTY shell channel，`FileSystem
 - 私钥支持 OpenSSH 和 PEM 格式，暂不支持 PuTTY 的 `.ppk` 格式。
 - 动态转发只支持 SOCKS5 的无认证 `CONNECT`，不支持 SOCKS4、UDP 和 BIND；连接断开后转发不会自动重连。
 - ssh_config 解析忽略 `Match` 块和 `Include` 指令；`ProxyJump` 会被解析出来，但还没有接入连接流程。
+- `SshConnector::set_timing` 运行时修改之后新建连接的连接超时与保活（越界值被限制到合法范围），`timing` 读回当前值。

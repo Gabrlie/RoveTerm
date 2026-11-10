@@ -38,7 +38,17 @@ pub async fn device_prefs_set(
     state
         .transfers
         .set_max_concurrent(usize::from(prefs.max_transfers));
+    apply_connection(&state, &prefs.connection);
     Ok(prefs)
+}
+
+/// Applies the connection settings to connections opened from now on.
+pub fn apply_connection(state: &AppState, connection: &rove_vault::ConnectionPrefs) {
+    state.ssh.set_timing(
+        u64::from(connection.connect_timeout_secs),
+        u64::from(connection.keepalive_secs),
+        usize::from(connection.keepalive_max),
+    );
 }
 
 /// Lists the families of the monospaced fonts installed on this device, sorted and without

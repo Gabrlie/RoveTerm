@@ -92,6 +92,7 @@ pub trait KeyCache: Send + Sync {
 | `ai.mode` | `ask_by_risk` | `ask_by_risk` / `ask_all` / `auto`，新 AI 会话的默认审批模式 |
 | `ai.read_only` / `ai.dangerous` | 空 | 去除首尾空白并丢弃空项，每类最多 200 项、每项最多 100 个字符、不含控制字符；只读项只能是程序名（字母、数字、`-_.+`） |
 | `DevicePrefs.agent.command` / `args` | 空（自动查找 Codex 的 ACP 适配器） | 去除首尾空白；命令与每个参数最多 1024 字节、不含控制字符，最多 32 个参数 |
+| `DevicePrefs.connection` | 连接超时 15 秒、保活 30 秒、3 次 | 连接超时 5–120 秒，保活间隔 5–600 秒，允许丢失的保活 1–10 次 |
 | `DevicePrefs.agent.auth` | `auto` | `auto`（有 API key 时用 key，否则用 Agent 自己的登录）/ `api_key` / `account` |
 
 应用通过 `prefs_get` / `prefs_set` 和 `device_prefs_get` / `device_prefs_set` 命令读写偏好设置，后者同时把 `max_transfers` 应用到传输队列（启动时也会应用）；`fonts_monospace` 用 fontdb 列出本机已安装的等宽字体族（去重、按名称排序），供字体选择使用，移动端返回空列表。

@@ -3,10 +3,10 @@
   import Select from '../../ui/Select.svelte';
   import Switch from '../../ui/Switch.svelte';
   import { fontsMonospace, type TerminalPrefs } from '../../ipc';
-  import { t } from '../../i18n';
+  import { t, type MessageKey } from '../../i18n';
   import { SCHEMES, schemeById } from '../../terminal/schemes';
   import { prefs, terminalFontStack } from '../prefs.svelte';
-  import { editPrefs } from '../edit.svelte';
+  import { editDevice, editPrefs } from '../edit.svelte';
 
   /** Powerline and Nerd Font code points shown in the preview. */
   const GLYPH = {
@@ -51,6 +51,19 @@
       .then((families) => (installed = families))
       .catch((caught: unknown) => console.warn('font list unavailable', caught));
   });
+
+  /** SSH connection timing, kept per device; applies to new connections. */
+  const CONNECTION: {
+    key: 'connect_timeout_secs' | 'keepalive_secs' | 'keepalive_max';
+    label: MessageKey;
+    hint: MessageKey;
+    unit: MessageKey | null;
+    values: number[];
+  }[] = [
+    { key: 'connect_timeout_secs', label: 'settings.connectTimeout', hint: 'settings.connectTimeoutHint', unit: 'settings.seconds', values: [5, 10, 15, 30, 60, 120] },
+    { key: 'keepalive_secs', label: 'settings.keepalive', hint: 'settings.keepaliveHint', unit: 'settings.seconds', values: [10, 15, 30, 60, 120, 300] },
+    { key: 'keepalive_max', label: 'settings.keepaliveMax', hint: 'settings.keepaliveMaxHint', unit: null, values: [1, 2, 3, 5, 10] },
+  ];
 </script>
 
 {#snippet schemeRow(label: string, key: 'scheme_light' | 'scheme_dark', dark: boolean)}
@@ -159,6 +172,24 @@
     </div>
   </div>
 </div>
+
+<p class="section-label">{t('settings.group.connection')}</p>
+<div class="form-group">
+  {#each CONNECTION as row (row.key)}
+    <div class="form-row">
+      <span class="form-label">{t(row.label)}<small>{t(row.hint)}</small></span>
+      <div class="control narrow">
+        <Select
+          label={t(row.label)}
+          value={String(prefs.device.connection[row.key])}
+          options={row.values.map((value) => ({ value: String(value), label: row.unit ? t(row.unit, { n: value }) : String(value) }))}
+          onchange={(value) => void editDevice((draft) => (draft.connection[row.key] = Number(value)))}
+        />
+      </div>
+    </div>
+  {/each}
+</div>
+<p class="form-note">{t('settings.connectionNote')}</p>
 
 <style>
   .control {

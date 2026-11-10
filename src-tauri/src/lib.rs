@@ -58,6 +58,7 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState::new(runtime, &data_dir).map_err(|error| error.message)?;
     match state.vault.device_preferences() {
         Ok(device) => {
+            commands::prefs::apply_connection(&state, &device.connection);
             let transfers = state.transfers.clone();
             tauri::async_runtime::spawn(async move {
                 transfers.set_max_concurrent(usize::from(device.max_transfers));

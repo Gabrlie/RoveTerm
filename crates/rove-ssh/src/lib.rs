@@ -317,7 +317,7 @@ impl SshConfig {
 
 /// Opens SSH terminals. Terminals to the same `user@host:port` share one connection.
 pub struct SshConnector {
-    options: ConnectOptions,
+    options: parking_lot::RwLock<ConnectOptions>,
     verifier: Arc<dyn HostKeyVerifier>,
     pool: pool::Pool,
 }
@@ -326,10 +326,24 @@ impl SshConnector {
     /// Creates a connector that verifies host keys with `verifier`.
     pub fn new(config: &SshConfig, verifier: Arc<dyn HostKeyVerifier>) -> Self {
         Self {
-            options: config.options(),
+            options: parking_lot::RwLock::new(config.options()),
             verifier,
             pool: pool::Pool::default(),
         }
+    }
+
+    /// The timing new connections get.
+    pub fn timing(&self) -> ConnectOptions {
+        self.options.read().clone()
+    }
+
+    /// Changes the connect timeout and keepalive of connections opened from now on (the user's
+    /// connection settings). Values are clamped to the ranges [`SshConfig::validate`] accepts.
+    pub fn set_timing(&self, connect_timeout_secs: u64, keepalive_secs: u64, keepalive_max: usize) {
+        let mut options = self.options.write();
+        options.connect_timeout = Duration::from_secs(connect_timeout_secs.clamp(1, 120));
+        options.keepalive_interval = Duration::from_secs(keepalive_secs.clamp(5, 600));
+        options.keepalive_max = keepalive_max.clamp(1, 10);
     }
 
     /// Connects directly and authenticates to `target` on a new, unshared connection.
@@ -349,16 +363,10 @@ impl SshConnector {
         via: &Via,
         progress: Option<Progress>,
     ) -> Result<Arc<SshConnection>, SshError> {
-        SshConnection::connect(
-            target,
-            auth,
-            via,
-            self.verifier.clone(),
-            &self.options,
-            progress,
-        )
-        .await
-        .map(Arc::new)
+        let options = self.options.read().clone();
+        SshConnection::connect(target, auth, via, self.verifier.clone(), &options, progress)
+            .await
+            .map(Arc::new)
     }
 
     /// Returns the shared connection to `target`, connecting directly with `auth` when none is

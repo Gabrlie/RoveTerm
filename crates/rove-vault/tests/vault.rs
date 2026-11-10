@@ -845,3 +845,30 @@ fn ai_preferences_are_validated() {
         Err(VaultError::Invalid(_))
     ));
 }
+
+#[test]
+fn connection_preferences_are_validated() {
+    let (vault, _) = vault();
+    let mut device = DevicePrefs::default();
+    device.connection.keepalive_secs = 60;
+    assert_eq!(
+        vault
+            .set_device_preferences(device)
+            .unwrap()
+            .connection
+            .keepalive_secs,
+        60
+    );
+    let mut bad = DevicePrefs::default();
+    bad.connection.connect_timeout_secs = 1;
+    assert!(matches!(
+        vault.set_device_preferences(bad),
+        Err(VaultError::Invalid(_))
+    ));
+    let mut bad = DevicePrefs::default();
+    bad.connection.keepalive_max = 0;
+    assert!(matches!(
+        vault.set_device_preferences(bad),
+        Err(VaultError::Invalid(_))
+    ));
+}
