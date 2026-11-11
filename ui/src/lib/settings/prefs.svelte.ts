@@ -60,6 +60,20 @@ class PrefsState {
     applyAppearance(this.value.appearance);
   }
 
+  /** The stored preferences, read again (they also change by sync); they become current. An
+   *  edit starts from these, never from what the view holds: after a failed load that is the
+   *  defaults, and saving them would erase the stored providers and settings. */
+  async current(): Promise<Preferences> {
+    this.value = await prefsGet();
+    return structuredClone($state.snapshot(this.value)) as Preferences;
+  }
+
+  /** This device's stored preferences, read again; see {@link current}. */
+  async currentDevice(): Promise<DevicePrefs> {
+    this.device = await devicePrefsGet();
+    return structuredClone($state.snapshot(this.device)) as DevicePrefs;
+  }
+
   /** Stores `next`; the backend returns the normalized value, which becomes current. */
   async save(next: Preferences): Promise<void> {
     this.value = await prefsSet(next);

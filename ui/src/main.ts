@@ -21,7 +21,17 @@ const target = document.getElementById('app');
 if (!target) throw new Error('missing #app mount point');
 
 // Terminals are created with the stored preferences, so load them before the first view mounts.
-await prefs.load().catch((error: unknown) => console.warn('preferences unavailable, using defaults', error));
+// When they cannot be read yet, the defaults show until a later attempt succeeds; edits always
+// start from the stored preferences, so the defaults are never saved over them.
+async function loadPrefs(attempt: number): Promise<void> {
+  try {
+    await prefs.load();
+  } catch (error) {
+    console.warn(`preferences unavailable (attempt ${attempt + 1})`, error);
+    if (attempt < 5) setTimeout(() => void loadPrefs(attempt + 1), 1000 * 2 ** attempt);
+  }
+}
+await loadPrefs(0);
 void applyWindowMaterial(prefs.device.window_material);
 
 export default mount(App, { target });
