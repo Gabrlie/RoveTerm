@@ -132,6 +132,7 @@ async fn tools_run_through_the_session() {
             "run_command",
             "read_file",
             "write_file",
+            "edit_file",
             "list_dir",
             "terminal_snapshot"
         ]
