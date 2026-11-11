@@ -100,11 +100,11 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 |---|---|
 | `ai_agents()` | 本机可用的 Agent 与默认项：每个服务商对应一个内置助手（`builtin:<id>`，附模型），然后是检测到的 ACP 智能体与按命令添加的智能体（`acp:<id>`，附运行的程序、是否经 npx）；各项是否已存 key、是否启用（`enabled`，用户关闭的检测项仍列出，供设置页重新打开，`ai_start` 只启动启用的）、是否按命令添加（`custom`） |
 | `ai_set_key(agent, key)` | 密封保存或删除某个 Agent 的 API key |
-| `ai_provider_models(provider, key)` | 列出服务商提供的模型（`GET /models`；OpenAI 兼容用 Bearer，Anthropic 用 x-api-key 并按 `after_id` 翻页，最多 20 页），排序去重后返回 id；key 未给出时用已保存的，vault 未解锁时不带 key |
+| `ai_provider_models(provider, key)` | 列出服务商提供的模型及其上下文窗口（列表给出时：`context_length`、`context_window`、`max_model_len`、`max_input_tokens` 等，超过 1 亿的不采信；`GET /models`；OpenAI 兼容用 Bearer，Anthropic 用 x-api-key 并按 `after_id` 翻页，最多 20 页），排序去重后返回 id；key 未给出时用已保存的，vault 未解锁时不带 key |
 | `ai_provider_test(provider, key)` | 用一次最小请求检查服务商的地址、模型和 key（未给出时用已保存的），返回模型的回复 |
 | `ai_start(context, agent, terminal, resume)` | 在 `local`、已保存主机或快速连接上启动 `agent`；内置助手直接构造 `Assistant`，ACP 智能体按检测结果启动并附带内置 MCP server；`terminal` 为用户在该主机的终端会话，供 `terminal_snapshot` 读取。返回会话设置（`config_options`，见下文）。`resume` 为之前的会话 id 时继续那段对话：须是同一 Agent、当前未打开，沿用同一 id |
 | `ai_set_option(id, option, value)` | 修改会话设置（如 `model`），返回修改后的全部设置 |
-| `ai_quota(agent, refresh)` | 本机智能体的套餐额度（各限额窗口的已用百分比、窗口长度、重置时间）：Codex 读 `$CODEX_HOME`（默认 `~/.codex`）下 `sessions/` 中最新会话日志末尾的 `token_count` 事件的 `rate_limits`；Claude Code 单独启动一个不带工具的短会话，发送其本地命令 `/usage`（不经过模型），按报告中的 `**名称** — **N%**` 行解析，启动与应答各限时 30 秒。结果复用 5 分钟，`refresh` 时重读；其他智能体返回空。RoveTerm 不读取任何登录令牌（`rove_ai::quota`，有单元测试） |
+| `ai_quota(agent, refresh)` | 本机智能体的套餐额度（各限额窗口的已用百分比、窗口长度、重置时间）：Codex 读 `$CODEX_HOME`（默认 `~/.codex`）下 `sessions/` 中最新会话日志末尾的 `token_count` 事件的 `rate_limits`，并从最新日志的最后一个 `token_count` 读出上下文占用（`info.last_token_usage` 对 `info.model_context_window`，`context`），每次都重读不复用；Claude Code 单独启动一个不带工具的短会话，发送其本地命令 `/usage`（不经过模型），按报告中的 `**名称** — **N%**` 行解析，启动与应答各限时 30 秒。Claude Code 的结果复用 5 分钟，`refresh` 时重读；其他智能体返回空。RoveTerm 不读取任何登录令牌（`rove_ai::quota`，有单元测试） |
 | `ai_rename(id, title)` | 给会话起名（1–120 个字符，运行中或已结束均可），写入 `ai/renamed` 记录 |
 | `ai_prompt(id, text)` | 发出提示并等待回合结束，返回结束原因 |
 | `ai_cancel` / `ai_answer` / `ai_set_mode` / `ai_stop` | 取消回合、回答审批、切换审批模式、结束会话 |
@@ -119,7 +119,7 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 
 应用退出时结束所有 AI 会话。
 
-ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次是完整列表；名称去掉开头的 `/`，空名或含空白的丢弃，最多 200 条，说明与参数提示各截到 500 个字符）。ACP 的 `usage_update`（`used` / `size`，对话占用的上下文 token 数与窗口大小）解析为 `SessionUpdate::Usage` 交给界面。内置助手每次请求后发出 `SessionUpdate::Stats`：输入（含缓存）与输出 token、首字时间（发出请求到第一段文字或推理）、tokens/s（输出 token 除以生成时长）；token 数取自服务商的 usage（Chat 请求带 `stream_options.include_usage`，Responses 读 `response.completed`，Anthropic 读 `message_start` 与 `message_delta`），未报告的项为空。统计不写入 Journal。
+ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次是完整列表；名称去掉开头的 `/`，空名或含空白的丢弃，最多 200 条，说明与参数提示各截到 500 个字符）。ACP 的 `usage_update`（`used` / `size`，对话占用的上下文 token 数与窗口大小）解析为 `SessionUpdate::Usage` 交给界面。内置助手每次请求后发出 `SessionUpdate::Stats`：输入（含缓存）与输出 token、首字时间（发出请求到第一段文字或推理）、tokens/s（输出 token 除以生成时长）；token 数取自服务商的 usage（Chat 请求带 `stream_options.include_usage`，Responses 读 `response.completed`，Anthropic 读 `message_start` 与 `message_delta`），未报告的项为空。统计不写入 Journal。知道模型的上下文窗口时（服务商的 `contexts`，否则 `context_window`），内置助手每次请求后还发出 `SessionUpdate::Usage`（输入加输出 token 与窗口大小）。
 
 会话设置与继续对话：
 

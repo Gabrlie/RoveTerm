@@ -362,6 +362,8 @@ export const zhCN: Messages = {
   'ai.searchModels': '搜索模型',
   'ai.defaultModel': '设为默认模型',
   'ai.noModelsListed': '服务没有返回模型，请检查地址与 key',
+  'ai.contextWindow': '上下文窗口',
+  'ai.contextWindowHint': '单位 token，用于模型列表未提供的模型；用来显示上下文占用',
   'ai.effortHint': '用于会推理的模型；模型不支持时自动不再传',
   'ai.effort.minimal': '极低',
   'ai.effort.low': '低',

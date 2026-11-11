@@ -581,7 +581,7 @@
           {/if}
         </div>
         <span class="spacer"></span>
-        <UsageMeter agent={agentRef} usage={chat.usage} stats={chat.stats} />
+        <UsageMeter agent={agentRef} usage={chat.usage} stats={chat.stats} busy={chat.busy} />
         <span class="gap" aria-hidden="true"></span>
         {#if chat.busy}
           <button type="button" class="send stop" title={t('ai.stop')} aria-label={t('ai.stop')} onclick={() => void chat.cancel()}><Icon name="stop" size={12} /></button>

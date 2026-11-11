@@ -136,6 +136,41 @@ pub struct Reply {
     pub stats: Stats,
 }
 
+/// A model in a provider's list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ListedModel {
+    pub id: String,
+    /// Its context window in tokens, when the list says.
+    pub context: Option<u64>,
+}
+
+/// Largest context window believed from a list (larger numbers are not a window).
+const MAX_CONTEXT: u64 = 100_000_000;
+
+/// A model entry of a `/models` list; the context window under the names providers use for it
+/// (OpenRouter `context_length`, Anthropic `max_input_tokens`, vLLM `max_model_len`, …).
+fn listed_model(entry: &Value) -> Option<ListedModel> {
+    let id = entry
+        .get("id")
+        .or_else(|| entry.get("name"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty() && id.len() <= 200)?
+        .to_owned();
+    let context = [
+        "/context_length",
+        "/context_window",
+        "/max_context_length",
+        "/max_model_len",
+        "/max_input_tokens",
+        "/input_token_limit",
+        "/top_provider/context_length",
+    ]
+    .iter()
+    .find_map(|pointer| entry.pointer(pointer).and_then(Value::as_u64))
+    .filter(|tokens| (1..=MAX_CONTEXT).contains(tokens));
+    Some(ListedModel { id, context })
+}
+
 /// Token counts and timing of one reply, as far as the provider reports them.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Stats {
@@ -301,9 +336,9 @@ impl Client {
     }
 
     /// The models the provider offers (`GET /models`: `data[].id`, paged on Anthropic), sorted
-    /// and without repeats.
-    pub async fn list_models(&self) -> Result<Vec<String>, LlmError> {
-        let mut models: Vec<String> = Vec::new();
+    /// and without repeats, with their context window where the provider tells it.
+    pub async fn list_models(&self) -> Result<Vec<ListedModel>, LlmError> {
+        let mut models: Vec<ListedModel> = Vec::new();
         let mut after: Option<String> = None;
         for _ in 0..20 {
             let mut url = Url::parse(&self.url("/models")).map_err(|_| LlmError::InvalidUrl)?;
@@ -340,13 +375,7 @@ impl Client {
                 .or_else(|| page.get("models"))
                 .and_then(Value::as_array)
                 .ok_or_else(|| LlmError::Protocol("the model list has no data".into()))?;
-            models.extend(
-                ids.iter()
-                    .filter_map(|model| model.get("id").or_else(|| model.get("name")))
-                    .filter_map(Value::as_str)
-                    .filter(|id| !id.is_empty() && id.len() <= 200)
-                    .map(str::to_owned),
-            );
+            models.extend(ids.iter().filter_map(listed_model));
             let more = page.get("has_more").and_then(Value::as_bool) == Some(true);
             after = page
                 .get("last_id")
@@ -356,8 +385,8 @@ impl Client {
                 break;
             }
         }
-        models.sort();
-        models.dedup();
+        models.sort_by(|a, b| a.id.cmp(&b.id));
+        models.dedup_by(|a, b| a.id == b.id);
         Ok(models)
     }
 

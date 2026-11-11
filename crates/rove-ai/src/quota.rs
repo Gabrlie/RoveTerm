@@ -22,6 +22,13 @@ pub struct Window {
     pub resets_text: Option<String>,
 }
 
+/// How full a model's context is (tokens).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ContextUse {
+    pub used: u64,
+    pub size: u64,
+}
+
 /// Longest log tail read when looking for the latest limits.
 const TAIL: u64 = 4 * 1024 * 1024;
 /// Most session log files looked at, newest first.
@@ -65,6 +72,27 @@ fn codex_window(window: &Value, now_ms: i64) -> Option<Window> {
         used_percent,
         resets_at,
         resets_text: None,
+    })
+}
+
+/// How full the context was at the end of a Codex session log: the last `token_count` event's
+/// last request (`info.last_token_usage`) against `info.model_context_window`.
+pub fn codex_context(log: &str) -> Option<ContextUse> {
+    log.lines().rev().find_map(|line| {
+        if !line.contains("model_context_window") {
+            return None;
+        }
+        let value: Value = serde_json::from_str(line).ok()?;
+        let info = value.get("payload").unwrap_or(&value).get("info")?;
+        let size = info
+            .get("model_context_window")?
+            .as_u64()
+            .filter(|size| *size > 0)?;
+        let last = info.get("last_token_usage")?;
+        let count = |name: &str| last.get(name).and_then(Value::as_u64);
+        let used = count("total_tokens")
+            .or_else(|| Some(count("input_tokens")? + count("output_tokens").unwrap_or(0)))?;
+        Some(ContextUse { used, size })
     })
 }
 
@@ -119,6 +147,11 @@ pub fn codex_quota(codex_home: &Path, now_ms: i64) -> Option<Vec<Window>> {
         .find_map(|path| codex_limits(&tail(path).ok()?, now_ms))
 }
 
+/// How full the context of Codex's most recent session is, from its log under `codex_home`.
+pub fn codex_latest_context(codex_home: &Path) -> Option<ContextUse> {
+    codex_context(&tail(codex_logs(codex_home).first()?).ok()?)
+}
+
 /// The limits in Claude Code's `/usage` report: lines such as
 /// `**5-hour limit** — **23%** · resets in 2h`.
 pub fn claude_limits(report: &str) -> Vec<Window> {
@@ -169,6 +202,23 @@ mod tests {
         assert_eq!(windows[0].resets_at, Some(1_800_000_000_000));
         assert_eq!(windows[1].resets_at, Some(1_000 + 3_600_000));
         assert_eq!(codex_limits("{}\nnot json rate_limits", 0), None);
+    }
+
+    #[test]
+    fn codex_context_comes_from_the_last_request() {
+        let log = [
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12},"model_context_window":272000}}}"#,
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":50000,"output_tokens":900},"model_context_window":272000}}}"#,
+        ]
+        .join("\n");
+        assert_eq!(
+            codex_context(&log),
+            Some(ContextUse {
+                used: 50_900,
+                size: 272_000
+            })
+        );
+        assert_eq!(codex_context(r#"{"payload":{"info":null}}"#), None);
     }
 
     #[test]

@@ -360,6 +360,8 @@ export const en = {
   'ai.searchModels': 'Search models',
   'ai.defaultModel': 'Default model',
   'ai.noModelsListed': 'The service listed no models; check the address and key',
+  'ai.contextWindow': 'Context window',
+  'ai.contextWindowHint': 'Tokens, for models whose list does not say; shows how full the context is',
   'ai.effortHint': 'For models that reason; dropped by itself where a model has none',
   'ai.effort.minimal': 'Minimal',
   'ai.effort.low': 'Low',

@@ -48,6 +48,8 @@ export function fromPreset(preset: ProviderPreset, taken: readonly string[]): Pr
     model: '',
     models: [],
     max_tokens: null,
+    contexts: {},
+    context_window: null,
     effort: 'medium',
   };
 }

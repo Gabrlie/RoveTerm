@@ -354,24 +354,27 @@ async fn a_reply_cut_short_is_an_error() {
 #[tokio::test]
 async fn model_lists_are_read_in_both_shapes() {
     // `serve` answers any method; the list is a plain JSON body with status 200.
-    let openai = json!({ "object": "list", "data": [{ "id": "gpt-5" }, { "id": "deepseek-chat" }, { "id": "gpt-5" }] });
+    let openai = json!({ "object": "list", "data": [{ "id": "gpt-5" }, { "id": "deepseek-chat", "context_length": 131072 }, { "id": "gpt-5" }] });
     let (base, seen) = serve_json(openai.to_string()).await;
     let models = client(Format::Chat, &base, "sk-list")
         .list_models()
         .await
         .unwrap();
-    assert_eq!(models, ["deepseek-chat", "gpt-5"]);
+    let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
+    assert_eq!(ids, ["deepseek-chat", "gpt-5"]);
+    assert_eq!((models[0].context, models[1].context), (Some(131072), None));
     let seen = seen.await.unwrap();
     assert_eq!(seen.path, "/v1/models");
     assert_eq!(seen.header("authorization"), Some("Bearer sk-list"));
 
-    let anthropic = json!({ "data": [{ "id": "claude-opus-5-5", "type": "model" }], "has_more": false, "last_id": "claude-opus-5-5" });
+    let anthropic = json!({ "data": [{ "id": "claude-opus-5-5", "type": "model", "max_input_tokens": 1000000 }], "has_more": false, "last_id": "claude-opus-5-5" });
     let (base, seen) = serve_json(anthropic.to_string()).await;
     let models = client(Format::Anthropic, &base, "ant")
         .list_models()
         .await
         .unwrap();
-    assert_eq!(models, ["claude-opus-5-5"]);
+    assert_eq!(models[0].id, "claude-opus-5-5");
+    assert_eq!(models[0].context, Some(1_000_000));
     let seen = seen.await.unwrap();
     assert_eq!(seen.path, "/v1/models?limit=1000");
     assert_eq!(seen.header("x-api-key"), Some("ant"));

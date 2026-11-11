@@ -13,9 +13,11 @@
     usage: { used: number; size: number } | null;
     /** The built-in assistant's last request. */
     stats?: RequestStats | null;
+    /** A turn is running; the context is read again when it ends. */
+    busy?: boolean;
   }
 
-  let { agent, usage, stats = null }: Props = $props();
+  let { agent, usage, stats = null, busy = false }: Props = $props();
   let open = $state(false);
   let root = $state<HTMLDivElement>();
   let quota = $state<AiQuota | null>(null);
@@ -25,19 +27,24 @@
   /** Agents whose plan limits can be read. */
   const QUOTA_AGENTS = new Set(['acp:codex', 'acp:claude']);
   const hasQuota = $derived(!!agent && QUOTA_AGENTS.has(agent));
-  const percent = $derived(contextPercent(usage));
+  /** As the agent reports it, else from its logs (Codex). */
+  const context = $derived(usage ?? quota?.context ?? null);
+  const percent = $derived(contextPercent(context));
   /** Tokens in context when only the request's counts are known (no window size). */
   const filled = $derived(percent === null ? contextTokens(stats) : null);
   const shown = $derived(percent !== null || hasQuota || stats !== null);
 
   async function load(refresh: boolean): Promise<void> {
     if (!agent || !hasQuota) return;
+    const asked = agent;
     loading = true;
     problem = '';
     try {
-      quota = await aiQuota(agent, refresh);
+      const read = await aiQuota(asked, refresh);
+      // An answer for an agent no longer shown is dropped.
+      if (agent === asked) quota = read;
     } catch (error) {
-      problem = errorText(error);
+      if (agent === asked) problem = errorText(error);
     } finally {
       loading = false;
     }
@@ -71,6 +78,11 @@
     void agent;
     quota = null;
   });
+
+  // Codex's context is read from its logs, cheaply: at the start and after every turn.
+  $effect(() => {
+    if (agent === 'acp:codex' && !busy) void load(false);
+  });
 </script>
 
 <svelte:window onpointerdown={onWindowPointer} />
@@ -95,7 +107,7 @@
           {#if hasQuota}<IconButton icon="refresh" small label={t('ai.quota.refresh')} disabled={loading} onclick={() => void load(true)} />{/if}
         </div>
         <div class="item">
-          <div class="row"><span>{t('ai.quota.contextLabel')}</span><span class="value">{percent !== null && usage ? `${Math.round(percent)}% · ${tokens(usage.used)} / ${tokens(usage.size)}` : filled !== null ? t('ai.quota.tokens', { tokens: tokens(filled) }) : t('ai.quota.contextUnknown')}</span></div>
+          <div class="row"><span>{t('ai.quota.contextLabel')}</span><span class="value">{percent !== null && context ? `${Math.round(percent)}% · ${tokens(context.used)} / ${tokens(context.size)}` : filled !== null ? t('ai.quota.tokens', { tokens: tokens(filled) }) : t('ai.quota.contextUnknown')}</span></div>
           {#if percent !== null}<div class="bar"><span style:width={`${percent}%`} class:high={percent >= 80}></span></div>{/if}
         </div>
         {#if stats}

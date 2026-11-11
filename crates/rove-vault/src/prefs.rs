@@ -78,6 +78,12 @@ pub struct ProviderPrefs {
     pub models: Vec<String>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// Context windows of the models in tokens, as the provider's model list told them.
+    #[serde(default)]
+    pub contexts: std::collections::BTreeMap<String, u64>,
+    /// Context window of the models the list says nothing about, when the user set one.
+    #[serde(default)]
+    pub context_window: Option<u64>,
     /// Older versions left it empty for "the model's default", read as `medium`.
     #[serde(default, deserialize_with = "effort_or_medium")]
     pub effort: ReasoningEffort,
@@ -632,6 +638,15 @@ impl ProviderPrefs {
             .is_some_and(|max| max == 0 || max > 1_000_000)
         {
             return invalid("the token limit must be 1–1000000");
+        }
+        // Windows are kept for the provider's models only.
+        self.contexts
+            .retain(|model, _| seen.iter().any(|known| known == model));
+        let bad_window = |tokens: u64| !(1_000..=100_000_000).contains(&tokens);
+        if self.contexts.values().any(|tokens| bad_window(*tokens))
+            || self.context_window.is_some_and(bad_window)
+        {
+            return invalid("a context window must be 1000–100000000 tokens");
         }
         Ok(())
     }

@@ -695,7 +695,9 @@ fn sync_records_round_trip_into_another_vault() {
     let mut prefs = Preferences::default();
     prefs.terminal.font_size = 16;
     source.set_preferences(prefs).unwrap();
-    source.set_ai_key("builtin:deepseek", Some("sk-sync")).unwrap();
+    source
+        .set_ai_key("builtin:deepseek", Some("sk-sync"))
+        .unwrap();
 
     // Children listed before their parents still apply: the vault orders them.
     let mut changes = as_changes(source.sync_records().unwrap());
@@ -719,7 +721,11 @@ fn sync_records_round_trip_into_another_vault() {
     );
     assert_eq!(target.preferences().unwrap().terminal.font_size, 16);
     assert_eq!(
-        target.ai_key("builtin:deepseek").unwrap().as_deref().map(String::as_str),
+        target
+            .ai_key("builtin:deepseek")
+            .unwrap()
+            .as_deref()
+            .map(String::as_str),
         Some("sk-sync")
     );
     target
@@ -875,6 +881,8 @@ fn ai_preferences_are_validated() {
             "deepseek-reasoner".into(),
         ],
         max_tokens: None,
+        contexts: Default::default(),
+        context_window: None,
         effort: rove_vault::ReasoningEffort::Medium,
     }];
     prefs.ai.default_agent = Some("builtin:deepseek".into());
@@ -1012,6 +1020,8 @@ fn preferences_sync_by_section_and_providers_one_by_one() {
         model: "deepseek-chat".into(),
         models: Vec::new(),
         max_tokens: None,
+        contexts: Default::default(),
+        context_window: None,
         effort: rove_vault::ReasoningEffort::Medium,
     };
     // Only `a` has a provider; `b` changed its terminal font.
@@ -1025,13 +1035,15 @@ fn preferences_sync_by_section_and_providers_one_by_one() {
     b.set_preferences(prefs).unwrap();
 
     // `b`'s whole preferences arrive at `a`: the sections apply, `a` keeps its provider.
-    a.apply_sync(&as_changes(b.sync_records().unwrap())).unwrap();
+    a.apply_sync(&as_changes(b.sync_records().unwrap()))
+        .unwrap();
     let merged = a.preferences().unwrap();
     assert_eq!(merged.terminal.font_size, 18);
     assert_eq!(merged.ai.providers, std::slice::from_ref(&provider));
 
     // The provider reaches `b` on its own, and so does its removal.
-    b.apply_sync(&as_changes(a.sync_records().unwrap())).unwrap();
+    b.apply_sync(&as_changes(a.sync_records().unwrap()))
+        .unwrap();
     assert_eq!(b.preferences().unwrap().ai.providers.len(), 1);
     b.apply_sync(&[SyncChange {
         kind: "ai_provider".into(),
@@ -1071,4 +1083,31 @@ fn an_empty_effort_reads_as_medium() {
     }))
     .unwrap();
     assert_eq!(missing.effort, rove_vault::ReasoningEffort::Medium);
+}
+
+#[test]
+fn context_windows_are_kept_for_the_providers_models() {
+    let vault = unlocked();
+    let mut prefs = Preferences::default();
+    let mut provider = rove_vault::ProviderPrefs {
+        id: "p".into(),
+        name: "P".into(),
+        format: rove_vault::ProviderFormat::Chat,
+        base_url: "https://x/v1".into(),
+        model: "a".into(),
+        models: vec!["b".into()],
+        max_tokens: None,
+        contexts: [("a".to_owned(), 128_000), ("gone".to_owned(), 8_000)].into(),
+        context_window: Some(64_000),
+        effort: rove_vault::ReasoningEffort::Medium,
+    };
+    prefs.ai.providers.push(provider.clone());
+    let stored = vault.set_preferences(prefs.clone()).unwrap();
+    assert_eq!(
+        stored.ai.providers[0].contexts,
+        [("a".to_owned(), 128_000)].into()
+    );
+    provider.context_window = Some(10);
+    prefs.ai.providers[0] = provider;
+    assert!(vault.set_preferences(prefs).is_err());
 }

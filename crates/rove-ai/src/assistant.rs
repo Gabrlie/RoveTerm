@@ -79,6 +79,9 @@ pub struct Assistant {
     /// The running turn's cancellation.
     running: std::sync::Mutex<Option<CancellationToken>>,
     turns: std::sync::atomic::AtomicU64,
+    /// Context windows of the models (tokens), and of the others when known.
+    contexts: std::collections::BTreeMap<String, u64>,
+    context_window: Option<u64>,
 }
 
 impl Assistant {
@@ -106,7 +109,27 @@ impl Assistant {
             history: Mutex::new(Vec::new()),
             running: std::sync::Mutex::new(None),
             turns: std::sync::atomic::AtomicU64::new(0),
+            contexts: std::collections::BTreeMap::new(),
+            context_window: None,
         }
+    }
+
+    /// Knows the context windows of the models (`contexts`), and of the rest (`fallback`), to
+    /// report how full the context is.
+    #[must_use]
+    pub fn with_contexts(
+        mut self,
+        contexts: std::collections::BTreeMap<String, u64>,
+        fallback: Option<u64>,
+    ) -> Self {
+        self.contexts = contexts;
+        self.context_window = fallback;
+        self
+    }
+
+    /// The context window of `model`, when known.
+    fn context_of(&self, model: &str) -> Option<u64> {
+        self.contexts.get(model).copied().or(self.context_window)
     }
 
     pub fn session(&self) -> &Arc<AiSession> {
@@ -280,6 +303,18 @@ impl Assistant {
             let reply = client
                 .complete(&self.system, &history, &self.tools, &mut on_delta)
                 .await?;
+            // The next request takes in this one's input and its reply.
+            if let (Some(input), Some(size)) = (
+                reply.stats.input_tokens,
+                self.context_of(&client.endpoint().model),
+            ) {
+                self.session.emit(AiEvent::Update {
+                    update: SessionUpdate::Usage {
+                        used: input + reply.stats.output_tokens.unwrap_or(0),
+                        size,
+                    },
+                });
+            }
             self.session.emit(AiEvent::Update {
                 update: SessionUpdate::Stats {
                     input_tokens: reply.stats.input_tokens,

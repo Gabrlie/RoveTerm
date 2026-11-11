@@ -423,7 +423,7 @@ pub async fn ai_provider_models(
     state: State<'_, AppState>,
     provider: ProviderPrefs,
     key: Option<String>,
-) -> Result<Vec<String>, CommandError> {
+) -> Result<Vec<llm::ListedModel>, CommandError> {
     let key = match key.filter(|key| !key.trim().is_empty()) {
         Some(key) => Zeroizing::new(key.trim().to_owned()),
         // A locked vault reads as no key: the list may not need one.
@@ -651,7 +651,9 @@ pub async fn ai_start(
                 .unwrap_or_default();
             let client = Client::new(endpoint(provider), &key, MODEL_IDLE)
                 .map_err(|error| CommandError::new("ai.model", error.to_string()))?;
-            let assistant = Assistant::new(client, session, &meta).with_models(&provider.models);
+            let assistant = Assistant::new(client, session, &meta)
+                .with_models(&provider.models)
+                .with_contexts(provider.contexts.clone(), provider.context_window);
             if let Some((_, _, records, _)) = &earlier {
                 let records: Vec<(String, serde_json::Value)> = records
                     .iter()
@@ -1047,6 +1049,8 @@ pub async fn ai_set_option(
 #[derive(Debug, Clone, Serialize)]
 pub struct AiQuota {
     pub windows: Vec<rove_ai::quota::Window>,
+    /// How full the context of the agent's latest session is, when its logs say (Codex).
+    pub context: Option<rove_ai::quota::ContextUse>,
     /// When it was read (Unix milliseconds).
     pub as_of: i64,
 }
@@ -1066,9 +1070,9 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// The rate-limit windows of local agent `agent` (Codex: from its session logs; Claude Code:
-/// from its `/usage` report, which starts it briefly); `None` for agents that report none.
-/// A recent answer is reused unless `refresh`.
+/// The rate-limit windows of local agent `agent` (Codex: from its session logs, with the context
+/// of its latest session; Claude Code: from its `/usage` report, which starts it briefly);
+/// `None` for agents that report none. A recent Claude Code answer is reused unless `refresh`.
 #[tauri::command]
 pub async fn ai_quota(
     state: State<'_, AppState>,
@@ -1078,6 +1082,26 @@ pub async fn ai_quota(
     let AgentRef::Acp(agent_id) = agent_ref(&agent)? else {
         return Ok(None);
     };
+    if agent_id == "codex" {
+        let home = std::env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::home_dir().map(|home| home.join(".codex")))
+            .ok_or_else(|| CommandError::new("app.io", "no home directory"))?;
+        // Reading the logs is cheap, and the context changes with every turn: never reused.
+        let (windows, context) = tauri::async_runtime::spawn_blocking(move || {
+            (
+                rove_ai::quota::codex_quota(&home, now_ms()).unwrap_or_default(),
+                rove_ai::quota::codex_latest_context(&home),
+            )
+        })
+        .await
+        .map_err(|error| CommandError::new("app.task", error.to_string()))?;
+        return Ok(Some(AiQuota {
+            windows,
+            context,
+            as_of: now_ms(),
+        }));
+    }
     if !refresh
         && let Some((at, quota)) = QUOTAS
             .lock()
@@ -1088,22 +1112,12 @@ pub async fn ai_quota(
         return Ok(Some(quota));
     }
     let windows = match agent_id.as_str() {
-        "codex" => {
-            let home = std::env::var_os("CODEX_HOME")
-                .map(PathBuf::from)
-                .or_else(|| std::env::home_dir().map(|home| home.join(".codex")))
-                .ok_or_else(|| CommandError::new("app.io", "no home directory"))?;
-            tauri::async_runtime::spawn_blocking(move || {
-                rove_ai::quota::codex_quota(&home, now_ms()).unwrap_or_default()
-            })
-            .await
-            .map_err(|error| CommandError::new("app.task", error.to_string()))?
-        }
         "claude" => claude_usage(state.inner(), &agent_id).await?,
         _ => return Ok(None),
     };
     let quota = AiQuota {
         windows,
+        context: None,
         as_of: now_ms(),
     };
     if let Ok(mut cache) = QUOTAS.lock() {

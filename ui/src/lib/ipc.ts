@@ -268,7 +268,17 @@ export interface ProviderPrefs {
   /** Other models to switch to in a conversation. */
   models: string[];
   max_tokens: number | null;
+  /** Context windows of the models (tokens), as the provider's model list told them. */
+  contexts: Record<string, number>;
+  /** Context window of the other models, when the user set one. */
+  context_window: number | null;
   effort: ReasoningEffort;
+}
+
+/** A model in a provider's list, with its context window when the list says. */
+export interface ListedModel {
+  id: string;
+  context: number | null;
 }
 
 export interface AiPrefs {
@@ -973,7 +983,7 @@ export function aiProviderTest(provider: ProviderPrefs, key: string | null): Pro
 }
 
 /** The models `provider` offers; `key` is the typed key, else the stored one. */
-export function aiProviderModels(provider: ProviderPrefs, key: string | null): Promise<string[]> {
+export function aiProviderModels(provider: ProviderPrefs, key: string | null): Promise<ListedModel[]> {
   return invoke('ai_provider_models', { provider, key });
 }
 
@@ -1007,6 +1017,8 @@ export interface QuotaWindow {
 
 export interface AiQuota {
   windows: QuotaWindow[];
+  /** How full the context of the agent's latest session is, when its logs say (Codex). */
+  context: { used: number; size: number } | null;
   as_of: number;
 }
 

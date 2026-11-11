@@ -13,6 +13,7 @@
   import { prefs } from '../prefs.svelte';
   import { editDevice, editPrefs, settingsError } from '../edit.svelte';
   import { notify } from '../../ui/toast.svelte';
+  import { tokens } from '../../ai/quota';
   import { customAgentId, EFFORT_LEVELS, fromPreset, mergeListed, PRESETS, providerModels, type ProviderPreset } from '../providers';
 
   const rules = $derived(prefs.value.ai);
@@ -109,6 +110,7 @@
     const chosen = providerModels(editing.picked, draft.model);
     draft.model = chosen.model;
     draft.models = chosen.models;
+    draft.contexts = Object.fromEntries(Object.entries(draft.contexts).filter(([model]) => editing?.picked.includes(model)));
     await editPrefs((prefsDraft) => {
       const at = prefsDraft.ai.providers.findIndex((provider) => provider.id === original);
       if (at >= 0) prefsDraft.ai.providers[at] = draft;
@@ -134,7 +136,12 @@
     fetchError = '';
     try {
       const fetched = await aiProviderModels($state.snapshot(editing.draft), editing.key.trim() || null);
-      editing.listed = mergeListed(fetched, editing.picked);
+      editing.listed = mergeListed(
+        fetched.map((model) => model.id),
+        editing.picked,
+      );
+      // Windows the list tells; the ones of models it no longer lists stay.
+      for (const model of fetched) if (model.context) editing.draft.contexts[model.id] = model.context;
       if (fetched.length === 0) fetchError = t('ai.noModelsListed');
     } catch (error) {
       fetchError = errorText(error);
@@ -279,12 +286,16 @@
             {#each shownModels as model (model)}
               {@const on = editing.picked.includes(model)}
               <div class="model-row" class:on>
-                <label class="model-pick"><input type="checkbox" checked={on} onchange={() => toggleModel(model)} /><span class="mono">{model}</span></label>
+                <label class="model-pick"><input type="checkbox" checked={on} onchange={() => toggleModel(model)} /><span class="mono">{model}</span>{#if editing.draft.contexts[model]}<small class="context">{tokens(editing.draft.contexts[model] ?? 0)}</small>{/if}</label>
                 <button type="button" class="star" class:starred={on && editing.draft.model === model} title={t('ai.defaultModel')} aria-label={t('ai.defaultModel')} onclick={() => starModel(model)}>★</button>
               </div>
             {/each}
           </div>
         {/if}
+      </div>
+      <div class="form-row">
+        <span class="form-label">{t('ai.contextWindow')}<small>{t('ai.contextWindowHint')}</small></span>
+        <input class="field mono narrow" type="number" min="1000" step="1000" value={editing.draft.context_window ?? ''} placeholder="128000" aria-label={t('ai.contextWindow')} oninput={(event) => editing && (editing.draft.context_window = event.currentTarget.value ? Math.round(Number(event.currentTarget.value)) : null)} />
       </div>
       <div class="form-row">
         <span class="form-label">{t('ai.effort')}<small>{t('ai.effortHint')}</small></span>
@@ -482,6 +493,14 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .context {
+    flex: none;
+    color: var(--fg-muted);
+    font-size: 11px;
+  }
+  .narrow {
+    width: 140px;
   }
   .model-pick input {
     flex: none;
