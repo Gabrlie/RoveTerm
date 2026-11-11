@@ -1,9 +1,8 @@
 <script lang="ts">
-  import { writeClipboard } from '../ui/clipboard';
   // Renders an agent's Markdown as plain elements and text nodes, never as HTML.
   // Links show their address on hover rather than navigating the WebView.
-  import { parseMarkdown, type Inline } from './markdown';
-
+  import { parseMarkdown, type Block, type Inline } from './markdown';
+  import { writeClipboard } from '../ui/clipboard';
   import Icon from '../ui/Icon.svelte';
   import { t } from '../i18n';
 
@@ -14,14 +13,15 @@
   }
 
   let { text, oninsert }: Props = $props();
-  let copied = $state<number | null>(null);
+  /** The code block just copied, by its path in the tree. */
+  let copied = $state<string | null>(null);
 
   const SHELL = new Set(['sh', 'bash', 'zsh', 'shell', 'console', 'fish', 'powershell', 'ps1']);
 
-  function copy(code: string, index: number): void {
+  function copy(code: string, path: string): void {
     void writeClipboard(code).then(() => {
-      copied = index;
-      setTimeout(() => (copied = copied === index ? null : copied), 1500);
+      copied = path;
+      setTimeout(() => (copied = copied === path ? null : copied), 1500);
     });
   }
   const blocks = $derived(parseMarkdown(text));
@@ -29,14 +29,15 @@
 
 {#snippet inline(nodes: Inline[])}
   {#each nodes as node, index (index)}
-    {#if node.kind === 'text'}{node.text}{:else if node.kind === 'code'}<code>{node.text}</code>{:else if node.kind === 'strong'}<strong>{@render inline(node.children)}</strong>{:else if node.kind === 'em'}<em>{@render inline(node.children)}</em>{:else}<span class="link" title={node.href}>{@render inline(node.children)}</span>{/if}
+    {#if node.kind === 'text'}{node.text}{:else if node.kind === 'code'}<code>{node.text}</code>{:else if node.kind === 'strong'}<strong>{@render inline(node.children)}</strong>{:else if node.kind === 'em'}<em>{@render inline(node.children)}</em>{:else if node.kind === 'del'}<del>{@render inline(node.children)}</del>{:else if node.kind === 'break'}<br />{:else}<span class="link" title={node.href}>{@render inline(node.children)}</span>{/if}
   {/each}
 {/snippet}
 
-<div class="markdown selectable">
-  {#each blocks as block, index (index)}
+{#snippet blockList(items: Block[], path: string)}
+  {#each items as block, index (index)}
+    {@const at = `${path}.${index}`}
     {#if block.kind === 'heading'}
-      <p class="heading">{@render inline(block.content)}</p>
+      <p class="heading h{Math.min(block.level, 3)}">{@render inline(block.content)}</p>
     {:else if block.kind === 'paragraph'}
       <p>{@render inline(block.content)}</p>
     {:else if block.kind === 'code'}
@@ -47,22 +48,42 @@
           {#if oninsert && SHELL.has(block.lang.toLowerCase())}
             <button type="button" title={t('ai.insertHint')} onclick={() => oninsert?.(block.text)}><Icon name="terminal" size={12} />{t('ai.insert')}</button>
           {/if}
-          <button type="button" onclick={() => copy(block.text, index)}><Icon name={copied === index ? 'check' : 'copy'} size={12} />{copied === index ? t('ai.copied') : t('edit.copy')}</button>
+          <button type="button" onclick={() => copy(block.text, at)}><Icon name={copied === at ? 'check' : 'copy'} size={12} />{copied === at ? t('ai.copied') : t('edit.copy')}</button>
         </div>
         <pre><code>{block.text}</code></pre>
       </div>
     {:else if block.kind === 'list'}
-      {#if block.ordered}
-        <ol>{#each block.items as item, at (at)}<li>{@render inline(item)}</li>{/each}</ol>
-      {:else}
-        <ul>{#each block.items as item, at (at)}<li>{@render inline(item)}</li>{/each}</ul>
-      {/if}
+      <svelte:element this={block.ordered ? 'ol' : 'ul'} start={block.ordered ? block.start : undefined} class:tasks={block.items.some((item) => item.task !== null)}>
+        {#each block.items as item, itemAt (itemAt)}
+          <li class:task={item.task !== null}>
+            {#if item.task !== null}<input type="checkbox" checked={item.task} disabled aria-hidden="true" />{/if}
+            <div class="item">{@render blockList(item.blocks, `${at}.${itemAt}`)}</div>
+          </li>
+        {/each}
+      </svelte:element>
     {:else if block.kind === 'quote'}
-      <blockquote>{@render inline(block.content)}</blockquote>
+      <blockquote>{@render blockList(block.blocks, at)}</blockquote>
+    {:else if block.kind === 'table'}
+      <div class="table">
+        <table>
+          <thead>
+            <tr>{#each block.header as cell, column (column)}<th style:text-align={block.align[column] ?? undefined}>{@render inline(cell)}</th>{/each}</tr>
+          </thead>
+          <tbody>
+            {#each block.rows as row, rowAt (rowAt)}
+              <tr>{#each row as cell, column (column)}<td style:text-align={block.align[column] ?? undefined}>{@render inline(cell)}</td>{/each}</tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
     {:else}
       <hr />
     {/if}
   {/each}
+{/snippet}
+
+<div class="markdown selectable">
+  {@render blockList(blocks, 'b')}
 </div>
 
 <style>
@@ -84,9 +105,71 @@
   .heading {
     font-weight: 600;
   }
+  .heading.h1 {
+    font-size: 1.15em;
+  }
   ul,
   ol {
     padding-left: var(--space-5);
+  }
+  li + li {
+    margin-top: 2px;
+  }
+  /* A list item's blocks: tight items read as one line, loose ones keep their spacing. */
+  .item {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+  ul.tasks {
+    padding-left: var(--space-1);
+    list-style: none;
+  }
+  li.task {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  li.task input {
+    flex: none;
+    margin: 0;
+  }
+  del {
+    color: var(--fg-muted);
+  }
+  .table {
+    max-width: 100%;
+    overflow-x: auto;
+    border-radius: var(--radius-sm);
+    box-shadow: 0 0 0 1px var(--separator);
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-footnote);
+  }
+  th,
+  td {
+    padding: 4px var(--space-2);
+    text-align: left;
+    vertical-align: top;
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+  th {
+    background: var(--fill);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  tr + tr td,
+  tbody tr:first-child td {
+    box-shadow: inset 0 1px 0 var(--separator);
+  }
+  blockquote {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
   }
   code {
     overflow-wrap: anywhere;
