@@ -7,6 +7,11 @@ import App from './App.svelte';
 import { prefs } from './lib/settings/prefs.svelte';
 import { applyWindowMaterial } from './lib/ui/window';
 import { isMac } from './lib/actions';
+import { forwardConsole } from './lib/ui/consolelog';
+import { logWrite } from './lib/ipc';
+
+// Warnings and errors of the interface also go to the log files.
+forwardConsole(logWrite);
 
 // WebKitGTK accepts backdrop-filter but does not draw it, so translucent materials would show
 // the content behind them unblurred; Linux uses opaque materials instead.

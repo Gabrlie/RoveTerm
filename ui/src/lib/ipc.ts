@@ -479,6 +479,16 @@ export function transferCancel(id: TransferId): Promise<boolean> {
   return invoke('transfer_cancel', { id });
 }
 
+/** Writes a warning or error of the interface to the application log. */
+export function logWrite(level: 'warn' | 'error', message: string): Promise<void> {
+  return invoke('log_write', { level, message });
+}
+
+/** Opens the folder of the log files in the system file manager. */
+export function logsReveal(): Promise<void> {
+  return invoke('logs_reveal');
+}
+
 /** Shows finished download `id` in the system file manager. */
 export function transferReveal(id: TransferId): Promise<void> {
   return invoke('transfer_reveal', { id });

@@ -63,3 +63,5 @@
 ## 日志
 
 日志、错误信息和 Journal 事件中不写入任何凭据明文。
+
+日志同时输出到终端和数据目录下的 `logs/roveterm.YYYY-MM-DD.log`（按天滚动，保留 7 个文件），供用户反馈问题时发送；界面的 `console.warn` / `console.error` 与未捕获错误经 `log_write` 转发进同一日志（每条最多 4 KiB，每分钟最多 60 条）。代码只记 id 与状态，不记密码、私钥、API key 或 token。

@@ -322,38 +322,7 @@ pub fn transfer_reveal(state: State<'_, AppState>, id: String) -> Result<(), Com
             "the downloaded file is gone",
         ));
     }
-    reveal(&path).map_err(|error| CommandError::new("app.io", error.to_string()))
-}
-
-/// Opens the file manager at `path`.
-fn reveal(path: &std::path::Path) -> std::io::Result<()> {
-    let mut command;
-    #[cfg(target_os = "macos")]
-    {
-        command = std::process::Command::new("open");
-        command.arg("-R").arg(path);
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let mut select = std::ffi::OsString::from("/select,");
-        select.push(path);
-        command = std::process::Command::new("explorer");
-        command.arg(select);
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        // No portable way to select a file: its folder opens.
-        command = std::process::Command::new("xdg-open");
-        command.arg(if path.is_dir() {
-            path
-        } else {
-            path.parent().unwrap_or(path)
-        });
-    }
-    // The file manager runs on its own; its exit is collected off this thread.
-    let mut child = command.spawn()?;
-    std::thread::spawn(move || child.wait());
-    Ok(())
+    crate::reveal::reveal(&path).map_err(|error| CommandError::new("app.io", error.to_string()))
 }
 
 /// Forgets finished transfers.

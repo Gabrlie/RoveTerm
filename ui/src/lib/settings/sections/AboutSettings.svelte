@@ -2,7 +2,9 @@
   import { onMount } from 'svelte';
   import { getVersion } from '@tauri-apps/api/app';
   import Icon from '../../ui/Icon.svelte';
-  import { t } from '../../i18n';
+  import { errorText, t } from '../../i18n';
+  import { logsReveal } from '../../ipc';
+  import { notify } from '../../ui/toast.svelte';
 
   let version = $state('');
 
@@ -18,6 +20,12 @@
   <h3>RoveTerm</h3>
   <p class="version">{t('settings.version')} {version || '…'}</p>
   <p>{t('settings.aboutText')}</p>
+</div>
+<div class="form-group">
+  <div class="form-row">
+    <span class="form-label">{t('settings.logs')}<small>{t('settings.logsHint')}</small></span>
+    <button type="button" class="secondary" onclick={() => void logsReveal().catch((error: unknown) => notify(errorText(error), 'error'))}>{t('action.help.logs')}</button>
+  </div>
 </div>
 <p class="form-note">{t('settings.aboutLicenses')}</p>
 

@@ -31,7 +31,7 @@
   import { isActionId, nativeMenuLabels, nativeMenus } from './lib/menu';
   import { terminals } from './lib/terminal/registry';
   import { workspace, type PaneTarget } from './lib/workspace/workspace.svelte';
-  import { menuSet, onHostKeyPrompt, onMenuAction, workspaceLoad, workspaceSave, type CredentialKind, type HostEntry, type HostKeyPrompt } from './lib/ipc';
+  import { logsReveal, menuSet, onHostKeyPrompt, onMenuAction, workspaceLoad, workspaceSave, type CredentialKind, type HostEntry, type HostKeyPrompt } from './lib/ipc';
   import { parseSnapshot } from './lib/workspace/snapshot';
   import { errorText, t } from './lib/i18n';
   import type { PaneId } from './lib/layout/layout';
@@ -158,6 +158,15 @@
   function openSettings(section?: SettingsSection): void {
     settingsSection = section;
     settingsOpen = true;
+  }
+
+  /** Opens the folder of the log files, to send them along with a problem. */
+  async function openLogs(): Promise<void> {
+    try {
+      await logsReveal();
+    } catch (error) {
+      notify(errorText(error), 'error');
+    }
   }
 
   async function importSshConfig(): Promise<void> {
@@ -296,6 +305,9 @@
       case 'help.shortcuts':
         settingsSection = 'shortcuts';
         settingsOpen = true;
+        break;
+      case 'help.logs':
+        void openLogs();
         break;
       case 'help.about':
         settingsSection = 'about';

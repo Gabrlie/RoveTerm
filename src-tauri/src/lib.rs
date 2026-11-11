@@ -3,7 +3,9 @@
 mod commands;
 mod connect;
 mod error;
+mod logs;
 mod profile;
+mod reveal;
 mod sink;
 mod state;
 
@@ -33,6 +35,11 @@ fn data_dir(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
 
 fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = data_dir(app)?;
+    // Without log files the app still runs; the terminal keeps the log.
+    if let Err(error) = logs::start_files(&data_dir) {
+        tracing::warn!(%error, "log files unavailable");
+    }
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting");
     let user_file = app.path().app_config_dir()?.join("roveterm.toml");
     let profile = profile::load(&data_dir, &user_file)?;
     let ctx = Context::new();
@@ -145,11 +152,7 @@ pub fn mcp_bridge() -> i32 {
 /// Starts the Tauri application. Shared by the desktop binary and the mobile entry point.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+    logs::init();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -177,6 +180,8 @@ pub fn run() {
             commands::sftp::transfer_cancel,
             commands::sftp::transfer_clear,
             commands::sftp::transfer_reveal,
+            commands::app::log_write,
+            commands::app::logs_reveal,
             commands::forward::forward_list,
             commands::forward::forward_create,
             commands::forward::forward_update,

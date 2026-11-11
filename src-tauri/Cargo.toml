@@ -33,6 +33,7 @@ tokio = { workspace = true, features = ["rt", "sync"] }
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tracing-appender.workspace = true
 zeroize = "1"
 tauri-plugin-clipboard-manager = "2.5.0"
 

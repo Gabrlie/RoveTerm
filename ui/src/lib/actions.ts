@@ -30,6 +30,7 @@ export type ActionId =
   | 'host.import'
   | 'help.shortcuts'
   | 'help.about'
+  | 'help.logs'
   | `tab.goto${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
 
 export interface Action {
@@ -73,6 +74,7 @@ export const actions: Action[] = [
   { id: 'host.import', label: 'action.host.import', keys: [] },
   { id: 'help.shortcuts', label: 'action.help.shortcuts', keys: [] },
   { id: 'help.about', label: 'action.help.about', keys: [] },
+  { id: 'help.logs', label: 'action.help.logs', keys: [] },
   ...([1, 2, 3, 4, 5, 6, 7, 8, 9] as const).map(
     (n): Action => ({ id: `tab.goto${n}`, label: 'action.tab.goto', keys: [`App+${n}`], hidden: true }),
   ),
