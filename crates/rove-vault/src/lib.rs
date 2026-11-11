@@ -36,7 +36,7 @@ pub use model::{
 pub use prefs::{
     Accent, AgentAuth, AgentPrefs, AgentsPrefs, AiMode, AiPrefs, AppearancePrefs, Bell,
     ConflictChoice, ConnectionPrefs, CursorStyle, CustomAgent, DevicePrefs, FilePrefs, Language,
-    Preferences, ProviderFormat, ProviderPrefs, ReasoningEffort, ReviewerKind, RightClick, StatusPrefs,
+    Preferences, ProviderFormat, ProviderPrefs, ReasoningEffort, ReviewModel, ReviewerKind, RightClick, StatusPrefs,
     TerminalPrefs, Theme,
 };
 pub use snippets::{Snippet, SnippetDraft, SnippetId};

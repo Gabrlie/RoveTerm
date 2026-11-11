@@ -17,7 +17,10 @@ pub enum Mode {
     AskByRisk,
     /// Everything is asked about.
     AskAll,
-    /// Everything runs and is recorded, except dangerous operations, which are still asked about.
+    /// Read-only operations run; modifications go to the session's judge first and run when it
+    /// allows them (asked about when it is unsure, or when there is none); dangerous operations
+    /// are always asked about. The policy itself asks: the judge is the session's
+    /// ([`crate::session::AiSession::set_reviewer`]).
     Auto,
 }
 
@@ -219,10 +222,9 @@ impl Policy {
             .as_ref()
             .is_some_and(|grants| grants.iter().all(|grant| self.granted.contains(grant)));
         match self.mode {
-            Mode::Auto => Decision::Allow,
             _ if granted => Decision::Allow,
-            Mode::AskByRisk if assessment.risk == Risk::ReadOnly => Decision::Allow,
-            Mode::AskByRisk | Mode::AskAll => ask,
+            Mode::AskByRisk | Mode::Auto if assessment.risk == Risk::ReadOnly => Decision::Allow,
+            Mode::AskByRisk | Mode::AskAll | Mode::Auto => ask,
         }
     }
 
@@ -278,8 +280,10 @@ mod tests {
         let all = Policy::new(Mode::AskAll, Rules::default());
         assert_eq!(decide(&all, &ls), ASK);
         assert_eq!(decide(&all, &restart), ASK);
+        // In auto mode the session's judge answers what the policy asks.
         let auto = Policy::new(Mode::Auto, Rules::default());
-        assert_eq!(decide(&auto, &restart), Decision::Allow);
+        assert_eq!(decide(&auto, &ls), Decision::Allow);
+        assert_eq!(decide(&auto, &restart), ASK);
         assert_eq!(decide(&auto, &wipe), ASK_ONCE);
     }
 

@@ -293,17 +293,36 @@ async fn acp_launch(
 /// Vault key of the Jev reviewer.
 const JEV_KEY: &str = "review:jev";
 
-/// The reviewer of the review mode as the preferences choose it, with its confidence threshold:
-/// the session's model (for local agents, the default provider's), or Jev with its key. `None`
-/// when it is off or cannot work (no provider, no key), so the user is asked as before.
+/// The judge of the auto mode as the preferences choose it, with its confidence threshold: the
+/// session's model (for local agents, the default provider's), a chosen provider's model, or Jev
+/// with its key. `None` when it cannot work (no provider, no key): the user is asked instead.
 fn reviewer_for(
     state: &AppState,
     prefs: &rove_vault::Preferences,
     agent: &AgentRef,
 ) -> Option<(Arc<dyn rove_ai::review::Reviewer>, f64)> {
     let threshold = f64::from(prefs.ai.review_confidence) / 100.0;
+    // A judge on `provider`'s model `model` (its default when `None`).
+    let on_model = |provider: &ProviderPrefs, model: Option<&str>| {
+        let key = state
+            .vault
+            .ai_key(&format!("builtin:{}", provider.id))
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let mut endpoint = endpoint(provider);
+        if let Some(model) = model {
+            model.clone_into(&mut endpoint.model);
+        }
+        Client::new(endpoint, &key, rove_ai::review::TIMEOUT)
+            .map_err(|error| tracing::warn!(%error, "the model judge is unavailable"))
+            .ok()
+            .map(|client| {
+                Arc::new(rove_ai::review::ModelReviewer::new(client))
+                    as Arc<dyn rove_ai::review::Reviewer>
+            })
+    };
     let reviewer: Arc<dyn rove_ai::review::Reviewer> = match prefs.ai.reviewer {
-        rove_vault::ReviewerKind::Off => return None,
         rove_vault::ReviewerKind::Model => {
             let wanted = match agent {
                 AgentRef::Builtin(id) => Some(id.clone()),
@@ -314,22 +333,34 @@ fn reviewer_for(
                     .and_then(|agent| agent.strip_prefix("builtin:"))
                     .map(str::to_owned),
             };
-            let provider = prefs
+            let Some(provider) = prefs
                 .ai
                 .providers
                 .iter()
                 .find(|provider| Some(&provider.id) == wanted.as_ref())
-                .or_else(|| prefs.ai.providers.first())?;
-            let key = state
-                .vault
-                .ai_key(&format!("builtin:{}", provider.id))
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            let client = Client::new(endpoint(provider), &key, rove_ai::review::TIMEOUT)
-                .map_err(|error| tracing::warn!(%error, "the model reviewer is unavailable"))
-                .ok()?;
-            Arc::new(rove_ai::review::ModelReviewer::new(client))
+                .or_else(|| prefs.ai.providers.first())
+            else {
+                tracing::warn!(
+                    "no model provider for the auto mode's judge; the user is asked instead"
+                );
+                return None;
+            };
+            on_model(provider, None)?
+        }
+        rove_vault::ReviewerKind::Chosen => {
+            let chosen = prefs.ai.review_model.as_ref()?;
+            let Some(provider) = prefs
+                .ai
+                .providers
+                .iter()
+                .find(|provider| provider.id == chosen.provider)
+            else {
+                tracing::warn!(
+                    "the auto mode's judge names a removed provider; the user is asked instead"
+                );
+                return None;
+            };
+            on_model(provider, Some(&chosen.model))?
         }
         rove_vault::ReviewerKind::Jev => {
             let Some(key) = state.vault.ai_key(JEV_KEY).ok().flatten() else {

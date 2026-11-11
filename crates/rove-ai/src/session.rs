@@ -132,7 +132,7 @@ pub struct AiSession {
     /// The agent is replaying an earlier conversation (`session/load`): RoveTerm shows that
     /// conversation from its own journal, so the replay is not reported again.
     replaying: std::sync::atomic::AtomicBool,
-    /// In the review mode, looks at ordinary modifications first; allows them at or above the
+    /// In the auto mode, looks at ordinary modifications first; allows them at or above the
     /// confidence threshold.
     reviewer: std::sync::RwLock<Option<(Arc<dyn crate::review::Reviewer>, f64)>>,
 }
@@ -280,7 +280,7 @@ impl AiSession {
         }
     }
 
-    /// Lets `reviewer` allow ordinary modifications in the review mode when it is at least
+    /// Lets `reviewer` allow ordinary modifications in the auto mode when it is at least
     /// `threshold` (0–1) sure; `None` asks the user about all of them.
     pub fn set_reviewer(&self, reviewer: Option<(Arc<dyn crate::review::Reviewer>, f64)>) {
         if let Ok(mut slot) = self.reviewer.write() {
@@ -289,7 +289,7 @@ impl AiSession {
     }
 
     /// The reviewer's word on an operation the policy would ask about, when one applies: only in
-    /// the review mode, for ordinary modifications the agent showed in full (not dangerous, not
+    /// the auto mode, for ordinary modifications the agent showed in full (not dangerous, not
     /// opaque, not its own tools). `None` when no reviewer applies or it failed.
     async fn review(
         &self,
@@ -300,7 +300,7 @@ impl AiSession {
         if agent_tool
             || assessment.opaque
             || assessment.risk != risk::Risk::Modify
-            || self.policy.lock().await.mode() != Mode::AskByRisk
+            || self.policy.lock().await.mode() != Mode::Auto
         {
             return None;
         }

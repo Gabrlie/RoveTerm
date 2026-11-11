@@ -55,11 +55,26 @@
     { value: 'responses', label: t('ai.format.responses') },
     { value: 'anthropic', label: t('ai.format.anthropic') },
   ];
-  const REVIEWERS: { value: 'off' | 'model' | 'jev'; label: string }[] = [
-    { value: 'off', label: t('ai.reviewer.off') },
+  const REVIEWERS: { value: 'model' | 'chosen' | 'jev'; label: string }[] = [
     { value: 'model', label: t('ai.reviewer.model') },
+    { value: 'chosen', label: t('ai.reviewer.chosen') },
     { value: 'jev', label: t('ai.reviewer.jev') },
   ];
+  /** Every model of the providers, as `provider id` + `model`, for the chosen judge. */
+  const JUDGE_MODELS = $derived(
+    providers.flatMap((provider) => [provider.model, ...provider.models].map((model) => ({ value: `${provider.id}\n${model}`, label: `${provider.name} · ${model}` }))),
+  );
+
+  /** Picks the judge kind; the chosen one starts on the first model offered. */
+  function setReviewer(value: 'model' | 'chosen' | 'jev'): void {
+    void editPrefs((draft) => {
+      draft.ai.reviewer = value;
+      if (value === 'chosen' && !draft.ai.review_model) {
+        const first = draft.ai.providers[0];
+        draft.ai.review_model = first ? { provider: first.id, model: first.model } : null;
+      }
+    });
+  }
   const CONFIDENCES = [60, 70, 80, 90, 95];
   let jevKey = $state('');
 
@@ -495,14 +510,18 @@
 <div class="form-group">
   <div class="form-row">
     <span class="form-label">{t('ai.reviewerLabel')}<small>{t('ai.reviewerHint')}</small></span>
-    <div class="control"><Select label={t('ai.reviewerLabel')} value={rules.reviewer} options={REVIEWERS} onchange={(value) => void editPrefs((draft) => (draft.ai.reviewer = value))} /></div>
+    <div class="control"><Select label={t('ai.reviewerLabel')} value={rules.reviewer} options={REVIEWERS} onchange={setReviewer} /></div>
   </div>
-  {#if rules.reviewer !== 'off'}
+  {#if rules.reviewer === 'chosen'}
     <div class="form-row">
-      <span class="form-label">{t('ai.reviewConfidence')}<small>{t('ai.reviewConfidenceHint')}</small></span>
-      <div class="control"><Select label={t('ai.reviewConfidence')} value={String(rules.review_confidence)} options={[...new Set([...CONFIDENCES, rules.review_confidence])].sort((a, b) => a - b).map((n) => ({ value: String(n), label: `${n}%` }))} onchange={(value) => void editPrefs((draft) => (draft.ai.review_confidence = Number(value)))} /></div>
+      <span class="form-label">{t('ai.reviewModel')}<small>{t('ai.reviewModelHint')}</small></span>
+      <div class="control"><Select label={t('ai.reviewModel')} value={rules.review_model ? `${rules.review_model.provider}\n${rules.review_model.model}` : ''} options={JUDGE_MODELS} onchange={(value) => void editPrefs((draft) => { const [provider = '', model = ''] = value.split('\n'); draft.ai.review_model = { provider, model }; })} /></div>
     </div>
   {/if}
+  <div class="form-row">
+    <span class="form-label">{t('ai.reviewConfidence')}<small>{t('ai.reviewConfidenceHint')}</small></span>
+    <div class="control"><Select label={t('ai.reviewConfidence')} value={String(rules.review_confidence)} options={[...new Set([...CONFIDENCES, rules.review_confidence])].sort((a, b) => a - b).map((n) => ({ value: String(n), label: `${n}%` }))} onchange={(value) => void editPrefs((draft) => (draft.ai.review_confidence = Number(value)))} /></div>
+  </div>
   {#if rules.reviewer === 'jev'}
     <div class="form-row">
       <span class="form-label">{t('ai.jevKey')}<small>{ai.agents?.jev_key ? t('ai.keyStored') : t('ai.jevKeyHint')}</small></span>

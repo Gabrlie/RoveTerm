@@ -1,6 +1,6 @@
-//! A second opinion before asking the user: in the review mode, an ordinary modification (not a
-//! dangerous or an opaque one) is first shown to a reviewer, and runs when the reviewer allows it
-//! with enough confidence; otherwise the user is asked as before. The reviewer sees what the
+//! The judge of the auto mode: an ordinary modification (not a dangerous or an opaque one) is
+//! first shown to a reviewer, and runs when the reviewer allows it with enough confidence;
+//! otherwise the user is asked. (In the review mode the user decides every modification.) The reviewer sees what the
 //! operation does and why it was flagged, never file contents beyond the change or credentials.
 
 use std::time::Duration;

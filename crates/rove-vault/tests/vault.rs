@@ -1132,3 +1132,36 @@ fn assistant_limits_are_checked() {
         serde_json::from_value(serde_json::json!({ "ai": { "mode": "auto" } })).unwrap();
     assert_eq!(old.ai.request_timeout_secs, 180);
 }
+
+#[test]
+fn the_auto_judge_reads_old_records_and_checks_its_model() {
+    let old: Preferences =
+        serde_json::from_value(serde_json::json!({ "ai": { "reviewer": "off" } })).unwrap();
+    assert_eq!(old.ai.reviewer, rove_vault::ReviewerKind::Model);
+    let vault = unlocked();
+    let mut prefs = Preferences::default();
+    prefs.ai.providers.push(rove_vault::ProviderPrefs {
+        id: "p".into(),
+        name: "P".into(),
+        format: rove_vault::ProviderFormat::Chat,
+        base_url: "https://x/v1".into(),
+        model: "big".into(),
+        models: vec!["small".into()],
+        max_tokens: None,
+        contexts: Default::default(),
+        context_window: None,
+        effort: rove_vault::ReasoningEffort::Medium,
+    });
+    prefs.ai.reviewer = rove_vault::ReviewerKind::Chosen;
+    assert!(vault.set_preferences(prefs.clone()).is_err());
+    prefs.ai.review_model = Some(rove_vault::ReviewModel {
+        provider: "p".into(),
+        model: "small".into(),
+    });
+    assert!(vault.set_preferences(prefs.clone()).is_ok());
+    prefs.ai.review_model = Some(rove_vault::ReviewModel {
+        provider: "p".into(),
+        model: "other".into(),
+    });
+    assert!(vault.set_preferences(prefs).is_err());
+}

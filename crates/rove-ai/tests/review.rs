@@ -1,13 +1,13 @@
-//! The reviewer in the review mode: what it is shown, and when its word replaces the user's.
+//! The judge of the auto mode: what it is shown, and when its word replaces the user's.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
-use rove_ai::Answer;
 use rove_ai::host::LocalHost;
 use rove_ai::review::{ReviewRequest, Reviewer, Verdict};
 use rove_ai::session::{AiEvent, AiSession, SessionSettings};
+use rove_ai::{Answer, Mode};
 use tokio::sync::mpsc;
 
 /// Allows everything with a fixed confidence, counting what it is shown.
@@ -31,13 +31,16 @@ impl Reviewer for Agreeable {
     }
 }
 
-/// A session in the review mode whose asked approvals are denied; returns it, how many
-/// approvals were asked, and the reviewer's count.
-fn session(confidence: f64) -> (Arc<AiSession>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+/// A session in `mode` whose asked approvals are denied; returns it, how many approvals were
+/// asked, and the reviewer's count.
+fn session_in(mode: Mode, confidence: f64) -> (Arc<AiSession>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
     let (events, mut received) = mpsc::unbounded_channel::<AiEvent>();
     let session = Arc::new(AiSession::new(
         Arc::new(LocalHost),
-        SessionSettings::default(),
+        SessionSettings {
+            mode,
+            ..SessionSettings::default()
+        },
         Arc::new(move |event| {
             let _ = events.send(event);
         }),
@@ -64,6 +67,10 @@ fn session(confidence: f64) -> (Arc<AiSession>, Arc<AtomicUsize>, Arc<AtomicUsiz
         }
     });
     (session, asked, seen)
+}
+
+fn session(confidence: f64) -> (Arc<AiSession>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+    session_in(Mode::Auto, confidence)
 }
 
 #[tokio::test]
@@ -160,5 +167,22 @@ async fn jev_is_asked_a_choice_and_its_confidence_is_kept() {
             .as_str()
             .unwrap()
             .contains("systemctl restart nginx")
+    );
+}
+
+#[tokio::test]
+async fn the_review_mode_leaves_every_change_to_the_user() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.conf");
+    let (session, asked, seen) = session_in(Mode::AskByRisk, 0.99);
+    assert!(
+        session
+            .write_file(path.to_str().unwrap(), "x")
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        (asked.load(Ordering::SeqCst), seen.load(Ordering::SeqCst)),
+        (1, 0)
     );
 }

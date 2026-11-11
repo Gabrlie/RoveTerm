@@ -294,8 +294,10 @@ export interface AiPrefs {
   max_steps: number;
   /** How long the built-in assistant waits for a reply, 30–1800 seconds. */
   request_timeout_secs: number;
-  /** Who looks at ordinary modifications in the review mode before the user is asked. */
-  reviewer: 'off' | 'model' | 'jev';
+  /** The judge of the auto mode: the conversation's model, a chosen one, or Jev. */
+  reviewer: 'model' | 'chosen' | 'jev';
+  /** The `chosen` judge's model, by provider id. */
+  review_model: { provider: string; model: string } | null;
   /** How sure the reviewer must be, in percent (50–99). */
   review_confidence: number;
 }

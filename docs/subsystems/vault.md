@@ -92,7 +92,8 @@ pub trait KeyCache: Send + Sync {
 | `ai.mode` | `ask_by_risk` | `ask_by_risk` / `ask_all` / `auto`，新 AI 会话的默认审批模式 |
 | `ai.max_steps` | 40 | 1–200，内置助手一个回合内最多的模型请求次数 |
 | `ai.request_timeout_secs` | 180 | 30–1800，内置助手等待回复开始及两段之间的最长时间 |
-| `ai.reviewer` | `off` | `off` / `model` / `jev`，审阅模式下普通修改的审阅者 |
+| `ai.reviewer` | `model` | `model` / `chosen` / `jev`，自动模式下普通修改的判断者；旧值 `off` 读作 `model` |
+| `ai.review_model` | 空 | `chosen` 判断者所用的 `{provider, model}`，须为已添加服务商的模型，选 `chosen` 时必填 |
 | `ai.review_confidence` | 80 | 50–99（百分比），审阅者放行所需的置信度 |
 | `ai.read_only` / `ai.dangerous` | 空 | 去除首尾空白并丢弃空项，每类最多 200 项、每项最多 100 个字符、不含控制字符；只读项只能是程序名（字母、数字、`-_.+`） |
 | `ai.providers` | 空 | 内置助手的模型服务商，最多 20 个：id 为 1–40 个小写字母、数字或 `-` 且不重复；名称 1–60 个字符；格式 `chat` / `responses` / `anthropic`；地址去除首尾空白与末尾 `/`，须为 http(s)、不含凭据和查询，最多 500 字节；模型 1–200 字节（新对话的默认模型）；`models` 为对话中可切换的其他模型，最多 32 个，去除首尾空白、空项、重复项和与默认相同的项；`max_tokens` 为空或 1–1000000；`contexts` 为各模型的上下文窗口（来自模型列表，只保留该服务商的模型），`context_window` 为列表未给出时的窗口，均为 1000–100000000 token；`effort` 为 `minimal` / `low` / `medium` / `high` / `xhigh` / `max`，默认 `medium`，旧版本留空的读作 `medium`。随用户同步，不含 key |
