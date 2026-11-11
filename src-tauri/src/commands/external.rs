@@ -135,6 +135,59 @@ pub async fn restore(app: &AppHandle) {
     }
 }
 
+/// The saved host named `wanted` (its id, or its name ignoring case).
+pub(crate) fn find_host(state: &AppState, wanted: &str) -> Result<rove_vault::Host, (i64, String)> {
+    let hosts = state
+        .vault
+        .list_hosts()
+        .map_err(|error| (-32603, error.to_string()))?;
+    let wanted = wanted.trim();
+    if let Some(host) = hosts.iter().find(|host| host.id.to_string() == wanted) {
+        return Ok(host.clone());
+    }
+    let named: Vec<&rove_vault::Host> = hosts
+        .iter()
+        .filter(|host| host.name.eq_ignore_ascii_case(wanted))
+        .collect();
+    match named.as_slice() {
+        [host] => Ok((*host).clone()),
+        [] => Err((
+            -32602,
+            format!("no saved host is named {wanted:?}; list_hosts shows them"),
+        )),
+        _ => Err((
+            -32602,
+            format!("several hosts are named {wanted:?}; give the id from list_hosts"),
+        )),
+    }
+}
+
+/// The saved hosts as an agent sees them: id, name, group, tags, address and system, never
+/// credentials.
+pub(crate) fn list_hosts(state: &AppState) -> Result<ToolResult, (i64, String)> {
+    let hosts = state
+        .vault
+        .list_hosts()
+        .map_err(|error| (-32603, error.to_string()))?;
+    let listed: Vec<Value> = hosts
+        .iter()
+        .map(|host| {
+            json!({
+                "id": host.id.to_string(),
+                "name": host.name,
+                "group": host.group,
+                "tags": host.tags,
+                "address": format!("{}@{}:{}", host.username, host.hostname, host.port),
+                "system": host.os.as_ref().and_then(|os| serde_json::to_value(os).ok()),
+            })
+        })
+        .collect();
+    Ok(ToolResult {
+        text: serde_json::to_string_pretty(&listed).unwrap_or_default(),
+        is_error: false,
+    })
+}
+
 /// The tools of one outside agent's connection.
 struct HostTools {
     app: AppHandle,
@@ -151,32 +204,8 @@ impl HostTools {
             .unwrap_or_default()
     }
 
-    /// The saved host named `wanted` (its id, or its name ignoring case).
     fn host(&self, wanted: &str) -> Result<rove_vault::Host, (i64, String)> {
-        let state = self.app.state::<AppState>();
-        let hosts = state
-            .vault
-            .list_hosts()
-            .map_err(|error| (-32603, error.to_string()))?;
-        let wanted = wanted.trim();
-        if let Some(host) = hosts.iter().find(|host| host.id.to_string() == wanted) {
-            return Ok(host.clone());
-        }
-        let named: Vec<&rove_vault::Host> = hosts
-            .iter()
-            .filter(|host| host.name.eq_ignore_ascii_case(wanted))
-            .collect();
-        match named.as_slice() {
-            [host] => Ok((*host).clone()),
-            [] => Err((
-                -32602,
-                format!("no saved host is named {wanted:?}; list_hosts shows them"),
-            )),
-            _ => Err((
-                -32602,
-                format!("several hosts are named {wanted:?}; give the id from list_hosts"),
-            )),
-        }
+        find_host(&self.app.state::<AppState>(), wanted)
     }
 
     async fn session(&self, host: HostId) -> Result<Arc<AiSession>, (i64, String)> {
@@ -194,28 +223,7 @@ impl HostTools {
     }
 
     fn list_hosts(&self) -> Result<ToolResult, (i64, String)> {
-        let state = self.app.state::<AppState>();
-        let hosts = state
-            .vault
-            .list_hosts()
-            .map_err(|error| (-32603, error.to_string()))?;
-        let listed: Vec<Value> = hosts
-            .iter()
-            .map(|host| {
-                json!({
-                    "id": host.id.to_string(),
-                    "name": host.name,
-                    "group": host.group,
-                    "tags": host.tags,
-                    "address": format!("{}@{}:{}", host.username, host.hostname, host.port),
-                    "system": host.os.as_ref().and_then(|os| serde_json::to_value(os).ok()),
-                })
-            })
-            .collect();
-        Ok(ToolResult {
-            text: serde_json::to_string_pretty(&listed).unwrap_or_default(),
-            is_error: false,
-        })
+        list_hosts(&self.app.state::<AppState>())
     }
 }
 

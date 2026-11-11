@@ -23,7 +23,7 @@ use rove_session::{SessionId, SessionManager};
 use rove_ssh::{SshConnection, SshConnector, SshTarget};
 use rove_vault::{AgentAuth, AiMode, ProviderFormat, ProviderPrefs, ReasoningEffort};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use zeroize::Zeroizing;
 
 use crate::connect::{host_target, quick_target};
@@ -144,8 +144,14 @@ fn agent_ref(text: &str) -> Result<AgentRef, CommandError> {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AiContext {
     Local,
-    Host { host_id: String },
-    Quick { address: String },
+    Host {
+        host_id: String,
+    },
+    Quick {
+        address: String,
+    },
+    /// All saved hosts: the fleet lead, which hands work to a sub-agent per host.
+    Fleet,
 }
 
 /// An agent the user can talk to, as the panel lists it.
@@ -672,6 +678,17 @@ fn host_of(
                 state.ai.workspace.clone(),
             )
         }
+        // The fleet lead works through sub-agents, never on a host itself.
+        AiContext::Fleet => (
+            Arc::new(LocalHost) as Arc<dyn Host>,
+            HostMeta {
+                name: "all saved hosts".into(),
+                address: "fleet".into(),
+                system: None,
+                notes: None,
+            },
+            state.ai.workspace.clone(),
+        ),
         AiContext::Quick { address } => {
             let target = quick_target(address)?;
             let label = target.address();
@@ -805,10 +822,25 @@ pub async fn ai_start(
             let client = Client::new(endpoint(provider), &key, idle)
                 .map_err(|error| CommandError::new("ai.model", error.to_string()))?
                 .with_cache_key(&id);
-            let assistant = Assistant::new(client, session, &meta)
-                .with_models(&provider.models)
-                .with_max_steps(prefs.ai.max_steps as usize)
-                .with_contexts(provider.contexts.clone(), provider.context_window);
+            let assistant = if matches!(context, AiContext::Fleet) {
+                let tools = crate::commands::fleet::FleetTools::new(
+                    app.clone(),
+                    id.clone(),
+                    provider.clone(),
+                    session.clone(),
+                );
+                Assistant::with_toolbox(
+                    client,
+                    session,
+                    crate::commands::fleet::PROMPT.to_owned(),
+                    Arc::new(tools),
+                )
+            } else {
+                Assistant::new(client, session, &meta)
+            }
+            .with_models(&provider.models)
+            .with_max_steps(prefs.ai.max_steps as usize)
+            .with_contexts(provider.contexts.clone(), provider.context_window);
             if let Some((_, _, records, _)) = &earlier {
                 let records: Vec<(String, serde_json::Value)> = records
                     .iter()
@@ -827,6 +859,12 @@ pub async fn ai_start(
                 resumed: earlier.is_some(),
             };
             (Arc::new(assistant) as Arc<dyn AgentBackend>, None, started)
+        }
+        AgentRef::Acp(_) if matches!(context, AiContext::Fleet) => {
+            return Err(CommandError::new(
+                "input.invalid",
+                "the fleet lead is RoveTerm's own assistant",
+            ));
         }
         AgentRef::Acp(agent_id) => {
             let (found, extra, auth_methods) = acp_launch(state.inner(), &agent_id).await?;
@@ -903,6 +941,7 @@ pub async fn ai_start(
         context: serde_json::to_value(&context).ok(),
         agent_session,
         resumed: earlier.is_some(),
+        parent: None,
     });
     state.ai.entries.lock().await.insert(
         id,
@@ -1015,6 +1054,7 @@ pub(crate) async fn start_external(
         context: serde_json::to_value(&context).ok(),
         agent_session: None,
         resumed: false,
+        parent: None,
     });
     state.ai.entries.lock().await.insert(
         id.clone(),
@@ -1032,6 +1072,169 @@ pub(crate) async fn start_external(
         tracing::warn!(%error, "announcing an outside agent's conversation failed");
     }
     Ok((id, session))
+}
+
+/// A sub-agent of the fleet lead started on a host (`{parent, id, host, task}`) or ended (`{id,
+/// ended: true}`).
+pub const AI_SUBTASK_EVENT: &str = "ai-subtask";
+
+/// Starts a sub-agent for fleet lead `parent` on saved host `host_id`: RoveTerm's assistant with
+/// `provider`, the host's tools and notes, the user's approval rules and judge, recorded as its
+/// own conversation (with `parent`) and announced to the UI. Returns its id and assistant.
+async fn start_subagent(
+    app: &AppHandle,
+    state: &AppState,
+    parent: &str,
+    host_id: rove_vault::HostId,
+    provider: &ProviderPrefs,
+    task: &str,
+) -> Result<(String, Arc<Assistant>), CommandError> {
+    let prefs = state.vault.preferences()?;
+    let context = AiContext::Host {
+        host_id: host_id.to_string(),
+    };
+    let (host, meta, _cwd) = host_of(state, &context)?;
+    let id = format!("ai-{}", uuid::Uuid::now_v7());
+    let auditor = Arc::new(Auditor::new(
+        {
+            let recorder = state.ai.recorder.clone();
+            Arc::new(move |record| recorder.record(record))
+        },
+        id.clone(),
+        host.label(),
+    ));
+    let sink = {
+        let app = app.clone();
+        let auditor = auditor.clone();
+        let id = id.clone();
+        Arc::new(move |event: AiEvent| {
+            auditor.event(&event);
+            if let Err(error) = app.emit(AI_EVENT, serde_json::json!({ "id": id, "event": event }))
+            {
+                tracing::warn!(%error, "emitting an AI event failed");
+            }
+        })
+    };
+    let settings = SessionSettings {
+        mode: mode(prefs.ai.mode),
+        rules: Rules {
+            read_only: prefs.ai.read_only.clone(),
+            dangerous: prefs.ai.dangerous.clone(),
+        },
+        ..SessionSettings::default()
+    };
+    let session = Arc::new(AiSession::new(host.clone(), settings, sink));
+    attach_notes(state, &session, &context);
+    let agent_ref = AgentRef::Builtin(provider.id.clone());
+    session.set_reviewer(reviewer_for(state, &prefs, &agent_ref));
+    let key = state
+        .vault
+        .ai_key(&format!("builtin:{}", provider.id))?
+        .unwrap_or_default();
+    let idle = Duration::from_secs(u64::from(prefs.ai.request_timeout_secs));
+    let client = Client::new(endpoint(provider), &key, idle)
+        .map_err(|error| CommandError::new("ai.model", error.to_string()))?
+        .with_cache_key(&id);
+    let assistant = Arc::new(
+        Assistant::new(client, session, &meta)
+            .with_models(&provider.models)
+            .with_max_steps(prefs.ai.max_steps as usize)
+            .with_contexts(provider.contexts.clone(), provider.context_window),
+    );
+    let mode_value = serde_json::to_value(prefs.ai.mode)
+        .ok()
+        .and_then(|mode| mode.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    auditor.started(&SessionInfo {
+        agent: Some(provider.name.clone()),
+        agent_version: Some(provider.model.clone()),
+        mode: mode_value,
+        agent_ref: Some(format!("builtin:{}", provider.id)),
+        context: serde_json::to_value(&context).ok(),
+        agent_session: None,
+        resumed: false,
+        parent: Some(parent.to_owned()),
+    });
+    state.ai.entries.lock().await.insert(
+        id.clone(),
+        Arc::new(Entry {
+            backend: assistant.clone(),
+            auditor,
+            mcp: None,
+        }),
+    );
+    if let Err(error) = app.emit(
+        AI_SUBTASK_EVENT,
+        serde_json::json!({ "parent": parent, "id": id, "host": host.label(), "task": task }),
+    ) {
+        tracing::warn!(%error, "announcing a sub-agent failed");
+    }
+    Ok((id, assistant))
+}
+
+/// Ends a sub-agent when its run is dropped (the lead's turn was cancelled) as well as when it
+/// finishes.
+struct EndSubagent {
+    app: AppHandle,
+    id: String,
+}
+
+impl Drop for EndSubagent {
+    fn drop(&mut self) {
+        let app = self.app.clone();
+        let id = std::mem::take(&mut self.id);
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            end_subagent(&app, &state, &id).await;
+        });
+    }
+}
+
+/// Runs `task` with a sub-agent of fleet lead `parent` on host `host_id` to the end of its turn
+/// and ends it; returns its last reply, or why it failed.
+pub(crate) async fn run_subagent(
+    app: &AppHandle,
+    parent: &str,
+    host_id: rove_vault::HostId,
+    provider: &ProviderPrefs,
+    task: &str,
+) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let (id, assistant) = start_subagent(app, &state, parent, host_id, provider, task)
+        .await
+        .map_err(|error| error.message)?;
+    let _end = EndSubagent {
+        app: app.clone(),
+        id: id.clone(),
+    };
+    let entry = state.ai.get(&id).await.map_err(|error| error.message)?;
+    entry.auditor.prompt(task);
+    let result = assistant.prompt(task).await;
+    let stop = match &result {
+        Ok(reason) => reason.clone(),
+        Err(error) => format!("error: {error}"),
+    };
+    entry.auditor.turn_ended(&stop);
+    let reply = assistant.last_reply().await;
+    match result {
+        Ok(_) if reply.trim().is_empty() => Ok(format!("(no reply; the turn ended with {stop})")),
+        Ok(_) => Ok(reply),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Ends sub-agent `id` (its task is done, failed or was cancelled).
+pub(crate) async fn end_subagent(app: &AppHandle, state: &AppState, id: &str) {
+    let entry = state.ai.entries.lock().await.remove(id);
+    if let Some(entry) = entry {
+        stop(&entry).await;
+    }
+    if let Err(error) = app.emit(
+        AI_SUBTASK_EVENT,
+        serde_json::json!({ "id": id, "ended": true }),
+    ) {
+        tracing::warn!(%error, "announcing the end of a sub-agent failed");
+    }
 }
 
 /// Ends conversation `id` of an agent the user runs (its connection closed).
@@ -1290,6 +1493,14 @@ pub async fn ai_sessions(
         .into_iter()
         .filter_map(|record| {
             let id = record.session_id?;
+            // Sub-agents show inside their lead's conversation.
+            if record
+                .payload
+                .get("parent")
+                .is_some_and(|parent| !parent.is_null())
+            {
+                return None;
+            }
             if !seen.insert(id.clone()) {
                 return None;
             }

@@ -12,7 +12,9 @@ export type PaneTarget =
   | { kind: 'local' }
   | { kind: 'ssh'; hostId: HostId; title: string }
   | { kind: 'quick'; address: string }
-  | { kind: 'sftp'; source: RemoteSource; title: string };
+  | { kind: 'sftp'; source: RemoteSource; title: string }
+  /** The fleet lead's conversation on all saved hosts. */
+  | { kind: 'fleet' };
 
 export interface PaneState {
   id: PaneId;
@@ -59,6 +61,8 @@ function initialTitle(target: PaneTarget): string {
       return target.address;
     case 'sftp':
       return target.title;
+    case 'fleet':
+      return 'Fleet lead';
   }
 }
 
@@ -69,10 +73,12 @@ export function hostOf(target: PaneTarget): HostId | null {
   return null;
 }
 
+
 /** The SFTP target for the same remote as `target`, or null for local terminals. */
 export function filesTargetFor(target: PaneTarget): PaneTarget | null {
   switch (target.kind) {
     case 'local':
+    case 'fleet':
       return null;
     case 'ssh':
       return { kind: 'sftp', source: { hostId: target.hostId }, title: target.title };
@@ -87,6 +93,7 @@ export function filesTargetFor(target: PaneTarget): PaneTarget | null {
 export function remoteSourceOf(target: PaneTarget): RemoteSource | null {
   switch (target.kind) {
     case 'local':
+    case 'fleet':
       return null;
     case 'ssh':
       return { hostId: target.hostId };
@@ -146,6 +153,18 @@ class Workspace {
     const index = group.active ? group.tabs.indexOf(group.active) + 1 : group.tabs.length;
     group.tabs.splice(index, 0, paneId);
     group.active = paneId;
+  }
+
+  /** Shows the fleet lead's tab, opening it in the focused group when none is open. */
+  openFleet(): void {
+    const existing = Object.values(this.panes).find((pane) => pane.target.kind === 'fleet');
+    const group = existing ? this.groupOf(existing.id) : undefined;
+    if (existing && group) {
+      this.activate(group.id, existing.id);
+      this.focusGroup(group.id);
+      return;
+    }
+    this.openTab({ kind: 'fleet' });
   }
 
   /** Opens `target` as a new tab of the focused group and shows it. */

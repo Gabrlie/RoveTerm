@@ -137,6 +137,15 @@ ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次
 - `ai/session_started` 记录 `SessionInfo`：Agent 名称与版本、审批模式、`agent_ref`、主机上下文、Agent 自己的会话 id、是否为继续。会话的第一条提示写一条自动的 `ai/renamed`（第一行，最多 60 个字符），用户改名再写一条，最新的为准；继续时已有标题则不再自动命名。
 - 继续 ACP 会话：Agent 声明 `loadSession` 能力时用 `session/load` 重开它自己的会话，期间 Agent 回放的旧对话不再上报（界面从 Journal 还原）；重开失败则开新会话。继续内置助手：用 `audit::transcript` 从记录还原提示与回复（执行过的操作以一行说明附在回复中，不含工具输出）作为历史。
 
+## 运维总管
+
+总管是所有已保存主机上的内置助手（`AiContext::Fleet`，`src-tauri/src/commands/fleet.rs`），自己不在任何主机上执行操作，只有三个工具：
+
+- `list_hosts`、`read_notes(host)`（与开放给本机智能体的同名工具同源）；
+- `delegate(tasks: [{host, task}])`：每项在该主机上启动一个子代理（内置助手 + 主机工具与备注，沿用用户的审批模式、规则与判断者），最多 4 个同时运行、一次最多 16 项，各自跑完一个回合后返回最后的回复（每项截到 4 KiB）。
+
+总管的系统提示词要求它为每个子代理写自足的任务，并把结果当作数据。总管的工具调用以工具行报告在它自己的会话中（显示并记入 Journal）。子代理是独立的会话（`run_subagent`），`SessionInfo.parent` 为总管的会话 id，不出现在历史列表中；开始与结束经 `ai-subtask` 事件通知界面。总管回合被取消时，正在运行的子代理随之结束。总管只能用内置助手（默认服务商为内置时用它，否则用第一个服务商），`Assistant::with_toolbox` 让它复用同一对话循环。
+
 ## 开放给本机智能体
 
 用户在终端中自己运行的 Agent（Claude Code、Codex 等）可以经 RoveTerm 使用已保存的主机（`src-tauri/src/commands/external.rs`）。按设备开关（`DevicePrefs.agents.expose`，默认关闭）：

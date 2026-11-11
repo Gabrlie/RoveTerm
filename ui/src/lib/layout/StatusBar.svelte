@@ -35,13 +35,14 @@
     if (target.kind === 'quick') return { name: target.address, address: '' };
     if (target.kind === 'sftp' && 'address' in target.source) return { name: target.source.address, address: '' };
     if (target.kind === 'local') return { name: t('status.localTerminal'), address: pane.title !== 'Terminal' ? pane.title : '' };
+    if (target.kind === 'fleet') return { name: t('fleet.title'), address: t('fleet.allHosts') };
     return { name: pane.title, address: '' };
   });
   const connection = $derived.by((): 'live' | 'connecting' | 'failed' | 'ended' => {
     if (!pane) return 'ended';
     if (pane.failure) return 'failed';
     if (pane.exited) return 'ended';
-    return pane.sessionId || pane.target.kind === 'sftp' ? 'live' : 'connecting';
+    return pane.sessionId || pane.target.kind === 'sftp' || pane.target.kind === 'fleet' ? 'live' : 'connecting';
   });
   const connectedFor = $derived.by(() => {
     if (!pane?.connectedAt || connection !== 'live') return null;

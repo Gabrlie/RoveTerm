@@ -333,6 +333,21 @@ impl Assistant {
     }
 
     /// Runs one turn for `text`; returns why it ended (`end_turn`, `cancelled`, `max_turn_requests`).
+    /// The text of the last reply, for a caller that hands the result on (the fleet lead's
+    /// sub-agents); empty before any.
+    pub async fn last_reply(&self) -> String {
+        self.history
+            .lock()
+            .await
+            .iter()
+            .rev()
+            .find_map(|message| match message {
+                Message::Assistant { text, .. } if !text.trim().is_empty() => Some(text.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
     pub async fn prompt(&self, text: &str) -> Result<String, AssistantError> {
         let token = CancellationToken::new();
         {

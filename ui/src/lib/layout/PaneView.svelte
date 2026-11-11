@@ -2,6 +2,7 @@
   // One tab's content: a terminal or a file browser, with the connection failure banner. Stays
   // mounted while another tab of its group is shown (hidden, keeping its size).
   import TermView from '../terminal/TermView.svelte';
+  import AiPanel from '../ai/AiPanel.svelte';
   import FileBrowser from '../files/FileBrowser.svelte';
   import { terminals } from '../terminal/registry';
   import { hostOf, workspace, type PaneState } from '../workspace/workspace.svelte';
@@ -24,9 +25,10 @@
     oncredentials: (paneId: PaneId, kind: CredentialKind, override?: boolean) => void;
     /** Opens the editor of a saved host. */
     onedithost: (hostId: string) => void;
+    onaisettings: () => void;
   }
 
-  let { pane, shown, focused, oncredentials, onedithost }: Props = $props();
+  let { pane, shown, focused, oncredentials, onedithost, onaisettings }: Props = $props();
   let view = $state<TermView>();
 
   /** The saved host was deleted (here or on another device) and the tab holds no live session:
@@ -54,7 +56,8 @@
         case 'quick':
           return sessionOpenQuick(target.address, state.password, size, onOutput);
         case 'sftp':
-          return Promise.reject(new Error('file panes have no terminal'));
+        case 'fleet':
+          return Promise.reject(new Error('this tab has no terminal'));
       }
     };
   }
@@ -97,6 +100,10 @@
         if (kind) oncredentials(pane.id, kind);
       }}
     />
+  {:else if pane.target.kind === 'fleet'}
+    <div class="fleet">
+      <AiPanel fleet onsettings={onaisettings} />
+    </div>
   {:else}
     <TermView
       bind:this={view}
@@ -219,5 +226,12 @@
     height: 26px;
     padding: 0 var(--space-3);
     font-size: var(--text-footnote);
+  }
+  /* The fleet lead's conversation, as wide as reads well. */
+  .fleet {
+    height: 100%;
+    max-width: 920px;
+    margin: 0 auto;
+    padding-top: var(--space-3);
   }
 </style>

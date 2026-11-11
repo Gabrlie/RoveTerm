@@ -852,7 +852,7 @@ export function syncDisable(): Promise<void> {
 // ---- AI ------------------------------------------------------------------------------------
 
 /** Where an AI session works. */
-export type AiContext = { kind: 'local' } | { kind: 'host'; host_id: HostId } | { kind: 'quick'; address: string };
+export type AiContext = { kind: 'local' } | { kind: 'host'; host_id: HostId } | { kind: 'quick'; address: string } | { kind: 'fleet' };
 
 /** An agent the user can talk to. */
 export interface AgentChoice {
@@ -1113,6 +1113,13 @@ export function aiStop(id: string): Promise<void> {
 
 /** An agent the user runs started a conversation on a host, or one ended. */
 export type ExternalEvent = { id: string; context: AiContext; agent: string; host: string } | { id: string; ended: true };
+
+/** A sub-agent of the fleet lead started on a host, or one ended. */
+export type SubtaskEvent = { parent: string; id: string; host: string; task: string } | { id: string; ended: true };
+
+export function onAiSubtask(handler: (event: SubtaskEvent) => void): Promise<UnlistenFn> {
+  return listen<SubtaskEvent>('ai-subtask', (event) => handler(event.payload));
+}
 
 export function onAiExternal(handler: (event: ExternalEvent) => void): Promise<UnlistenFn> {
   return listen<ExternalEvent>('ai-external', (event) => handler(event.payload));

@@ -12,10 +12,12 @@ import {
   aiRename,
   aiSetOption,
   onAiExternal,
+  onAiSubtask,
   onAiUpdate,
   type AiSessionSummary,
   type AiRecord,
   type ExternalEvent,
+  type SubtaskEvent,
   type AgentCommand,
   type ConfigOption,
   type RequestStats,
@@ -46,6 +48,8 @@ export function contextKey(context: AiContext): string {
       return `host:${context.host_id}`;
     case 'quick':
       return `quick:${context.address}`;
+    case 'fleet':
+      return 'fleet';
   }
 }
 
@@ -83,8 +87,10 @@ export class Chat {
   resumeId = $state<string | null>(null);
   /** The agent the user runs on their own that drives this conversation through RoveTerm. */
   external = $state<string | null>(null);
-  /** That agent disconnected. */
+  /** That agent disconnected, or the sub-agent finished. */
   ended = $state(false);
+  /** The host a sub-agent of the fleet lead works on. */
+  subtaskOf = $state<string | null>(null);
 
   /** What the chat is called: the user's title, or its first question. */
   get name(): string | null {
@@ -259,7 +265,7 @@ export class Chat {
     {
       this.starting = true;
       try {
-        const agent = this.agent ?? ai.defaultAgent;
+        const agent = this.agent ?? (this.context.kind === 'fleet' ? ai.fleetAgent : ai.defaultAgent);
         if (!agent) throw { code: 'ai.no_agent', message: 'no agent' };
         this.agent = agent;
         const started = await aiStart(this.context, agent, this.attachTerminal ? terminal : null, this.resumeId);
@@ -437,6 +443,13 @@ class AiStore {
     this.agents = await aiAgents();
   }
 
+  /** The fleet lead's agent: RoveTerm's assistant with the default provider when that is one,
+   *  else the first provider. */
+  get fleetAgent(): string | null {
+    const builtin = (this.agents?.agents ?? []).filter((agent) => agent.enabled && agent.kind === 'builtin');
+    return builtin.find((agent) => agent.agent === this.agents?.default)?.agent ?? builtin[0]?.agent ?? null;
+  }
+
   /** The agent new conversations use: the default when it is available, else the first. */
   get defaultAgent(): string | null {
     const list = this.agents;
@@ -475,6 +488,38 @@ class AiStore {
     this.version += 1;
   }
 
+  /** Takes a sub-agent the fleet lead started, or its end: its conversation is its own chat
+   *  (approvals, records), shown inside the lead's. */
+  private subtask(event: SubtaskEvent): void {
+    if ('ended' in event) {
+      const chat = this.byId[event.id];
+      if (chat) {
+        chat.ended = true;
+        chat.busy = false;
+      }
+      this.version += 1;
+      return;
+    }
+    const lead = this.byId[event.parent];
+    if (!lead) return;
+    const chat = new Chat(`sub:${event.id}`, { kind: 'fleet' });
+    chat.id = event.id;
+    chat.title = event.host;
+    chat.subtaskOf = event.host;
+    chat.busy = true;
+    chat.items.push({ kind: 'user', text: event.task });
+    this.chats.set(chat.key, chat);
+    this.byId[event.id] = chat;
+    lead.items.push({ kind: 'subtask', id: event.id, host: event.host, task: event.task });
+    this.version += 1;
+  }
+
+  /** A sub-agent's conversation, by id. */
+  subtaskChat(id: string): Chat | undefined {
+    void this.version;
+    return this.byId[id];
+  }
+
   /** Forgets an ended conversation of an agent the user runs (it stays in the history). */
   dismiss(chat: Chat): void {
     if (!chat.ended) return;
@@ -489,6 +534,7 @@ class AiStore {
     this.listening = true;
     onAiUpdate((id, event) => this.byId[id]?.handle(event)).catch((error: unknown) => console.warn('AI events unavailable', error));
     onAiExternal((event) => this.external(event)).catch((error: unknown) => console.warn('outside agent events unavailable', error));
+    onAiSubtask((event) => this.subtask(event)).catch((error: unknown) => console.warn('sub-agent events unavailable', error));
   }
 }
 

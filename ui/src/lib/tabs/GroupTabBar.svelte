@@ -23,7 +23,7 @@
 
   function tabIcon(paneId: PaneId): IconName {
     const kind = workspace.panes[paneId]?.target.kind;
-    return kind === 'local' ? 'terminal' : kind === 'sftp' ? 'files' : 'server';
+    return kind === 'local' ? 'terminal' : kind === 'sftp' ? 'files' : kind === 'fleet' ? 'bot' : 'server';
   }
 
   /** A saved host's tab is named after the host (following renames), so tabs of different
@@ -33,6 +33,7 @@
     const pane = workspace.panes[paneId];
     if (!pane) return '';
     const target = pane.target;
+    if (target.kind === 'fleet') return t('fleet.title');
     const hostId = hostOf(target);
     if (hostId && target.kind !== 'local' && target.kind !== 'quick') return hosts.find(hostId)?.name || target.title;
     return pane.title;
@@ -44,7 +45,7 @@
     if (!pane) return 'ended';
     if (pane.failure) return 'failed';
     if (pane.exited) return 'ended';
-    return pane.sessionId || pane.target.kind === 'sftp' ? 'live' : 'connecting';
+    return pane.sessionId || pane.target.kind === 'sftp' || pane.target.kind === 'fleet' ? 'live' : 'connecting';
   }
 
   let menu = $state<{ x: number; y: number; paneId: PaneId } | null>(null);

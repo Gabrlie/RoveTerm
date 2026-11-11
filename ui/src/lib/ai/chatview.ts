@@ -60,7 +60,9 @@ export type ChatItem =
   /** The agent lost its connection to the model service: retrying, given up, or back. */
   | { kind: 'connection'; detail: string; retries: number; state: 'retrying' | 'failed' | 'recovered' }
   /** The earlier conversation was summarized to stay within the context window. */
-  | { kind: 'compacted'; summary: string };
+  | { kind: 'compacted'; summary: string }
+  /** The fleet lead handed `task` to sub-agent conversation `id` on `host`. */
+  | { kind: 'subtask'; id: string; host: string; task: string };
 
 export type OperationItem = Extract<ChatItem, { kind: 'operation' }>;
 export type ApprovalItem = Extract<ChatItem, { kind: 'approval' }>;

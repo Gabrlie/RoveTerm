@@ -137,3 +137,9 @@ test('only successful reads fold together', () => {
   const laid = rows([read('/a'), read('/b'), write]);
   assert.deepEqual(laid.map((row) => row.kind), ['group', 'item']);
 });
+
+test('a sub-agent stays a row of its own between reads', () => {
+  const read = (path: string): ChatItem => ({ kind: 'operation', operation: { op: 'read_file', path }, assessment: readOnly, approved: false, outcome: { result: 'read', bytes: 1, sha256: '', truncated: false } });
+  const laid = rows([read('/a'), { kind: 'subtask', id: 'ai-2', host: 'web', task: 'check' }, read('/b')]);
+  assert.deepEqual(laid.map((row) => (row.kind === 'item' ? row.item.kind : row.kind)), ['operation', 'subtask', 'operation']);
+});

@@ -16,6 +16,7 @@
   import { readClipboard, writeClipboard } from './lib/ui/clipboard';
   import KeysDialog from './lib/keys/KeysDialog.svelte';
   import HomePage from './lib/home/HomePage.svelte';
+  import { ai } from './lib/ai/ai.svelte';
   import RightPanel, { type RightPage } from './lib/panels/RightPanel.svelte';
   import BottomPanel from './lib/panels/BottomPanel.svelte';
   import { keys } from './lib/keys/keys.svelte';
@@ -31,7 +32,7 @@
   import { isActionId, nativeMenuLabels, nativeMenus } from './lib/menu';
   import { terminals } from './lib/terminal/registry';
   import { workspace, type PaneTarget } from './lib/workspace/workspace.svelte';
-  import { logsReveal, menuSet, onHostKeyPrompt, onMenuAction, workspaceLoad, workspaceSave, type CredentialKind, type HostEntry, type HostKeyPrompt } from './lib/ipc';
+  import { logsReveal, menuSet, type AiRecord, type AiSessionSummary, onHostKeyPrompt, onMenuAction, workspaceLoad, workspaceSave, type CredentialKind, type HostEntry, type HostKeyPrompt } from './lib/ipc';
   import { parseSnapshot } from './lib/workspace/snapshot';
   import { errorText, t } from './lib/i18n';
   import type { PaneId } from './lib/layout/layout';
@@ -158,6 +159,23 @@
   function openSettings(section?: SettingsSection): void {
     settingsSection = section;
     settingsOpen = true;
+  }
+
+  /** Shows the fleet lead's tab; sends `text` to it when given. */
+  function openFleet(text: string | null = null): void {
+    ai.listen();
+    workspace.openFleet();
+    if (text) {
+      const chat = ai.chat({ kind: 'fleet' });
+      if (!chat.busy && !chat.starting) void chat.send(text, null);
+    }
+  }
+
+  /** Continues an earlier conversation with the fleet lead in its tab. */
+  async function resumeFleet(summary: AiSessionSummary, records: AiRecord[]): Promise<void> {
+    ai.listen();
+    await ai.resume(summary, records);
+    workspace.openFleet();
   }
 
   /** Opens the folder of the log files, to send them along with a problem. */
@@ -305,6 +323,12 @@
       case 'help.shortcuts':
         settingsSection = 'shortcuts';
         settingsOpen = true;
+        break;
+      case 'fleet.open':
+        openFleet();
+        break;
+      case 'fleet.new':
+        void ai.reset(ai.chat({ kind: 'fleet' }), ai.fleetAgent).then(() => openFleet());
         break;
       case 'help.logs':
         void openLogs();
@@ -463,9 +487,11 @@
         onforwards={(host) => (forwardsHost = host)}
         onnotice={(message) => showNotice(message, 'error')}
         onaction={run}
+        onfleet={openFleet}
+        onfleetresume={(summary, records) => void resumeFleet(summary, records)}
       />
     {/snippet}
-    <EditorGroups {home} oncredentials={requestPaneCredentials} onedithost={(hostId) => (editing = hosts.find(hostId) ?? undefined)} />
+    <EditorGroups {home} oncredentials={requestPaneCredentials} onedithost={(hostId) => (editing = hosts.find(hostId) ?? undefined)} onaisettings={() => openSettings('ai')} />
     {#if bottomOpen}
       <div class="edge horizontal" role="separator" aria-orientation="horizontal" onpointerdown={resizeBottom}></div>
     {/if}

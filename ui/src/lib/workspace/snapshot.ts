@@ -37,6 +37,8 @@ function parseTarget(value: unknown): PaneTarget | null {
   switch (value.kind) {
     case 'local':
       return { kind: 'local' };
+    case 'fleet':
+      return { kind: 'fleet' };
     case 'ssh': {
       const hostId = text('hostId');
       return hostId ? { kind: 'ssh', hostId, title: text('title') ?? '' } : null;

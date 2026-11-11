@@ -3,6 +3,7 @@
 pub mod ai;
 pub mod app;
 pub mod external;
+pub mod fleet;
 pub mod forward;
 pub mod host;
 pub mod keys;

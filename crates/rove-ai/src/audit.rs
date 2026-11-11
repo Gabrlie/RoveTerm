@@ -63,6 +63,9 @@ pub struct SessionInfo {
     /// This start continued an earlier run of the session.
     #[serde(default)]
     pub resumed: bool,
+    /// The conversation that started this one as a sub-agent (the fleet lead's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 /// A title from a prompt: its first line, cut to 60 characters.

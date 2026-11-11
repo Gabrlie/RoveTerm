@@ -7,7 +7,8 @@
   import { hosts } from '../hosts/hosts.svelte';
   import { forwardStatuses } from '../forwards/forwards.svelte';
   import { t } from '../i18n';
-  import type { HostEntry } from '../ipc';
+  import type { AiRecord, AiSessionSummary, HostEntry } from '../ipc';
+  import FleetHome from '../fleet/FleetHome.svelte';
   import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
   import { hostMenuItems } from '../hosts/hostMenu';
   import { hostAddress, hostSubtitle } from '../hosts/route';
@@ -23,9 +24,13 @@
     onnotice: (message: string) => void;
     /** Runs an action from the empty-space menu. */
     onaction: (id: ActionId) => void;
+    /** Opens the fleet lead's tab, sending `text` when given. */
+    onfleet: (text: string | null) => void;
+    /** Continues an earlier conversation with the fleet lead. */
+    onfleetresume: (summary: AiSessionSummary, records: AiRecord[]) => void;
   }
 
-  let { onconnect, onfiles, onforwards, onedit, onquick, onlocal, onnotice, onaction }: Props = $props();
+  let { onconnect, onfiles, onforwards, onedit, onquick, onlocal, onnotice, onaction, onfleet, onfleetresume }: Props = $props();
   let query = $state('');
   let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
@@ -80,6 +85,10 @@
     <button type="button" class="secondary action" onclick={() => onedit(null)}><Icon name="add" size={15} />{t('host.new')}</button>
     <button type="button" class="secondary action" onclick={onlocal}><Icon name="terminal" size={15} />{t('action.tab.newLocal')}</button>
   </header>
+
+  {#if hosts.items.length > 0}
+    <FleetHome onopen={onfleet} onresume={onfleetresume} />
+  {/if}
 
   {#if hosts.items.length === 0}
     <div class="empty">
