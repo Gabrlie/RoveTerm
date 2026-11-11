@@ -53,10 +53,14 @@
         <pre><code>{block.text}</code></pre>
       </div>
     {:else if block.kind === 'list'}
-      <svelte:element this={block.ordered ? 'ol' : 'ul'} start={block.ordered ? block.start : undefined} class:tasks={block.items.some((item) => item.task !== null)}>
+      <!-- Markers are drawn as their own column: WebKit's list markers can come apart from a long
+           item's text while a reply streams in. -->
+      <svelte:element this={block.ordered ? 'ol' : 'ul'} start={block.ordered ? block.start : undefined}>
         {#each block.items as item, itemAt (itemAt)}
-          <li class:task={item.task !== null}>
-            {#if item.task !== null}<input type="checkbox" checked={item.task} disabled aria-hidden="true" />{/if}
+          <li>
+            <span class="marker" aria-hidden="true">
+              {#if item.task !== null}<input type="checkbox" checked={item.task} disabled />{:else if block.ordered}{block.start + itemAt}.{:else}•{/if}
+            </span>
             <div class="item">{@render blockList(item.blocks, `${at}.${itemAt}`)}</div>
           </li>
         {/each}
@@ -110,30 +114,34 @@
   }
   ul,
   ol {
-    padding-left: var(--space-5);
+    padding-left: var(--space-1);
+    list-style: none;
+  }
+  li {
+    display: grid;
+    grid-template-columns: minmax(14px, auto) minmax(0, 1fr);
+    column-gap: 6px;
+    align-items: baseline;
   }
   li + li {
     margin-top: 2px;
   }
-  /* A list item's blocks: tight items read as one line, loose ones keep their spacing. */
+  .marker {
+    justify-self: end;
+    color: var(--fg-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .marker input {
+    margin: 0;
+  }
+  /* A list item's blocks: tight items read as one line, loose ones keep their spacing. Plain
+     block flow: WebKit can set the bullet on a line of its own beside a flex container. */
   .item {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
+    display: block;
     min-width: 0;
   }
-  ul.tasks {
-    padding-left: var(--space-1);
-    list-style: none;
-  }
-  li.task {
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-  }
-  li.task input {
-    flex: none;
-    margin: 0;
+  .item > :global(* + *) {
+    margin-top: var(--space-1);
   }
   del {
     color: var(--fg-muted);
