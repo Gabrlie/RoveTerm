@@ -10,7 +10,6 @@ export const en = {
   'terminal.endedBar': 'The shell exited. Press Enter to start a new one.',
   'terminal.reconnect': 'Reconnect',
   'terminal.restart': 'Restart',
-  'status.sessionEnded': 'This session has ended',
   'terminal.openFailed': 'Could not open terminal: {message}',
   'terminal.reconnectHint': 'Press Enter to reconnect',
   'error.ssh.connect': 'Could not connect to the server',

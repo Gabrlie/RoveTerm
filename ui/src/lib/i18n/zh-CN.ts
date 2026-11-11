@@ -12,7 +12,6 @@ export const zhCN: Messages = {
   'terminal.endedBar': 'Shell 已退出，按 Enter 重新启动',
   'terminal.reconnect': '重新连接',
   'terminal.restart': '重新启动',
-  'status.sessionEnded': '这个会话已结束',
   'terminal.openFailed': '无法打开终端：{message}',
   'terminal.reconnectHint': '按 Enter 重新连接',
   'error.ssh.connect': '无法连接到服务器',
