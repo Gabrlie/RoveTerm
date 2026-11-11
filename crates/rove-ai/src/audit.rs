@@ -117,7 +117,10 @@ pub fn conversation_body(records: &[(i64, String, Value)]) -> Option<Value> {
         return None;
     }
     let pinned = |entry: &Value| entry["kind"] == KIND_STARTED || entry["kind"] == KIND_RENAMED;
-    let mut size: usize = entries.iter().map(|entry| entry.to_string().len() + 1).sum();
+    let mut size: usize = entries
+        .iter()
+        .map(|entry| entry.to_string().len() + 1)
+        .sum();
     let mut dropped = vec![false; entries.len()];
     for (at, entry) in entries.iter().enumerate() {
         if size <= SYNC_MAX {
@@ -145,7 +148,8 @@ pub fn missing_records(local: &[(i64, String)], body: &Value) -> Vec<(i64, Strin
     for (ts, kind) in local {
         *have.entry((*ts, kind.as_str())).or_default() += 1;
     }
-    let mut seen: std::collections::HashMap<(i64, String), usize> = std::collections::HashMap::new();
+    let mut seen: std::collections::HashMap<(i64, String), usize> =
+        std::collections::HashMap::new();
     body.get("records")
         .and_then(Value::as_array)
         .into_iter()
@@ -159,7 +163,13 @@ pub fn missing_records(local: &[(i64, String)], body: &Value) -> Vec<(i64, Strin
             let count = seen.entry((ts, kind.to_owned())).or_default();
             *count += 1;
             let local = have.get(&(ts, kind)).copied().unwrap_or(0);
-            (*count > local).then(|| (ts, kind.to_owned(), entry.get("payload").cloned().unwrap_or(Value::Null)))
+            (*count > local).then(|| {
+                (
+                    ts,
+                    kind.to_owned(),
+                    entry.get("payload").cloned().unwrap_or(Value::Null),
+                )
+            })
         })
         .collect()
 }
@@ -577,7 +587,11 @@ mod tests {
     #[test]
     fn conversations_sync_clipped_and_merge_without_repeats() {
         let records = vec![
-            (2, KIND_PROMPT.to_owned(), json!({ "text": "x".repeat(10_000) })),
+            (
+                2,
+                KIND_PROMPT.to_owned(),
+                json!({ "text": "x".repeat(10_000) }),
+            ),
             (1, KIND_STARTED.to_owned(), json!({ "agent": "A" })),
             (3, KIND_MESSAGE.to_owned(), json!({ "text": "hi" })),
             (3, KIND_MESSAGE.to_owned(), json!({ "text": "again" })),
@@ -593,11 +607,26 @@ mod tests {
         assert_eq!(missing.len(), 2);
         assert_eq!(missing[0].1, KIND_PROMPT);
         assert_eq!(missing[1].2["text"], "again");
-        assert!(missing_records(&records.iter().map(|(ts, kind, _)| (*ts, kind.clone())).collect::<Vec<_>>(), &body).is_empty());
+        assert!(
+            missing_records(
+                &records
+                    .iter()
+                    .map(|(ts, kind, _)| (*ts, kind.clone()))
+                    .collect::<Vec<_>>(),
+                &body
+            )
+            .is_empty()
+        );
 
         // A conversation too long keeps its start and its newest records.
         let mut long: Vec<(i64, String, Value)> = (1..200)
-            .map(|at| (at, KIND_MESSAGE.to_owned(), json!({ "text": format!("{at}{}", "y".repeat(1_000)) })))
+            .map(|at| {
+                (
+                    at,
+                    KIND_MESSAGE.to_owned(),
+                    json!({ "text": format!("{at}{}", "y".repeat(1_000)) }),
+                )
+            })
             .collect();
         assert!(conversation_body(&long).is_none(), "no start record");
         long.push((0, KIND_STARTED.to_owned(), json!({})));
@@ -605,7 +634,12 @@ mod tests {
         assert!(body.to_string().len() <= SYNC_MAX + 1024);
         let list = body["records"].as_array().unwrap();
         assert_eq!(list[0]["kind"], KIND_STARTED);
-        assert!(list.last().unwrap()["payload"]["text"].as_str().unwrap().starts_with("199"));
+        assert!(
+            list.last().unwrap()["payload"]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("199")
+        );
     }
 
     #[test]
@@ -622,7 +656,12 @@ mod tests {
         audit.started(&SessionInfo::default());
         audit.prompt("hi");
         audit.ended();
-        let kinds: Vec<String> = records.lock().unwrap().iter().map(|record| record.kind.clone()).collect();
+        let kinds: Vec<String> = records
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|record| record.kind.clone())
+            .collect();
         assert_eq!(kinds, [KIND_STARTED, KIND_PROMPT, KIND_RENAMED, KIND_ENDED]);
     }
 

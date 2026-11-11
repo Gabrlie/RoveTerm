@@ -82,7 +82,9 @@ pub fn codex_logs(codex_home: &Path) -> Vec<PathBuf> {
             if meta.is_dir() && depth < 4 {
                 walk(&path, depth + 1, out);
             } else if meta.is_file()
-                && path.extension().is_some_and(|extension| extension == "jsonl")
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension == "jsonl")
                 && let Ok(modified) = meta.modified()
             {
                 out.push((modified, path));
@@ -92,7 +94,11 @@ pub fn codex_logs(codex_home: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     walk(&codex_home.join("sessions"), 0, &mut found);
     found.sort_by_key(|entry| std::cmp::Reverse(entry.0));
-    found.into_iter().take(MAX_FILES).map(|(_, path)| path).collect()
+    found
+        .into_iter()
+        .take(MAX_FILES)
+        .map(|(_, path)| path)
+        .collect()
 }
 
 /// The end of `path`, at most [`TAIL`] bytes, as text.

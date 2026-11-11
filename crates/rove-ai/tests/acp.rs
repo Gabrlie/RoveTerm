@@ -465,8 +465,11 @@ async fn a_session_that_cannot_be_reopened_starts_anew() {
 async fn older_model_lists_and_boolean_settings_can_be_changed() {
     let (session, _received, mut fake, (read, write)) = harness();
     let script = tokio::spawn(async move {
-        fake.answer("initialize", json!({ "protocolVersion": 1, "authMethods": [] }))
-            .await;
+        fake.answer(
+            "initialize",
+            json!({ "protocolVersion": 1, "authMethods": [] }),
+        )
+        .await;
         fake.answer(
             "session/new",
             json!({
@@ -477,7 +480,10 @@ async fn older_model_lists_and_boolean_settings_can_be_changed() {
         )
         .await;
         let model = fake.answer("session/set_model", json!({})).await;
-        assert_eq!(model["params"], json!({ "sessionId": "s1", "modelId": "opus" }));
+        assert_eq!(
+            model["params"],
+            json!({ "sessionId": "s1", "modelId": "opus" })
+        );
         let fast = fake.answer("session/set_config_option", json!({})).await;
         assert_eq!(
             fast["params"],
@@ -492,7 +498,10 @@ async fn older_model_lists_and_boolean_settings_can_be_changed() {
     let options = &running.started().config_options;
     assert_eq!(options.len(), 2);
     assert_eq!(options[0].id, "model");
-    assert_eq!(options[0].choices[1].description.as_deref(), Some("Most capable"));
+    assert_eq!(
+        options[0].choices[1].description.as_deref(),
+        Some("Most capable")
+    );
     assert_eq!(options[1].kind, acp::ConfigKind::Boolean);
     assert_eq!(options[1].current, "false");
 

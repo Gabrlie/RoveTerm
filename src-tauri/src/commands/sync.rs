@@ -591,7 +591,11 @@ mod tests {
         let key = SyncKey::from_bytes([3; 32]);
         let device = |name: &str| {
             let journal: Arc<dyn JournalStore> = Arc::new(SqliteJournal::open_in_memory().unwrap());
-            (journal.clone(), ConversationStore(journal), SyncState::new(name))
+            (
+                journal.clone(),
+                ConversationStore(journal),
+                SyncState::new(name),
+            )
         };
         let (journal_a, store_a, mut state_a) = device("a");
         let (journal_b, store_b, mut state_b) = device("b");
@@ -614,21 +618,37 @@ mod tests {
                 })
                 .unwrap()
                 .into_iter()
-                .map(|record| format!("{}:{}", record.kind, record.payload["text"].as_str().unwrap_or("")))
+                .map(|record| {
+                    format!(
+                        "{}:{}",
+                        record.kind,
+                        record.payload["text"].as_str().unwrap_or("")
+                    )
+                })
                 .collect()
         };
         runtime.block_on(async {
-            rove_sync::sync(&backend, &key, &mut state_a, &store_a).await.unwrap();
-            rove_sync::sync(&backend, &key, &mut state_b, &store_b).await.unwrap();
+            rove_sync::sync(&backend, &key, &mut state_a, &store_a)
+                .await
+                .unwrap();
+            rove_sync::sync(&backend, &key, &mut state_b, &store_b)
+                .await
+                .unwrap();
         });
         assert_eq!(texts(&journal_b).len(), 2);
 
         add(&journal_b, rove_ai::audit::KIND_PROMPT, "thanks");
         runtime.block_on(async {
-            rove_sync::sync(&backend, &key, &mut state_b, &store_b).await.unwrap();
-            rove_sync::sync(&backend, &key, &mut state_a, &store_a).await.unwrap();
+            rove_sync::sync(&backend, &key, &mut state_b, &store_b)
+                .await
+                .unwrap();
+            rove_sync::sync(&backend, &key, &mut state_a, &store_a)
+                .await
+                .unwrap();
             // Nothing new either way: the stores settle.
-            let settled = rove_sync::sync(&backend, &key, &mut state_a, &store_a).await.unwrap();
+            let settled = rove_sync::sync(&backend, &key, &mut state_a, &store_a)
+                .await
+                .unwrap();
             assert_eq!(settled.pushed, 0);
         });
         let mut a = texts(&journal_a);

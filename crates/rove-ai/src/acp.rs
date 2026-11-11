@@ -698,7 +698,10 @@ pub fn parse_update(update: &Value) -> Option<SessionUpdate> {
         }),
         "usage_update" => Some(SessionUpdate::Usage {
             used: update.get("used").and_then(Value::as_u64)?,
-            size: update.get("size").and_then(Value::as_u64).filter(|size| *size > 0)?,
+            size: update
+                .get("size")
+                .and_then(Value::as_u64)
+                .filter(|size| *size > 0)?,
         }),
         "config_option_update" => Some(SessionUpdate::ConfigOptions {
             options: parse_config_options(update.get("configOptions")),
