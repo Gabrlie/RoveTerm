@@ -9,19 +9,17 @@ export interface ProviderPreset {
   name: string;
   format: ProviderFormat;
   base_url: string;
-  /** Shown as the model field's placeholder; the user picks the model. */
-  modelHint: string;
   /** The service takes no API key (a model server on this computer). */
   keyless: boolean;
 }
 
 export const PRESETS: ProviderPreset[] = [
-  { id: 'openai', name: 'OpenAI', format: 'responses', base_url: 'https://api.openai.com/v1', modelHint: 'gpt-5', keyless: false },
-  { id: 'anthropic', name: 'Anthropic', format: 'anthropic', base_url: 'https://api.anthropic.com/v1', modelHint: 'claude-opus-5-5', keyless: false },
-  { id: 'deepseek', name: 'DeepSeek', format: 'chat', base_url: 'https://api.deepseek.com/v1', modelHint: 'deepseek-chat', keyless: false },
-  { id: 'openrouter', name: 'OpenRouter', format: 'chat', base_url: 'https://openrouter.ai/api/v1', modelHint: 'openai/gpt-5', keyless: false },
-  { id: 'ollama', name: 'Ollama', format: 'chat', base_url: 'http://localhost:11434/v1', modelHint: 'qwen3', keyless: true },
-  { id: 'custom', name: '', format: 'chat', base_url: '', modelHint: '', keyless: false },
+  { id: 'openai', name: 'OpenAI', format: 'responses', base_url: 'https://api.openai.com/v1', keyless: false },
+  { id: 'anthropic', name: 'Anthropic', format: 'anthropic', base_url: 'https://api.anthropic.com/v1', keyless: false },
+  { id: 'deepseek', name: 'DeepSeek', format: 'chat', base_url: 'https://api.deepseek.com/v1', keyless: false },
+  { id: 'openrouter', name: 'OpenRouter', format: 'chat', base_url: 'https://openrouter.ai/api/v1', keyless: false },
+  { id: 'ollama', name: 'Ollama', format: 'chat', base_url: 'http://localhost:11434/v1', keyless: true },
+  { id: 'custom', name: '', format: 'chat', base_url: '', keyless: false },
 ];
 
 /** A provider id (lowercase letters, digits and `-`, at most 40) from `name`, unused in `taken`. */

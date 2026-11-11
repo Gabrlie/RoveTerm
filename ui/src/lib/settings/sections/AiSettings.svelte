@@ -30,14 +30,11 @@
     original: string | null;
     draft: ProviderPrefs;
     key: string;
-    hint: string;
     keyless: boolean;
     /** Models checked for the provider; the starred one (`draft.model`) is the default. */
     picked: string[];
     /** Models listed to choose from: fetched, plus the checked ones. */
     listed: string[];
-    /** A model typed by hand. */
-    manual: string;
     query: string;
   } | null>(null);
   let fetching = $state(false);
@@ -92,14 +89,14 @@
 
   function startAdding(preset: ProviderPreset): void {
     const draft = fromPreset(preset, providers.map((provider) => provider.id));
-    editing = { original: null, draft, key: '', hint: preset.modelHint, keyless: preset.keyless, picked: [], listed: [], manual: '', query: '' };
+    editing = { original: null, draft, key: '', keyless: preset.keyless, picked: [], listed: [], query: '' };
     fetchError = '';
     testResult = null;
   }
 
   function startEditing(provider: ProviderPrefs): void {
     const picked = [provider.model, ...provider.models];
-    editing = { original: provider.id, draft: structuredClone($state.snapshot(provider)), key: '', hint: '', keyless: false, picked, listed: [...picked], manual: '', query: '' };
+    editing = { original: provider.id, draft: structuredClone($state.snapshot(provider)), key: '', keyless: false, picked, listed: [...picked], query: '' };
     fetchError = '';
     testResult = null;
   }
@@ -109,7 +106,7 @@
     const { original, draft, key } = editing;
     draft.name = draft.name.trim();
     draft.base_url = draft.base_url.trim();
-    const chosen = providerModels(editing.picked.length > 0 ? editing.picked : [editing.manual], draft.model);
+    const chosen = providerModels(editing.picked, draft.model);
     draft.model = chosen.model;
     draft.models = chosen.models;
     await editPrefs((prefsDraft) => {
@@ -158,18 +155,8 @@
     editing.draft.model = model;
   }
 
-  /** Adds the model typed by hand to the list, checked. */
-  function addManual(): void {
-    if (!editing || !editing.manual.trim()) return;
-    const model = editing.manual.trim();
-    editing.listed = mergeListed(editing.listed, [...editing.picked, model]);
-    starModel(editing.draft.model && editing.picked.length > 0 ? editing.draft.model : model);
-    if (!editing.picked.includes(model)) editing.picked = [...editing.picked, model];
-    editing.manual = '';
-  }
-
   const shownModels = $derived(editing ? editing.listed.filter((model) => !editing?.query.trim() || model.toLowerCase().includes(editing.query.trim().toLowerCase())) : []);
-  const hasModel = $derived(!!editing && (editing.picked.length > 0 || editing.manual.trim().length > 0));
+  const hasModel = $derived(!!editing && editing.picked.length > 0);
 
   async function removeProvider(provider: ProviderPrefs): Promise<void> {
     const confirmed = await ask({ title: t('ai.removeProvider'), message: t('ai.removeProviderConfirm', { name: provider.name }), confirmLabel: t('ai.remove'), danger: true });
@@ -188,7 +175,7 @@
     testing = true;
     testResult = null;
     try {
-      const chosen = providerModels(editing.picked.length > 0 ? editing.picked : [editing.manual], editing.draft.model);
+      const chosen = providerModels(editing.picked, editing.draft.model);
       const draft = { ...$state.snapshot(editing.draft), name: editing.draft.name.trim() || 'test', model: chosen.model, models: chosen.models };
       const reply = await aiProviderTest(draft, editing.key.trim() || null);
       testResult = { ok: true, text: t('ai.testOk', { reply: reply.trim() || '…' }) };
@@ -298,10 +285,6 @@
             {/each}
           </div>
         {/if}
-        <div class="manual">
-          <input class="field mono" bind:value={editing.manual} spellcheck="false" placeholder={editing.hint ? t('ai.modelExample', { model: editing.hint }) : t('ai.modelManual')} aria-label={t('ai.modelManual')} onkeydown={(event) => event.key === 'Enter' && (event.preventDefault(), addManual())} />
-          <button type="button" class="secondary" disabled={!editing.manual.trim()} onclick={addManual}>{t('ai.add')}</button>
-        </div>
       </div>
       <div class="form-row">
         <span class="form-label">{t('ai.effort')}<small>{t('ai.effortHint')}</small></span>
@@ -526,11 +509,6 @@
   .star.starred {
     color: var(--warning);
   }
-  .manual {
-    display: flex;
-    gap: var(--space-2);
-  }
-  .manual .field,
   .search {
     flex: 1;
     width: auto;
