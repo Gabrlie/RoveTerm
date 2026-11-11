@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { writeClipboard } from '../ui/clipboard';
   // Renders an agent's Markdown as plain elements and text nodes, never as HTML.
   // Links show their address on hover rather than navigating the WebView.
   import { parseMarkdown, type Inline } from './markdown';
@@ -18,7 +19,7 @@
   const SHELL = new Set(['sh', 'bash', 'zsh', 'shell', 'console', 'fish', 'powershell', 'ps1']);
 
   function copy(code: string, index: number): void {
-    void navigator.clipboard.writeText(code).then(() => {
+    void writeClipboard(code).then(() => {
       copied = index;
       setTimeout(() => (copied = copied === index ? null : copied), 1500);
     });

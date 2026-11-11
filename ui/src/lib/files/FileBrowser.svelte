@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { writeClipboard } from '../ui/clipboard';
   // Remote file browser bound to one SFTP session. The session opens on mount and closes on
   // destroy; transfers started here keep running after the browser closes.
   import { onDestroy, onMount } from 'svelte';
@@ -178,7 +179,7 @@
   let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
   function copyPath(name: string): void {
-    navigator.clipboard.writeText(joinPath(cwd, name)).catch((error: unknown) => console.warn('copy failed', error));
+    writeClipboard(joinPath(cwd, name)).catch((error: unknown) => console.warn('copy failed', error));
   }
 
   /** Right-click on a row: acts on the selection, selecting the row first when it is not in it. */

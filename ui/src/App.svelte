@@ -13,7 +13,7 @@
   import EditMenu from './lib/ui/EditMenu.svelte';
   import Toaster from './lib/ui/Toaster.svelte';
   import { notify, type ToastKind } from './lib/ui/toast.svelte';
-  import { readClipboard } from './lib/ui/clipboard';
+  import { readClipboard, writeClipboard } from './lib/ui/clipboard';
   import KeysDialog from './lib/keys/KeysDialog.svelte';
   import HomePage from './lib/home/HomePage.svelte';
   import RightPanel, { type RightPage } from './lib/panels/RightPanel.svelte';
@@ -26,7 +26,8 @@
   import { hosts, needsPassword } from './lib/hosts/hosts.svelte';
   import { vault } from './lib/vault/vault.svelte';
   import { sync } from './lib/sync/sync.svelte';
-  import { actionFor, isMac, type ActionId } from './lib/actions';
+  import { actionFor, isMac, isTextField, type ActionId } from './lib/actions';
+  import { terminalCopies, terminalPastes, type ClipboardContext } from './lib/terminal/claims';
   import { isActionId, nativeMenuLabels, nativeMenus } from './lib/menu';
   import { terminals } from './lib/terminal/registry';
   import { workspace, type PaneTarget } from './lib/workspace/workspace.svelte';
@@ -279,7 +280,7 @@
         break;
       case 'terminal.copy': {
         const text = focusedTerminal()?.selection();
-        if (text) navigator.clipboard.writeText(text).catch((error: unknown) => console.warn('copy failed', error));
+        if (text) writeClipboard(text).catch((error: unknown) => console.warn('copy failed', error));
         break;
       }
       case 'terminal.paste':
@@ -346,9 +347,38 @@
     }
   }
 
+  /** Where copy and paste stand now, to tell whether the shortcut belongs to the terminal. */
+  function clipboardContext(): ClipboardContext {
+    const active = document.activeElement;
+    // Selecting in xterm can leave a DOM selection inside the terminal itself; only one
+    // elsewhere on the page counts as the page's own.
+    const selection = window.getSelection();
+    const anchor = selection?.anchorNode ?? null;
+    const anchorElement = anchor instanceof Element ? anchor : (anchor?.parentElement ?? null);
+    const pageSelection = anchorElement?.closest('.xterm') ? '' : (selection?.toString() ?? '');
+    return {
+      terminalSelection: focusedTerminal()?.selection() ?? '',
+      pageSelection,
+      focusInTerminal: !active || active === document.body || !!active.closest('.xterm'),
+      focusInTextField: isTextField(active),
+    };
+  }
+
+  /** The system's Copy (the macOS Edit menu takes ⌘C before the page sees it) copies the
+   *  terminal's selection when that is the only one; xterm covers the case where it has the focus. */
+  function onCopy(event: ClipboardEvent): void {
+    const context = clipboardContext();
+    if (!event.clipboardData || !terminalCopies(context) || context.focusInTerminal) return;
+    event.clipboardData.setData('text/plain', context.terminalSelection);
+    event.preventDefault();
+  }
+
   function onKeydown(event: KeyboardEvent): void {
     const id = actionFor(event);
     if (!id) return;
+    // Copy and paste that are not the terminal's keep the system's behaviour.
+    if (id === 'terminal.copy' && !terminalCopies(clipboardContext())) return;
+    if (id === 'terminal.paste' && !terminalPastes(clipboardContext())) return;
     event.preventDefault();
     event.stopPropagation();
     run(id);
@@ -395,6 +425,7 @@
 </script>
 
 <svelte:window onkeydowncapture={onKeydown} />
+<svelte:document oncopy={onCopy} />
 
 <div class="app">
   <TitleBar {sidebarOpen} rightOpen={rightPage !== null} {bottomOpen} onaction={run} />

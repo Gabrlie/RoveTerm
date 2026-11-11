@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { writeClipboard } from '../ui/clipboard';
   // The key library: list on the left, the selected key or a generate/import form on the right.
   import { onMount } from 'svelte';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -191,7 +192,7 @@
   }
 
   async function copy(text: string): Promise<void> {
-    await navigator.clipboard.writeText(text).catch((caught: unknown) => console.warn('copy failed', caught));
+    await writeClipboard(text).catch((caught: unknown) => console.warn('copy failed', caught));
     notice = t('keys.copied');
   }
 

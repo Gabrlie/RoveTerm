@@ -4,7 +4,7 @@
   // does nothing.
   import ContextMenu, { type MenuItem } from './ContextMenu.svelte';
   import { t } from '../i18n';
-  import { readClipboard } from './clipboard';
+  import { readClipboard, writeClipboard } from './clipboard';
 
   type Field = HTMLInputElement | HTMLTextAreaElement;
 
@@ -40,12 +40,12 @@
       list.push({
         label: t('edit.cut'),
         onselect: () => {
-          void navigator.clipboard.writeText(text).then(() => replace(field, ''));
+          void writeClipboard(text).then(() => replace(field, ''));
         },
       });
     }
     if (text && !secret) {
-      list.push({ label: t('edit.copy'), icon: 'copy', onselect: () => void navigator.clipboard.writeText(text) });
+      list.push({ label: t('edit.copy'), icon: 'copy', onselect: () => void writeClipboard(text) });
     }
     if (writable) {
       list.push({

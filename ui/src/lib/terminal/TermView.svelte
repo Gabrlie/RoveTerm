@@ -20,7 +20,7 @@
   import { formatStep } from './connectLog';
   import { isAppShortcut } from '../actions';
   import { prefs, SYMBOL_FONT } from '../settings/prefs.svelte';
-  import { readClipboard } from '../ui/clipboard';
+  import { readClipboard, writeClipboard } from '../ui/clipboard';
   import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
 
   interface Props {
@@ -68,7 +68,7 @@
 
   function copySelection(): void {
     const text = term?.getSelection();
-    if (text) navigator.clipboard.writeText(text).catch((error: unknown) => console.warn('copy failed', error));
+    if (text) writeClipboard(text).catch((error: unknown) => console.warn('copy failed', error));
   }
 
   function pasteClipboard(): void {
