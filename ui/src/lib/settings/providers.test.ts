@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { customAgentId, fromPreset, PRESETS, providerId } from './providers.ts';
+import { customAgentId, fromPreset, mergeListed, PRESETS, providerId, providerModels } from './providers.ts';
 
 test('ids are slugs that do not collide', () => {
   assert.equal(providerId('OpenAI', []), 'openai');
@@ -20,4 +20,11 @@ test('presets fill the form but leave the model to the user', () => {
   assert.equal(provider.base_url, 'http://localhost:11434/v1');
   assert.equal(provider.model, '');
   for (const preset of PRESETS) assert.ok(preset.base_url === '' || /^https?:\/\//.test(preset.base_url));
+});
+
+test('checked models become the default and the others', () => {
+  assert.deepEqual(providerModels(['a', 'b', 'c'], 'b'), { model: 'b', models: ['a', 'c'] });
+  assert.deepEqual(providerModels(['a', ' b ', 'a'], 'x'), { model: 'a', models: ['b'] });
+  assert.deepEqual(providerModels([], ''), { model: '', models: [] });
+  assert.deepEqual(mergeListed(['z', 'a', 'm'], ['m', 'custom']), ['custom', 'm', 'a', 'z']);
 });

@@ -329,3 +329,72 @@ async fn a_reply_cut_short_is_an_error() {
     .await;
     assert!(matches!(reply, Err(LlmError::Protocol(_))));
 }
+
+#[tokio::test]
+async fn model_lists_are_read_in_both_shapes() {
+    // `serve` answers any method; the list is a plain JSON body with status 200.
+    let openai = json!({ "object": "list", "data": [{ "id": "gpt-5" }, { "id": "deepseek-chat" }, { "id": "gpt-5" }] });
+    let (base, seen) = serve_json(openai.to_string()).await;
+    let models = client(Format::Chat, &base, "sk-list")
+        .list_models()
+        .await
+        .unwrap();
+    assert_eq!(models, ["deepseek-chat", "gpt-5"]);
+    let seen = seen.await.unwrap();
+    assert_eq!(seen.path, "/v1/models");
+    assert_eq!(seen.header("authorization"), Some("Bearer sk-list"));
+
+    let anthropic = json!({ "data": [{ "id": "claude-opus-5-5", "type": "model" }], "has_more": false, "last_id": "claude-opus-5-5" });
+    let (base, seen) = serve_json(anthropic.to_string()).await;
+    let models = client(Format::Anthropic, &base, "ant")
+        .list_models()
+        .await
+        .unwrap();
+    assert_eq!(models, ["claude-opus-5-5"]);
+    let seen = seen.await.unwrap();
+    assert_eq!(seen.path, "/v1/models?limit=1000");
+    assert_eq!(seen.header("x-api-key"), Some("ant"));
+    assert_eq!(seen.header("anthropic-version"), Some("2023-06-01"));
+}
+
+/// Serves one GET with a JSON `body`; returns the base URL and what was asked.
+async fn serve_json(body: String) -> (String, oneshot::Receiver<Seen>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/v1", listener.local_addr().unwrap());
+    let (sender, receiver) = oneshot::channel();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (read, mut write) = stream.into_split();
+        let mut reader = BufReader::new(read);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let path = line
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or_default()
+            .to_owned();
+        let mut headers = Vec::new();
+        loop {
+            let mut header = String::new();
+            reader.read_line(&mut header).await.unwrap();
+            let header = header.trim_end();
+            if header.is_empty() {
+                break;
+            }
+            let (name, value) = header.split_once(':').unwrap();
+            headers.push((name.to_ascii_lowercase(), value.trim().to_owned()));
+        }
+        let _ = sender.send(Seen {
+            path,
+            headers,
+            body: Value::Null,
+        });
+        let head = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        );
+        write.write_all(head.as_bytes()).await.unwrap();
+        write.write_all(body.as_bytes()).await.unwrap();
+    });
+    (base, receiver)
+}

@@ -959,6 +959,11 @@ export function aiProviderTest(provider: ProviderPrefs, key: string | null): Pro
   return invoke('ai_provider_test', { provider, key });
 }
 
+/** The models `provider` offers; `key` is the typed key, else the stored one. */
+export function aiProviderModels(provider: ProviderPrefs, key: string | null): Promise<string[]> {
+  return invoke('ai_provider_models', { provider, key });
+}
+
 /** Stores the API key of `agent` sealed on this device; `null` removes it. */
 export function aiSetKey(agent: string, key: string | null): Promise<void> {
   return invoke('ai_set_key', { agent, key });

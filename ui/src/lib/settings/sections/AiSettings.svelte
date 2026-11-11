@@ -8,12 +8,12 @@
   import ContextMenu, { type MenuItem } from '../../ui/ContextMenu.svelte';
   import { ask } from '../../ui/confirm.svelte';
   import { errorText, t } from '../../i18n';
-  import { aiProviderTest, aiSetKey, type AgentAuth, type AgentChoice, type AiMode, type ProviderFormat, type ProviderPrefs, type ReasoningEffort } from '../../ipc';
+  import { aiProviderModels, aiProviderTest, aiSetKey, type AgentAuth, type AgentChoice, type AiMode, type ProviderFormat, type ProviderPrefs, type ReasoningEffort } from '../../ipc';
   import { ai } from '../../ai/ai.svelte';
   import { prefs } from '../prefs.svelte';
   import { editDevice, editPrefs, settingsError } from '../edit.svelte';
   import { notify } from '../../ui/toast.svelte';
-  import { customAgentId, EFFORT_LEVELS, fromPreset, PRESETS, type ProviderPreset } from '../providers';
+  import { customAgentId, EFFORT_LEVELS, fromPreset, mergeListed, PRESETS, providerModels, type ProviderPreset } from '../providers';
 
   const rules = $derived(prefs.value.ai);
   const providers = $derived(prefs.value.ai.providers);
@@ -26,7 +26,22 @@
   let dangerous = $state(prefs.value.ai.dangerous.join('\n'));
 
   /** The provider being added or edited, with the key typed for it. */
-  let editing = $state<{ original: string | null; draft: ProviderPrefs; key: string; hint: string; keyless: boolean; others: string } | null>(null);
+  let editing = $state<{
+    original: string | null;
+    draft: ProviderPrefs;
+    key: string;
+    hint: string;
+    keyless: boolean;
+    /** Models checked for the provider; the starred one (`draft.model`) is the default. */
+    picked: string[];
+    /** Models listed to choose from: fetched, plus the checked ones. */
+    listed: string[];
+    /** A model typed by hand. */
+    manual: string;
+    query: string;
+  } | null>(null);
+  let fetching = $state(false);
+  let fetchError = $state('');
   let testing = $state(false);
   let testResult = $state<{ ok: boolean; text: string } | null>(null);
   let presetMenu = $state<{ x: number; y: number } | null>(null);
@@ -77,12 +92,15 @@
 
   function startAdding(preset: ProviderPreset): void {
     const draft = fromPreset(preset, providers.map((provider) => provider.id));
-    editing = { original: null, draft, key: '', hint: preset.modelHint, keyless: preset.keyless, others: '' };
+    editing = { original: null, draft, key: '', hint: preset.modelHint, keyless: preset.keyless, picked: [], listed: [], manual: '', query: '' };
+    fetchError = '';
     testResult = null;
   }
 
   function startEditing(provider: ProviderPrefs): void {
-    editing = { original: provider.id, draft: structuredClone($state.snapshot(provider)), key: '', hint: '', keyless: false, others: provider.models.join(', ') };
+    const picked = [provider.model, ...provider.models];
+    editing = { original: provider.id, draft: structuredClone($state.snapshot(provider)), key: '', hint: '', keyless: false, picked, listed: [...picked], manual: '', query: '' };
+    fetchError = '';
     testResult = null;
   }
 
@@ -91,11 +109,9 @@
     const { original, draft, key } = editing;
     draft.name = draft.name.trim();
     draft.base_url = draft.base_url.trim();
-    draft.model = draft.model.trim();
-    draft.models = editing.others
-      .split(/[,\n]/)
-      .map((model) => model.trim())
-      .filter((model) => model.length > 0);
+    const chosen = providerModels(editing.picked.length > 0 ? editing.picked : [editing.manual], draft.model);
+    draft.model = chosen.model;
+    draft.models = chosen.models;
     await editPrefs((prefsDraft) => {
       const at = prefsDraft.ai.providers.findIndex((provider) => provider.id === original);
       if (at >= 0) prefsDraft.ai.providers[at] = draft;
@@ -114,6 +130,47 @@
     await refresh();
   }
 
+  /** Lists the models at the address and format filled in. */
+  async function fetchModels(): Promise<void> {
+    if (!editing) return;
+    fetching = true;
+    fetchError = '';
+    try {
+      const fetched = await aiProviderModels($state.snapshot(editing.draft), editing.key.trim() || null);
+      editing.listed = mergeListed(fetched, editing.picked);
+      if (fetched.length === 0) fetchError = t('ai.noModelsListed');
+    } catch (error) {
+      fetchError = errorText(error);
+    } finally {
+      fetching = false;
+    }
+  }
+
+  function toggleModel(model: string): void {
+    if (!editing) return;
+    editing.picked = editing.picked.includes(model) ? editing.picked.filter((entry) => entry !== model) : [...editing.picked, model];
+    if (!editing.picked.includes(editing.draft.model)) editing.draft.model = editing.picked[0] ?? '';
+  }
+
+  function starModel(model: string): void {
+    if (!editing) return;
+    if (!editing.picked.includes(model)) editing.picked = [...editing.picked, model];
+    editing.draft.model = model;
+  }
+
+  /** Adds the model typed by hand to the list, checked. */
+  function addManual(): void {
+    if (!editing || !editing.manual.trim()) return;
+    const model = editing.manual.trim();
+    editing.listed = mergeListed(editing.listed, [...editing.picked, model]);
+    starModel(editing.draft.model && editing.picked.length > 0 ? editing.draft.model : model);
+    if (!editing.picked.includes(model)) editing.picked = [...editing.picked, model];
+    editing.manual = '';
+  }
+
+  const shownModels = $derived(editing ? editing.listed.filter((model) => !editing?.query.trim() || model.toLowerCase().includes(editing.query.trim().toLowerCase())) : []);
+  const hasModel = $derived(!!editing && (editing.picked.length > 0 || editing.manual.trim().length > 0));
+
   async function removeProvider(provider: ProviderPrefs): Promise<void> {
     const confirmed = await ask({ title: t('ai.removeProvider'), message: t('ai.removeProviderConfirm', { name: provider.name }), confirmLabel: t('ai.remove'), danger: true });
     if (!confirmed) return;
@@ -131,7 +188,8 @@
     testing = true;
     testResult = null;
     try {
-      const draft = { ...$state.snapshot(editing.draft), name: editing.draft.name.trim() || 'test', model: editing.draft.model.trim() };
+      const chosen = providerModels(editing.picked.length > 0 ? editing.picked : [editing.manual], editing.draft.model);
+      const draft = { ...$state.snapshot(editing.draft), name: editing.draft.name.trim() || 'test', model: chosen.model, models: chosen.models };
       const reply = await aiProviderTest(draft, editing.key.trim() || null);
       testResult = { ok: true, text: t('ai.testOk', { reply: reply.trim() || '…' }) };
     } catch (error) {
@@ -198,7 +256,7 @@
 <div class="form-group">
   {#each providers as provider (provider.id)}
     <div class="form-row item">
-      <span class="form-label">{provider.name}<small class="mono">{provider.model}{provider.models.length > 0 ? ` +${provider.models.length}` : ''} · {t(`ai.format.${provider.format}`)}{hasKey(`builtin:${provider.id}`) ? '' : ` · ${t('ai.noKey')}`}</small></span>
+      <span class="form-label">{provider.name}<small class="mono">★ {provider.model}{provider.models.length > 0 ? ` +${provider.models.length}` : ''} · {t(`ai.format.${provider.format}`)}{hasKey(`builtin:${provider.id}`) ? '' : ` · ${t('ai.noKey')}`}</small></span>
       <IconButton icon="edit" small label={t('ai.edit')} onclick={() => startEditing(provider)} />
       <IconButton icon="remove" small label={t('ai.remove')} onclick={() => void removeProvider(provider)} />
     </div>
@@ -221,12 +279,29 @@
         <input class="field mono" bind:value={editing.draft.base_url} spellcheck="false" placeholder="https://…/v1" aria-label={t('ai.baseUrl')} />
       </div>
       <div class="form-row">
-        <span class="form-label">{t('ai.model')}</span>
-        <input class="field mono" bind:value={editing.draft.model} spellcheck="false" placeholder={editing.hint ? t('ai.modelExample', { model: editing.hint }) : ''} aria-label={t('ai.model')} />
+        <span class="form-label">{t('ai.models')}<small>{t('ai.modelsHint')}</small></span>
+        <button type="button" class="secondary" disabled={fetching || !editing.draft.base_url.trim()} onclick={() => void fetchModels()}>{fetching ? t('ai.fetchingModels') : t('ai.fetchModels')}</button>
       </div>
-      <div class="form-row">
-        <span class="form-label">{t('ai.otherModels')}<small>{t('ai.otherModelsHint')}</small></span>
-        <input class="field mono" bind:value={editing.others} spellcheck="false" aria-label={t('ai.otherModels')} />
+      <div class="form-row stacked models">
+        {#if fetchError}<p class="form-note failed">{fetchError}</p>{/if}
+        {#if editing.listed.length > 6}
+          <input class="field mono search" bind:value={editing.query} placeholder={t('ai.searchModels')} aria-label={t('ai.searchModels')} spellcheck="false" />
+        {/if}
+        {#if editing.listed.length > 0}
+          <div class="model-list" role="listbox" aria-multiselectable="true" aria-label={t('ai.models')}>
+            {#each shownModels as model (model)}
+              {@const on = editing.picked.includes(model)}
+              <div class="model-row" class:on>
+                <label class="model-pick"><input type="checkbox" checked={on} onchange={() => toggleModel(model)} /><span class="mono">{model}</span></label>
+                <button type="button" class="star" class:starred={on && editing.draft.model === model} title={t('ai.defaultModel')} aria-label={t('ai.defaultModel')} onclick={() => starModel(model)}>★</button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+        <div class="manual">
+          <input class="field mono" bind:value={editing.manual} spellcheck="false" placeholder={editing.hint ? t('ai.modelExample', { model: editing.hint }) : t('ai.modelManual')} aria-label={t('ai.modelManual')} onkeydown={(event) => event.key === 'Enter' && (event.preventDefault(), addManual())} />
+          <button type="button" class="secondary" disabled={!editing.manual.trim()} onclick={addManual}>{t('ai.add')}</button>
+        </div>
       </div>
       <div class="form-row">
         <span class="form-label">{t('ai.effort')}<small>{t('ai.effortHint')}</small></span>
@@ -238,10 +313,10 @@
       </div>
       {#if testResult}<p class="form-note result" class:failed={!testResult.ok}>{testResult.text}</p>{/if}
       <div class="form-row buttons">
-        <button type="button" class="secondary" disabled={testing || !editing.draft.base_url.trim() || !editing.draft.model.trim()} onclick={() => void testProvider()}>{testing ? t('ai.testing') : t('ai.test')}</button>
+        <button type="button" class="secondary" disabled={testing || !editing.draft.base_url.trim() || !hasModel} onclick={() => void testProvider()}>{testing ? t('ai.testing') : t('ai.test')}</button>
         <span class="spacer"></span>
         <button type="button" class="secondary" onclick={() => (editing = null)}>{t('ai.cancel')}</button>
-        <button type="button" class="primary" disabled={!editing.draft.name.trim() || !editing.draft.base_url.trim() || !editing.draft.model.trim()} onclick={() => void saveProvider()}>{t('ai.save')}</button>
+        <button type="button" class="primary" disabled={!editing.draft.name.trim() || !editing.draft.base_url.trim() || !hasModel} onclick={() => void saveProvider()}>{t('ai.save')}</button>
       </div>
     </div>
   {:else}
@@ -386,6 +461,79 @@
   }
   .control {
     width: 200px;
+  }
+  .models {
+    gap: var(--space-2);
+  }
+  .model-list {
+    max-height: 200px;
+    overflow-y: auto;
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    box-shadow: 0 0 0 1px var(--separator);
+  }
+  .model-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 2px var(--space-2);
+  }
+  .model-row + .model-row {
+    box-shadow: inset 0 1px 0 var(--separator);
+  }
+  /* Above the dialog's own label layout (a column). */
+  .model-row .model-pick {
+    flex: 1;
+    color: var(--fg);
+    font-size: var(--text-footnote);
+    font-weight: normal;
+    min-width: 0;
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-start;
+    align-items: center;
+    padding: 4px 0;
+    text-align: left;
+    cursor: pointer;
+    gap: var(--space-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .model-pick input {
+    flex: none;
+    width: auto;
+    margin: 0;
+  }
+  .model-pick span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .star {
+    flex: none;
+    padding: 0 4px;
+    border: none;
+    background: none;
+    color: var(--fg-subtle);
+    font-size: 14px;
+    cursor: pointer;
+    visibility: hidden;
+  }
+  .model-row.on .star,
+  .model-row:hover .star {
+    visibility: visible;
+  }
+  .star.starred {
+    color: var(--warning);
+  }
+  .manual {
+    display: flex;
+    gap: var(--space-2);
+  }
+  .manual .field,
+  .search {
+    flex: 1;
+    width: auto;
   }
   .stacked {
     flex-direction: column;

@@ -58,3 +58,16 @@ export function fromPreset(preset: ProviderPreset, taken: readonly string[]): Pr
 export function customAgentId(name: string, taken: readonly string[]): string {
   return providerId(`custom-${name}`, taken);
 }
+
+/** The checked models as a provider's `model` (the starred one, else the first checked) and
+ *  its other `models`. */
+export function providerModels(picked: readonly string[], star: string): { model: string; models: string[] } {
+  const unique = [...new Set(picked.map((model) => model.trim()).filter((model) => model.length > 0))];
+  const model = unique.includes(star) ? star : (unique[0] ?? '');
+  return { model, models: unique.filter((entry) => entry !== model) };
+}
+
+/** A fetched model list with the already-checked models kept (they may not be listed). */
+export function mergeListed(fetched: readonly string[], picked: readonly string[]): string[] {
+  return [...new Set([...picked, ...fetched])].sort((a, b) => Number(picked.includes(b)) - Number(picked.includes(a)) || a.localeCompare(b));
+}

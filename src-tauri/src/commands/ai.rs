@@ -416,6 +416,35 @@ pub async fn ai_provider_test(
     Ok(reply.text.chars().take(200).collect())
 }
 
+/// The models provider `provider` offers, to choose from; `key` is the typed key, else the one
+/// stored for it.
+#[tauri::command]
+pub async fn ai_provider_models(
+    state: State<'_, AppState>,
+    provider: ProviderPrefs,
+    key: Option<String>,
+) -> Result<Vec<String>, CommandError> {
+    let key = match key.filter(|key| !key.trim().is_empty()) {
+        Some(key) => Zeroizing::new(key.trim().to_owned()),
+        // A locked vault reads as no key: the list may not need one.
+        None => state
+            .vault
+            .ai_key(&format!("builtin:{}", provider.id))
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+    };
+    // The model is not chosen yet: only the address and format matter here.
+    let mut endpoint = endpoint(&provider);
+    endpoint.model.clear();
+    let client = Client::new(endpoint, &key, Duration::from_secs(30))
+        .map_err(|error| CommandError::new("ai.model", error.to_string()))?;
+    client
+        .list_models()
+        .await
+        .map_err(|error| CommandError::new("ai.model", error.to_string()))
+}
+
 /// A remote host's live connection, from the app's pool.
 struct Pooled {
     ssh: Arc<SshConnector>,

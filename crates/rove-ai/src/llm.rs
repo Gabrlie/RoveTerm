@@ -244,6 +244,81 @@ impl Client {
         format!("{}{path}", self.base.as_str().trim_end_matches('/'))
     }
 
+    /// `request` with the key and the format's headers.
+    fn authed(&self, mut request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if !self.key.is_empty() {
+            request = match self.endpoint.format {
+                Format::Anthropic => request.header("x-api-key", self.key.as_str()),
+                _ => request.bearer_auth(self.key.as_str()),
+            };
+        }
+        if self.endpoint.format == Format::Anthropic {
+            request = request.header("anthropic-version", "2023-06-01");
+        }
+        request
+    }
+
+    /// The models the provider offers (`GET /models`: `data[].id`, paged on Anthropic), sorted
+    /// and without repeats.
+    pub async fn list_models(&self) -> Result<Vec<String>, LlmError> {
+        let mut models: Vec<String> = Vec::new();
+        let mut after: Option<String> = None;
+        for _ in 0..20 {
+            let mut url = Url::parse(&self.url("/models")).map_err(|_| LlmError::InvalidUrl)?;
+            if self.endpoint.format == Format::Anthropic {
+                let mut query = url.query_pairs_mut();
+                query.append_pair("limit", "1000");
+                if let Some(after) = &after {
+                    query.append_pair("after_id", after);
+                }
+            }
+            let response = tokio::time::timeout(self.idle, self.authed(self.http.get(url)).send())
+                .await
+                .map_err(|_| LlmError::Timeout)?
+                .map_err(|error| LlmError::Network(self.scrub(&error.without_url().to_string())))?;
+            let status = response.status();
+            let bytes = tokio::time::timeout(self.idle, response.bytes())
+                .await
+                .map_err(|_| LlmError::Timeout)?
+                .map_err(|error| LlmError::Network(self.scrub(&error.without_url().to_string())))?;
+            if bytes.len() > MAX_BODY {
+                return Err(LlmError::TooLarge);
+            }
+            let text = String::from_utf8_lossy(&bytes);
+            if !status.is_success() {
+                return Err(LlmError::Http {
+                    status: status.as_u16(),
+                    message: self.scrub(&error_message(&text)),
+                });
+            }
+            let page: Value = serde_json::from_str(&text)
+                .map_err(|_| LlmError::Protocol("the model list is not JSON".into()))?;
+            let ids = page
+                .get("data")
+                .or_else(|| page.get("models"))
+                .and_then(Value::as_array)
+                .ok_or_else(|| LlmError::Protocol("the model list has no data".into()))?;
+            models.extend(
+                ids.iter()
+                    .filter_map(|model| model.get("id").or_else(|| model.get("name")))
+                    .filter_map(Value::as_str)
+                    .filter(|id| !id.is_empty() && id.len() <= 200)
+                    .map(str::to_owned),
+            );
+            let more = page.get("has_more").and_then(Value::as_bool) == Some(true);
+            after = page
+                .get("last_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if !more || after.is_none() {
+                break;
+            }
+        }
+        models.sort();
+        models.dedup();
+        Ok(models)
+    }
+
     /// Streams one completion of `messages` after `system`, offering `tools`; `on_delta` sees the
     /// text and reasoning as they arrive. Dropping the future cancels the request.
     pub async fn complete(
@@ -267,21 +342,13 @@ impl Client {
                 anthropic_body(&self.endpoint, system, messages, tools),
             ),
         };
-        let mut request = self
-            .http
-            .post(self.url(path))
-            .header("content-type", "application/json")
-            .body(body.to_string())
-            .header("accept", "text/event-stream");
-        if !self.key.is_empty() {
-            request = match self.endpoint.format {
-                Format::Anthropic => request.header("x-api-key", self.key.as_str()),
-                _ => request.bearer_auth(self.key.as_str()),
-            };
-        }
-        if self.endpoint.format == Format::Anthropic {
-            request = request.header("anthropic-version", "2023-06-01");
-        }
+        let request = self.authed(
+            self.http
+                .post(self.url(path))
+                .header("content-type", "application/json")
+                .body(body.to_string())
+                .header("accept", "text/event-stream"),
+        );
         let response = tokio::time::timeout(self.idle, request.send())
             .await
             .map_err(|_| LlmError::Timeout)?
@@ -980,19 +1047,34 @@ mod tests {
         assert_eq!(body["messages"][1]["content"][0]["type"], "thinking");
         assert_eq!(body["messages"][1]["content"][1]["input"]["command"], "ls");
         assert_eq!(body["messages"][2]["content"].as_array().unwrap().len(), 2);
-        assert_eq!(body["thinking"], json!({ "type": "adaptive", "display": "summarized" }));
+        assert_eq!(
+            body["thinking"],
+            json!({ "type": "adaptive", "display": "summarized" })
+        );
         assert_eq!(body["output_config"]["effort"], "high");
         let max = Endpoint {
             effort: Some(Effort::Max),
             ..endpoint.clone()
         };
-        assert_eq!(anthropic_body(&max, "s", &messages, &[])["output_config"]["effort"], "max");
-        assert_eq!(chat_body(&max, "s", &messages, &[])["reasoning_effort"], "xhigh");
+        assert_eq!(
+            anthropic_body(&max, "s", &messages, &[])["output_config"]["effort"],
+            "max"
+        );
+        assert_eq!(
+            chat_body(&max, "s", &messages, &[])["reasoning_effort"],
+            "xhigh"
+        );
         let minimal = Endpoint {
             effort: Some(Effort::Minimal),
             ..endpoint
         };
-        assert_eq!(anthropic_body(&minimal, "s", &messages, &[])["output_config"]["effort"], "low");
-        assert_eq!(responses_body(&minimal, "s", &messages, &[])["reasoning"]["effort"], "minimal");
+        assert_eq!(
+            anthropic_body(&minimal, "s", &messages, &[])["output_config"]["effort"],
+            "low"
+        );
+        assert_eq!(
+            responses_body(&minimal, "s", &messages, &[])["reasoning"]["effort"],
+            "minimal"
+        );
     }
 }
