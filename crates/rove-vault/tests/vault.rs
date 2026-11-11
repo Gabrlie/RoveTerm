@@ -1111,3 +1111,24 @@ fn context_windows_are_kept_for_the_providers_models() {
     prefs.ai.providers[0] = provider;
     assert!(vault.set_preferences(prefs).is_err());
 }
+
+#[test]
+fn assistant_limits_are_checked() {
+    let vault = unlocked();
+    let mut prefs = Preferences::default();
+    assert_eq!(
+        (prefs.ai.max_steps, prefs.ai.request_timeout_secs),
+        (40, 180)
+    );
+    prefs.ai.max_steps = 0;
+    assert!(vault.set_preferences(prefs.clone()).is_err());
+    prefs.ai.max_steps = 80;
+    prefs.ai.request_timeout_secs = 10;
+    assert!(vault.set_preferences(prefs.clone()).is_err());
+    prefs.ai.request_timeout_secs = 600;
+    assert_eq!(vault.set_preferences(prefs).unwrap().ai.max_steps, 80);
+    // Older records without them read the defaults.
+    let old: Preferences =
+        serde_json::from_value(serde_json::json!({ "ai": { "mode": "auto" } })).unwrap();
+    assert_eq!(old.ai.request_timeout_secs, 180);
+}

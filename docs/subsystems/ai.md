@@ -142,6 +142,8 @@ ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次
 
 对话以统一的 `Message`（用户、助手含工具调用、工具结果）传给客户端，由它转换成各格式的请求；Anthropic 的同一轮工具结果合并进一条用户消息，签名的思考块在下一轮原样回传。
 
+提示缓存：Anthropic 在系统提示（连同其前的工具）和对话最后一个内容块（思考块除外）各设一个 `cache_control: {type: "ephemeral"}` 断点，每次请求读取上一次写入的缓存；Responses 带 `prompt_cache_key`（AI 会话 id），同一对话的请求共享前缀；Chat Completions 不加参数（兼容接口可能拒绝未知参数，OpenAI 与 DeepSeek 会自动缓存）。缓存读写的 token 计入输入 token。一个回合的最多请求次数与回复超时取自 `ai.max_steps` / `ai.request_timeout_secs`。
+
 推理强度按格式换算：OpenAI Chat 的 `reasoning_effort` 与 Responses 的 `reasoning.effort` 取 minimal 至 xhigh（max 按 xhigh）；Anthropic 用自适应思考（`thinking: {type: "adaptive", display: "summarized"}`）加 `output_config.effort`（low 至 max，minimal 按 low），不再发送固定的思考预算，当前模型会拒绝它。模型不支持推理参数时（400 且错误信息提到 reasoning、effort 或 thinking），去掉强度重试一次，同一客户端之后不再发送；切换模型或强度时重新尝试。
 
 安全与限制：基础地址必须是 http(s)、不含凭据与查询；重定向只在同源内跟随，key 不会被带到别处；API key 只在请求头中，错误文本里出现的 key 替换为 `***`；单次回复最多 8 MiB；首包与两段之间超过空闲时限即超时；流没有正常结束视为错误。

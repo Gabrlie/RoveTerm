@@ -549,3 +549,23 @@ async fn token_counts_are_read_in_each_format() {
         (Some(100), Some(12))
     );
 }
+
+#[tokio::test]
+async fn responses_requests_name_their_cache_prefix() {
+    let reply = sse(&[(
+        "response.completed",
+        json!({ "response": { "usage": { "input_tokens": 1, "output_tokens": 1 } } }),
+    )]);
+    let (base, seen) = serve(200, reply).await;
+    client(Format::Responses, &base, "k")
+        .with_cache_key("ai-1")
+        .complete(
+            "s",
+            &[Message::User { text: "hi".into() }],
+            &[],
+            &mut |_| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(seen.await.unwrap().body["prompt_cache_key"], "ai-1");
+}

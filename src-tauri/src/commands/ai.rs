@@ -36,8 +36,6 @@ pub const AI_EVENT: &str = "ai-update";
 const MAX_PROMPT: usize = 100_000;
 /// Agent modes that make an ACP agent ask before its own tools change anything.
 const PREFERRED_MODES: &[&str] = &["read-only", "read_only", "readonly", "default", "plan"];
-/// How long a model may stay silent before its reply counts as stalled.
-const MODEL_IDLE: Duration = Duration::from_secs(180);
 
 /// One running AI session.
 struct Entry {
@@ -652,10 +650,13 @@ pub async fn ai_start(
                 .vault
                 .ai_key(&format!("builtin:{provider_id}"))?
                 .unwrap_or_default();
-            let client = Client::new(endpoint(provider), &key, MODEL_IDLE)
-                .map_err(|error| CommandError::new("ai.model", error.to_string()))?;
+            let idle = Duration::from_secs(u64::from(prefs.ai.request_timeout_secs));
+            let client = Client::new(endpoint(provider), &key, idle)
+                .map_err(|error| CommandError::new("ai.model", error.to_string()))?
+                .with_cache_key(&id);
             let assistant = Assistant::new(client, session, &meta)
                 .with_models(&provider.models)
+                .with_max_steps(prefs.ai.max_steps as usize)
                 .with_contexts(provider.contexts.clone(), provider.context_window);
             if let Some((_, _, records, _)) = &earlier {
                 let records: Vec<(String, serde_json::Value)> = records

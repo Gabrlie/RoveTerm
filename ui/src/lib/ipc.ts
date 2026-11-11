@@ -290,6 +290,10 @@ export interface AiPrefs {
   read_only: string[];
   /** Text that makes any command containing it dangerous. */
   dangerous: string[];
+  /** Most model requests of the built-in assistant in one turn, 1–200. */
+  max_steps: number;
+  /** How long the built-in assistant waits for a reply, 30–1800 seconds. */
+  request_timeout_secs: number;
 }
 
 export interface Preferences {

@@ -221,6 +221,8 @@ pub struct Client {
     /// The model turned down the reasoning effort; later requests leave it out. Shared by the
     /// clones of one client, reset when the model or effort changes.
     effort_refused: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Groups requests that share a prefix for the provider's prompt cache (Responses).
+    cache_key: Option<String>,
 }
 
 /// Whether a 400 reply turns down the reasoning settings (the model has none).
@@ -272,6 +274,7 @@ impl Client {
             key: Zeroizing::new(key.to_owned()),
             idle,
             effort_refused: Default::default(),
+            cache_key: None,
         })
     }
 
@@ -293,6 +296,14 @@ impl Client {
         model.clone_into(&mut client.endpoint.model);
         client.effort_refused = Default::default();
         client
+    }
+
+    /// The same client naming its requests' shared prefix `key` for the prompt cache (one
+    /// conversation's requests share it).
+    #[must_use]
+    pub fn with_cache_key(mut self, key: &str) -> Self {
+        self.cache_key = Some(key.chars().take(64).collect());
+        self
     }
 
     /// The model turned down the reasoning effort, which is left out since.
@@ -429,7 +440,7 @@ impl Client {
         tools: &[ToolSpec],
         on_delta: &mut (dyn FnMut(Delta) + Send),
     ) -> Result<Reply, LlmError> {
-        let (path, body) = match endpoint.format {
+        let (path, mut body) = match endpoint.format {
             Format::Chat => (
                 "/chat/completions",
                 chat_body(endpoint, system, messages, tools),
@@ -443,6 +454,11 @@ impl Client {
                 anthropic_body(endpoint, system, messages, tools),
             ),
         };
+        if endpoint.format == Format::Responses
+            && let Some(key) = &self.cache_key
+        {
+            body["prompt_cache_key"] = json!(key);
+        }
         let request = self.authed(
             self.http
                 .post(self.url(path))
@@ -678,7 +694,25 @@ fn anthropic_body(
             }
         }
     }
+    // Cache breakpoints: the system prompt (with the tools before it) and the end of the
+    // conversation, so each request reads what the previous one wrote.
+    if let Some(block) = list
+        .last_mut()
+        .and_then(|message| message["content"].as_array_mut())
+        .and_then(|blocks| {
+            blocks.iter_mut().rev().find(|block| {
+                !matches!(
+                    block["type"].as_str(),
+                    Some("thinking" | "redacted_thinking")
+                )
+            })
+        })
+    {
+        block["cache_control"] = json!({ "type": "ephemeral" });
+    }
     let max_tokens = endpoint.max_tokens.unwrap_or(ANTHROPIC_MAX_TOKENS);
+    let system =
+        json!([{ "type": "text", "text": system, "cache_control": { "type": "ephemeral" } }]);
     let mut body = json!({ "model": endpoint.model, "system": system, "messages": list, "max_tokens": max_tokens, "stream": true });
     if !tools.is_empty() {
         body["tools"] = tools
@@ -1222,6 +1256,23 @@ mod tests {
         assert_eq!(body["messages"][1]["content"][0]["type"], "thinking");
         assert_eq!(body["messages"][1]["content"][1]["input"]["command"], "ls");
         assert_eq!(body["messages"][2]["content"].as_array().unwrap().len(), 2);
+        // Cache breakpoints at the system prompt and the end of the conversation only.
+        assert_eq!(body["system"][0]["text"], "sys");
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(
+            body["messages"][2]["content"][1]["cache_control"]["type"],
+            "ephemeral"
+        );
+        assert!(
+            body["messages"][2]["content"][0]
+                .get("cache_control")
+                .is_none()
+        );
+        assert!(
+            body["messages"][1]["content"][1]
+                .get("cache_control")
+                .is_none()
+        );
         assert_eq!(
             body["thinking"],
             json!({ "type": "adaptive", "display": "summarized" })

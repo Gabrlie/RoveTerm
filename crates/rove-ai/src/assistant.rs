@@ -13,7 +13,7 @@ use crate::llm::{Client, Delta, Effort, LlmError, Message, ToolSpec};
 use crate::session::{AiEvent, AiSession};
 use crate::tools;
 
-/// Most model calls in one turn.
+/// Most model calls in one turn unless set otherwise ([`Assistant::with_max_steps`]).
 pub const MAX_STEPS: usize = 40;
 /// Characters of conversation kept before old tool results are dropped.
 const MAX_HISTORY: usize = 400_000;
@@ -84,6 +84,7 @@ pub struct Assistant {
     /// Context windows of the models (tokens), and of the others when known.
     contexts: std::collections::BTreeMap<String, u64>,
     context_window: Option<u64>,
+    max_steps: usize,
 }
 
 impl Assistant {
@@ -113,7 +114,15 @@ impl Assistant {
             turns: std::sync::atomic::AtomicU64::new(0),
             contexts: std::collections::BTreeMap::new(),
             context_window: None,
+            max_steps: MAX_STEPS,
         }
+    }
+
+    /// Makes at most `steps` model requests in one turn.
+    #[must_use]
+    pub fn with_max_steps(mut self, steps: usize) -> Self {
+        self.max_steps = steps.max(1);
+        self
     }
 
     /// Knows the context windows of the models (`contexts`), and of the rest (`fallback`), to
@@ -283,7 +292,7 @@ impl Assistant {
         history.push(Message::User {
             text: text.to_owned(),
         });
-        for step in 0..MAX_STEPS {
+        for step in 0..self.max_steps {
             trim(&mut history);
             let message_id = format!("t{turn}s{step}");
             let session = self.session.clone();

@@ -53,6 +53,9 @@
     { value: 'responses', label: t('ai.format.responses') },
     { value: 'anthropic', label: t('ai.format.anthropic') },
   ];
+  /** Choices for the requests per turn and the reply timeout (seconds). */
+  const STEPS = [10, 20, 40, 80, 120, 200];
+  const TIMEOUTS = [60, 120, 180, 300, 600, 1200, 1800];
   const EFFORTS: { value: ReasoningEffort; label: string }[] = EFFORT_LEVELS.map((value) => ({ value, label: t(`ai.effort.${value}`) }));
   const MODES: { value: AiMode; label: string }[] = [
     { value: 'ask_all', label: t('ai.mode.ask_all') },
@@ -386,6 +389,14 @@
   <div class="form-row">
     <span class="form-label">{t('ai.defaultMode')}<small>{t(`ai.modeHint.${rules.mode}`)}</small></span>
     <div class="control"><Select label={t('ai.defaultMode')} value={rules.mode} options={MODES} onchange={(value) => void editPrefs((draft) => (draft.ai.mode = value))} /></div>
+  </div>
+  <div class="form-row">
+    <span class="form-label">{t('ai.maxSteps')}<small>{t('ai.maxStepsHint')}</small></span>
+    <div class="control"><Select label={t('ai.maxSteps')} value={String(rules.max_steps)} options={[...new Set([...STEPS, rules.max_steps])].sort((a, b) => a - b).map((n) => ({ value: String(n), label: String(n) }))} onchange={(value) => void editPrefs((draft) => (draft.ai.max_steps = Number(value)))} /></div>
+  </div>
+  <div class="form-row">
+    <span class="form-label">{t('ai.requestTimeout')}<small>{t('ai.requestTimeoutHint')}</small></span>
+    <div class="control"><Select label={t('ai.requestTimeout')} value={String(rules.request_timeout_secs)} options={[...new Set([...TIMEOUTS, rules.request_timeout_secs])].sort((a, b) => a - b).map((n) => ({ value: String(n), label: t('ai.seconds', { n }) }))} onchange={(value) => void editPrefs((draft) => (draft.ai.request_timeout_secs = Number(value)))} /></div>
   </div>
 </div>
 

@@ -96,7 +96,7 @@ fn effort_or_medium<'de, D: serde::Deserializer<'de>>(
 }
 
 /// AI settings that follow the user.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AiPrefs {
     /// Default approval mode of new AI sessions.
@@ -109,6 +109,24 @@ pub struct AiPrefs {
     pub read_only: Vec<String>,
     /// Text that makes any command containing it dangerous.
     pub dangerous: Vec<String>,
+    /// Most model requests of the built-in assistant in one turn (its tool calls included).
+    pub max_steps: u32,
+    /// How long the built-in assistant waits for a reply to start, and between its pieces.
+    pub request_timeout_secs: u32,
+}
+
+impl Default for AiPrefs {
+    fn default() -> Self {
+        Self {
+            mode: AiMode::default(),
+            providers: Vec::new(),
+            default_agent: None,
+            read_only: Vec::new(),
+            dangerous: Vec::new(),
+            max_steps: 40,
+            request_timeout_secs: 180,
+        }
+    }
 }
 
 /// How the agent signs in.
@@ -527,6 +545,16 @@ impl AiPrefs {
         }
         if self.providers.len() > MAX_PROVIDERS {
             return Err(VaultError::Invalid("too many providers".into()));
+        }
+        if !(1..=200).contains(&self.max_steps) {
+            return Err(VaultError::Invalid(
+                "the requests per turn must be 1–200".into(),
+            ));
+        }
+        if !(30..=1800).contains(&self.request_timeout_secs) {
+            return Err(VaultError::Invalid(
+                "the request timeout must be 30–1800 seconds".into(),
+            ));
         }
         let mut ids = std::collections::HashSet::new();
         for provider in &mut self.providers {
