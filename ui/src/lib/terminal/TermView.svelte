@@ -21,6 +21,7 @@
   import { isAppShortcut } from '../actions';
   import { prefs, SYMBOL_FONT } from '../settings/prefs.svelte';
   import { readClipboard, writeClipboard } from '../ui/clipboard';
+  import { osc52Text } from './osc52';
   import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
 
   interface Props {
@@ -87,6 +88,12 @@
     { label: t('terminal.menu.selectAll'), separated: true, onselect: () => term?.selectAll() },
     { label: t('terminal.menu.clear'), icon: 'clear', onselect: () => term?.clear() },
   ];
+
+  /** The right button opens RoveTerm's menu and is not reported to the program in the terminal,
+   *  which would otherwise clear its own selection (Claude Code) before the menu can use it. */
+  function holdRightButton(event: MouseEvent): void {
+    if (event.button === 2) event.stopPropagation();
+  }
 
   function onContextMenu(event: MouseEvent): void {
     event.preventDefault();
@@ -243,6 +250,12 @@
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = '11';
     term.loadAddon(new WebLinksAddon());
+    // Programs that keep their own selection (Claude Code, tmux) copy it with OSC 52.
+    term.parser.registerOscHandler(52, (data) => {
+      const text = osc52Text(data);
+      if (text) void writeClipboard(text).catch((error: unknown) => console.warn('OSC 52 copy failed', error));
+      return true;
+    });
     term.open(container);
     if (prefersWebgl()) void loadWebgl(term);
     fit.fit();
@@ -303,7 +316,7 @@
 
 </script>
 
-<div class="term" class:ringing bind:this={container} oncontextmenu={onContextMenu} role="presentation"></div>
+<div class="term" class:ringing bind:this={container} oncontextmenu={onContextMenu} onmousedowncapture={holdRightButton} onmouseupcapture={holdRightButton} role="presentation"></div>
 {#if menu}
   <ContextMenu x={menu.x} y={menu.y} items={menuItems()} onclose={() => (menu = null)} />
 {/if}
