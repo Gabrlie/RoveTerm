@@ -284,8 +284,14 @@
           <p class="empty">{keys.items.length === 0 ? t('keys.empty') : t('host.noMatch')}</p>
         {/each}
       </div>
+      <!-- At the bottom of the list's column, level with Done. -->
+      <div class="add">
+        <button type="button" class:active={mode === 'generate'} onclick={() => reset('generate')}><Icon name="add" size={13} />{t('keys.generate')}</button>
+        <button type="button" class:active={mode === 'import'} onclick={() => reset('import')}><Icon name="importConfig" size={13} />{t('keys.import')}</button>
+      </div>
     </nav>
 
+    <div class="main">
     <div class="pane">
       {#if mode === 'view' && selected}
         <div class="head">
@@ -439,14 +445,11 @@
       {#if error}<p class="message error">{error}</p>{/if}
       {#if notice}<p class="message notice">{notice}</p>{/if}
     </div>
-  </div>
-  {#snippet actions()}
-    <div class="add">
-      <button type="button" class="secondary" class:active={mode === 'generate'} onclick={() => reset('generate')}><Icon name="add" size={13} />{t('keys.generate')}</button>
-      <button type="button" class="secondary" class:active={mode === 'import'} onclick={() => reset('import')}><Icon name="importConfig" size={13} />{t('keys.import')}</button>
+    <div class="foot">
+      <button type="button" class="primary" onclick={onclose}>{t('settings.done')}</button>
     </div>
-    <button type="button" class="primary" onclick={onclose}>{t('settings.done')}</button>
-  {/snippet}
+    </div>
+  </div>
 </Dialog>
 
 {#if keyMenu}
@@ -454,13 +457,12 @@
 {/if}
 
 <style>
+  /* Runs to the bottom of the dialog, so the line between the list and the pane does too. */
   .layout {
     display: flex;
-    height: min(580px, 70vh);
-    margin: 0 calc(-1 * var(--space-5));
-    box-shadow:
-      inset 0 1px 0 var(--separator),
-      inset 0 -1px 0 var(--separator);
+    height: min(620px, 74vh);
+    margin: 0 calc(-1 * var(--space-5)) calc(-1 * var(--space-2));
+    box-shadow: inset 0 1px 0 var(--separator);
   }
   nav {
     flex: 0 0 220px;
@@ -571,20 +573,52 @@
   }
   .add {
     display: flex;
-    gap: var(--space-2);
-    margin-right: auto;
+    flex-direction: column;
+    gap: 2px;
+    padding-top: var(--space-2);
+    box-shadow: inset 0 1px 0 var(--separator);
   }
   .add button {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-2);
+    height: 28px;
+    padding: 0 var(--space-2);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    font-size: var(--text-footnote);
+    text-align: left;
   }
+  .add button:hover,
   .add button.active {
-    box-shadow: 0 0 0 1px var(--accent);
+    background: var(--fill-hover);
+  }
+  /* The right side: the pane, and Done level with the buttons at the bottom of the list. */
+  .main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  /* As tall as the buttons under the list (their line, two rows and the column's padding), so
+     the two lines meet. */
+  .foot {
+    flex: none;
+    box-sizing: border-box;
+    height: calc(var(--space-2) + 58px + var(--space-3));
+    display: flex;
+    justify-content: flex-end;
+    align-items: flex-end;
+    padding: 0 var(--space-5) var(--space-3);
+    box-shadow: inset 0 1px 0 var(--separator);
   }
   .pane {
     flex: 1;
     min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
