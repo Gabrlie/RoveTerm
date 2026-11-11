@@ -923,7 +923,16 @@ export type SessionUpdate =
   | { kind: 'config_options'; options: ConfigOption[] }
   /** How much of the model's context window the conversation fills, in tokens. */
   | { kind: 'usage'; used: number; size: number }
+  | { kind: 'commands'; commands: AgentCommand[] }
   | { kind: 'stats'; input_tokens: number | null; output_tokens: number | null; first_token_ms: number | null; tokens_per_second: number | null };
+
+/** A command the agent offers, run by sending `/<name>` as a prompt. */
+export interface AgentCommand {
+  name: string;
+  description: string;
+  /** What to type after the name, when it takes input. */
+  hint: string | null;
+}
 
 /** The built-in assistant's last request: tokens in and out, and how fast they came. */
 export type RequestStats = Omit<Extract<SessionUpdate, { kind: 'stats' }>, 'kind'>;

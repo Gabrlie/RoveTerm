@@ -1,13 +1,16 @@
 <script lang="ts">
-  // The AI page of the right panel, laid out like VSCode's agent chat: the conversation about the
-  // focused tab's host, each operation as one line that expands, approvals inline, and a composer
-  // card with the agent and approval mode at the bottom.
+  // The AI page of the right panel, laid out like VSCode's agent chat: the agent and the
+  // conversation's title at the top, the conversation about the focused tab's host (each
+  // operation as one line that expands, approvals inline), and an input card with the model,
+  // approval mode and usage at the bottom. Typing `/` lists the agent's commands and settings.
   import { onMount, tick } from 'svelte';
   import Icon from '../ui/Icon.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import Markdown from './Markdown.svelte';
   import AuditDialog from './AuditDialog.svelte';
   import UsageMeter from './UsageMeter.svelte';
+  import ModelPopover from './ModelPopover.svelte';
+  import { builtinCommands, slashItems, slashQuery, splitOptions, type SlashItem } from './composer';
   import { ai, contextKey } from './ai.svelte';
   import { outcomeState, rows, subject, toolSubject, type ApprovalItem } from './chatview';
   import { hostOf, workspace } from '../workspace/workspace.svelte';
@@ -65,8 +68,12 @@
   let historyOpen = $state(false);
   /** The title being typed, while renaming. */
   let renaming = $state<string | null>(null);
-  let settingsOpen = $state(false);
-  let settingsPicker = $state<HTMLDivElement>();
+  /** The setting whose choices the `/` menu lists, after it was picked there. */
+  let slashSetting = $state<ConfigOption | null>(null);
+  /** The highlighted entry of the `/` menu. */
+  let slashAt = $state(0);
+  /** The input the `/` menu was closed on (Escape), until it changes. */
+  let slashClosed = $state<string | null>(null);
   /** Dangerous approvals the user acknowledged, by request id. */
   let acknowledged = $state<Record<number, boolean>>({});
   /** Rows the user expanded, by key. */
@@ -94,6 +101,10 @@
   }
 
   function onKeydown(event: KeyboardEvent): void {
+    if (!event.isComposing && slashKey(event)) {
+      event.preventDefault();
+      return;
+    }
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       send();
@@ -142,12 +153,11 @@
       { id: 'effort', name: t('ai.effort'), category: 'thought_level', kind: 'select', current: provider.effort, choices: EFFORT_LEVELS.map((level) => ({ value: level, name: level, description: null })) },
     ];
   });
-  const modelSetting = $derived(settings.find((option) => option.category === 'model') ?? settings[0]);
-
-  function choiceName(option: ConfigOption): string {
-    const value = chat.optionValue(option);
-    return entryName(option, option.choices.find((entry) => entry.value === value) ?? { value, name: value });
-  }
+  const split = $derived(splitOptions(settings));
+  const commands = $derived(agentRef?.startsWith('builtin:') ? builtinCommands(agentRef) : chat.commands);
+  const query = $derived(slashQuery(draft));
+  const slashOpen = $derived(query !== null && slashClosed !== draft);
+  const slashList = $derived(query === null ? [] : slashItems(query, commands, split.others));
 
   /** A choice's name; the built-in assistant's effort levels in the user's language. */
   function entryName(option: ConfigOption, entry: { value: string; name: string }): string {
@@ -164,17 +174,66 @@
     return option.id === 'effort' ? t('ai.effort') : option.id === 'model' ? t('ai.model') : option.name;
   }
 
-  /** Opens the model menu; an agent that has not started yet starts first, to list its models. */
-  async function openSettings(): Promise<void> {
-    if (settingsOpen) {
-      settingsOpen = false;
-      return;
-    }
+  /** Starts a local agent that has not started yet, without a message, so that it lists its
+   *  models, settings and commands. Returns whether they can be shown. */
+  async function prepareAgent(): Promise<boolean> {
     if (!chat.id && agentRef?.startsWith('acp:')) {
       await chat.prepare(terminalPane?.sessionId ?? null);
-      if (!chat.id) return;
+      return !!chat.id;
     }
-    settingsOpen = true;
+    return true;
+  }
+
+  function onInput(): void {
+    grow();
+    slashAt = 0;
+    slashSetting = null;
+    if (draft === '/') void prepareAgent();
+  }
+
+  function pickSlash(item: SlashItem): void {
+    if (item.kind === 'command') {
+      draft = `/${item.command.name} `;
+      slashSetting = null;
+      input?.focus();
+    } else {
+      slashSetting = item.option;
+      slashAt = Math.max(0, item.option.choices.findIndex((choice) => choice.value === chat.optionValue(item.option)));
+    }
+  }
+
+  function pickSettingChoice(option: ConfigOption, value: string): void {
+    void chat.setOption(option.id, value);
+    slashSetting = null;
+    draft = '';
+    input?.focus();
+  }
+
+  /** Arrow keys, Enter or Tab and Escape in the `/` menu; returns whether the key was used. */
+  function slashKey(event: KeyboardEvent): boolean {
+    if (!slashOpen) return false;
+    const count = slashSetting ? slashSetting.choices.length : slashList.length;
+    if (event.key === 'Escape') {
+      if (slashSetting) slashSetting = null;
+      else slashClosed = draft;
+      return true;
+    }
+    if (count === 0) return false;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      slashAt = (slashAt + (event.key === 'ArrowDown' ? 1 : count - 1)) % count;
+      return true;
+    }
+    if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
+      if (slashSetting) {
+        const choice = slashSetting.choices[slashAt];
+        if (choice) pickSettingChoice(slashSetting, choice.value);
+      } else {
+        const item = slashList[slashAt];
+        if (item) pickSlash(item);
+      }
+      return true;
+    }
+    return false;
   }
 
   async function resume(summary: AiSessionSummary, records: AiRecord[]): Promise<void> {
@@ -264,7 +323,6 @@
   function onWindowPointer(event: PointerEvent): void {
     if (pickerOpen && picker && !picker.contains(event.target as Node)) pickerOpen = false;
     if (modeOpen && modePicker && !modePicker.contains(event.target as Node)) modeOpen = false;
-    if (settingsOpen && settingsPicker && !settingsPicker.contains(event.target as Node)) settingsOpen = false;
   }
 
   onMount(() => {
@@ -288,6 +346,29 @@
 
 <div class="ai">
   <div class="toolbar">
+    <div class="picker" bind:this={picker}>
+      <button type="button" class="pick agent-pick" onclick={() => (pickerOpen = !pickerOpen)} aria-expanded={pickerOpen} title={agent ? `${t('ai.agent')}: ${agent.name}${agent.detail ? `\n${agent.detail}` : ''}` : t('ai.chooseAgent')}>
+        <Icon name="bot" size={13} /><span class="pick-name">{agent?.name ?? t('ai.chooseAgent')}</span>
+      </button>
+      {#if pickerOpen}
+        <div class="menu down" role="menu">
+          {#each GROUPS as group (group.kind)}
+            {@const entries = agents.filter((entry) => entry.kind === group.kind)}
+            {#if entries.length > 0}
+              <p class="menu-title">{t(group.title)}</p>
+              {#each entries as entry (entry.agent)}
+                <button type="button" role="menuitem" class="menu-item" class:current={entry.agent === agentRef} onclick={() => chooseAgent(entry)}>
+                  <span class="menu-name">{entry.name}</span>
+                  <span class="menu-detail">{entry.via_npx ? t('ai.viaNpx') : entry.detail}</span>
+                </button>
+              {/each}
+            {/if}
+          {/each}
+          <button type="button" role="menuitem" class="menu-item manage" onclick={() => ((pickerOpen = false), onsettings())}>{t('ai.manageAgents')}</button>
+        </div>
+      {/if}
+    </div>
+    <span class="divider" aria-hidden="true"></span>
     {#if renaming !== null}
       <!-- svelte-ignore a11y_autofocus -->
       <input class="rename" bind:value={renaming} autofocus aria-label={t('ai.rename')} maxlength="120" onkeydown={onRenameKey} onblur={() => void finishRename()} />
@@ -439,63 +520,54 @@
           <Icon name="terminal" size={12} />
         </label>
       </div>
-      <textarea bind:this={input} bind:value={draft} rows="1" placeholder={t('ai.placeholder', { host: hostInText })} aria-label={t('ai.placeholder', { host: hostInText })} oninput={grow} onkeydown={onKeydown}></textarea>
-      <div class="card-foot">
-        <div class="picker" bind:this={picker}>
-          <button type="button" class="pick" onclick={() => (pickerOpen = !pickerOpen)} aria-expanded={pickerOpen} title={agent?.detail ?? ''}>
-            <Icon name="bot" size={12} /><span class="pick-name">{agent?.name ?? t('ai.chooseAgent')}</span><Icon name="chevronDown" size={11} />
-          </button>
-          {#if pickerOpen}
-            <div class="menu" role="menu">
-              {#each GROUPS as group (group.kind)}
-                {@const entries = agents.filter((entry) => entry.kind === group.kind)}
-                {#if entries.length > 0}
-                  <p class="menu-title">{t(group.title)}</p>
-                  {#each entries as entry (entry.agent)}
-                    <button type="button" role="menuitem" class="menu-item" class:current={entry.agent === agentRef} onclick={() => chooseAgent(entry)}>
-                      <span class="menu-name">{entry.name}</span>
-                      <span class="menu-detail">{entry.via_npx ? t('ai.viaNpx') : entry.detail}</span>
-                    </button>
-                  {/each}
+      {#if slashOpen}
+        <div class="menu slash" role="listbox" aria-label={t('ai.slash.title')}>
+          {#if slashSetting}
+            {@const option = slashSetting}
+            <p class="menu-title">{optionName(option)}</p>
+            {#each option.choices as choice, at (choice.value)}
+              <button type="button" role="option" aria-selected={at === slashAt} class="menu-item" class:active={at === slashAt} class:current={choice.value === chat.optionValue(option)} onpointerenter={() => (slashAt = at)} onclick={() => pickSettingChoice(option, choice.value)}>
+                <span class="menu-name">{entryName(option, choice)}</span>
+                {#if choice.description}<span class="menu-detail wrap">{choice.description}</span>{/if}
+              </button>
+            {/each}
+          {:else if chat.starting}
+            <p class="menu-title">{t('ai.starting')}</p>
+          {:else if slashList.length === 0}
+            <p class="menu-title">{commands.length === 0 && split.others.length === 0 ? t('ai.slash.none') : t('ai.slash.noMatch')}</p>
+          {:else}
+            {#each slashList as item, at (item.kind === 'command' ? `c:${item.command.name}` : `s:${item.option.id}`)}
+              {#if at === 0 || (item.kind === 'setting' && slashList[at - 1]?.kind === 'command')}
+                <p class="menu-title">{item.kind === 'command' ? t('ai.slash.commands') : t('ai.slash.settings')}</p>
+              {/if}
+              <button type="button" role="option" aria-selected={at === slashAt} class="menu-item" class:active={at === slashAt} onpointerenter={() => (slashAt = at)} onclick={() => pickSlash(item)}>
+                {#if item.kind === 'command'}
+                  <span class="menu-name"><span class="mono">/{item.command.name}</span>{#if item.command.hint}<span class="hint">{item.command.hint}</span>{/if}</span>
+                  {#if item.command.description}<span class="menu-detail wrap">{item.command.description}</span>{/if}
+                {:else}
+                  <span class="menu-name">{optionName(item.option)}</span>
+                  <span class="menu-detail">{entryName(item.option, item.option.choices.find((choice) => choice.value === chat.optionValue(item.option)) ?? { value: '', name: chat.optionValue(item.option) })}</span>
                 {/if}
-              {/each}
-              <button type="button" role="menuitem" class="menu-item manage" onclick={() => ((pickerOpen = false), onsettings())}>{t('ai.manageAgents')}</button>
-            </div>
+              </button>
+            {/each}
           {/if}
         </div>
-        {#if modelSetting || (agentRef?.startsWith('acp:') && !chat.id)}
-          <div class="picker spread" bind:this={settingsPicker}>
-            <button type="button" class="pick" onclick={() => void openSettings()} aria-expanded={settingsOpen} title={t('ai.modelSettings')} disabled={chat.starting}>
-              <span class="pick-name">{chat.starting ? t('ai.loadingModels') : modelSetting ? choiceName(modelSetting) : t('ai.model')}</span><Icon name="chevronDown" size={11} />
-            </button>
-            {#if settingsOpen}
-              <div class="menu" role="menu" aria-label={t('ai.modelSettings')}>
-                {#if settings.length === 0}<p class="menu-title">{t('ai.noModelSettings')}</p>{/if}
-                {#each settings as option (option.id)}
-                  {#if option.kind === 'boolean'}
-                    {@const on = chat.optionValue(option) === 'true'}
-                    <button type="button" role="menuitemcheckbox" aria-checked={on} class="menu-item toggle-row" onclick={() => void chat.setOption(option.id, on ? 'false' : 'true')}>
-                      <span class="menu-name">{option.name}</span>
-                      <span class="switch-mark" class:on></span>
-                    </button>
-                  {:else}
-                  <p class="menu-title">{optionName(option)}</p>
-                  {#each option.choices as entry (entry.value)}
-                    <button type="button" role="menuitemradio" aria-checked={entry.value === chat.optionValue(option)} class="menu-item" class:current={entry.value === chat.optionValue(option)} onclick={() => ((settingsOpen = false), void chat.setOption(option.id, entry.value))}>
-                      <span class="menu-name">{entryName(option, entry)}</span>
-                      {#if entry.description}<span class="menu-detail wrap">{entry.description}</span>{/if}
-                    </button>
-                  {/each}
-                  {/if}
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/if}
-        <UsageMeter agent={agentRef} usage={chat.usage} stats={chat.stats} />
+      {/if}
+      <textarea bind:this={input} bind:value={draft} rows="1" placeholder={t('ai.placeholder', { host: hostInText })} aria-label={t('ai.placeholder', { host: hostInText })} oninput={onInput} onkeydown={onKeydown}></textarea>
+      <div class="card-foot">
+        <ModelPopover
+          model={split.model}
+          effort={split.effort}
+          toggles={split.toggles}
+          value={(option) => chat.optionValue(option)}
+          label={entryName}
+          onset={(option, value) => void chat.setOption(option, value)}
+          onopen={prepareAgent}
+          busy={chat.starting}
+        />
         <div class="picker spread" bind:this={modePicker}>
-          <button type="button" class="pick" onclick={() => (modeOpen = !modeOpen)} aria-expanded={modeOpen} title={`${t('ai.mode')}: ${t(`ai.mode.${chat.mode}`)}`} aria-label={`${t('ai.mode')}: ${t(`ai.mode.${chat.mode}`)}`}>
-            <Icon name={MODE_ICONS[chat.mode]} size={12} /><Icon name="chevronDown" size={11} />
+          <button type="button" class="pick icon" onclick={() => (modeOpen = !modeOpen)} aria-expanded={modeOpen} title={`${t('ai.mode')}: ${t(`ai.mode.${chat.mode}`)}`} aria-label={`${t('ai.mode')}: ${t(`ai.mode.${chat.mode}`)}`}>
+            <Icon name={MODE_ICONS[chat.mode]} size={14} />
           </button>
           {#if modeOpen}
             <div class="menu" role="menu" aria-label={t('ai.mode')}>
@@ -510,6 +582,8 @@
           {/if}
         </div>
         <span class="spacer"></span>
+        <UsageMeter agent={agentRef} usage={chat.usage} stats={chat.stats} />
+        <span class="gap" aria-hidden="true"></span>
         {#if chat.busy}
           <button type="button" class="send stop" title={t('ai.stop')} aria-label={t('ai.stop')} onclick={() => void chat.cancel()}><Icon name="stop" size={12} /></button>
         {:else}
@@ -557,6 +631,8 @@
   }
   .title {
     cursor: text;
+    font-weight: 500;
+    color: var(--fg-muted);
   }
   .title:hover {
     background: var(--fill-hover);
@@ -1078,10 +1154,56 @@
   .picker.spread {
     position: static;
   }
-  .picker.spread .menu {
+  .picker.spread .menu,
+  .menu.slash {
     right: 0;
     width: auto;
     bottom: calc(100% + 6px);
+  }
+  .menu.slash {
+    left: 0;
+  }
+  .menu.down {
+    top: calc(100% + 4px);
+    bottom: auto;
+  }
+  .menu-item.active {
+    background: var(--fill-hover);
+  }
+  .menu-item.active:hover {
+    background: var(--accent);
+  }
+  .menu-name .mono {
+    font-family: var(--font-mono);
+  }
+  .menu-name .hint {
+    margin-left: 6px;
+    opacity: 0.6;
+  }
+  .pick.icon {
+    width: 24px;
+    justify-content: center;
+    padding: 0;
+  }
+  .gap {
+    flex: none;
+    width: var(--space-2);
+  }
+  .agent-pick {
+    max-width: 160px;
+    color: var(--fg);
+    font-size: var(--text-footnote);
+    font-weight: 600;
+  }
+  .toolbar .picker {
+    flex: 0 1 auto;
+  }
+  .divider {
+    flex: none;
+    width: 1px;
+    height: 14px;
+    margin: 0 2px;
+    background: var(--separator);
   }
   .toggle-row {
     flex-direction: row;

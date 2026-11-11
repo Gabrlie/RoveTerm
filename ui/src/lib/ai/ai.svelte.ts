@@ -13,6 +13,7 @@ import {
   onAiUpdate,
   type AiSessionSummary,
   type AiRecord,
+  type AgentCommand,
   type ConfigOption,
   type RequestStats,
   type AiAnswer,
@@ -69,6 +70,8 @@ export class Chat {
   stats = $state<RequestStats | null>(null);
   /** Settings of the running agent the user can change (model, reasoning effort). */
   options = $state<ConfigOption[]>([]);
+  /** The agent's slash commands, as it last listed them. */
+  commands = $state<AgentCommand[]>([]);
   /** Settings chosen before the agent started, applied once it has. */
   wanted = $state<Record<string, string>>({});
   /** An earlier session this chat continues; its id is reused when the agent starts. */
@@ -157,6 +160,8 @@ export class Chat {
           this.plan = update.entries;
         } else if (update.kind === 'usage') {
           this.usage = { used: update.used, size: update.size };
+        } else if (update.kind === 'commands') {
+          this.commands = update.commands;
         } else if (update.kind === 'stats') {
           const { kind: _kind, ...stats } = update;
           this.stats = stats;

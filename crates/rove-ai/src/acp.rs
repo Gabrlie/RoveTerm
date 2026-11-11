@@ -103,6 +103,10 @@ pub enum SessionUpdate {
         used: u64,
         size: u64,
     },
+    /// The agent's slash commands (its full list each time).
+    Commands {
+        commands: Vec<AgentCommand>,
+    },
     /// The built-in assistant's last request: tokens in and out, and how fast they came.
     Stats {
         input_tokens: Option<u64>,
@@ -110,6 +114,43 @@ pub enum SessionUpdate {
         first_token_ms: Option<u64>,
         tokens_per_second: Option<f64>,
     },
+}
+
+/// A command the agent offers, run by sending `/<name>` (with arguments after it) as a prompt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AgentCommand {
+    pub name: String,
+    pub description: String,
+    /// What to type after the name, when it takes input.
+    pub hint: Option<String>,
+}
+
+/// Most commands kept from one list.
+const MAX_COMMANDS: usize = 200;
+
+fn parse_commands(list: &Value) -> Option<Vec<AgentCommand>> {
+    let commands = list
+        .as_array()?
+        .iter()
+        .filter_map(|entry| {
+            let name = string(entry, "name")?;
+            let name = name.trim_start_matches('/').to_owned();
+            if name.is_empty() || name.len() > 64 || name.chars().any(char::is_whitespace) {
+                return None;
+            }
+            let clip = |text: String| text.chars().take(500).collect::<String>();
+            Some(AgentCommand {
+                name,
+                description: clip(string(entry, "description").unwrap_or_default()),
+                hint: entry
+                    .pointer("/input/hint")
+                    .and_then(Value::as_str)
+                    .map(|hint| clip(hint.to_owned())),
+            })
+        })
+        .take(MAX_COMMANDS)
+        .collect();
+    Some(commands)
 }
 
 /// A tool call as reported by the agent; fields an update leaves out are `None` or empty.
@@ -710,6 +751,9 @@ pub fn parse_update(update: &Value) -> Option<SessionUpdate> {
                 .and_then(Value::as_u64)
                 .filter(|size| *size > 0)?,
         }),
+        "available_commands_update" => Some(SessionUpdate::Commands {
+            commands: parse_commands(update.get("availableCommands")?)?,
+        }),
         "config_option_update" => Some(SessionUpdate::ConfigOptions {
             options: parse_config_options(update.get("configOptions")),
         }),
@@ -1252,6 +1296,38 @@ mod tests {
             None
         );
         assert_eq!(parse_update(&json!({ "sessionUpdate": "tool_call" })), None);
+    }
+
+    #[test]
+    fn agent_commands_are_read_and_checked() {
+        let update = json!({
+            "sessionUpdate": "available_commands_update",
+            "availableCommands": [
+                { "name": "review", "description": "Review changes", "input": { "hint": "what to review" } },
+                { "name": "/compact", "description": "Compact" },
+                { "name": "two words", "description": "dropped" },
+                { "name": "", "description": "dropped" },
+                { "description": "no name" },
+            ],
+        });
+        let Some(SessionUpdate::Commands { commands }) = parse_update(&update) else {
+            panic!()
+        };
+        assert_eq!(
+            commands,
+            [
+                AgentCommand {
+                    name: "review".into(),
+                    description: "Review changes".into(),
+                    hint: Some("what to review".into()),
+                },
+                AgentCommand {
+                    name: "compact".into(),
+                    description: "Compact".into(),
+                    hint: None,
+                },
+            ]
+        );
     }
 
     #[test]
