@@ -1,13 +1,14 @@
 <script lang="ts" module>
-  export type RightPage = 'status' | 'snippets' | 'ai';
+  export type RightPage = 'status' | 'snippets' | 'ai' | 'transfers';
 </script>
 
 <script lang="ts">
   // The right-hand panel: one page at a time — server status of the focused pane's remote,
-  // snippets, or the AI chat — chosen from the activity rail.
+  // snippets, the AI chat, or the download center — chosen from the activity rail.
   import IconButton from '../ui/IconButton.svelte';
   import StatusPanel from './StatusPanel.svelte';
   import SnippetsPanel from './SnippetsPanel.svelte';
+  import TransfersPanel from './TransfersPanel.svelte';
   import { t } from '../i18n';
   import { remoteSourceOf, sourceKey, workspace, hostOf } from '../workspace/workspace.svelte';
   import { hosts } from '../hosts/hosts.svelte';
@@ -16,10 +17,11 @@
 
   let { page, onclose, onsettings }: { page: RightPage; onclose: () => void; onsettings: () => void } = $props();
 
-  const TITLES: Record<RightPage, 'action.panel.status' | 'action.panel.snippets' | 'ai.title'> = {
+  const TITLES: Record<RightPage, 'action.panel.status' | 'action.panel.snippets' | 'ai.title' | 'action.panel.transfers'> = {
     status: 'action.panel.status',
     snippets: 'action.panel.snippets',
     ai: 'ai.title',
+    transfers: 'action.panel.transfers',
   };
 
   const source = $derived.by(() => {
@@ -48,6 +50,8 @@
       {#key live ? sourceKey(live) : ''}
         <StatusPanel source={live} visible={true} session={pane?.sessionId ?? null} />
       {/key}
+    {:else if page === 'transfers'}
+      <TransfersPanel />
     {:else}
       <SnippetsPanel />
     {/if}

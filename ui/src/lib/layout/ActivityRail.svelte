@@ -1,12 +1,14 @@
 <script lang="ts">
   // The right edge of the window: toggles of the right panel's pages (one open at a time), the
-  // files panel and the focused host's port forwards, then ways to reach a new host.
+  // files panel, the focused host's port forwards and the downloads, then ways to reach a new
+  // host.
   import IconButton from '../ui/IconButton.svelte';
   import { t } from '../i18n';
   import type { ActionId } from '../actions';
   import type { RightPage } from '../panels/RightPanel.svelte';
   import type { IconName } from '../ui/icons';
   import { ai } from '../ai/ai.svelte';
+  import DownloadsButton from '../files/DownloadsButton.svelte';
 
   interface Props {
     /** The right panel's open page, or `null` when closed. */
@@ -36,6 +38,7 @@
   <span class="rule"></span>
   <IconButton icon="files" label={t('rail.files')} active={bottomOpen} disabled={!remote && !bottomOpen} onclick={() => onaction('panel.bottom')} />
   <IconButton icon="forwards" label={t('rail.forwards')} disabled={!remote} onclick={() => onaction('forward.manage')} />
+  <DownloadsButton onopen={() => onaction('panel.transfers')} />
   <span class="spacer"></span>
   <IconButton icon="quickConnect" label={t('rail.quickConnect')} onclick={() => onaction('host.quickConnect')} />
   <IconButton icon="importConfig" label={t('rail.import')} onclick={() => onaction('host.import')} />

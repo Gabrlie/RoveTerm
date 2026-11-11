@@ -17,7 +17,7 @@
 | `src/lib/tabs/GroupTabBar.svelte` | 编辑组的标签栏 |
 | `src/lib/actions.ts` | actions 表：快捷键、命令面板的唯一来源 |
 | `src/lib/ui/` | 通用组件：`Icon`、`IconButton`、`Dialog`、`CommandPalette`；图标映射在 `icons.ts` |
-| `src/lib/files/` | SFTP 文件面板 `FileBrowser`、传输状态 `transfers.svelte.ts`、路径与格式化的纯函数 `format.ts` |
+| `src/lib/files/` | SFTP 文件面板 `FileBrowser`、传输状态 `transfers.svelte.ts`、下载按钮与弹窗 `DownloadsButton`、传输行 `TransferRow`、路径与格式化的纯函数 `format.ts` / `transferview.ts` |
 | `src/lib/forwards/` | 端口转发对话框 `ForwardsDialog`、转发状态 `forwards.svelte.ts` |
 | `src/lib/hosts/` | 主机列表与搜索、主机编辑、快速连接、密码输入、host key 确认 |
 | `src/lib/vault/vault.svelte.ts` | vault 锁定状态，以及由用户操作触发的解锁和重置 |
@@ -74,7 +74,7 @@
 - 双击目录进入，双击文件下载到系统下载目录；路径栏可以直接输入路径。单击选择，Ctrl/⌘ 单击多选，Shift 单击连选。
 - 列表获得焦点时：方向键移动选择，Enter 打开，Backspace 返回上级，Delete 删除，F2 重命名，Ctrl/⌘+A 全选。
 - 上传通过系统文件选择框（`tauri-plugin-dialog`，只授予 `dialog:allow-open`），或把文件从系统拖到面板上。上传时若当前目录已有同名项、下载时若本地目标目录已有同名项（由 `transfer_local_clashes` 检查），都询问替换、保留两者还是跳过。
-- 面板底部列出与该主机相关的传输（`transfer-update` 事件），显示进度并可取消；上传到当前目录的传输完成后自动刷新列表。
+- 传输的进度与取消在下载弹窗与下载中心（见右侧图标栏），文件面板不再单独列出；上传到当前目录的传输完成后自动刷新列表。
 - 是否显示隐藏文件取自偏好 `files.show_hidden`，工具栏按钮切换时写回偏好。
 
 ## 端口转发
@@ -95,9 +95,10 @@
 
 - 右侧图标栏（`ActivityRail`）在窗口最右侧，与标题栏同材质、不做卡片：
   - 上段是右侧面板的页面开关：服务器状态、AI（有待审批时显示数量角标）、快捷指令。同时只开一个面板，点击已打开的那页即收起，与 VSCode 的辅助侧栏相同；打开的页面按设备记在 localStorage。
-  - 中段：文件（开关底部文件面板）、端口转发（打开聚焦主机的转发），聚焦的不是远程主机时禁用。
+  - 中段：文件（开关底部文件面板）、端口转发（打开聚焦主机的转发），聚焦的不是远程主机时禁用；下载（`DownloadsButton`，有进行中的传输时显示数量角标与总进度条）。
+  - 下载按钮打开浏览器式的小弹窗，列出最近 8 个上传与下载（进度、取消；已完成的下载可"在文件夹中显示"），可清除已结束的，底部"打开下载中心"打开右侧面板的下载中心页（`TransfersPanel`：进行中与已结束分组列出本次运行的全部传输）。文件面板开始上传或下载时自动弹出该弹窗；`files/transferview.ts` 有单元测试。
   - 底段：快速连接、从系统导入。
-  - 全部经 actions 表触发：`panel.status`、`ai.open`、`panel.snippets` 开关对应页面，`panel.right`（`App+L`）开关上次打开的页面。标题栏右侧仍有侧栏、底部面板、右侧面板三个开关（右侧面板按钮开关上次打开的页面），与图标栏并存。
+  - 全部经 actions 表触发：`panel.status`、`ai.open`、`panel.snippets` 开关对应页面，`panel.transfers` 打开下载中心，`panel.right`（`App+L`）开关上次打开的页面。标题栏右侧仍有侧栏、底部面板、右侧面板三个开关（右侧面板按钮开关上次打开的页面），与图标栏并存。
 - 底部状态栏（`StatusBar`）在窗口最下方，高 26px：
   - 左侧：聚焦会话的状态点（已连接、连接中、失败、已结束）、名称（已保存主机为主机名，本地终端为"本地终端"）、`用户@主机`、已连接时长（会话开始时记在 `PaneState.connectedAt`）、活动会话数、运行中的端口转发数。
   - 右侧：AI 待审批数（点击打开 AI 面板）、同步状态（已设置同步时显示，悬停为上次同步时间，点击立即同步，进行中转动、失败标红）、新建本地终端、外观菜单（自动、浅色、深色，写入偏好）、命令面板、当前时间（每到整分钟刷新）。

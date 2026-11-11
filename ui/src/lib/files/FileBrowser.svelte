@@ -70,7 +70,6 @@
   let dropping = $state(false);
   let pending = $state<Pending | null>(null);
   let nameInput = $state('');
-  let transfersOpen = $state(true);
   let root: HTMLDivElement;
   let list: HTMLDivElement;
   let destroyed = false;
@@ -80,10 +79,6 @@
 
   const shown = $derived(sortEntries(showHidden ? entries : entries.filter((entry) => !entry.name.startsWith('.'))));
   const selection = $derived(shown.filter((entry) => selected.has(entry.name)));
-  const related = $derived(
-    label ? transfers.all.filter((row) => row.src_label === label || row.dst_label === label).slice(-50) : [],
-  );
-  const running = $derived(related.filter((row) => !isFinal(row)).length);
 
   function toggleHidden(): void {
     void editPrefs((draft) => (draft.files.show_hidden = !draft.files.show_hidden));
@@ -264,7 +259,7 @@
     try {
       await transferDownload(fs, paths, dir, conflict);
       info(t('files.downloading', { count: paths.length }));
-      transfersOpen = true;
+      transfers.popover = true;
     } catch (error) {
       fail(error);
     }
@@ -291,7 +286,7 @@
     try {
       await transferUpload(fs, paths, dir, conflict);
       info(t('files.uploading', { count: paths.length }));
-      transfersOpen = true;
+      transfers.popover = true;
     } catch (error) {
       fail(error);
     }
@@ -415,16 +410,6 @@
     }
   }
 
-  function progress(row: TransferUpdate): number {
-    return row.bytes_total > 0 ? Math.min(100, (row.bytes_done / row.bytes_total) * 100) : row.state === 'done' ? 100 : 0;
-  }
-
-  function rowStatus(row: TransferUpdate): string {
-    if (row.state === 'running') return `${formatSize(row.bytes_done)} / ${formatSize(row.bytes_total)}`;
-    if (row.state === 'done' && row.skipped) return t('transfer.skipped');
-    return t(`transfer.${row.state}`);
-  }
-
   onMount(async () => {
     unsubscribe = transfers.subscribe(onTransfer);
     transfers.start().catch((error: unknown) => console.warn('transfer events unavailable', error));
@@ -520,33 +505,6 @@
       </div>
     {/each}
   </div>
-
-  {#if related.length > 0}
-    <div class="transfers">
-      <div class="transfers-head">
-        <button type="button" class="toggle" onclick={() => (transfersOpen = !transfersOpen)}>
-          <Icon name="transfer" size={14} />
-          {t('files.transfers', { count: running })}
-        </button>
-        <IconButton icon="clear" label={t('files.clearFinished')} small onclick={() => void transfers.clearFinished()} />
-      </div>
-      {#if transfersOpen}
-        <div class="transfer-list">
-          {#each [...related].reverse() as row (row.id)}
-            <div class="transfer" class:failed={row.state === 'failed'} title={row.error ? errorText({ code: `fs.${row.error.kind}`, message: row.error.detail ?? '' }) : row.dst_path}>
-              <Icon name={row.tag === 'upload' ? 'upload' : 'download'} size={13} />
-              <span class="transfer-name">{row.name}</span>
-              <span class="bar"><span style:width="{progress(row)}%"></span></span>
-              <span class="transfer-status">{rowStatus(row)}</span>
-              {#if !isFinal(row)}
-                <IconButton icon="close" label={t('files.cancelTransfer')} small onclick={() => void transfers.cancel(row.id)} />
-              {/if}
-            </div>
-          {/each}
-        </div>
-      {/if}
-    </div>
-  {/if}
 
   <div class="status" class:error={status?.error}>
     {#if status}{status.text}{:else if fsId}{t('files.summary', { count: shown.length, selected: selection.length })}{/if}
@@ -739,78 +697,6 @@
     padding: var(--space-6) var(--space-4);
     color: var(--fg-muted);
     text-align: center;
-  }
-  .transfers {
-    background: var(--material-bar);
-    box-shadow: inset 0 1px 0 var(--separator);
-  }
-  .transfers-head {
-    display: flex;
-    align-items: center;
-    padding: 0 var(--space-2);
-  }
-  .toggle {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    height: 28px;
-    padding: 0 var(--space-1);
-    border: none;
-    background: none;
-    color: var(--fg-muted);
-    font: inherit;
-    font-size: var(--text-footnote);
-    font-weight: 600;
-    text-align: left;
-    cursor: pointer;
-  }
-  .toggle :global(svg) {
-    color: var(--accent);
-  }
-  .transfer-list {
-    max-height: 140px;
-    overflow-y: auto;
-    padding-bottom: var(--space-1);
-  }
-  .transfer {
-    display: grid;
-    grid-template-columns: 16px minmax(60px, 1fr) minmax(60px, 120px) auto 24px;
-    gap: var(--space-2);
-    align-items: center;
-    height: 26px;
-    padding: 0 var(--space-3);
-    font-size: var(--text-footnote);
-    color: var(--fg-muted);
-  }
-  .transfer.failed {
-    color: var(--danger);
-  }
-  .transfer-name {
-    color: var(--fg);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .bar {
-    height: 4px;
-    border-radius: var(--radius-pill);
-    background: var(--fill-pressed);
-    overflow: hidden;
-  }
-  .bar span {
-    display: block;
-    height: 100%;
-    border-radius: inherit;
-    background: var(--accent);
-    transition: width var(--dur) var(--ease-out);
-  }
-  .transfer.failed .bar span {
-    background: var(--danger);
-  }
-  .transfer-status {
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
   }
   .status {
     padding: 3px var(--space-3);

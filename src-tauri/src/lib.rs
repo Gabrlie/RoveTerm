@@ -176,6 +176,7 @@ pub fn run() {
             commands::sftp::transfer_list,
             commands::sftp::transfer_cancel,
             commands::sftp::transfer_clear,
+            commands::sftp::transfer_reveal,
             commands::forward::forward_list,
             commands::forward::forward_create,
             commands::forward::forward_update,

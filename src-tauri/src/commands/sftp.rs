@@ -301,6 +301,61 @@ pub fn transfer_cancel(state: State<'_, AppState>, id: String) -> Result<bool, C
     Ok(state.transfers.cancel(id))
 }
 
+/// Shows a finished download in the system file manager (selected where the platform can). The
+/// path is the transfer's own, never one from the caller.
+#[tauri::command]
+pub fn transfer_reveal(state: State<'_, AppState>, id: String) -> Result<(), CommandError> {
+    let id: TransferId = id
+        .parse()
+        .map_err(|error: FsError| CommandError::from(error))?;
+    let row = state
+        .transfers
+        .list()
+        .into_iter()
+        .find(|row| row.id == id)
+        .filter(|row| row.tag == "download" && row.state == rove_fs::TransferState::Done)
+        .ok_or_else(|| CommandError::new("fs.not_found", "no finished download with that id"))?;
+    let path = std::path::PathBuf::from(&row.dst_path);
+    if !path.exists() {
+        return Err(CommandError::new(
+            "fs.not_found",
+            "the downloaded file is gone",
+        ));
+    }
+    reveal(&path).map_err(|error| CommandError::new("app.io", error.to_string()))
+}
+
+/// Opens the file manager at `path`.
+fn reveal(path: &std::path::Path) -> std::io::Result<()> {
+    let mut command;
+    #[cfg(target_os = "macos")]
+    {
+        command = std::process::Command::new("open");
+        command.arg("-R").arg(path);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let mut select = std::ffi::OsString::from("/select,");
+        select.push(path);
+        command = std::process::Command::new("explorer");
+        command.arg(select);
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        // No portable way to select a file: its folder opens.
+        command = std::process::Command::new("xdg-open");
+        command.arg(if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        });
+    }
+    // The file manager runs on its own; its exit is collected off this thread.
+    let mut child = command.spawn()?;
+    std::thread::spawn(move || child.wait());
+    Ok(())
+}
+
 /// Forgets finished transfers.
 #[tauri::command]
 pub fn transfer_clear(state: State<'_, AppState>) {

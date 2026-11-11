@@ -77,7 +77,7 @@
 
   let sidebarOpen = $state(stored('ui.sidebar', true));
   $effect(() => store('ui.sidebar', sidebarOpen));
-  const RIGHT_PAGES: RightPage[] = ['status', 'ai', 'snippets'];
+  const RIGHT_PAGES: RightPage[] = ['status', 'ai', 'snippets', 'transfers'];
   function storedPage(key: string): RightPage | null {
     try {
       const value = localStorage.getItem(key);
@@ -315,6 +315,11 @@
         break;
       case 'panel.snippets':
         toggleRight('snippets');
+        break;
+      case 'panel.transfers':
+        // Opened from the downloads popover too: it shows the page rather than toggling it.
+        rightPage = 'transfers';
+        lastRightPage = 'transfers';
         break;
       case 'panel.bottom':
         bottomOpen = !bottomOpen;

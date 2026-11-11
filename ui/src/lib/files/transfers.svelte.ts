@@ -1,10 +1,16 @@
-// Every transfer the backend reports, kept current from `transfer-update` events.
-import { onTransferUpdate, transferCancel, transferClear, transferList, type TransferId, type TransferUpdate } from '../ipc';
+// Every transfer the backend reports, kept current from `transfer-update` events, and whether
+// the downloads popover is open (it opens by itself when a transfer starts, as in a browser).
+import { onTransferUpdate, transferCancel, transferClear, transferList, transferReveal, type TransferId, type TransferUpdate } from '../ipc';
+import { isFinal } from './transferview';
+
+export { isFinal };
 
 type Listener = (update: TransferUpdate) => void;
 
 class Transfers {
   byId = $state<Record<TransferId, TransferUpdate>>({});
+  /** The downloads popover of the activity rail is open. */
+  popover = $state(false);
   private listeners = new Set<Listener>();
   private started = false;
 
@@ -34,6 +40,11 @@ class Transfers {
     return transferCancel(id);
   }
 
+  /** Shows finished download `id` in the system file manager. */
+  reveal(id: TransferId): Promise<void> {
+    return transferReveal(id);
+  }
+
   /** Forgets finished transfers here and in the backend. */
   async clearFinished(): Promise<void> {
     await transferClear();
@@ -41,10 +52,6 @@ class Transfers {
       if (isFinal(row)) delete this.byId[id];
     }
   }
-}
-
-export function isFinal(row: TransferUpdate): boolean {
-  return row.state === 'done' || row.state === 'failed' || row.state === 'cancelled';
 }
 
 export const transfers = new Transfers();

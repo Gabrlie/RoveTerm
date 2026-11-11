@@ -479,6 +479,11 @@ export function transferCancel(id: TransferId): Promise<boolean> {
   return invoke('transfer_cancel', { id });
 }
 
+/** Shows finished download `id` in the system file manager. */
+export function transferReveal(id: TransferId): Promise<void> {
+  return invoke('transfer_reveal', { id });
+}
+
 export function transferClear(): Promise<void> {
   return invoke('transfer_clear');
 }

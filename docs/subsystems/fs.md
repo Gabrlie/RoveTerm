@@ -46,5 +46,6 @@ enqueue(TransferRequest) → TransferId，状态 queued
 | `sftp_close` | 从 `FsSessions` 移除；进行中的传输不受影响 |
 | `transfer_upload` / `transfer_download` | 为每个路径排一个传输；下载目录缺省时使用系统下载目录，系统未配置时退回已存在的 `~/Downloads` |
 | `transfer_list` / `transfer_cancel` / `transfer_clear` | 查询、取消、清除已结束的传输 |
+| `transfer_reveal(id)` | 在系统文件管理器中显示已完成的下载（macOS `open -R`、Windows `explorer /select,` 选中文件；Linux 用 `xdg-open` 打开所在文件夹）；路径取自传输本身，不接受调用方给的路径 |
 
 `TransferUpdate` 以 `transfer-update` 事件转发给 WebView。远程路径必须是绝对 POSIX 路径，本地路径必须是绝对路径，单次最多 1000 个路径；新文件名经 `validate_name` 校验。
