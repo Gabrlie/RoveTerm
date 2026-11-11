@@ -1,6 +1,6 @@
 # rove-ai
 
-RoveTerm 中的 AI Agent：ACP 客户端、审批策略和绑定主机的工具。Agent 是不可信的外部进程，它在主机上的每个操作都先经过 `Policy`。设计理由见 [0006](../../docs/decisions/0006-ai-acp.md)，参考见 [docs/subsystems/ai.md](../../docs/subsystems/ai.md)。
+RoveTerm 中的 AI Agent：内置助手（主力）、ACP 客户端（兼容通道，只保证通用能力）、审批策略、审阅者和绑定主机的工具。Agent 是不可信的外部进程，它在主机上的每个操作都先经过 `Policy`。设计理由见 [0006](../../docs/decisions/0006-ai-acp.md)，参考见 [docs/subsystems/ai.md](../../docs/subsystems/ai.md)。
 
 ## 契约
 
