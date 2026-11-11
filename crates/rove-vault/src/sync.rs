@@ -3,7 +3,7 @@
 //! sync protocol; it only reads and writes records. See docs/decisions/0005-sync.md.
 //!
 //! Synced: hosts (without connection times), their secrets, library keys with their private
-//! halves, snippets, forward rules and the user preferences. Never synced: known hosts, device
+//! halves, snippets, forward rules, the user preferences and the AI agents' API keys. Never synced: known hosts, device
 //! preferences, the device key, and the sync settings themselves.
 
 use rusqlite::{OptionalExtension, params};
@@ -18,10 +18,18 @@ use crate::{
 };
 
 /// Record kinds, in the order changes are applied (parents first).
-pub const SYNC_KINDS: [&str; 6] = ["prefs", "host", "key", "host_secret", "forward", "snippet"];
+pub const SYNC_KINDS: [&str; 7] = [
+    "prefs",
+    "host",
+    "key",
+    "host_secret",
+    "forward",
+    "snippet",
+    "ai_key",
+];
 /// Kinds that carry secrets, which [`Vault::reset_secrets`] discards on this device: after a
 /// reset the sync space has to restore them rather than learn that they are gone.
-pub const SYNC_SECRET_KINDS: [&str; 2] = ["host_secret", "key"];
+pub const SYNC_SECRET_KINDS: [&str; 3] = ["host_secret", "key", "ai_key"];
 
 /// One syncable record.
 #[derive(Debug, Clone, PartialEq)]
@@ -215,6 +223,15 @@ impl Vault {
                 body: json(&body)?,
             });
         }
+        for agent in self.ai_key_ids()? {
+            if let Some(key) = self.ai_key(&agent)? {
+                records.push(SyncRecord {
+                    kind: "ai_key",
+                    id: agent,
+                    body: serde_json::json!({ "key": key.as_str() }),
+                });
+            }
+        }
         Ok(records)
     }
 
@@ -284,6 +301,13 @@ impl Vault {
                         now
                     ],
                 )?;
+            }
+            "ai_key" => {
+                let key = value
+                    .get("key")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| VaultError::Invalid("AI key record without a key".into()))?;
+                self.set_ai_key(id, Some(key))?;
             }
             "host_secret" => {
                 let host_id: HostId = id.parse()?;
@@ -370,6 +394,7 @@ impl Vault {
                 Err(error) => return Err(error),
             },
             "host_secret" => self.delete_secret(id.parse()?)?,
+            "ai_key" => self.set_ai_key(id, None)?,
             "key" => {
                 let key_id: KeyId = id.parse()?;
                 self.conn.lock().execute(

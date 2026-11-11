@@ -45,6 +45,6 @@
 - `sync_probe()` 对已连接的存储再次查看是否已有空间。
 - `sync_setup(password)` 在已连接的存储上加入已有空间，没有空间时创建（密码至少 8 个字符，新空间从新的同步状态开始；其他设备恰好同时创建时改为加入），跑第一轮后存入同步密钥。
 - 每轮（`sync_setup` 与 `sync_now`）先 `verify_space`，结束后无论成败都保存同步状态；空间被替换（`sync.space_changed`）时清除本机的同步密钥。
-- `vault_reset_secrets` 重置凭据后调用 `after_secrets_reset`：同步状态对 `rove_vault::SYNC_SECRET_KINDS`（`host_secret`、`key`）`defer_to_space`，并清除随设备密钥失效的同步密钥与存储密码；重新输入同步密码后的第一轮从空间恢复这些凭据，而不是把它们的缺失同步给其他设备。
+- `vault_reset_secrets` 重置凭据后调用 `after_secrets_reset`：同步状态对 `rove_vault::SYNC_SECRET_KINDS`（`host_secret`、`key`、`ai_key`）`defer_to_space`，并清除随设备密钥失效的同步密钥与存储密码；重新输入同步密码后的第一轮从空间恢复这些凭据，而不是把它们的缺失同步给其他设备。
 
 `SyncTarget` 为 `Folder { path }`（绝对路径）或 `WebDav { url, username }`，WebDAV 密码不进入目标的 JSON。`sync_status` 报告 `configured`（已选存储）、`connected`（文件夹，或本机有 WebDAV 密码）和 `ready`（还有同步密钥）。`sync_now` 运行一轮，`sync_disable` 清除本机的同步设置。各轮由 `AppState.sync_lock` 串行执行，需要 vault 已解锁；本机没有同步密钥时 `sync_now` 返回 `sync.needs_password`。错误码为 `sync.*`（`wrong_password`、`no_space`、`space_exists`、`space_changed`、`rejected`、`backend`、`format`、`crypto`、`unauthorized`、`store`、`not_configured`、`needs_password`、`weak_password`）。

@@ -695,6 +695,7 @@ fn sync_records_round_trip_into_another_vault() {
     let mut prefs = Preferences::default();
     prefs.terminal.font_size = 16;
     source.set_preferences(prefs).unwrap();
+    source.set_ai_key("builtin:deepseek", Some("sk-sync")).unwrap();
 
     // Children listed before their parents still apply: the vault orders them.
     let mut changes = as_changes(source.sync_records().unwrap());
@@ -717,6 +718,18 @@ fn sync_records_round_trip_into_another_vault() {
         "PRIVATE laptop"
     );
     assert_eq!(target.preferences().unwrap().terminal.font_size, 16);
+    assert_eq!(
+        target.ai_key("builtin:deepseek").unwrap().as_deref().map(String::as_str),
+        Some("sk-sync")
+    );
+    target
+        .apply_sync(&[SyncChange {
+            kind: "ai_key".into(),
+            id: "builtin:deepseek".into(),
+            body: None,
+        }])
+        .unwrap();
+    assert_eq!(target.ai_key("builtin:deepseek").unwrap(), None);
 
     // Deleting the parent host removes its forward and secret too.
     target

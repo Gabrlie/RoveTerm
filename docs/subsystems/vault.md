@@ -102,9 +102,9 @@ pub trait KeyCache: Send + Sync {
 
 `src/sync.rs` 是 vault 一侧的同步接口，不涉及同步协议（见 [sync](sync.md)）：
 
-- `sync_records()` 列出全部可同步记录（种类 `prefs`、`host`、`key`、`host_secret`、`forward`、`snippet`，内容为 JSON）：主机不含连接时间，含检测到的系统；凭据与私钥为明文 JSON，交给同步引擎密封后才离开本机。需要已解锁，否则凭据会看似被删除并把删除扩散到其他设备。
+- `sync_records()` 列出全部可同步记录（种类 `prefs`、`host`、`key`、`host_secret`、`forward`、`snippet`、`ai_key`，内容为 JSON）：主机不含连接时间，含检测到的系统；凭据与私钥为明文 JSON，交给同步引擎密封后才离开本机。需要已解锁，否则凭据会看似被删除并把删除扩散到其他设备。
 - `apply_sync(changes)` 写入来自其他设备的变更：先按父到子的顺序写入新增和修改，再按子到父删除；内容像本地编辑一样校验，引用的主机不存在时跳过对应的凭据与转发，未知种类忽略。密钥缺少私钥时保留本机已有的私钥。
-- AI 的 API key 按 Agent 分别保存：`set_ai_key(id, Some(key))` 用设备主密钥密封后存在 `preferences` 表的 `ai_key:<id>` 记录中，`id` 为 `builtin:<服务商 id>` 或 `acp:<智能体 id>`，AAD 绑定该 id，挪到别的记录下无法打开（需已解锁；key 去除首尾空白，不能为空、含空白或控制字符，最多 4096 字节），`None` 删除；`ai_key(id)` 需已解锁，`ai_key_ids()` 锁定时也可读。schema 9 把旧的单个 key 改名为 `ai_key:acp:codex`，它仍以旧的 AAD 打开，且只有这条记录可以。key 只属于本机，不参与同步；`reset_secrets()` 会一并删除这些记录。应用在重置后让同步从空间恢复密码与私钥（见 [sync](sync.md#应用中的同步)）。
+- AI 的 API key 按 Agent 分别保存：`set_ai_key(id, Some(key))` 用设备主密钥密封后存在 `preferences` 表的 `ai_key:<id>` 记录中，`id` 为 `builtin:<服务商 id>` 或 `acp:<智能体 id>`，AAD 绑定该 id，挪到别的记录下无法打开（需已解锁；key 去除首尾空白，不能为空、含空白或控制字符，最多 4096 字节），`None` 删除；`ai_key(id)` 需已解锁，`ai_key_ids()` 锁定时也可读。schema 9 把旧的单个 key 改名为 `ai_key:acp:codex`，它仍以旧的 AAD 打开，且只有这条记录可以。key 作为 `ai_key` 记录随端到端加密的同步分段同步（每台设备再用自己的设备密钥密封）；`reset_secrets()` 会一并删除这些记录。应用在重置后让同步从空间恢复密码与私钥（见 [sync](sync.md#应用中的同步)）。
 - `sync_local()` / `set_sync_local()` 读写本机的同步设置（后端位置、同步状态、同步密钥、存储密码），存在 `preferences` 表的 `sync` 记录中，不参与同步；同步密钥和存储密码（如 WebDAV 密码）用设备主密钥分别密封，锁定时读出为空。
 
 ## 表结构
