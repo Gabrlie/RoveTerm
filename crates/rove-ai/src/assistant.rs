@@ -141,25 +141,26 @@ impl Assistant {
 
     /// The model to answer with and how much it reasons, as session settings.
     pub fn config_options(&self) -> Vec<ConfigOption> {
+        // Without a level of its own the session reasons at `medium`, as providers default to.
         let effort = self
             .client
             .read()
             .ok()
-            .and_then(|client| client.endpoint().effort);
-        let name = |effort: Option<Effort>| {
-            effort
-                .and_then(|effort| serde_json::to_value(effort).ok())
+            .and_then(|client| client.endpoint().effort)
+            .unwrap_or(Effort::Medium);
+        let name = |effort: Effort| {
+            serde_json::to_value(effort)
+                .ok()
                 .and_then(|value| value.as_str().map(str::to_owned))
-                .unwrap_or_else(|| "default".into())
+                .unwrap_or_default()
         };
         let levels = [
-            None,
-            Some(Effort::Minimal),
-            Some(Effort::Low),
-            Some(Effort::Medium),
-            Some(Effort::High),
-            Some(Effort::XHigh),
-            Some(Effort::Max),
+            Effort::Minimal,
+            Effort::Low,
+            Effort::Medium,
+            Effort::High,
+            Effort::XHigh,
+            Effort::Max,
         ];
         let effort_option = ConfigOption {
             id: "effort".into(),
@@ -198,18 +199,13 @@ impl Assistant {
         options
     }
 
-    /// Reasons at `effort` (`default`, `minimal` … `max`) from the next request on.
+    /// Reasons at `effort` (`minimal` … `max`) from the next request on.
     pub fn set_effort(&self, effort: &str) -> Result<(), AssistantError> {
-        let level = if effort == "default" {
-            None
-        } else {
-            Some(
-                serde_json::from_value::<Effort>(serde_json::Value::String(effort.to_owned()))
-                    .map_err(|_| AssistantError::UnknownModel(effort.to_owned()))?,
-            )
-        };
+        let level =
+            serde_json::from_value::<Effort>(serde_json::Value::String(effort.to_owned()))
+                .map_err(|_| AssistantError::UnknownModel(effort.to_owned()))?;
         if let Ok(mut client) = self.client.write() {
-            *client = client.with_effort(level);
+            *client = client.with_effort(Some(level));
         }
         Ok(())
     }

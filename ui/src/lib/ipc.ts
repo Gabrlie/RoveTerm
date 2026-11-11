@@ -268,7 +268,7 @@ export interface ProviderPrefs {
   /** Other models to switch to in a conversation. */
   models: string[];
   max_tokens: number | null;
-  effort: ReasoningEffort | null;
+  effort: ReasoningEffort;
 }
 
 export interface AiPrefs {

@@ -139,7 +139,7 @@
     const models = [provider.model, ...provider.models];
     return [
       { id: 'model', name: t('ai.model'), category: 'model', kind: 'select', current: provider.model, choices: models.map((model) => ({ value: model, name: model, description: null })) },
-      { id: 'effort', name: t('ai.effort'), category: 'thought_level', kind: 'select', current: provider.effort ?? 'default', choices: ['default', ...EFFORT_LEVELS].map((level) => ({ value: level, name: level, description: null })) },
+      { id: 'effort', name: t('ai.effort'), category: 'thought_level', kind: 'select', current: provider.effort, choices: EFFORT_LEVELS.map((level) => ({ value: level, name: level, description: null })) },
     ];
   });
   const modelSetting = $derived(settings.find((option) => option.category === 'model') ?? settings[0]);

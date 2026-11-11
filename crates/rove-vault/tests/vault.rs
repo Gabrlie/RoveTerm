@@ -875,7 +875,7 @@ fn ai_preferences_are_validated() {
             "deepseek-reasoner".into(),
         ],
         max_tokens: None,
-        effort: None,
+        effort: rove_vault::ReasoningEffort::Medium,
     }];
     prefs.ai.default_agent = Some("builtin:deepseek".into());
     let stored = vault.set_preferences(prefs.clone()).unwrap();
@@ -1012,7 +1012,7 @@ fn preferences_sync_by_section_and_providers_one_by_one() {
         model: "deepseek-chat".into(),
         models: Vec::new(),
         max_tokens: None,
-        effort: None,
+        effort: rove_vault::ReasoningEffort::Medium,
     };
     // Only `a` has a provider; `b` changed its terminal font.
     let a = unlocked();
@@ -1057,4 +1057,18 @@ fn preferences_sync_by_section_and_providers_one_by_one() {
     ])
     .unwrap();
     assert_eq!(a.preferences().unwrap(), before);
+}
+
+#[test]
+fn an_empty_effort_reads_as_medium() {
+    let provider: rove_vault::ProviderPrefs = serde_json::from_value(serde_json::json!({
+        "id": "p", "name": "P", "format": "chat", "base_url": "https://x/v1", "model": "m", "effort": null
+    }))
+    .unwrap();
+    assert_eq!(provider.effort, rove_vault::ReasoningEffort::Medium);
+    let missing: rove_vault::ProviderPrefs = serde_json::from_value(serde_json::json!({
+        "id": "p", "name": "P", "format": "chat", "base_url": "https://x/v1", "model": "m"
+    }))
+    .unwrap();
+    assert_eq!(missing.effort, rove_vault::ReasoningEffort::Medium);
 }

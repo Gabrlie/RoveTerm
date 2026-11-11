@@ -31,51 +31,70 @@ async fn serve(status: u16, body: String) -> (String, oneshot::Receiver<Seen>) {
     let (sender, receiver) = oneshot::channel();
     tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let (read, mut write) = stream.into_split();
-        let mut reader = BufReader::new(read);
-        let mut line = String::new();
-        reader.read_line(&mut line).await.unwrap();
-        let path = line
-            .split_whitespace()
-            .nth(1)
-            .unwrap_or_default()
-            .to_owned();
-        let mut headers = Vec::new();
-        let mut length = 0;
-        loop {
-            let mut header = String::new();
-            reader.read_line(&mut header).await.unwrap();
-            let header = header.trim_end();
-            if header.is_empty() {
-                break;
-            }
-            let (name, value) = header.split_once(':').unwrap();
-            let (name, value) = (name.to_ascii_lowercase(), value.trim().to_owned());
-            if name == "content-length" {
-                length = value.parse().unwrap();
-            }
-            headers.push((name, value));
-        }
-        let mut raw = vec![0u8; length];
-        reader.read_exact(&mut raw).await.unwrap();
-        let _ = sender.send(Seen {
-            path,
-            headers,
-            body: serde_json::from_slice(&raw).unwrap(),
-        });
-        let kind = if status == 200 {
-            "text/event-stream"
-        } else {
-            "application/json"
-        };
-        let head = format!(
-            "HTTP/1.1 {status} X\r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-            body.len()
-        );
-        write.write_all(head.as_bytes()).await.unwrap();
-        write.write_all(body.as_bytes()).await.unwrap();
+        let _ = sender.send(exchange(stream, status, &body).await);
     });
     (base, receiver)
+}
+
+/// Serves one request per reply, in order; returns the base URL and what each asked.
+async fn serve_each(replies: Vec<(u16, String)>) -> (String, tokio::sync::mpsc::UnboundedReceiver<Seen>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/v1", listener.local_addr().unwrap());
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        for (status, body) in replies {
+            let (stream, _) = listener.accept().await.unwrap();
+            let _ = sender.send(exchange(stream, status, &body).await);
+        }
+    });
+    (base, receiver)
+}
+
+/// Reads one request from `stream` and answers it with `status` and `body`.
+async fn exchange(stream: tokio::net::TcpStream, status: u16, body: &str) -> Seen {
+    let (read, mut write) = stream.into_split();
+    let mut reader = BufReader::new(read);
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    let path = line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or_default()
+        .to_owned();
+    let mut headers = Vec::new();
+    let mut length = 0;
+    loop {
+        let mut header = String::new();
+        reader.read_line(&mut header).await.unwrap();
+        let header = header.trim_end();
+        if header.is_empty() {
+            break;
+        }
+        let (name, value) = header.split_once(':').unwrap();
+        let (name, value) = (name.to_ascii_lowercase(), value.trim().to_owned());
+        if name == "content-length" {
+            length = value.parse().unwrap();
+        }
+        headers.push((name, value));
+    }
+    let mut raw = vec![0u8; length];
+    reader.read_exact(&mut raw).await.unwrap();
+    let kind = if status == 200 {
+        "text/event-stream"
+    } else {
+        "application/json"
+    };
+    let head = format!(
+        "HTTP/1.1 {status} X\r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+        body.len()
+    );
+    write.write_all(head.as_bytes()).await.unwrap();
+    write.write_all(body.as_bytes()).await.unwrap();
+    Seen {
+        path,
+        headers,
+        body: serde_json::from_slice(&raw).unwrap_or(Value::Null),
+    }
 }
 
 fn client(format: Format, base: &str, key: &str) -> Client {
@@ -397,4 +416,27 @@ async fn serve_json(body: String) -> (String, oneshot::Receiver<Seen>) {
         write.write_all(body.as_bytes()).await.unwrap();
     });
     (base, receiver)
+}
+
+#[tokio::test]
+async fn a_model_without_reasoning_settings_is_asked_again_without_them() {
+    let refused = json!({ "error": { "message": "Unsupported parameter: 'reasoning_effort' is not supported with this model." } });
+    let reply = || {
+        sse(&[
+            ("", json!({ "choices": [{ "delta": { "content": "ok" } }] })),
+            ("", json!({ "choices": [{ "delta": {}, "finish_reason": "stop" }] })),
+        ]) + "data: [DONE]\n\n"
+    };
+    let (base, mut seen) =
+        serve_each(vec![(400, refused.to_string()), (200, reply()), (200, reply())]).await;
+    let client = client(Format::Chat, &base, "k").with_effort(Some(rove_ai::llm::Effort::High));
+    let messages = [Message::User { text: "hi".into() }];
+    let reply = client.complete("s", &messages, &[], &mut |_| {}).await.unwrap();
+    assert_eq!(reply.text, "ok");
+    assert_eq!(seen.recv().await.unwrap().body["reasoning_effort"], "high");
+    assert!(seen.recv().await.unwrap().body.get("reasoning_effort").is_none());
+    assert!(client.effort_refused());
+    // Later requests leave it out from the start.
+    client.complete("s", &messages, &[], &mut |_| {}).await.unwrap();
+    assert!(seen.recv().await.unwrap().body.get("reasoning_effort").is_none());
 }

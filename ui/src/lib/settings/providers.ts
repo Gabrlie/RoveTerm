@@ -50,7 +50,7 @@ export function fromPreset(preset: ProviderPreset, taken: readonly string[]): Pr
     model: '',
     models: [],
     max_tokens: null,
-    effort: null,
+    effort: 'medium',
   };
 }
 

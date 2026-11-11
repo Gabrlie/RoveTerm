@@ -368,7 +368,7 @@ fn endpoint(provider: &ProviderPrefs) -> Endpoint {
         base_url: provider.base_url.clone(),
         model: provider.model.clone(),
         max_tokens: provider.max_tokens,
-        effort: provider.effort.map(|effort| match effort {
+        effort: Some(match provider.effort {
             ReasoningEffort::Minimal => llm::Effort::Minimal,
             ReasoningEffort::Low => llm::Effort::Low,
             ReasoningEffort::Medium => llm::Effort::Medium,

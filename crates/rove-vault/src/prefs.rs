@@ -49,11 +49,12 @@ pub enum ProviderFormat {
 }
 
 /// How much a model reasons, where the format can set it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningEffort {
     Minimal,
     Low,
+    #[default]
     Medium,
     High,
     #[serde(rename = "xhigh")]
@@ -77,8 +78,15 @@ pub struct ProviderPrefs {
     pub models: Vec<String>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
-    #[serde(default)]
-    pub effort: Option<ReasoningEffort>,
+    /// Older versions left it empty for "the model's default", read as `medium`.
+    #[serde(default, deserialize_with = "effort_or_medium")]
+    pub effort: ReasoningEffort,
+}
+
+fn effort_or_medium<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<ReasoningEffort, D::Error> {
+    Ok(Option::<ReasoningEffort>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// AI settings that follow the user.

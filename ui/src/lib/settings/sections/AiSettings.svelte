@@ -55,7 +55,7 @@
     { value: 'responses', label: t('ai.format.responses') },
     { value: 'anthropic', label: t('ai.format.anthropic') },
   ];
-  const EFFORTS: { value: 'default' | ReasoningEffort; label: string }[] = (['default', ...EFFORT_LEVELS] as const).map((value) => ({ value, label: t(`ai.effort.${value}`) }));
+  const EFFORTS: { value: ReasoningEffort; label: string }[] = EFFORT_LEVELS.map((value) => ({ value, label: t(`ai.effort.${value}`) }));
   const MODES: { value: AiMode; label: string }[] = [
     { value: 'ask_all', label: t('ai.mode.ask_all') },
     { value: 'ask_by_risk', label: t('ai.mode.ask_by_risk') },
@@ -305,7 +305,7 @@
       </div>
       <div class="form-row">
         <span class="form-label">{t('ai.effort')}<small>{t('ai.effortHint')}</small></span>
-        <div class="control"><Select label={t('ai.effort')} value={editing.draft.effort ?? 'default'} options={EFFORTS} onchange={(value) => editing && (editing.draft.effort = value === 'default' ? null : value)} /></div>
+        <div class="control"><Select label={t('ai.effort')} value={editing.draft.effort} options={EFFORTS} onchange={(value) => editing && (editing.draft.effort = value)} /></div>
       </div>
       <div class="form-row">
         <span class="form-label">{t('ai.key')}<small>{editing.keyless ? t('ai.keyOptional') : editing.original && hasKey(`builtin:${editing.original}`) ? t('ai.keyStored') : t('ai.keyHint')}</small></span>

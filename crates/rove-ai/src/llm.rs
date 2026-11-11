@@ -162,6 +162,15 @@ pub struct Client {
     key: Zeroizing<String>,
     /// How long to wait for the reply to start and between two pieces of it.
     idle: Duration,
+    /// The model turned down the reasoning effort; later requests leave it out. Shared by the
+    /// clones of one client, reset when the model or effort changes.
+    effort_refused: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Whether a 400 reply turns down the reasoning settings (the model has none).
+fn refuses_effort(status: u16, message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    status == 400 && ["reasoning", "effort", "thinking"].iter().any(|word| message.contains(word))
 }
 
 fn same_origin(a: &Url, b: &Url) -> bool {
@@ -203,6 +212,7 @@ impl Client {
             base,
             key: Zeroizing::new(key.to_owned()),
             idle,
+            effort_refused: Default::default(),
         })
     }
 
@@ -214,6 +224,7 @@ impl Client {
     pub fn with_effort(&self, effort: Option<Effort>) -> Self {
         let mut client = self.clone();
         client.endpoint.effort = effort;
+        client.effort_refused = Default::default();
         client
     }
 
@@ -221,7 +232,13 @@ impl Client {
     pub fn with_model(&self, model: &str) -> Self {
         let mut client = self.clone();
         model.clone_into(&mut client.endpoint.model);
+        client.effort_refused = Default::default();
         client
+    }
+
+    /// The model turned down the reasoning effort, which is left out since.
+    pub fn effort_refused(&self) -> bool {
+        self.effort_refused.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Removes the key from text that may quote the request.
@@ -320,7 +337,8 @@ impl Client {
     }
 
     /// Streams one completion of `messages` after `system`, offering `tools`; `on_delta` sees the
-    /// text and reasoning as they arrive. Dropping the future cancels the request.
+    /// text and reasoning as they arrive. Dropping the future cancels the request. A model that
+    /// turns down the reasoning effort is asked again without it, and not given it again.
     pub async fn complete(
         &self,
         system: &str,
@@ -328,18 +346,47 @@ impl Client {
         tools: &[ToolSpec],
         on_delta: &mut (dyn FnMut(Delta) + Send),
     ) -> Result<Reply, LlmError> {
-        let (path, body) = match self.endpoint.format {
+        let mut endpoint = self.endpoint.clone();
+        if self.effort_refused() {
+            endpoint.effort = None;
+        }
+        match self
+            .complete_at(&endpoint, system, messages, tools, on_delta)
+            .await
+        {
+            Err(LlmError::Http { status, message })
+                if endpoint.effort.is_some() && refuses_effort(status, &message) =>
+            {
+                self.effort_refused
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                endpoint.effort = None;
+                self.complete_at(&endpoint, system, messages, tools, on_delta)
+                    .await
+            }
+            other => other,
+        }
+    }
+
+    async fn complete_at(
+        &self,
+        endpoint: &Endpoint,
+        system: &str,
+        messages: &[Message],
+        tools: &[ToolSpec],
+        on_delta: &mut (dyn FnMut(Delta) + Send),
+    ) -> Result<Reply, LlmError> {
+        let (path, body) = match endpoint.format {
             Format::Chat => (
                 "/chat/completions",
-                chat_body(&self.endpoint, system, messages, tools),
+                chat_body(endpoint, system, messages, tools),
             ),
             Format::Responses => (
                 "/responses",
-                responses_body(&self.endpoint, system, messages, tools),
+                responses_body(endpoint, system, messages, tools),
             ),
             Format::Anthropic => (
                 "/messages",
-                anthropic_body(&self.endpoint, system, messages, tools),
+                anthropic_body(endpoint, system, messages, tools),
             ),
         };
         let request = self.authed(
