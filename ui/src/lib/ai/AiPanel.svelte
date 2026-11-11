@@ -401,9 +401,9 @@
     <div class="card">
       <div class="context">
         <span class="chip"><Icon name={context.kind === 'local' ? 'terminal' : 'server'} size={11} />{hostName}</span>
-        <label class="chip toggle" class:on={chat.attachTerminal} title={chat.id ? t('ai.terminalFixed') : t('ai.terminalHint')}>
-          <input type="checkbox" bind:checked={chat.attachTerminal} disabled={!!chat.id} />
-          <Icon name="terminal" size={11} />{t('ai.terminal')}
+        <label class="chip toggle icon-only" class:on={chat.attachTerminal} title={`${t('ai.terminalHint')}${chat.id ? `\n${t('ai.terminalFixed')}` : ''}`}>
+          <input type="checkbox" bind:checked={chat.attachTerminal} disabled={!!chat.id} aria-label={t('ai.terminalHint')} />
+          <Icon name="terminal" size={12} />
         </label>
       </div>
       <textarea bind:this={input} bind:value={draft} rows="1" placeholder={t('ai.placeholder', { host: hostInText })} aria-label={t('ai.placeholder', { host: hostInText })} oninput={grow} onkeydown={onKeydown}></textarea>
@@ -917,7 +917,18 @@
     color: var(--fg);
   }
   .chip.toggle input {
-    display: none;
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .chip.icon-only {
+    position: relative;
+    width: 22px;
+    justify-content: center;
+    padding: 0;
+  }
+  .chip.toggle:not(.on) :global(svg) {
+    opacity: 0.45;
   }
   textarea {
     width: 100%;

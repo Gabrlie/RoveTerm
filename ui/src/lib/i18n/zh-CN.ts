@@ -457,7 +457,6 @@ export const zhCN: Messages = {
   'ai.example.logs': '看看系统日志里最近的错误',
   'ai.example.disk': '哪些东西占用了最多的磁盘空间？',
   'ai.waitingApproval': '等待你的批准（{n}）',
-  'ai.terminal': '可看终端',
   'ai.terminalHint': '允许 Agent 读取这个终端当前显示的内容（只读）。关闭后它仍能在主机上用自己的会话执行命令，只是看不到你终端里的画面',
   'ai.terminalFixed': '对话开始时确定；要更改请新建对话',
   'ai.chooseAgent': '选择 Agent',

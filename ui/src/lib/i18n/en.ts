@@ -455,7 +455,6 @@ export const en = {
   'ai.example.logs': 'Show the most recent errors in the system log',
   'ai.example.disk': 'What is using the most disk space?',
   'ai.waitingApproval': 'Waiting for your approval ({n})',
-  'ai.terminal': 'Sees my terminal',
   'ai.terminalHint': 'The agent may read what this terminal shows (read-only). Off: it still runs commands on the host in its own session, but cannot see your screen.',
   'ai.terminalFixed': 'Set when the conversation started; start a new conversation to change it',
   'ai.chooseAgent': 'Choose an agent',
