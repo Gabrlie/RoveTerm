@@ -91,7 +91,7 @@ Agent 自带的 shell 在本机运行，到不了远程主机，因此 RoveTerm 
 | `list_dir` | 列目录 |
 | `terminal_snapshot` | 读取用户在该主机上的终端最近显示的内容 |
 
-Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接模式：`roveterm --mcp-bridge` 从环境变量 `ROVETERM_MCP_ADDR`、`ROVETERM_MCP_TOKEN` 得知运行中应用的回环端口和 token，连上后先发送 token，再把 stdin / stdout 原样转发。应用为每个 AI 会话监听一个随机回环端口，token 随机生成、只在内存中，经环境变量（而非命令行参数）交给桥接进程；token 不对的连接直接关闭。
+Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接模式：`roveterm --mcp-bridge` 从环境变量 `ROVETERM_MCP_ADDR`、`ROVETERM_MCP_TOKEN` 得知运行中应用的回环端口和 token，连上后先发送 token，再把 stdin / stdout 原样转发。应用为每个 AI 会话监听一个随机回环端口，token 随机生成、只在内存中，经环境变量（而非命令行参数）交给桥接进程；token 不对的连接直接关闭。另有 `--mcp-bridge --mcp-config <文件>`：从文件读取地址与 token，供用户自己运行的 Agent 使用（见"开放给本机智能体"）。每个连接的工具由 `McpTools` 提供，连接结束时得到通知。
 
 ## 应用接入
 

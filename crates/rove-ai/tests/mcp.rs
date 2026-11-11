@@ -175,3 +175,84 @@ async fn tools_run_through_the_session() {
     assert!(relative.get("error").is_some());
     server.abort();
 }
+
+/// Tools that record who connected, what was called and whether the connection closed.
+#[derive(Default)]
+struct Recording {
+    client: std::sync::Mutex<String>,
+    calls: std::sync::Mutex<Vec<String>>,
+    closed: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait]
+impl rove_ai::mcp::McpTools for Recording {
+    fn instructions(&self) -> String {
+        "test tools".into()
+    }
+
+    fn specs(&self) -> Value {
+        json!([{ "name": "echo", "description": "Echo", "inputSchema": { "type": "object" } }])
+    }
+
+    fn client_named(&self, name: &str) {
+        *self.client.lock().unwrap() = name.to_owned();
+    }
+
+    async fn call(
+        &self,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<rove_ai::tools::ToolResult, (i64, String)> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("{name} {arguments}"));
+        Ok(rove_ai::tools::ToolResult {
+            text: "ok".into(),
+            is_error: false,
+        })
+    }
+
+    async fn closed(&self) {
+        self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn each_connection_gets_its_tools_and_is_told_when_it_closes() {
+    let tools = Arc::new(Recording::default());
+    let listener = McpListener::bind().await.unwrap();
+    let config = listener.config().unwrap();
+    let shared = tools.clone();
+    let server = listener.serve_with(Arc::new(move || {
+        shared.clone() as Arc<dyn rove_ai::mcp::McpTools>
+    }));
+    let stream = TcpStream::connect(&config.addr).await.unwrap();
+    let (reader, mut writer) = stream.into_split();
+    writer
+        .write_all(format!("{}\n", config.token).as_bytes())
+        .await
+        .unwrap();
+    let mut connection = Connection {
+        lines: BufReader::new(reader).lines(),
+        writer,
+        next: 0,
+    };
+    let init = connection
+        .call("initialize", json!({ "protocolVersion": "2025-06-18", "clientInfo": { "name": "claude-code", "title": "Claude Code" } }))
+        .await;
+    assert_eq!(init["result"]["instructions"], "test tools");
+    assert_eq!(*tools.client.lock().unwrap(), "Claude Code");
+    let (text, failed) = connection.tool("echo", json!({ "x": 1 })).await;
+    assert_eq!((text.as_str(), failed), ("ok", false));
+    assert_eq!(*tools.calls.lock().unwrap(), [r#"echo {"x":1}"#]);
+    drop(connection);
+    for _ in 0..50 {
+        if tools.closed.load(std::sync::atomic::Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(tools.closed.load(std::sync::atomic::Ordering::SeqCst));
+    server.abort();
+}

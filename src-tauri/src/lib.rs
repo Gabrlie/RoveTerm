@@ -140,7 +140,14 @@ pub fn mcp_bridge() -> i32 {
             return 1;
         }
     };
-    match runtime.block_on(rove_ai::mcp::bridge()) {
+    // `--mcp-bridge --mcp-config <file>`: an agent the user runs, through the config file.
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let config = args
+        .iter()
+        .position(|arg| arg == "--mcp-config")
+        .and_then(|at| args.get(at + 1))
+        .map(PathBuf::from);
+    match runtime.block_on(rove_ai::mcp::bridge(config.as_deref())) {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("roveterm --mcp-bridge: {error}");
