@@ -170,6 +170,7 @@ impl Vault {
     /// Deletes every stored secret and unlocks with a fresh master key. The only way out of
     /// [`LockReason::KeyLost`]. Hosts and known hosts are kept.
     pub fn reset_secrets(&self) -> Result<LockState, VaultError> {
+        tracing::warn!("resetting the vault: stored passwords, private keys and AI keys are removed");
         let key = MasterKey::generate()?;
         self.key_cache.store(&key)?;
         {

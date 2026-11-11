@@ -352,6 +352,9 @@ pub async fn ai_set_key(
         AgentRef::Acp(id) => format!("acp:{id}"),
     };
     state.ensure_unlocked().await?;
+    if key.is_none() {
+        tracing::info!(agent = %id, "AI key removed by the user");
+    }
     let key = key.map(Zeroizing::new);
     Ok(state
         .vault

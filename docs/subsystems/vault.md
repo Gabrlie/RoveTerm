@@ -100,6 +100,8 @@ pub trait KeyCache: Send + Sync {
 
 ## 同步
 
+AI key 被删除时写日志（只记 id，不记 key）：用户在设置中移除（`AI key removed by the user`）、其他设备经同步删除（`AI key removed by another device through sync`），以及重置凭据库时（`resetting the vault`），便于追查 key 的丢失来源。
+
 `src/sync.rs` 是 vault 一侧的同步接口，不涉及同步协议（见 [sync](sync.md)）：
 
 - `sync_records()` 列出全部可同步记录（种类 `pref`（偏好按节：appearance、terminal、files、status、ai，ai 节不含服务商）、`ai_provider`（每个服务商一条）、`host`、`key`、`host_secret`、`forward`、`snippet`、`ai_key`；偏好按节同步，一台设备改了某一节不会覆盖其他节，也不会带走另一台的服务商；旧版本的整体记录 `prefs` 及其删除被忽略，旧版本也忽略新的种类；内容为 JSON）：主机不含连接时间，含检测到的系统；凭据与私钥为明文 JSON，交给同步引擎密封后才离开本机。需要已解锁，否则凭据会看似被删除并把删除扩散到其他设备。

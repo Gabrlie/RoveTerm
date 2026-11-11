@@ -451,7 +451,11 @@ impl Vault {
                 Err(error) => return Err(error),
             },
             "host_secret" => self.delete_secret(id.parse()?)?,
-            "ai_key" => self.set_ai_key(id, None)?,
+            "ai_key" => {
+                // Keys do not leave by themselves: which device removed one is worth knowing.
+                tracing::info!(agent = %id, "AI key removed by another device through sync");
+                self.set_ai_key(id, None)?;
+            }
             "key" => {
                 let key_id: KeyId = id.parse()?;
                 self.conn.lock().execute(
