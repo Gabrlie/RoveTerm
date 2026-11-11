@@ -14,10 +14,12 @@
 
   interface Props {
     sidebarOpen: boolean;
+    rightOpen: boolean;
+    bottomOpen: boolean;
     onaction: (id: ActionId) => void;
   }
 
-  let { sidebarOpen, onaction }: Props = $props();
+  let { sidebarOpen, rightOpen, bottomOpen, onaction }: Props = $props();
 
   let bar = $state<HTMLElement>();
   /** The menu titles: clicks there switch menus instead of closing them. */
@@ -106,6 +108,8 @@
   <span class="drag" data-tauri-drag-region></span>
   <div class="layout">
     <IconButton icon="sidebar" small label={t('action.sidebar.toggle')} active={sidebarOpen} onclick={() => onaction('sidebar.toggle')} />
+    <IconButton icon="panelBottom" small label={t('action.panel.bottom')} active={bottomOpen} onclick={() => onaction('panel.bottom')} />
+    <IconButton icon="panelRight" small label={t('action.panel.right')} active={rightOpen} onclick={() => onaction('panel.right')} />
   </div>
   {#if appWindow}
     <div class="window">

@@ -397,7 +397,7 @@
 <svelte:window onkeydowncapture={onKeydown} />
 
 <div class="app">
-  <TitleBar {sidebarOpen} onaction={run} />
+  <TitleBar {sidebarOpen} rightOpen={rightPage !== null} {bottomOpen} onaction={run} />
   <div class="body">
   {#if sidebarOpen}
     <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onnotice={(message) => showNotice(message, 'error')} onsettings={() => (settingsOpen = true)} onkeys={() => (keysOpen = true)} />
