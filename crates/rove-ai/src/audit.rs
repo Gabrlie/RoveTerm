@@ -250,6 +250,11 @@ pub struct Auditor {
     thought: Mutex<String>,
     /// The session has a title (written from the first prompt unless it had one).
     titled: std::sync::atomic::AtomicBool,
+    /// The start, kept until the session records something else: an agent started and left
+    /// without a message leaves no history.
+    pending_start: Mutex<Option<SessionInfo>>,
+    /// Something was written.
+    written: std::sync::atomic::AtomicBool,
 }
 
 impl Auditor {
@@ -261,6 +266,8 @@ impl Auditor {
             message: Mutex::new(String::new()),
             thought: Mutex::new(String::new()),
             titled: std::sync::atomic::AtomicBool::new(false),
+            pending_start: Mutex::new(None),
+            written: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -270,6 +277,23 @@ impl Auditor {
     }
 
     fn write(&self, kind: &str, mut payload: Value) {
+        let start = self
+            .pending_start
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(info) = start {
+            self.write_now(
+                KIND_STARTED,
+                serde_json::to_value(&info).unwrap_or_else(|_| json!({})),
+            );
+        }
+        self.write_now(kind, payload.take());
+    }
+
+    fn write_now(&self, kind: &str, mut payload: Value) {
+        self.written
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         if let Value::Object(fields) = &mut payload {
             fields.insert("host".into(), Value::String(self.host.clone()));
         }
@@ -298,11 +322,12 @@ impl Auditor {
         }
     }
 
+    /// Notes how the session started; written with its first record (normally the first prompt).
     pub fn started(&self, info: &SessionInfo) {
-        self.write(
-            KIND_STARTED,
-            serde_json::to_value(info).unwrap_or_else(|_| json!({})),
-        );
+        *self
+            .pending_start
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(info.clone());
     }
 
     pub fn prompt(&self, text: &str) {
@@ -322,9 +347,12 @@ impl Auditor {
         self.write(KIND_TURN_ENDED, json!({ "stop_reason": stop_reason }));
     }
 
+    /// Records the end; a session that recorded nothing stays without records.
     pub fn ended(&self) {
         self.flush();
-        self.write(KIND_ENDED, json!({}));
+        if self.written.load(std::sync::atomic::Ordering::SeqCst) {
+            self.write(KIND_ENDED, json!({}));
+        }
     }
 
     /// Records a session event.
@@ -578,6 +606,24 @@ mod tests {
         let list = body["records"].as_array().unwrap();
         assert_eq!(list[0]["kind"], KIND_STARTED);
         assert!(list.last().unwrap()["payload"]["text"].as_str().unwrap().starts_with("199"));
+    }
+
+    #[test]
+    fn a_session_without_a_message_leaves_no_history() {
+        let (audit, records) = auditor();
+        audit.started(&SessionInfo {
+            agent: Some("Codex".into()),
+            ..SessionInfo::default()
+        });
+        audit.ended();
+        assert!(records.lock().unwrap().is_empty());
+
+        let (audit, records) = auditor();
+        audit.started(&SessionInfo::default());
+        audit.prompt("hi");
+        audit.ended();
+        let kinds: Vec<String> = records.lock().unwrap().iter().map(|record| record.kind.clone()).collect();
+        assert_eq!(kinds, [KIND_STARTED, KIND_PROMPT, KIND_RENAMED, KIND_ENDED]);
     }
 
     #[test]
