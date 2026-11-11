@@ -156,14 +156,13 @@ class Workspace {
   }
 
   /**
-   * Splits the focused group, opening its current tab's target again in a new group beside
-   * (`row`) or below (`column`) it; a group showing home splits into another empty one.
+   * Splits the focused group, adding an empty group (it shows home) beside (`row`) or below
+   * (`column`) it. Opening the same host again is the tab menu's split ({@link splitTab}).
    */
   splitFocused(dir: SplitDir): void {
     const group = this.focusedGroup;
     if (!group) return;
-    const source = this.focusedPane;
-    const added = this.createGroup(source ? [this.createPane(source.target)] : []);
+    const added = this.createGroup([]);
     this.root = splitPane(this.root, group.id, dir, added.id);
     this.focusedGroupId = added.id;
   }
