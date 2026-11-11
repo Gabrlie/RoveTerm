@@ -113,6 +113,7 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         commands::external::restore(&handle).await;
     });
     schedule::start(app.handle());
+    commands::autostart::apply(app);
     Ok(())
 }
 
@@ -168,9 +169,15 @@ pub fn mcp_bridge() -> i32 {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     logs::init();
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_clipboard_manager::init());
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        Some(vec![commands::autostart::MINIMIZED_ARG]),
+    ));
+    let app = builder
         .setup(boot)
         .on_menu_event(commands::menu::on_event)
         .invoke_handler(tauri::generate_handler![
@@ -196,6 +203,8 @@ pub fn run() {
             commands::sftp::transfer_clear,
             commands::sftp::transfer_reveal,
             commands::app::log_write,
+            commands::autostart::autostart_get,
+            commands::autostart::autostart_set,
             commands::host::host_notes_get,
             commands::host::host_notes_set,
             commands::app::logs_reveal,

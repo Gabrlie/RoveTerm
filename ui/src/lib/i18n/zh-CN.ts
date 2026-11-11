@@ -778,6 +778,8 @@ export const zhCN: Messages = {
   'settings.aboutLicenses': '内置的字体、图标和终端配色各自遵循其许可，说明文件与它们放在源码中的同一位置。',
   'settings.logsHint': '最近七天的按天日志文件，不含密码与密钥；反馈问题时可一并发送',
   'settings.logs': '日志',
+  'settings.autostart': '登录时启动',
+  'settings.autostartHint': '登录系统后 RoveTerm 自动最小化启动，定时任务就能按时运行',
   'edit.cut': '剪切',
   'edit.copy': '复制',
   'edit.paste': '粘贴',

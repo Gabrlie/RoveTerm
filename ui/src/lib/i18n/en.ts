@@ -776,6 +776,8 @@ export const en = {
   'settings.aboutLicenses': 'Bundled fonts, icons and colour schemes keep their own licences; see the notes next to each in the source tree.',
   'settings.logsHint': 'Daily files of the last seven days; they hold no passwords or keys. Send them along when reporting a problem.',
   'settings.logs': 'Logs',
+  'settings.autostart': 'Start at login',
+  'settings.autostartHint': 'RoveTerm starts minimized when you log in, so scheduled tasks run on time',
   'edit.cut': 'Cut',
   'edit.copy': 'Copy',
   'edit.paste': 'Paste',

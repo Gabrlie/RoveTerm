@@ -14,6 +14,7 @@
   import { notify } from '../ui/toast.svelte';
   import { ask } from '../ui/confirm.svelte';
   import { clock, parseClock, repeatText, scheduleId } from './schedule';
+  import AutostartRow from '../settings/AutostartRow.svelte';
 
   let { onclose, onopenreport }: { onclose: () => void; onopenreport: (conversation: string) => void } = $props();
 
@@ -196,6 +197,9 @@
       {:else}
         <p class="empty">{t('schedule.empty')}</p>
       {/each}
+    </div>
+    <div class="form-group">
+      <AutostartRow />
     </div>
   {/if}
   {#snippet actions()}

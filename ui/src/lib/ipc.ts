@@ -561,6 +561,15 @@ export function logWrite(level: 'warn' | 'error', message: string): Promise<void
   return invoke('log_write', { level, message });
 }
 
+/** Whether RoveTerm starts (minimized) when the user logs in; `null` where it cannot. */
+export function autostartGet(): Promise<boolean | null> {
+  return invoke('autostart_get');
+}
+
+export function autostartSet(enabled: boolean): Promise<void> {
+  return invoke('autostart_set', { enabled });
+}
+
 /** Opens the folder of the log files in the system file manager. */
 export function logsReveal(): Promise<void> {
   return invoke('logs_reveal');

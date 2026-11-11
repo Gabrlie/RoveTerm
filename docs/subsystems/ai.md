@@ -155,6 +155,7 @@ ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次
 - 每个处理过的时间写一条 `ai/schedule_run`（`schedule`、`due`、`status`：`started` / `done` / `failed` / `missed`、`conversation`），开始时就写，所以退出时被打断的运行不会重做；同一任务不会同时运行两次。
 - 一次运行是一段独立的总管对话（`ai::run_scheduled`）：标题为"任务名 · 时间"，会话为无人值守模式，子代理按任务是否允许修改以无人值守模式运行；提示中说明无人值守并要求以报告结尾（一句话概况、各服务器的发现与变更、需要用户决定的事项）。结束时发出 `ai-report` 事件。
 - 命令：`schedule_status()`（各任务最近一次的处理）、`schedule_run_now(id)`（立即运行，不影响定时）。
+- 登录时启动（桌面端，`tauri-plugin-autostart`）：开启后登录系统时以 `--minimized` 启动、窗口最小化，定时任务因此能按时运行。设置保存在操作系统的登录项中（本身按设备），命令 `autostart_get()`（移动端为 `null`）/ `autostart_set(enabled)`；开关在定时任务对话框与设置"关于"页。
 
 ## 开放给本机智能体
 

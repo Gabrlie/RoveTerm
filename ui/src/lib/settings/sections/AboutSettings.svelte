@@ -5,6 +5,7 @@
   import { errorText, t } from '../../i18n';
   import { logsReveal } from '../../ipc';
   import { notify } from '../../ui/toast.svelte';
+  import AutostartRow from '../AutostartRow.svelte';
 
   let version = $state('');
 
@@ -22,6 +23,7 @@
   <p>{t('settings.aboutText')}</p>
 </div>
 <div class="form-group">
+  <AutostartRow />
   <div class="form-row">
     <span class="form-label">{t('settings.logs')}<small>{t('settings.logsHint')}</small></span>
     <button type="button" class="secondary" onclick={() => void logsReveal().catch((error: unknown) => notify(errorText(error), 'error'))}>{t('action.help.logs')}</button>

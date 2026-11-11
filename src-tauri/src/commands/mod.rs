@@ -2,6 +2,7 @@
 
 pub mod ai;
 pub mod app;
+pub mod autostart;
 pub mod external;
 pub mod fleet;
 pub mod forward;
