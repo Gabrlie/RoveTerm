@@ -474,6 +474,7 @@ export const zhCN: Messages = {
   'ai.verb.command': '运行',
   'ai.verb.read_file': '读取',
   'ai.verb.write_file': '写入',
+  'ai.verb.edit_file': '修改',
   'ai.verb.list_dir': '列出',
   'ai.verb.read_terminal': '读取终端',
   'ai.verb.agent_tool': 'Agent 工具',

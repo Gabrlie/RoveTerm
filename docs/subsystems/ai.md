@@ -87,6 +87,7 @@ Agent 自带的 shell 在本机运行，到不了远程主机，因此 RoveTerm 
 |---|---|
 | `run_command` | 运行 shell 命令，返回退出码与输出；可指定工作目录和超时（最多 600 秒） |
 | `read_file` / `write_file` | 读写文本文件，可按行截取 |
+| `edit_file` | 把文件中的一段文字（`old`，须原样且只出现一次，`replace_all` 时可多处）替换为 `new`（`edit.rs`）；替换不成立时不发起审批直接报错，审批卡片显示删除与新增的行（`Operation::EditFile`，按写入评估风险、按目录记住授权），结果记为 `ai/file_write`，审计中可看到差异；系统提示词引导改已有文件时优先用它 |
 | `list_dir` | 列目录 |
 | `terminal_snapshot` | 读取用户在该主机上的终端最近显示的内容 |
 

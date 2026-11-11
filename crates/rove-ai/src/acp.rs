@@ -68,6 +68,11 @@ impl ClientError {
     pub fn denied(message: impl Into<String>) -> Self {
         Self::new(code::INTERNAL, message)
     }
+
+    /// Arguments that cannot work as given.
+    pub fn invalid(message: impl Into<String>) -> Self {
+        Self::new(code::INVALID_PARAMS, message)
+    }
 }
 
 /// What the agent reported about a running session.

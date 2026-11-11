@@ -7,6 +7,7 @@ pub mod assistant;
 pub mod audit;
 pub mod backend;
 pub mod detect;
+pub mod edit;
 pub mod host;
 pub mod llm;
 pub mod mcp;

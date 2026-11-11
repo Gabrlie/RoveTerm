@@ -430,7 +430,7 @@ impl Auditor {
                 let kind = match operation {
                     Operation::Command { .. } => KIND_COMMAND,
                     Operation::ReadFile { .. } => KIND_FILE_READ,
-                    Operation::WriteFile { .. } => KIND_FILE_WRITE,
+                    Operation::WriteFile { .. } | Operation::EditFile { .. } => KIND_FILE_WRITE,
                     Operation::ListDir { .. } => KIND_LIST_DIR,
                     Operation::ReadTerminal => KIND_TERMINAL_READ,
                     Operation::AgentTool { .. } => KIND_TOOL_CALL,

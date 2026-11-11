@@ -1,5 +1,5 @@
-//! The tools an agent has on the session's host: run a command, read and write files, list a
-//! directory and read the user's terminal. The built-in MCP server and the built-in assistant
+//! The tools an agent has on the session's host: run a command, read, write and edit files, list
+//! a directory and read the user's terminal. The built-in MCP server and the built-in assistant
 //! offer the same tools with the same descriptions; every call goes through [`AiSession`], which
 //! applies the policy.
 
@@ -52,6 +52,16 @@ pub fn specs(host: &str) -> Value {
                 "path": { "type": "string", "description": "Absolute path" },
                 "content": { "type": "string" }
             }, "required": ["path", "content"] }
+        },
+        {
+            "name": "edit_file",
+            "description": format!("Change part of a text file on {host}: replace `old` (copied exactly from the file, with enough surrounding lines to occur once) with `new`. Prefer this to write_file for changes to existing files. Usually needs the user's approval."),
+            "inputSchema": { "type": "object", "properties": {
+                "path": { "type": "string", "description": "Absolute path" },
+                "old": { "type": "string", "description": "The exact text to replace" },
+                "new": { "type": "string", "description": "The text to put in its place" },
+                "replace_all": { "type": "boolean", "description": "Replace every occurrence rather than one" }
+            }, "required": ["path", "old", "new"] }
         },
         {
             "name": "list_dir",
@@ -165,6 +175,20 @@ pub async fn call(
             let content = argument(arguments, "content")?;
             Ok(match session.write_file(path, content).await {
                 Ok(()) => result(format!("wrote {} bytes to {path}", content.len()), false),
+                Err(error) => result(error.message, true),
+            })
+        }
+        "edit_file" => {
+            let path = argument(arguments, "path")?;
+            absolute(path)?;
+            let old = argument(arguments, "old")?;
+            let new = argument(arguments, "new")?;
+            let all = arguments
+                .get("replace_all")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            Ok(match session.edit_file(path, old, new, all).await {
+                Ok(count) => result(format!("replaced {count} place(s) in {path}"), false),
                 Err(error) => result(error.message, true),
             })
         }

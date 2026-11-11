@@ -575,6 +575,64 @@ impl AiSession {
         }
     }
 
+    /// Replaces `old` with `new` in a text file on the host after the policy allows it: `old`
+    /// must occur exactly once, or at least once with `replace_all`. The approval shows the
+    /// change. Returns how many places changed.
+    pub async fn edit_file(
+        &self,
+        path: &str,
+        old: &str,
+        new: &str,
+        replace_all: bool,
+    ) -> Result<usize, ClientError> {
+        let current = host::read_text(self.host.as_ref(), path, &self.limits)
+            .await
+            .map_err(failure)?;
+        if current.truncated {
+            return Err(ClientError::invalid(
+                "the file is too large to edit; write it whole instead",
+            ));
+        }
+        let (content, count) = crate::edit::replace(&current.content, old, new, replace_all)
+            .map_err(ClientError::invalid)?;
+        let operation = Operation::EditFile {
+            path: path.to_owned(),
+            diff: crate::edit::diff(old, new),
+        };
+        let assessment = self.assess(&operation).await;
+        let (allowed, approved) = self.authorize(&operation, &assessment, false).await;
+        if !allowed {
+            self.report(operation, assessment, approved, Outcome::Denied);
+            return Err(ClientError::denied(
+                "the user did not allow editing this file",
+            ));
+        }
+        match host::write_text(self.host.as_ref(), path, &content, &self.limits).await {
+            Ok(()) => {
+                let outcome = Outcome::Written {
+                    bytes: content.len(),
+                    sha256: sha256(content.as_bytes()),
+                    previous_sha256: Some(sha256(current.content.as_bytes())),
+                    lines_before: current.content.lines().count(),
+                    lines_after: content.lines().count(),
+                };
+                self.report(operation, assessment, approved, outcome);
+                Ok(count)
+            }
+            Err(error) => {
+                self.report(
+                    operation,
+                    assessment,
+                    approved,
+                    Outcome::Failed {
+                        error: error.to_string(),
+                    },
+                );
+                Err(failure(error))
+            }
+        }
+    }
+
     /// Lists a directory on the host after the policy allows it.
     pub async fn list_dir(&self, path: &str) -> Result<(Vec<Entry>, bool), ClientError> {
         let operation = Operation::ListDir {

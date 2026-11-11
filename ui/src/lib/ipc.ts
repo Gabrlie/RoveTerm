@@ -905,6 +905,8 @@ export type AiOperation =
   | { op: 'command'; command: string }
   | { op: 'read_file'; path: string }
   | { op: 'write_file'; path: string }
+  /** `diff`: removed lines after `- `, added after `+ `. */
+  | { op: 'edit_file'; path: string; diff: string }
   | { op: 'list_dir'; path: string }
   | { op: 'read_terminal' }
   | {

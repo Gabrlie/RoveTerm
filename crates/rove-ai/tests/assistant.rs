@@ -164,7 +164,7 @@ async fn a_turn_runs_tools_through_the_policy() {
     assert_eq!(bodies.len(), 3);
     let system = bodies[0]["messages"][0]["content"].as_str().unwrap();
     assert!(system.contains("untrusted-data") && system.contains("Linux"));
-    assert_eq!(bodies[0]["tools"].as_array().unwrap().len(), 5);
+    assert_eq!(bodies[0]["tools"].as_array().unwrap().len(), 6);
     // The model saw the command's output, marked as data, and then the refusal.
     let first_result = bodies[1]["messages"].as_array().unwrap().last().unwrap()["content"]
         .as_str()

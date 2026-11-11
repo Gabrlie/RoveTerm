@@ -20,3 +20,9 @@ test('refusals and unknown kinds', () => {
   assert.equal(at('ai/thought', { text: 'hmm' }), null);
   assert.equal(at('ai/something_new', {}), null);
 });
+
+test('an edit shows its change', () => {
+  const line = auditLine({ ts: 1, kind: 'ai/file_write', payload: { operation: { op: 'edit_file', path: '/etc/a', diff: '- a\n+ b\n' }, outcome: { result: 'written' } } });
+  assert.equal(line?.text, '/etc/a');
+  assert.equal(line?.detail, '- a\n+ b\n');
+});

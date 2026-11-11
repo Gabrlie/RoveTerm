@@ -472,6 +472,7 @@ export const en = {
   'ai.verb.command': 'Run',
   'ai.verb.read_file': 'Read',
   'ai.verb.write_file': 'Write',
+  'ai.verb.edit_file': 'Edit',
   'ai.verb.list_dir': 'List',
   'ai.verb.read_terminal': 'Read the terminal',
   'ai.verb.agent_tool': 'Agent tool',

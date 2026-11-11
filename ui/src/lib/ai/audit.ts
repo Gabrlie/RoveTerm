@@ -66,6 +66,9 @@ export function auditLine(entry: AiRecord): AuditLine | null {
         tone = 'danger';
         detail = str(outcome.error);
       }
+      // An edit shows its change.
+      const diff = str(record(payload.operation).diff);
+      if (diff && !detail) detail = diff;
       // Agent tools report themselves when finished, without an operation.
       const text = subject(payload.operation) || str(payload.title) || str(payload.input);
       if (!result && payload.status) note = str(payload.status);

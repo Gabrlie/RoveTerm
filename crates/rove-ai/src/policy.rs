@@ -52,6 +52,11 @@ pub enum Operation {
     WriteFile {
         path: String,
     },
+    /// Replace text in a file; `diff` shows the change (removed lines `- `, added `+ `).
+    EditFile {
+        path: String,
+        diff: String,
+    },
     ListDir {
         path: String,
     },
@@ -78,7 +83,7 @@ impl Operation {
             Self::Command { command } => risk::assess_command(command, rules),
             Self::ReadFile { path } | Self::ListDir { path } => risk::assess_read(path),
             Self::ReadTerminal => Assessment::new(),
-            Self::WriteFile { path } => risk::assess_write(path),
+            Self::WriteFile { path } | Self::EditFile { path, .. } => risk::assess_write(path),
             Self::AgentTool {
                 command: Some(command),
                 ..
@@ -132,7 +137,9 @@ impl Operation {
                 )
             }
             // Writes are remembered per directory, secret reads per file.
-            Self::WriteFile { path } => Some(vec![format!("write:{}", parent(path))]),
+            Self::WriteFile { path } | Self::EditFile { path, .. } => {
+                Some(vec![format!("write:{}", parent(path))])
+            }
             Self::ReadFile { path } | Self::ListDir { path } => Some(vec![format!("read:{path}")]),
             Self::ReadTerminal => Some(vec!["terminal".to_owned()]),
             Self::AgentTool { kind, .. } => Some(vec![format!("tool:{kind:?}")]),

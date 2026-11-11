@@ -135,6 +135,7 @@ export function subject(operation: AiOperation): string {
       return operation.command;
     case 'read_file':
     case 'write_file':
+    case 'edit_file':
     case 'list_dir':
       return operation.path;
     case 'read_terminal':

@@ -252,6 +252,7 @@
       case 'read_file':
         return 'file';
       case 'write_file':
+      case 'edit_file':
         return 'edit';
       case 'list_dir':
         return 'folder';
@@ -456,6 +457,9 @@
               </div>
               {#if subject(item.operation)}<pre class="approval-subject selectable">{subject(item.operation)}</pre>{/if}
               {#if item.operation.op === 'agent_tool' && item.operation.detail}<p class="approval-detail selectable">{item.operation.detail}</p>{/if}
+              {#if item.operation.op === 'edit_file'}
+                <pre class="diff selectable">{#each item.operation.diff.split('\n') as line, at (at)}<span class:removed={line.startsWith('- ')} class:added={line.startsWith('+ ')}>{line}{'\n'}</span>{/each}</pre>
+              {/if}
               <p class="approval-where">{item.agentTool ? t('ai.agentTool') : t('ai.on', { host: hostInText })}</p>
               {#if item.assessment.reasons.length > 0}
                 <ul class="reasons">
@@ -884,6 +888,24 @@
     font-size: 11.5px;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+  .diff {
+    margin: var(--space-2) 0 0;
+    padding: var(--space-2);
+    max-height: 220px;
+    overflow: auto;
+    border-radius: var(--radius-sm);
+    background: var(--fill);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .diff .removed {
+    color: var(--danger);
+  }
+  .diff .added {
+    color: var(--success);
   }
   .approval-detail {
     margin: var(--space-2) 0 0;
