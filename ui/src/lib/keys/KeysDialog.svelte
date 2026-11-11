@@ -284,7 +284,7 @@
           <p class="empty">{keys.items.length === 0 ? t('keys.empty') : t('host.noMatch')}</p>
         {/each}
       </div>
-      <!-- At the bottom of the list's column, level with Done. -->
+      <!-- At the foot of the sidebar. -->
       <div class="add">
         <button type="button" class:active={mode === 'generate'} onclick={() => reset('generate')}><Icon name="add" size={13} />{t('keys.generate')}</button>
         <button type="button" class:active={mode === 'import'} onclick={() => reset('import')}><Icon name="importConfig" size={13} />{t('keys.import')}</button>
@@ -464,6 +464,7 @@
     margin: 0 calc(-1 * var(--space-5)) calc(-1 * var(--space-2));
     box-shadow: inset 0 1px 0 var(--separator);
   }
+  /* A sidebar of its own, the full height of the dialog. */
   nav {
     flex: 0 0 220px;
     display: flex;
@@ -596,23 +597,19 @@
   .add button.active {
     background: var(--fill-hover);
   }
-  /* The right side: the pane, and Done level with the buttons at the bottom of the list. */
+  /* The right side: the pane above its bottom bar. */
   .main {
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
   }
-  /* As tall as the buttons under the list (their line, two rows and the column's padding), so
-     the two lines meet. */
+  /* The bottom bar of the right side, apart from the sidebar's buttons. */
   .foot {
     flex: none;
-    box-sizing: border-box;
-    height: calc(var(--space-2) + 58px + var(--space-3));
     display: flex;
     justify-content: flex-end;
-    align-items: flex-end;
-    padding: 0 var(--space-5) var(--space-3);
+    padding: var(--space-3) var(--space-5) var(--space-4);
     box-shadow: inset 0 1px 0 var(--separator);
   }
   .pane {
