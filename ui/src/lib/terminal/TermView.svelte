@@ -30,9 +30,15 @@
     onexit?: (status: ExitStatus) => void;
     onerror?: (error: unknown) => void;
     ontitle?: (title: string) => void;
+    /** The session is remote: an end without an exit code means the connection dropped. */
+    remote?: boolean;
+    /** Enter pressed after the session ended: start it again. */
+    onrestart?: () => void;
   }
 
-  let { open, active = true, onsession, onexit, onerror, ontitle }: Props = $props();
+  let { open, active = true, onsession, onexit, onerror, ontitle, remote = false, onrestart }: Props = $props();
+  /** The session ended; keys no longer go anywhere. */
+  let ended = false;
 
   let container: HTMLDivElement;
   let term: Terminal | undefined;
@@ -112,7 +118,12 @@
       return;
     }
     const { exit } = message;
-    const notice = exit.signal ? t('terminal.exitedSignal', { signal: exit.signal }) : t('terminal.exited', { code: exit.code ?? '?' });
+    ended = true;
+    const notice = exit.signal
+      ? t('terminal.exitedSignal', { signal: exit.signal })
+      : exit.code === null
+        ? t(remote ? 'terminal.disconnected' : 'terminal.ended')
+        : t('terminal.exited', { code: exit.code });
     term.write(`\r\n\x1b[2m[${notice}]\x1b[0m\r\n`);
     onexit?.(exit);
   }
@@ -240,6 +251,10 @@
     // App shortcuts are handled by the window; the terminal must not also send them to the shell.
     term.attachCustomKeyEventHandler((event) => !isAppShortcut(event));
     term.onData((data) => {
+      if (ended) {
+        if (data === '\r') onrestart?.();
+        return;
+      }
       if (sessionId) sessionWrite(sessionId, data).catch((error: unknown) => console.warn('write failed', error));
     });
     term.onTitleChange((title) => ontitle?.(title));

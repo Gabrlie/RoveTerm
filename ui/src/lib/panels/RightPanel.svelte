@@ -42,9 +42,17 @@
     {#if page === 'ai'}
       <AiPanel {onsettings} />
     {:else if page === 'status'}
-      {#key source ? sourceKey(source) : ''}
-        <StatusPanel {source} visible={true} session={workspace.focusedPane?.sessionId ?? null} />
-      {/key}
+      {@const pane = workspace.focusedPane}
+      {#if pane?.exited && source}
+        <div class="ended">
+          <p>{t('status.sessionEnded')}</p>
+          <button type="button" class="primary" onclick={() => workspace.reopen(pane.id, null, false)}>{t('terminal.reconnect')}</button>
+        </div>
+      {:else}
+        {#key source ? sourceKey(source) : ''}
+          <StatusPanel {source} visible={true} session={pane?.sessionId ?? null} />
+        {/key}
+      {/if}
     {:else}
       <SnippetsPanel />
     {/if}
@@ -59,6 +67,18 @@
     background: var(--material-sidebar);
     backdrop-filter: var(--material-blur);
     -webkit-backdrop-filter: var(--material-blur);
+  }
+  .ended {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-6) var(--space-4);
+    color: var(--fg-muted);
+    text-align: center;
+  }
+  .ended p {
+    margin: 0;
   }
   .tabs {
     display: flex;

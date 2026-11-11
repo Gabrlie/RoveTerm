@@ -107,9 +107,21 @@
         if (pane.target.kind === 'ssh') hosts.connected(pane.target.hostId).catch((error: unknown) => console.warn('host refresh failed', error));
       }}
       onexit={(status) => onExit(status.code)}
+      remote={pane.target.kind !== 'local'}
+      onrestart={() => workspace.reopen(pane.id, null, false)}
       ontitle={(title) => workspace.retitle(pane.id, title)}
       onerror={onOpenError}
     />
+    {#if pane.exited && !pane.failure}
+      <div class="failure ended" role="status">
+        <Icon name="info" size={16} />
+        <span class="reason">{pane.target.kind === 'local' ? t('terminal.endedBar') : pane.exited.code === null && !pane.exited.signal ? t('terminal.disconnectedBar') : t('terminal.sessionEndedBar')}</span>
+        <div class="buttons">
+          <button type="button" class="primary" onclick={() => workspace.reopen(pane.id, null, false)}>{pane.target.kind === 'local' ? t('terminal.restart') : t('terminal.reconnect')}</button>
+          <button type="button" class="secondary" onclick={() => workspace.closePane(pane.id)}>{t('common.close')}</button>
+        </div>
+      </div>
+    {/if}
     {#if pane.failure}
       {@const failure = pane.failure}
       <div class="failure" role="alert">
