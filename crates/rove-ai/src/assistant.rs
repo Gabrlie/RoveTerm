@@ -201,9 +201,8 @@ impl Assistant {
 
     /// Reasons at `effort` (`minimal` … `max`) from the next request on.
     pub fn set_effort(&self, effort: &str) -> Result<(), AssistantError> {
-        let level =
-            serde_json::from_value::<Effort>(serde_json::Value::String(effort.to_owned()))
-                .map_err(|_| AssistantError::UnknownModel(effort.to_owned()))?;
+        let level = serde_json::from_value::<Effort>(serde_json::Value::String(effort.to_owned()))
+            .map_err(|_| AssistantError::UnknownModel(effort.to_owned()))?;
         if let Ok(mut client) = self.client.write() {
             *client = client.with_effort(Some(level));
         }
@@ -281,6 +280,14 @@ impl Assistant {
             let reply = client
                 .complete(&self.system, &history, &self.tools, &mut on_delta)
                 .await?;
+            self.session.emit(AiEvent::Update {
+                update: SessionUpdate::Stats {
+                    input_tokens: reply.stats.input_tokens,
+                    output_tokens: reply.stats.output_tokens,
+                    first_token_ms: reply.stats.first_token_ms,
+                    tokens_per_second: reply.stats.tokens_per_second(),
+                },
+            });
             let calls = reply.tool_calls.clone();
             history.push(Message::Assistant {
                 text: reply.text,

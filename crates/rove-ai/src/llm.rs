@@ -3,7 +3,7 @@
 //! Responses and Anthropic Messages. The API key goes only into a request header; it is never
 //! logged, and error texts that could quote it are scrubbed.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use rove_http::reqwest::{self, Url};
@@ -133,6 +133,27 @@ pub struct Reply {
     pub opaque: Option<Value>,
     /// Why the model stopped, in the provider's words (`stop`, `end_turn`, `tool_use`, …).
     pub stop: String,
+    pub stats: Stats,
+}
+
+/// Token counts and timing of one reply, as far as the provider reports them.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct Stats {
+    /// Tokens the request took in (cached ones included).
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    /// From sending the request to the first text or reasoning.
+    pub first_token_ms: Option<u64>,
+    /// From the first text or reasoning (else from sending) to the end of the reply.
+    pub generation_ms: u64,
+}
+
+impl Stats {
+    /// Output tokens per second of generation, when both are known.
+    pub fn tokens_per_second(&self) -> Option<f64> {
+        let output = self.output_tokens.filter(|count| *count > 0)?;
+        (self.generation_ms >= 50).then(|| output as f64 * 1000.0 / self.generation_ms as f64)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize)]
@@ -170,7 +191,10 @@ pub struct Client {
 /// Whether a 400 reply turns down the reasoning settings (the model has none).
 fn refuses_effort(status: u16, message: &str) -> bool {
     let message = message.to_ascii_lowercase();
-    status == 400 && ["reasoning", "effort", "thinking"].iter().any(|word| message.contains(word))
+    status == 400
+        && ["reasoning", "effort", "thinking"]
+            .iter()
+            .any(|word| message.contains(word))
 }
 
 fn same_origin(a: &Url, b: &Url) -> bool {
@@ -238,7 +262,8 @@ impl Client {
 
     /// The model turned down the reasoning effort, which is left out since.
     pub fn effort_refused(&self) -> bool {
-        self.effort_refused.load(std::sync::atomic::Ordering::Relaxed)
+        self.effort_refused
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Removes the key from text that may quote the request.
@@ -396,6 +421,7 @@ impl Client {
                 .body(body.to_string())
                 .header("accept", "text/event-stream"),
         );
+        let sent = Instant::now();
         let response = tokio::time::timeout(self.idle, request.send())
             .await
             .map_err(|_| LlmError::Timeout)?
@@ -416,6 +442,8 @@ impl Client {
         let mut parser = SseParser::default();
         let mut state = StreamState::new(self.endpoint.format);
         let mut total = 0usize;
+        // When the first text or reasoning arrived.
+        let first = std::sync::OnceLock::<Instant>::new();
         loop {
             let chunk = match tokio::time::timeout(self.idle, stream.next()).await {
                 Err(_) => return Err(LlmError::Timeout),
@@ -431,20 +459,35 @@ impl Client {
             if total > MAX_BODY {
                 return Err(LlmError::TooLarge);
             }
+            let mut timed = |delta: Delta| {
+                let _ = first.set(Instant::now());
+                on_delta(delta);
+            };
             for event in parser.push(&chunk) {
-                if state.event(&event, on_delta).map_err(|error| match error {
-                    LlmError::Protocol(text) => LlmError::Protocol(self.scrub(&text)),
-                    other => other,
-                })? {
-                    return Ok(state.finish());
+                if state
+                    .event(&event, &mut timed)
+                    .map_err(|error| match error {
+                        LlmError::Protocol(text) => LlmError::Protocol(self.scrub(&text)),
+                        other => other,
+                    })?
+                {
+                    return Ok(timed_reply(state.finish(), sent, first.get().copied()));
                 }
             }
         }
         if !state.finished {
             return Err(LlmError::Protocol("the reply ended early".into()));
         }
-        Ok(state.finish())
+        Ok(timed_reply(state.finish(), sent, first.get().copied()))
     }
+}
+
+/// `reply` with the time to its first token and of its generation, ending now.
+fn timed_reply(mut reply: Reply, sent: Instant, first: Option<Instant>) -> Reply {
+    let millis = |duration: Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+    reply.stats.first_token_ms = first.map(|first| millis(first - sent));
+    reply.stats.generation_ms = millis(first.unwrap_or(sent).elapsed());
+    reply
 }
 
 /// The `message` of a provider's JSON error body, or the body itself.
@@ -482,7 +525,13 @@ fn chat_body(endpoint: &Endpoint, system: &str, messages: &[Message], tools: &[T
             Message::Tool { call_id, output, .. } => json!({ "role": "tool", "tool_call_id": call_id, "content": output }),
         });
     }
-    let mut body = json!({ "model": endpoint.model, "messages": list, "stream": true });
+    // The token counts come in a last chunk.
+    let mut body = json!({
+        "model": endpoint.model,
+        "messages": list,
+        "stream": true,
+        "stream_options": { "include_usage": true },
+    });
     if !tools.is_empty() {
         body["tools"] = tools
             .iter()
@@ -695,6 +744,8 @@ struct StreamState {
     blocks: Vec<(usize, String)>,
     stop: String,
     finished: bool,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
 }
 
 fn parse(data: &str) -> Result<Value, LlmError> {
@@ -718,6 +769,25 @@ impl StreamState {
             blocks: Vec::new(),
             stop: String::new(),
             finished: false,
+            input_tokens: None,
+            output_tokens: None,
+        }
+    }
+
+    /// Takes the token counts of a usage object, under the format's names.
+    fn usage(&mut self, usage: Option<&Value>, input: &[&str], output: &str) {
+        let Some(usage) = usage.filter(|usage| usage.is_object()) else {
+            return;
+        };
+        let counts: Vec<u64> = input
+            .iter()
+            .filter_map(|name| usage.get(*name).and_then(Value::as_u64))
+            .collect();
+        if !counts.is_empty() {
+            self.input_tokens = Some(counts.iter().sum());
+        }
+        if let Some(count) = usage.get(output).and_then(Value::as_u64) {
+            self.output_tokens = Some(count);
         }
     }
 
@@ -754,6 +824,7 @@ impl StreamState {
         if let Some(error) = value.get("error") {
             return Err(LlmError::Protocol(error_message(&error.to_string())));
         }
+        self.usage(value.get("usage"), &["prompt_tokens"], "completion_tokens");
         let Some(choice) = value.pointer("/choices/0") else {
             return Ok(false);
         };
@@ -834,6 +905,11 @@ impl StreamState {
                 });
             }
             "response.completed" | "response.incomplete" => {
+                self.usage(
+                    value.pointer("/response/usage"),
+                    &["input_tokens"],
+                    "output_tokens",
+                );
                 self.stop = value
                     .pointer("/response/incomplete_details/reason")
                     .and_then(Value::as_str)
@@ -940,7 +1016,25 @@ impl StreamState {
                     _ => {}
                 }
             }
+            "message_start" => self.usage(
+                value.pointer("/message/usage"),
+                &[
+                    "input_tokens",
+                    "cache_read_input_tokens",
+                    "cache_creation_input_tokens",
+                ],
+                "output_tokens",
+            ),
             "message_delta" => {
+                self.usage(
+                    value.get("usage"),
+                    &[
+                        "input_tokens",
+                        "cache_read_input_tokens",
+                        "cache_creation_input_tokens",
+                    ],
+                    "output_tokens",
+                );
                 if let Some(reason) = value.pointer("/delta/stop_reason").and_then(Value::as_str) {
                     self.stop = reason.to_owned();
                 }
@@ -988,6 +1082,11 @@ impl StreamState {
             tool_calls,
             opaque,
             stop: self.stop,
+            stats: Stats {
+                input_tokens: self.input_tokens,
+                output_tokens: self.output_tokens,
+                ..Stats::default()
+            },
         }
     }
 }

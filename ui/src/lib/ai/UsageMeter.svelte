@@ -2,18 +2,20 @@
   // Context use of the conversation (as the agent reports it) and, for Codex and Claude Code,
   // how much of the plan's limits is used, behind a small ring in the input card.
   import { t, type MessageKey } from '../i18n';
-  import { aiQuota, type AiQuota, type QuotaWindow } from '../ipc';
+  import { aiQuota, type AiQuota, type QuotaWindow, type RequestStats } from '../ipc';
   import { errorText } from '../i18n';
   import IconButton from '../ui/IconButton.svelte';
-  import { contextPercent, tokens, windowName } from './quota';
+  import { contextPercent, contextTokens, speed, tokens, wait, windowName } from './quota';
 
   interface Props {
     /** The chat's agent (`acp:codex`…), or null. */
     agent: string | null;
     usage: { used: number; size: number } | null;
+    /** The built-in assistant's last request. */
+    stats?: RequestStats | null;
   }
 
-  let { agent, usage }: Props = $props();
+  let { agent, usage, stats = null }: Props = $props();
   let open = $state(false);
   let root = $state<HTMLDivElement>();
   let quota = $state<AiQuota | null>(null);
@@ -24,7 +26,9 @@
   const QUOTA_AGENTS = new Set(['acp:codex', 'acp:claude']);
   const hasQuota = $derived(!!agent && QUOTA_AGENTS.has(agent));
   const percent = $derived(contextPercent(usage));
-  const shown = $derived(percent !== null || hasQuota);
+  /** Tokens in context when only the request's counts are known (no window size). */
+  const filled = $derived(percent === null ? contextTokens(stats) : null);
+  const shown = $derived(percent !== null || hasQuota || stats !== null);
 
   async function load(refresh: boolean): Promise<void> {
     if (!agent || !hasQuota) return;
@@ -73,10 +77,15 @@
 
 {#if shown}
   <div class="meter" bind:this={root}>
-    <button type="button" class="ring" onclick={toggle} aria-expanded={open} title={percent !== null ? t('ai.quota.context', { percent: Math.round(percent) }) : t('ai.quota.title')} aria-label={t('ai.quota.title')}>
+    <button type="button" class="ring" onclick={toggle} aria-expanded={open} title={percent !== null ? t('ai.quota.context', { percent: Math.round(percent) }) : filled !== null ? t('ai.quota.contextTokens', { tokens: tokens(filled) }) : t('ai.quota.title')} aria-label={t('ai.quota.title')}>
       <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
         <circle cx="10" cy="10" r="7" class="track" />
-        <circle cx="10" cy="10" r="7" class="fill" class:high={(percent ?? 0) >= 80} stroke-dasharray={`${((percent ?? 0) / 100) * 44} 44`} />
+        {#if percent !== null}
+          <circle cx="10" cy="10" r="7" class="fill" class:high={percent >= 80} stroke-dasharray={`${(percent / 100) * 44} 44`} />
+        {:else}
+          <!-- No window size: a plain gauge, nothing to fill. -->
+          <circle cx="10" cy="10" r="2" class="dot" />
+        {/if}
       </svg>
     </button>
     {#if open}
@@ -86,9 +95,17 @@
           {#if hasQuota}<IconButton icon="refresh" small label={t('ai.quota.refresh')} disabled={loading} onclick={() => void load(true)} />{/if}
         </div>
         <div class="item">
-          <div class="row"><span>{t('ai.quota.contextLabel')}</span><span class="value">{percent !== null && usage ? `${Math.round(percent)}% · ${tokens(usage.used)} / ${tokens(usage.size)}` : t('ai.quota.contextUnknown')}</span></div>
-          <div class="bar"><span style:width={`${percent ?? 0}%`} class:high={(percent ?? 0) >= 80}></span></div>
+          <div class="row"><span>{t('ai.quota.contextLabel')}</span><span class="value">{percent !== null && usage ? `${Math.round(percent)}% · ${tokens(usage.used)} / ${tokens(usage.size)}` : filled !== null ? t('ai.quota.tokens', { tokens: tokens(filled) }) : t('ai.quota.contextUnknown')}</span></div>
+          {#if percent !== null}<div class="bar"><span style:width={`${percent}%`} class:high={percent >= 80}></span></div>{/if}
         </div>
+        {#if stats}
+          {#if stats.output_tokens !== null}
+            <div class="row"><span>{t('ai.quota.output')}</span><span class="value">{t('ai.quota.tokens', { tokens: tokens(stats.output_tokens) })}</span></div>
+          {/if}
+          <div class="row"><span>{t('ai.quota.speed')}</span><span class="value">{stats.tokens_per_second !== null ? speed(stats.tokens_per_second) : '—'}</span></div>
+          <div class="row"><span>{t('ai.quota.firstToken')}</span><span class="value">{stats.first_token_ms !== null ? wait(stats.first_token_ms) : '—'}</span></div>
+          <p class="note">{t('ai.quota.lastRequest')}</p>
+        {/if}
         {#if hasQuota}
           {#if loading && !quota}
             <p class="note">{t('ai.quota.loading')}</p>
@@ -147,6 +164,10 @@
   }
   .fill.high {
     stroke: var(--warning);
+  }
+  .dot {
+    fill: var(--fg-muted);
+    stroke: none;
   }
   .popover {
     position: absolute;

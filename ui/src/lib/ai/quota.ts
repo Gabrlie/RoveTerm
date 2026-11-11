@@ -23,3 +23,19 @@ export function tokens(count: number): string {
   if (count >= 1000) return `${Math.round(count / 1000)}k`;
   return String(count);
 }
+
+/** Output speed as `42 tok/s` (one decimal below 10). */
+export function speed(tokensPerSecond: number): string {
+  return `${tokensPerSecond < 10 ? tokensPerSecond.toFixed(1) : Math.round(tokensPerSecond)} tok/s`;
+}
+
+/** A wait as `850 ms` or `1.2 s`. */
+export function wait(ms: number): string {
+  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+}
+
+/** Tokens the conversation fills after the last request (its input and its reply), if known. */
+export function contextTokens(stats: { input_tokens: number | null; output_tokens: number | null } | null): number | null {
+  if (stats?.input_tokens == null) return null;
+  return stats.input_tokens + (stats.output_tokens ?? 0);
+}

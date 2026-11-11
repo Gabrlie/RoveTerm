@@ -103,6 +103,13 @@ pub enum SessionUpdate {
         used: u64,
         size: u64,
     },
+    /// The built-in assistant's last request: tokens in and out, and how fast they came.
+    Stats {
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
+        first_token_ms: Option<u64>,
+        tokens_per_second: Option<f64>,
+    },
 }
 
 /// A tool call as reported by the agent; fields an update leaves out are `None` or empty.

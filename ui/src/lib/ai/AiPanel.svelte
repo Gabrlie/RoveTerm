@@ -492,7 +492,7 @@
             {/if}
           </div>
         {/if}
-        <UsageMeter agent={agentRef} usage={chat.usage} />
+        <UsageMeter agent={agentRef} usage={chat.usage} stats={chat.stats} />
         <div class="picker spread" bind:this={modePicker}>
           <button type="button" class="pick" onclick={() => (modeOpen = !modeOpen)} aria-expanded={modeOpen} title={`${t('ai.mode')}: ${t(`ai.mode.${chat.mode}`)}`} aria-label={`${t('ai.mode')}: ${t(`ai.mode.${chat.mode}`)}`}>
             <Icon name={MODE_ICONS[chat.mode]} size={12} /><Icon name="chevronDown" size={11} />

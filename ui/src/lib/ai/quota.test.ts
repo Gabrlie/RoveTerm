@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { contextPercent, tokens, windowName } from './quota.ts';
+import { contextPercent, contextTokens, speed, tokens, wait, windowName } from './quota.ts';
 
 const window = (minutes: number | null, label = '') => ({ label, minutes, used_percent: 10, resets_at: null, resets_text: null });
 
@@ -19,4 +19,14 @@ test('context usage', () => {
   assert.equal(tokens(123_456), '123k');
   assert.equal(tokens(1_000_000), '1M');
   assert.equal(tokens(512), '512');
+});
+
+test('request stats read as speed, wait and context', () => {
+  assert.equal(speed(42.4), '42 tok/s');
+  assert.equal(speed(7.25), '7.3 tok/s');
+  assert.equal(wait(850), '850 ms');
+  assert.equal(wait(1234), '1.2 s');
+  assert.equal(contextTokens({ input_tokens: 1000, output_tokens: 20 }), 1020);
+  assert.equal(contextTokens({ input_tokens: null, output_tokens: 20 }), null);
+  assert.equal(contextTokens(null), null);
 });

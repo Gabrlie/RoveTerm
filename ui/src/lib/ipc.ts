@@ -922,7 +922,11 @@ export type SessionUpdate =
   | { kind: 'mode_changed'; mode_id: string }
   | { kind: 'config_options'; options: ConfigOption[] }
   /** How much of the model's context window the conversation fills, in tokens. */
-  | { kind: 'usage'; used: number; size: number };
+  | { kind: 'usage'; used: number; size: number }
+  | { kind: 'stats'; input_tokens: number | null; output_tokens: number | null; first_token_ms: number | null; tokens_per_second: number | null };
+
+/** The built-in assistant's last request: tokens in and out, and how fast they came. */
+export type RequestStats = Omit<Extract<SessionUpdate, { kind: 'stats' }>, 'kind'>;
 
 export interface CommandOutput {
   stdout: string;

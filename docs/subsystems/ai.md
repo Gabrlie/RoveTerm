@@ -119,7 +119,7 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 
 应用退出时结束所有 AI 会话。
 
-ACP 的 `usage_update`（`used` / `size`，对话占用的上下文 token 数与窗口大小）解析为 `SessionUpdate::Usage` 交给界面。
+ACP 的 `usage_update`（`used` / `size`，对话占用的上下文 token 数与窗口大小）解析为 `SessionUpdate::Usage` 交给界面。内置助手每次请求后发出 `SessionUpdate::Stats`：输入（含缓存）与输出 token、首字时间（发出请求到第一段文字或推理）、tokens/s（输出 token 除以生成时长）；token 数取自服务商的 usage（Chat 请求带 `stream_options.include_usage`，Responses 读 `response.completed`，Anthropic 读 `message_start` 与 `message_delta`），未报告的项为空。统计不写入 Journal。
 
 会话设置与继续对话：
 

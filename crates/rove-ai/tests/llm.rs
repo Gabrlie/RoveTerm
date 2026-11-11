@@ -37,7 +37,9 @@ async fn serve(status: u16, body: String) -> (String, oneshot::Receiver<Seen>) {
 }
 
 /// Serves one request per reply, in order; returns the base URL and what each asked.
-async fn serve_each(replies: Vec<(u16, String)>) -> (String, tokio::sync::mpsc::UnboundedReceiver<Seen>) {
+async fn serve_each(
+    replies: Vec<(u16, String)>,
+) -> (String, tokio::sync::mpsc::UnboundedReceiver<Seen>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}/v1", listener.local_addr().unwrap());
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -424,19 +426,123 @@ async fn a_model_without_reasoning_settings_is_asked_again_without_them() {
     let reply = || {
         sse(&[
             ("", json!({ "choices": [{ "delta": { "content": "ok" } }] })),
-            ("", json!({ "choices": [{ "delta": {}, "finish_reason": "stop" }] })),
+            (
+                "",
+                json!({ "choices": [{ "delta": {}, "finish_reason": "stop" }] }),
+            ),
         ]) + "data: [DONE]\n\n"
     };
-    let (base, mut seen) =
-        serve_each(vec![(400, refused.to_string()), (200, reply()), (200, reply())]).await;
+    let (base, mut seen) = serve_each(vec![
+        (400, refused.to_string()),
+        (200, reply()),
+        (200, reply()),
+    ])
+    .await;
     let client = client(Format::Chat, &base, "k").with_effort(Some(rove_ai::llm::Effort::High));
     let messages = [Message::User { text: "hi".into() }];
-    let reply = client.complete("s", &messages, &[], &mut |_| {}).await.unwrap();
+    let reply = client
+        .complete("s", &messages, &[], &mut |_| {})
+        .await
+        .unwrap();
     assert_eq!(reply.text, "ok");
     assert_eq!(seen.recv().await.unwrap().body["reasoning_effort"], "high");
-    assert!(seen.recv().await.unwrap().body.get("reasoning_effort").is_none());
+    assert!(
+        seen.recv()
+            .await
+            .unwrap()
+            .body
+            .get("reasoning_effort")
+            .is_none()
+    );
     assert!(client.effort_refused());
     // Later requests leave it out from the start.
-    client.complete("s", &messages, &[], &mut |_| {}).await.unwrap();
-    assert!(seen.recv().await.unwrap().body.get("reasoning_effort").is_none());
+    client
+        .complete("s", &messages, &[], &mut |_| {})
+        .await
+        .unwrap();
+    assert!(
+        seen.recv()
+            .await
+            .unwrap()
+            .body
+            .get("reasoning_effort")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn token_counts_are_read_in_each_format() {
+    let messages = [Message::User { text: "hi".into() }];
+
+    let chat = sse(&[
+        ("", json!({ "choices": [{ "delta": { "content": "ok" } }] })),
+        (
+            "",
+            json!({ "choices": [{ "delta": {}, "finish_reason": "stop" }] }),
+        ),
+        (
+            "",
+            json!({ "choices": [], "usage": { "prompt_tokens": 120, "completion_tokens": 7 } }),
+        ),
+    ]) + "data: [DONE]\n\n";
+    let (base, seen) = serve(200, chat).await;
+    let reply = client(Format::Chat, &base, "k")
+        .complete("s", &messages, &[], &mut |_| {})
+        .await
+        .unwrap();
+    assert_eq!(
+        seen.await.unwrap().body["stream_options"]["include_usage"],
+        true
+    );
+    assert_eq!(
+        (reply.stats.input_tokens, reply.stats.output_tokens),
+        (Some(120), Some(7))
+    );
+    assert!(reply.stats.first_token_ms.is_some());
+
+    let responses = sse(&[
+        ("response.output_text.delta", json!({ "delta": "ok" })),
+        (
+            "response.completed",
+            json!({ "response": { "usage": { "input_tokens": 50, "output_tokens": 3 } } }),
+        ),
+    ]);
+    let (base, _seen) = serve(200, responses).await;
+    let reply = client(Format::Responses, &base, "k")
+        .complete("s", &messages, &[], &mut |_| {})
+        .await
+        .unwrap();
+    assert_eq!(
+        (reply.stats.input_tokens, reply.stats.output_tokens),
+        (Some(50), Some(3))
+    );
+
+    let anthropic = sse(&[
+        (
+            "message_start",
+            json!({ "message": { "usage": { "input_tokens": 10, "cache_read_input_tokens": 90, "output_tokens": 1 } } }),
+        ),
+        (
+            "content_block_start",
+            json!({ "index": 0, "content_block": { "type": "text" } }),
+        ),
+        (
+            "content_block_delta",
+            json!({ "index": 0, "delta": { "type": "text_delta", "text": "ok" } }),
+        ),
+        (
+            "message_delta",
+            json!({ "delta": { "stop_reason": "end_turn" }, "usage": { "output_tokens": 12 } }),
+        ),
+        ("message_stop", json!({})),
+    ]);
+    let (base, _seen) = serve(200, anthropic).await;
+    let reply = client(Format::Anthropic, &base, "k")
+        .complete("s", &messages, &[], &mut |_| {})
+        .await
+        .unwrap();
+    assert_eq!(
+        (reply.stats.input_tokens, reply.stats.output_tokens),
+        (Some(100), Some(12))
+    );
 }

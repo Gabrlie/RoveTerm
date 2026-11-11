@@ -14,6 +14,7 @@ import {
   type AiSessionSummary,
   type AiRecord,
   type ConfigOption,
+  type RequestStats,
   type AiAnswer,
   type AiContext,
   type AiEvent,
@@ -64,6 +65,8 @@ export class Chat {
   title = $state<string | null>(null);
   /** How much of the model's context the conversation fills, as the agent last reported it. */
   usage = $state<{ used: number; size: number } | null>(null);
+  /** The built-in assistant's last request. */
+  stats = $state<RequestStats | null>(null);
   /** Settings of the running agent the user can change (model, reasoning effort). */
   options = $state<ConfigOption[]>([]);
   /** Settings chosen before the agent started, applied once it has. */
@@ -154,6 +157,9 @@ export class Chat {
           this.plan = update.entries;
         } else if (update.kind === 'usage') {
           this.usage = { used: update.used, size: update.size };
+        } else if (update.kind === 'stats') {
+          const { kind: _kind, ...stats } = update;
+          this.stats = stats;
         } else if (update.kind === 'config_options') {
           this.options = update.options.filter((option) => option.category !== 'mode');
         }
