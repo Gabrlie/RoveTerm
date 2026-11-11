@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { itemsFromRecords, approvalFor, commandOf, connectionProblem, outcomeState, rows, subject, toolSubject, type ChatItem } from './chatview.ts';
+import { itemsFromRecords, approvalFor, waitingApproval, commandOf, connectionProblem, outcomeState, rows, subject, toolSubject, type ChatItem } from './chatview.ts';
 
 const readOnly = { risk: 'read_only' as const, programs: [], opaque: false, reasons: [] };
 const ran = (command: string, exit = 0): ChatItem => ({
@@ -101,4 +101,16 @@ test('connection problems of an earlier conversation show as such', () => {
   ]);
   assert.deepEqual(items.map((item) => item.kind), ['user', 'connection']);
   assert.ok(items[1]?.kind === 'connection' && items[1].state === 'failed');
+});
+
+test('answers in a continued session reach its own approvals', () => {
+  const old = itemsFromRecords([
+    { ts: 1, kind: 'ai/approval', payload: { request_id: 1, asked: { op: 'command', command: 'a' }, risk: 'modify', reasons: [] } },
+    { ts: 2, kind: 'ai/approval', payload: { request_id: 1, answer: 'deny' } },
+  ]);
+  assert.ok(old[0]?.kind === 'approval' && old[0].requestId === -1);
+  const fresh: ChatItem = { kind: 'approval', requestId: 1, operation: { op: 'command', command: 'b' }, assessment: readOnly, rememberable: false, agentTool: false, answer: undefined, outcome: null };
+  const items = [...old, fresh];
+  assert.equal(waitingApproval(items, 1), fresh);
+  assert.equal(waitingApproval([{ ...fresh, answer: 'allow_once' }], 1), undefined);
 });

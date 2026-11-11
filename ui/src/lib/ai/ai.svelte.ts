@@ -27,7 +27,7 @@ import {
   type ToolCall,
 } from '../ipc';
 import { errorText, t, type MessageKey } from '../i18n';
-import { approvalFor, connectionProblem, itemsFromRecords, titleOf, type ChatItem } from './chatview';
+import { approvalFor, connectionProblem, itemsFromRecords, titleOf, waitingApproval, type ChatItem } from './chatview';
 import { prefs } from '../settings/prefs.svelte';
 
 export type { ChatItem } from './chatview';
@@ -172,8 +172,8 @@ export class Chat {
         });
         break;
       case 'approved': {
-        const item = this.items.find((entry) => entry.kind === 'approval' && entry.requestId === event.request_id);
-        if (item?.kind === 'approval') item.answer = event.answer;
+        const item = waitingApproval(this.items, event.request_id);
+        if (item) item.answer = event.answer;
         break;
       }
       case 'executed':

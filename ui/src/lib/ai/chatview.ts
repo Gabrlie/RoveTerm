@@ -80,6 +80,16 @@ export function approvalFor(items: ChatItem[], operation: AiOperation): Approval
   return undefined;
 }
 
+/** The approval an answer belongs to: the latest one with `requestId` still waiting. A continued
+ *  session numbers its requests from 1 again, so older rows with the same number are skipped. */
+export function waitingApproval(items: ChatItem[], requestId: number): ApprovalItem | undefined {
+  for (let at = items.length - 1; at >= 0; at -= 1) {
+    const item = items[at];
+    if (item?.kind === 'approval' && item.requestId === requestId && item.answer === undefined) return item;
+  }
+  return undefined;
+}
+
 /** An operation that ran by itself and succeeded, which may fold with its neighbours. */
 function quiet(item: ChatItem): item is OperationItem {
   if (item.kind !== 'operation' || item.approved) return false;
@@ -245,7 +255,12 @@ export function itemsFromRecords(records: AiRecord[]): ChatItem[] {
       }
     }
   }
-  for (const item of items) if (item.kind === 'approval' && item.answer === undefined) item.answer = null;
+  // Settled, and numbered apart from the requests of a continued session.
+  for (const item of items) {
+    if (item.kind !== 'approval') continue;
+    if (item.answer === undefined) item.answer = null;
+    item.requestId = -1;
+  }
   return items;
 }
 
