@@ -335,6 +335,8 @@ export interface AgentsPrefs {
   disabled: string[];
   custom: CustomAgent[];
   auth: AgentAuth;
+  /** Agents the user runs on their own may use the saved hosts through RoveTerm. */
+  expose: boolean;
 }
 
 export interface DevicePrefs {
@@ -1092,6 +1094,33 @@ export function aiSetMode(id: string, mode: AiMode): Promise<void> {
 
 export function aiStop(id: string): Promise<void> {
   return invoke('ai_stop', { id });
+}
+
+/** An agent the user runs started a conversation on a host, or one ended. */
+export type ExternalEvent = { id: string; context: AiContext; agent: string; host: string } | { id: string; ended: true };
+
+export function onAiExternal(handler: (event: ExternalEvent) => void): Promise<UnlistenFn> {
+  return listen<ExternalEvent>('ai-external', (event) => handler(event.payload));
+}
+
+/** Whether agents the user runs may use the saved hosts, and the command they start. */
+export interface ExternalStatus {
+  enabled: boolean;
+  config: string;
+  command: string[];
+}
+
+export function externalStatus(): Promise<ExternalStatus> {
+  return invoke('external_status');
+}
+
+export function externalSet(enabled: boolean): Promise<ExternalStatus> {
+  return invoke('external_set', { enabled });
+}
+
+/** Adds RoveTerm's MCP server to `client` (`claude` or `codex`); resolves with its output. */
+export function externalInstall(client: 'claude' | 'codex'): Promise<string> {
+  return invoke('external_install', { client });
 }
 
 export function onAiUpdate(handler: (id: string, event: AiEvent) => void): Promise<UnlistenFn> {

@@ -2,6 +2,7 @@
 
 pub mod ai;
 pub mod app;
+pub mod external;
 pub mod forward;
 pub mod host;
 pub mod keys;

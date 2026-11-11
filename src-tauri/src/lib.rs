@@ -107,6 +107,10 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     app.manage(state);
+    let handle = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        commands::external::restore(&handle).await;
+    });
     Ok(())
 }
 
@@ -114,6 +118,8 @@ fn shutdown(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     state.transfers.cancel_all();
     state.forwards.stop_all();
+    // The config file names a port that is about to close.
+    state.external.disable();
     state.fs_sessions.clear();
     tauri::async_runtime::block_on(async {
         state.ai.stop_all().await;
@@ -189,6 +195,9 @@ pub fn run() {
             commands::sftp::transfer_reveal,
             commands::app::log_write,
             commands::app::logs_reveal,
+            commands::external::external_status,
+            commands::external::external_set,
+            commands::external::external_install,
             commands::forward::forward_list,
             commands::forward::forward_create,
             commands::forward::forward_update,

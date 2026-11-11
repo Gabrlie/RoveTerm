@@ -11,7 +11,7 @@
   import UsageMeter from './UsageMeter.svelte';
   import ModelPopover from './ModelPopover.svelte';
   import { builtinCommands, choiceKey, optionKey, slashItems, slashQuery, splitOptions, type SlashItem } from './composer';
-  import { ai, contextKey } from './ai.svelte';
+  import { ai, contextKey, type Chat } from './ai.svelte';
   import { outcomeState, rows, subject, toolSubject, type ApprovalItem } from './chatview';
   import { hostOf, workspace } from '../workspace/workspace.svelte';
   import { hosts } from '../hosts/hosts.svelte';
@@ -38,7 +38,18 @@
     if (pane.target.kind === 'sftp' && 'address' in pane.target.source) return { kind: 'quick', address: pane.target.source.address };
     return { kind: 'local' };
   });
-  const chat = $derived(ai.chat(context));
+  /** The user's own conversation about the host. */
+  const own = $derived(ai.chat(context));
+  /** Conversations agents the user runs have on this host. */
+  const externals = $derived(ai.externalOn(context));
+  /** The outside agent's conversation being looked at, instead of the user's own. */
+  let viewing = $state<Chat | null>(null);
+  const chat = $derived(viewing && externals.includes(viewing) ? viewing : own);
+  // Another host shows its own conversation.
+  $effect(() => {
+    void contextKey(context);
+    viewing = null;
+  });
   /** The user's terminal on that host, which the agent may read and code can be inserted into. */
   const terminalPane = $derived.by(() => {
     const pane = workspace.focusedPane;
@@ -344,6 +355,14 @@
 {/snippet}
 
 <div class="ai">
+  {#if chat.external}
+    <div class="toolbar">
+      <IconButton icon="back" small label={t('ai.back')} onclick={() => (viewing = null)} />
+      <span class="external-title"><Icon name="plug" size={13} />{t('ai.externalTitle', { agent: chat.external })}</span>
+      <span class="spacer"></span>
+      {#if chat.ended}<IconButton icon="close" small label={t('ai.externalDismiss')} onclick={() => ((viewing = null), ai.dismiss(chat))} />{/if}
+    </div>
+  {:else}
   <div class="toolbar">
     <div class="picker" bind:this={picker}>
       <button type="button" class="pick agent-pick" onclick={() => (pickerOpen = !pickerOpen)} aria-expanded={pickerOpen} title={agent ? `${t('ai.agent')}: ${agent.name}${agent.detail ? `\n${agent.detail}` : ''}` : t('ai.chooseAgent')}>
@@ -379,6 +398,20 @@
     <IconButton icon="history" small label={t('ai.history')} onclick={() => (historyOpen = true)} />
     <IconButton icon="settings" small label={t('ai.openSettings')} onclick={onsettings} />
   </div>
+  {/if}
+
+  {#if !chat.external && externals.length > 0}
+    <div class="externals">
+      {#each externals as other (other.key)}
+        <button type="button" class="external" onclick={() => (viewing = other)}>
+          <Icon name="plug" size={12} />
+          <span class="external-name">{other.ended ? t('ai.externalEnded', { agent: other.external ?? '' }) : t('ai.externalWorking', { agent: other.external ?? '' })}</span>
+          {#if other.waiting > 0}<span class="external-badge">{other.waiting}</span>{/if}
+          <Icon name="chevron" size={11} />
+        </button>
+      {/each}
+    </div>
+  {/if}
 
   {#if chat.plan.length > 0}
     <details class="plan" open>
@@ -513,6 +546,9 @@
     {/each}
   </div>
 
+  {#if chat.external}
+    <p class="external-note">{chat.ended ? t('ai.externalEndedNote', { agent: chat.external }) : t('ai.externalNote', { agent: chat.external })}</p>
+  {:else}
   <div class="composer">
     {#if chat.starting || chat.busy}
       <p class="status" class:attention={waiting > 0}>
@@ -601,6 +637,7 @@
       </div>
     </div>
   </div>
+  {/if}
 </div>
 
 {#if historyOpen}
@@ -654,6 +691,66 @@
   }
   .spacer {
     flex: 1;
+  }
+  .externals {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0 var(--space-3) var(--space-2);
+  }
+  .external {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 6px var(--space-2);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--accent-soft);
+    color: var(--accent);
+    font: inherit;
+    font-size: var(--text-footnote);
+    text-align: left;
+    cursor: pointer;
+  }
+  .external:hover {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  .external-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .external-badge {
+    min-width: 16px;
+    padding: 0 5px;
+    border-radius: var(--radius-pill);
+    background: var(--danger);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    text-align: center;
+  }
+  .external-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--text-footnote);
+    font-weight: 600;
+  }
+  .external-note {
+    margin: 0 var(--space-3) var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--fill);
+    color: var(--fg-muted);
+    font-size: var(--text-footnote);
   }
   .plan {
     margin: 0 var(--space-3) var(--space-2);

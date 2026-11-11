@@ -30,7 +30,7 @@ const DEVICE_DEFAULTS: DevicePrefs = {
   window_material: true,
   download_dir: '',
   max_transfers: 3,
-  agents: { disabled: [], custom: [], auth: 'auto' },
+  agents: { disabled: [], custom: [], auth: 'auto', expose: false },
   connection: { connect_timeout_secs: 15, keepalive_secs: 30, keepalive_max: 3 },
 };
 

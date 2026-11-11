@@ -11,9 +11,11 @@ import {
   aiStop,
   aiRename,
   aiSetOption,
+  onAiExternal,
   onAiUpdate,
   type AiSessionSummary,
   type AiRecord,
+  type ExternalEvent,
   type AgentCommand,
   type ConfigOption,
   type RequestStats,
@@ -79,6 +81,10 @@ export class Chat {
   wanted = $state<Record<string, string>>({});
   /** An earlier session this chat continues; its id is reused when the agent starts. */
   resumeId = $state<string | null>(null);
+  /** The agent the user runs on their own that drives this conversation through RoveTerm. */
+  external = $state<string | null>(null);
+  /** That agent disconnected. */
+  ended = $state(false);
 
   /** What the chat is called: the user's title, or its first question. */
   get name(): string | null {
@@ -439,11 +445,50 @@ class AiStore {
     return usable.some((agent) => agent.agent === list.default) ? list.default : (usable[0]?.agent ?? null);
   }
 
+  /** Conversations agents the user runs have on `context`'s host, newest first. */
+  externalOn(context: AiContext): Chat[] {
+    void this.version;
+    const key = contextKey(context);
+    return [...this.chats.values()].filter((chat) => chat.external !== null && contextKey(chat.context) === key).reverse();
+  }
+
+  /** Takes a conversation an agent the user runs started, or its end. */
+  private external(event: ExternalEvent): void {
+    if ('ended' in event) {
+      const chat = this.byId[event.id];
+      if (!chat) return;
+      chat.ended = true;
+      // Nothing to look back at: it goes.
+      if (chat.items.length === 0) {
+        this.chats.delete(chat.key);
+        delete this.byId[event.id];
+      }
+      this.version += 1;
+      return;
+    }
+    const chat = new Chat(`external:${event.id}`, event.context);
+    chat.id = event.id;
+    chat.external = event.agent;
+    chat.title = event.agent;
+    this.chats.set(chat.key, chat);
+    this.byId[event.id] = chat;
+    this.version += 1;
+  }
+
+  /** Forgets an ended conversation of an agent the user runs (it stays in the history). */
+  dismiss(chat: Chat): void {
+    if (!chat.ended) return;
+    this.chats.delete(chat.key);
+    if (chat.id) delete this.byId[chat.id];
+    this.version += 1;
+  }
+
   /** Routes backend events to their chats; called once. */
   listen(): void {
     if (this.listening) return;
     this.listening = true;
     onAiUpdate((id, event) => this.byId[id]?.handle(event)).catch((error: unknown) => console.warn('AI events unavailable', error));
+    onAiExternal((event) => this.external(event)).catch((error: unknown) => console.warn('outside agent events unavailable', error));
   }
 }
 

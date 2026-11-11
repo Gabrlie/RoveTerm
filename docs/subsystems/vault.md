@@ -97,7 +97,7 @@ pub trait KeyCache: Send + Sync {
 | `ai.read_only` / `ai.dangerous` | 空 | 去除首尾空白并丢弃空项，每类最多 200 项、每项最多 100 个字符、不含控制字符；只读项只能是程序名（字母、数字、`-_.+`） |
 | `ai.providers` | 空 | 内置助手的模型服务商，最多 20 个：id 为 1–40 个小写字母、数字或 `-` 且不重复；名称 1–60 个字符；格式 `chat` / `responses` / `anthropic`；地址去除首尾空白与末尾 `/`，须为 http(s)、不含凭据和查询，最多 500 字节；模型 1–200 字节（新对话的默认模型）；`models` 为对话中可切换的其他模型，最多 32 个，去除首尾空白、空项、重复项和与默认相同的项；`max_tokens` 为空或 1–1000000；`contexts` 为各模型的上下文窗口（来自模型列表，只保留该服务商的模型），`context_window` 为列表未给出时的窗口，均为 1000–100000000 token；`effort` 为 `minimal` / `low` / `medium` / `high` / `xhigh` / `max`，默认 `medium`，旧版本留空的读作 `medium`。随用户同步，不含 key |
 | `ai.default_agent` | 空 | 新对话默认的 Agent：`builtin:<服务商 id>` 或 `acp:<智能体 id>` |
-| `DevicePrefs.agents` | 空 | `disabled`：关闭的已检测智能体 id（最多 50）；`custom`：按命令添加的智能体（最多 20，id 为 `custom-` 加小写 slug，名称 1–60 个字符，命令非空，命令与参数最多 1024 字节、不含控制字符，最多 32 个参数）；`auth`：`auto` / `api_key` / `account`。旧记录中的单个 `agent` 命令在读取时移入 `custom`（id `custom-1`），之后不再写出 |
+| `DevicePrefs.agents` | 空 | `disabled`：关闭的已检测智能体 id（最多 50）；`custom`：按命令添加的智能体（最多 20，id 为 `custom-` 加小写 slug，名称 1–60 个字符，命令非空，命令与参数最多 1024 字节、不含控制字符，最多 32 个参数）；`auth`：`auto` / `api_key` / `account`；`expose`：是否允许用户自己运行的智能体经 MCP 使用已保存的主机（默认关闭）。旧记录中的单个 `agent` 命令在读取时移入 `custom`（id `custom-1`），之后不再写出 |
 
 应用通过 `prefs_get` / `prefs_set` 和 `device_prefs_get` / `device_prefs_set` 命令读写偏好设置，后者同时把 `max_transfers` 应用到传输队列（启动时也会应用）；`fonts_monospace` 用 fontdb 列出本机已安装的等宽字体族（去重、按名称排序），供字体选择使用，移动端返回空列表。
 

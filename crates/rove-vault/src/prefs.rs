@@ -182,6 +182,9 @@ pub struct AgentsPrefs {
     pub custom: Vec<CustomAgent>,
     /// How agents sign in.
     pub auth: AgentAuth,
+    /// Agents the user runs on their own (Claude Code, Codex in a terminal) may use the hosts
+    /// saved here through RoveTerm's MCP server, with RoveTerm's approvals.
+    pub expose: bool,
 }
 
 /// The AI agent program on this device, before agents were listed; read from older records and

@@ -8,6 +8,8 @@
   import ContextMenu, { type MenuItem } from '../../ui/ContextMenu.svelte';
   import { ask } from '../../ui/confirm.svelte';
   import { errorText, t } from '../../i18n';
+  import { externalInstall, externalSet, externalStatus, type ExternalStatus } from '../../ipc';
+  import { writeClipboard } from '../../ui/clipboard';
   import { aiProviderModels, aiProviderTest, aiSetKey, aiSetReviewKey, type AgentAuth, type AgentChoice, type AiMode, type ProviderFormat, type ProviderPrefs, type ReasoningEffort } from '../../ipc';
   import { ai } from '../../ai/ai.svelte';
   import { prefs } from '../prefs.svelte';
@@ -263,7 +265,42 @@
     }
   }
 
-  onMount(() => void refresh());
+  /** Access for agents the user runs on their own. */
+  let external = $state<ExternalStatus | null>(null);
+  /** What the last one-click setup printed, or why it failed. */
+  let installNote = $state<{ ok: boolean; text: string } | null>(null);
+  let installing = $state(false);
+
+  async function setExternal(enabled: boolean): Promise<void> {
+    try {
+      external = await externalSet(enabled);
+    } catch (error) {
+      notify(errorText(error), 'error');
+    }
+  }
+
+  async function install(client: 'claude' | 'codex'): Promise<void> {
+    installing = true;
+    installNote = null;
+    try {
+      const output = await externalInstall(client);
+      installNote = { ok: true, text: t('ai.externalInstalled', { agent: client === 'claude' ? 'Claude Code' : 'Codex' }) + (output ? `\n${output}` : '') };
+    } catch (error) {
+      installNote = { ok: false, text: errorText(error) };
+    } finally {
+      installing = false;
+    }
+  }
+
+  /** The command, quoted for a shell where a part has spaces. */
+  const externalCommand = $derived((external?.command ?? []).map((part) => (/\s/.test(part) ? `"${part}"` : part)).join(' '));
+
+  onMount(() => {
+    void refresh();
+    externalStatus()
+      .then((status) => (external = status))
+      .catch((error: unknown) => console.warn('outside agent access unavailable', error));
+  });
 </script>
 
 <p class="form-note intro">{t('ai.settingsIntro')}</p>
@@ -398,6 +435,29 @@
     <div class="control"><Select label={t('ai.auth')} value={prefs.device.agents.auth} options={AUTH} onchange={(value) => void editDevice((draft) => (draft.agents.auth = value))} /></div>
   </div>
 </div>
+
+<p class="section-label">{t('ai.externalAccess')}</p>
+<div class="form-group">
+  <div class="form-row">
+    <span class="form-label">{t('ai.externalEnable')}<small>{t('ai.externalEnableHint')}</small></span>
+    <Switch label={t('ai.externalEnable')} checked={external?.enabled ?? false} onchange={(checked) => void setExternal(checked)} />
+  </div>
+  {#if external?.enabled}
+    <div class="form-row">
+      <span class="form-label">{t('ai.externalSetup')}<small>{t('ai.externalSetupHint')}</small></span>
+      <button type="button" class="secondary" disabled={installing} onclick={() => void install('claude')}>Claude Code</button>
+      <button type="button" class="secondary" disabled={installing} onclick={() => void install('codex')}>Codex</button>
+    </div>
+    <div class="form-row stacked">
+      <span class="form-label">{t('ai.externalCommand')}<small>{t('ai.externalCommandHint')}</small></span>
+      <div class="command-line">
+        <code class="mono selectable">{externalCommand}</code>
+        <IconButton icon="copy" small label={t('edit.copy')} onclick={() => void writeClipboard(externalCommand)} />
+      </div>
+    </div>
+  {/if}
+</div>
+{#if installNote}<p class="form-note" class:failed={!installNote.ok}>{installNote.text}</p>{/if}
 
 <p class="section-label">{t('ai.defaults')}</p>
 <div class="form-group">
@@ -579,6 +639,24 @@
   }
   .star.starred {
     color: var(--warning);
+  }
+  .command-line {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+  .command-line code {
+    flex: 1;
+    min-width: 0;
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    box-shadow: 0 0 0 1px var(--separator);
+    font-size: 11.5px;
+    overflow-wrap: anywhere;
+  }
+  .form-note {
+    white-space: pre-wrap;
   }
   .search {
     flex: 1;

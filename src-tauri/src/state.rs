@@ -36,6 +36,8 @@ pub struct AppState {
     pub pty: Arc<rove_pty::LocalTerminals>,
     /// Running AI sessions.
     pub ai: crate::commands::ai::AiSessions,
+    /// Access for agents the user runs on their own, while it is on.
+    pub external: crate::commands::external::ExternalAccess,
     /// Held while a sync round runs, so rounds never overlap.
     pub sync_lock: tokio::sync::Mutex<()>,
     /// Plugin runtime and app-level registrations; taken on exit to unload plugins in order.
@@ -60,6 +62,7 @@ impl AppState {
             local_fs: ctx.require::<LocalFs>()?,
             journal,
             ai,
+            external: crate::commands::external::ExternalAccess::new(data_dir),
             #[cfg(desktop)]
             pty: ctx.require::<rove_pty::LocalTerminals>()?,
             sync_lock: tokio::sync::Mutex::new(()),

@@ -61,6 +61,7 @@ import bot from 'lucide-static/icons/bot-message-square.svg?raw';
 import brain from 'lucide-static/icons/brain.svg?raw';
 import back from 'lucide-static/icons/chevron-left.svg?raw';
 import slash from 'lucide-static/icons/square-slash.svg?raw';
+import plug from 'lucide-static/icons/plug.svg?raw';
 import snippets from 'lucide-static/icons/scroll-text.svg?raw';
 import sun from 'lucide-static/icons/sun.svg?raw';
 import moon from 'lucide-static/icons/moon.svg?raw';
@@ -77,6 +78,7 @@ export const icons = {
   brain,
   back,
   slash,
+  plug,
   snippets,
   history,
   add,

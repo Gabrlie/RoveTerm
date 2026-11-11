@@ -32,6 +32,9 @@ use crate::state::AppState;
 
 /// Event carrying an AI session's [`AiEvent`]s.
 pub const AI_EVENT: &str = "ai-update";
+/// An agent the user runs on their own started (`{id, context, agent, host}`) or ended (`{id,
+/// ended: true}`) a conversation on a host.
+pub const AI_EXTERNAL_EVENT: &str = "ai-external";
 /// Longest prompt accepted.
 const MAX_PROMPT: usize = 100_000;
 /// Agent modes that make an ACP agent ask before its own tools change anything.
@@ -838,6 +841,138 @@ pub async fn ai_start(
         }),
     );
     Ok(started)
+}
+
+/// The backend of a conversation an agent the user runs drives through RoveTerm's MCP server:
+/// there is nothing to prompt here; stopping withdraws its approvals and stops its commands.
+struct ExternalBackend(Arc<AiSession>);
+
+#[async_trait]
+impl AgentBackend for ExternalBackend {
+    async fn prompt(&self, _text: &str) -> Result<String, BackendError> {
+        Err(BackendError::Invalid(
+            "this conversation is driven by an agent outside RoveTerm".into(),
+        ))
+    }
+
+    async fn cancel(&self) {
+        self.0.withdraw_approvals().await;
+    }
+
+    async fn stop(&self) {
+        self.0.withdraw_approvals().await;
+        self.0.stop_jobs().await;
+    }
+
+    fn session(&self) -> &Arc<AiSession> {
+        &self.0
+    }
+
+    async fn set_config_option(
+        &self,
+        _id: &str,
+        _value: &str,
+    ) -> Result<Vec<acp::ConfigOption>, BackendError> {
+        Err(BackendError::Invalid(
+            "this conversation has no settings here".into(),
+        ))
+    }
+}
+
+/// Starts a conversation for `client` (an agent the user runs, by the name it gave) on saved
+/// host `host_id`: a session with the user's approval rules and reviewer, recorded like any
+/// other, and announced to the UI. Returns its id and session.
+pub(crate) async fn start_external(
+    app: &AppHandle,
+    state: &AppState,
+    client: &str,
+    host_id: rove_vault::HostId,
+) -> Result<(String, Arc<AiSession>), CommandError> {
+    state.ensure_unlocked().await?;
+    let prefs = state.vault.preferences()?;
+    let context = AiContext::Host {
+        host_id: host_id.to_string(),
+    };
+    let (host, _meta, _cwd) = host_of(state, &context)?;
+    let id = format!("ai-{}", uuid::Uuid::now_v7());
+    let auditor = Arc::new(Auditor::new(
+        {
+            let recorder = state.ai.recorder.clone();
+            Arc::new(move |record| recorder.record(record))
+        },
+        id.clone(),
+        host.label(),
+    ));
+    let sink = {
+        let app = app.clone();
+        let auditor = auditor.clone();
+        let id = id.clone();
+        Arc::new(move |event: AiEvent| {
+            auditor.event(&event);
+            if let Err(error) = app.emit(AI_EVENT, serde_json::json!({ "id": id, "event": event }))
+            {
+                tracing::warn!(%error, "emitting an AI event failed");
+            }
+        })
+    };
+    let settings = SessionSettings {
+        mode: mode(prefs.ai.mode),
+        rules: Rules {
+            read_only: prefs.ai.read_only.clone(),
+            dangerous: prefs.ai.dangerous.clone(),
+        },
+        ..SessionSettings::default()
+    };
+    let session = Arc::new(AiSession::new(host.clone(), settings, sink));
+    session.set_reviewer(reviewer_for(
+        state,
+        &prefs,
+        &AgentRef::Acp("external".into()),
+    ));
+    let mode_value = serde_json::to_value(prefs.ai.mode)
+        .ok()
+        .and_then(|mode| mode.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    // No agent reference: the conversation cannot be continued from RoveTerm.
+    auditor.started(&SessionInfo {
+        agent: Some(client.to_owned()),
+        agent_version: None,
+        mode: mode_value,
+        agent_ref: None,
+        context: serde_json::to_value(&context).ok(),
+        agent_session: None,
+        resumed: false,
+    });
+    state.ai.entries.lock().await.insert(
+        id.clone(),
+        Arc::new(Entry {
+            backend: Arc::new(ExternalBackend(session.clone())),
+            auditor,
+            mcp: None,
+        }),
+    );
+    tracing::info!(session = %id, agent = client, "an outside agent started working on a host");
+    if let Err(error) = app.emit(
+        AI_EXTERNAL_EVENT,
+        serde_json::json!({ "id": id, "context": context, "agent": client, "host": host.label() }),
+    ) {
+        tracing::warn!(%error, "announcing an outside agent's conversation failed");
+    }
+    Ok((id, session))
+}
+
+/// Ends conversation `id` of an agent the user runs (its connection closed).
+pub(crate) async fn end_external(app: &AppHandle, state: &AppState, id: &str) {
+    let entry = state.ai.entries.lock().await.remove(id);
+    if let Some(entry) = entry {
+        stop(&entry).await;
+    }
+    if let Err(error) = app.emit(
+        AI_EXTERNAL_EVENT,
+        serde_json::json!({ "id": id, "ended": true }),
+    ) {
+        tracing::warn!(%error, "announcing the end of an outside agent's conversation failed");
+    }
 }
 
 /// Sends `text` to session `id` and waits for the turn to end; returns the stop reason.

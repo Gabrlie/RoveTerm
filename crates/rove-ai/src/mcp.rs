@@ -177,7 +177,7 @@ pub async fn bridge(config: Option<&std::path::Path>) -> std::io::Result<()> {
         Some(path) => {
             let text = std::fs::read_to_string(path).map_err(|error| {
                 std::io::Error::other(format!(
-                    "{error}: turn on access for local agents in RoveTerm's AI settings ({})",
+                    "{error}: RoveTerm is not running, or access for local agents is off in its AI settings ({})",
                     path.display()
                 ))
             })?;
