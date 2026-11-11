@@ -76,6 +76,8 @@ pub struct Assistant {
     models: Vec<String>,
     session: Arc<AiSession>,
     system: String,
+    /// What the model may call: the host's tools, or another set (such as the fleet's).
+    toolbox: Arc<dyn crate::mcp::McpTools>,
     tools: Vec<ToolSpec>,
     history: Mutex<Vec<Message>>,
     /// The running turn's cancellation.
@@ -91,9 +93,23 @@ pub struct Assistant {
 }
 
 impl Assistant {
+    /// An assistant working on `session`'s host with the host's tools.
     pub fn new(client: Client, session: Arc<AiSession>, meta: &HostMeta) -> Self {
-        let specs = tools::specs(&session.host().label());
-        let tools = specs
+        let toolbox: Arc<dyn crate::mcp::McpTools> =
+            Arc::new(crate::mcp::SessionTools(session.clone()));
+        Self::with_toolbox(client, session, system_prompt(meta), toolbox)
+    }
+
+    /// An assistant with `system` as its instructions and `toolbox` as its tools; `session`
+    /// carries its events, approvals and records.
+    pub fn with_toolbox(
+        client: Client,
+        session: Arc<AiSession>,
+        system: String,
+        toolbox: Arc<dyn crate::mcp::McpTools>,
+    ) -> Self {
+        let tools = toolbox
+            .specs()
             .as_array()
             .map(|list| {
                 list.iter()
@@ -110,7 +126,8 @@ impl Assistant {
             client: std::sync::RwLock::new(client),
             models,
             session,
-            system: system_prompt(meta),
+            system,
+            toolbox,
             tools,
             history: Mutex::new(Vec::new()),
             running: std::sync::Mutex::new(None),
@@ -391,7 +408,7 @@ impl Assistant {
             for call in calls {
                 let result = match serde_json::from_str::<Value>(&call.arguments) {
                     Ok(arguments) if arguments.is_object() => {
-                        match tools::call(&call.name, &arguments, &self.session).await {
+                        match self.toolbox.call(&call.name, &arguments).await {
                             Ok(result) => result,
                             Err((_, message)) => tools::ToolResult {
                                 text: message,
