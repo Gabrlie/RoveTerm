@@ -284,10 +284,6 @@
           <p class="empty">{keys.items.length === 0 ? t('keys.empty') : t('host.noMatch')}</p>
         {/each}
       </div>
-      <div class="add">
-        <button type="button" class:active={mode === 'generate'} onclick={() => reset('generate')}><Icon name="add" size={13} />{t('keys.generate')}</button>
-        <button type="button" class:active={mode === 'import'} onclick={() => reset('import')}><Icon name="importConfig" size={13} />{t('keys.import')}</button>
-      </div>
     </nav>
 
     <div class="pane">
@@ -445,6 +441,10 @@
     </div>
   </div>
   {#snippet actions()}
+    <div class="add">
+      <button type="button" class="secondary" class:active={mode === 'generate'} onclick={() => reset('generate')}><Icon name="add" size={13} />{t('keys.generate')}</button>
+      <button type="button" class="secondary" class:active={mode === 'import'} onclick={() => reset('import')}><Icon name="importConfig" size={13} />{t('keys.import')}</button>
+    </div>
     <button type="button" class="primary" onclick={onclose}>{t('settings.done')}</button>
   {/snippet}
 </Dialog>
@@ -571,28 +571,16 @@
   }
   .add {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding-top: var(--space-2);
-    box-shadow: inset 0 1px 0 var(--separator);
+    gap: var(--space-2);
+    margin-right: auto;
   }
   .add button {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
-    height: 28px;
-    padding: 0 var(--space-2);
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--accent);
-    font: inherit;
-    font-size: var(--text-footnote);
-    text-align: left;
+    gap: 6px;
   }
-  .add button:hover,
   .add button.active {
-    background: var(--fill-hover);
+    box-shadow: 0 0 0 1px var(--accent);
   }
   .pane {
     flex: 1;
