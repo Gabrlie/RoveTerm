@@ -98,6 +98,11 @@ pub enum SessionUpdate {
     ConfigOptions {
         options: Vec<ConfigOption>,
     },
+    /// How much of the model's context window the conversation fills (tokens).
+    Usage {
+        used: u64,
+        size: u64,
+    },
 }
 
 /// A tool call as reported by the agent; fields an update leaves out are `None` or empty.
@@ -690,6 +695,10 @@ pub fn parse_update(update: &Value) -> Option<SessionUpdate> {
         }),
         "current_mode_update" => Some(SessionUpdate::ModeChanged {
             mode_id: string(update, "currentModeId")?,
+        }),
+        "usage_update" => Some(SessionUpdate::Usage {
+            used: update.get("used").and_then(Value::as_u64)?,
+            size: update.get("size").and_then(Value::as_u64).filter(|size| *size > 0)?,
         }),
         "config_option_update" => Some(SessionUpdate::ConfigOptions {
             options: parse_config_options(update.get("configOptions")),

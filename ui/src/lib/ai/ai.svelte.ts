@@ -62,6 +62,8 @@ export class Chat {
   attachTerminal = $state(true);
   /** The title the user gave; otherwise the first question names the chat. */
   title = $state<string | null>(null);
+  /** How much of the model's context the conversation fills, as the agent last reported it. */
+  usage = $state<{ used: number; size: number } | null>(null);
   /** Settings of the running agent the user can change (model, reasoning effort). */
   options = $state<ConfigOption[]>([]);
   /** Settings chosen before the agent started, applied once it has. */
@@ -150,6 +152,8 @@ export class Chat {
           }
         } else if (update.kind === 'plan') {
           this.plan = update.entries;
+        } else if (update.kind === 'usage') {
+          this.usage = { used: update.used, size: update.size };
         } else if (update.kind === 'config_options') {
           this.options = update.options.filter((option) => option.category !== 'mode');
         }

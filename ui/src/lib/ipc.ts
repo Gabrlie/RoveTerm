@@ -920,7 +920,9 @@ export type SessionUpdate =
   | { kind: 'tool_call'; call: ToolCall; changed: boolean }
   | { kind: 'plan'; entries: PlanEntry[] }
   | { kind: 'mode_changed'; mode_id: string }
-  | { kind: 'config_options'; options: ConfigOption[] };
+  | { kind: 'config_options'; options: ConfigOption[] }
+  /** How much of the model's context window the conversation fills, in tokens. */
+  | { kind: 'usage'; used: number; size: number };
 
 export interface CommandOutput {
   stdout: string;
@@ -972,6 +974,27 @@ export function aiStart(context: AiContext, agent: string, terminal: SessionId |
 /** Sets setting `option` (such as `model`) of session `id`; returns the settings as they now are. */
 export function aiSetOption(id: string, option: string, value: string): Promise<ConfigOption[]> {
   return invoke('ai_set_option', { id, option, value });
+}
+
+/** One rate-limit window of a local agent's plan. */
+export interface QuotaWindow {
+  /** The agent's own name for it; empty when `minutes` describes it. */
+  label: string;
+  minutes: number | null;
+  used_percent: number;
+  /** Unix milliseconds. */
+  resets_at: number | null;
+  resets_text: string | null;
+}
+
+export interface AiQuota {
+  windows: QuotaWindow[];
+  as_of: number;
+}
+
+/** Plan usage of local agent `agent` (Codex, Claude Code); `null` for agents that report none. */
+export function aiQuota(agent: string, refresh: boolean): Promise<AiQuota | null> {
+  return invoke('ai_quota', { agent, refresh });
 }
 
 /** Names AI session `id`; returns the title as stored. */

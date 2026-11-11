@@ -18,6 +18,7 @@ RoveTerm 中的 AI Agent：ACP 客户端、审批策略和绑定主机的工具�
 - `Assistant::with_models` 提供可切换的模型，`set_model` 从下一次请求起换用，`config_options` 以会话设置给出；`seed` 在第一轮之前放入继续对话的历史。
 - `backend::AgentBackend` 是应用驱动一个 AI 会话的统一接口（`prompt`、`cancel`、`stop`、`session`、`set_config_option`），由内置助手与 ACP 的 `Running` 实现；`AgentRef` 标识回答的 Agent：`builtin`（服务商 id）或 `acp`（智能体 id）。以后接入其他来源的智能体只需新增实现。
 - `detect`：内置智能体表（Codex、Claude Code、Gemini CLI、Qwen Code：ACP 程序名、参数、npm 包、API key 环境变量与登录方式）；`detect(path)` 在 PATH 上查找已安装的程序，否则在有 npx 时经 npx 运行；`search_path()` 合并登录 shell 的 PATH、本进程的 PATH 与常见安装目录。
+- `quota`：读取智能体的套餐额度：`codex_quota` 从 Codex 的会话日志读最新的 `rate_limits`，`claude_limits` 解析 Claude Code `/usage` 报告中的限额行；不涉及登录令牌。
 - `tools`：Agent 在会话主机上的工具表：`specs(host)` 给出名称、说明与参数 schema，`call(name, arguments, session)` 经 `AiSession` 审批并执行，返回文本与是否失败；内置 MCP server 与内置助手共用。
 - `mcp`：内置 MCP server（协议 2024-11-05 至 2025-06-18），工具 `run_command`、`read_file`、`write_file`、`list_dir`、`terminal_snapshot`，全部经 `AiSession` 审批并在会话主机上执行；路径必须是绝对路径。`McpListener` 在回环随机端口上监听，连接须先发送 token 行（10 秒内，常数时间比较）；`bridge_env` 给出桥接进程的环境变量。`bridge()` 是应用二进制 `--mcp-bridge` 模式的实现：连上应用后复制 stdin / stdout。
 - `AiSession::set_terminal_source` 提供用户终端的最近内容，`read_terminal` 读取它（只读操作，同样记录）。

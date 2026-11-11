@@ -11,6 +11,7 @@ pub mod host;
 pub mod llm;
 pub mod mcp;
 pub mod policy;
+pub mod quota;
 pub mod risk;
 pub mod runner;
 pub mod screen;

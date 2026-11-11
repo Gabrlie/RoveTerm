@@ -7,6 +7,7 @@
   import IconButton from '../ui/IconButton.svelte';
   import Markdown from './Markdown.svelte';
   import AuditDialog from './AuditDialog.svelte';
+  import UsageMeter from './UsageMeter.svelte';
   import { ai, contextKey } from './ai.svelte';
   import { outcomeState, rows, subject, toolSubject, type ApprovalItem } from './chatview';
   import { hostOf, workspace } from '../workspace/workspace.svelte';
@@ -491,6 +492,7 @@
             {/if}
           </div>
         {/if}
+        <UsageMeter agent={agentRef} usage={chat.usage} />
         <div class="picker spread" bind:this={modePicker}>
           <button type="button" class="pick" onclick={() => (modeOpen = !modeOpen)} aria-expanded={modeOpen} title={`${t('ai.mode')}: ${t(`ai.mode.${chat.mode}`)}`} aria-label={`${t('ai.mode')}: ${t(`ai.mode.${chat.mode}`)}`}>
             <Icon name={MODE_ICONS[chat.mode]} size={12} /><Icon name="chevronDown" size={11} />

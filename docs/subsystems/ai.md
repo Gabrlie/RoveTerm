@@ -103,6 +103,7 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 | `ai_provider_test(provider, key)` | 用一次最小请求检查服务商的地址、模型和 key（未给出时用已保存的），返回模型的回复 |
 | `ai_start(context, agent, terminal, resume)` | 在 `local`、已保存主机或快速连接上启动 `agent`；内置助手直接构造 `Assistant`，ACP 智能体按检测结果启动并附带内置 MCP server；`terminal` 为用户在该主机的终端会话，供 `terminal_snapshot` 读取。返回会话设置（`config_options`，见下文）。`resume` 为之前的会话 id 时继续那段对话：须是同一 Agent、当前未打开，沿用同一 id |
 | `ai_set_option(id, option, value)` | 修改会话设置（如 `model`），返回修改后的全部设置 |
+| `ai_quota(agent, refresh)` | 本机智能体的套餐额度（各限额窗口的已用百分比、窗口长度、重置时间）：Codex 读 `$CODEX_HOME`（默认 `~/.codex`）下 `sessions/` 中最新会话日志末尾的 `token_count` 事件的 `rate_limits`；Claude Code 单独启动一个不带工具的短会话，发送其本地命令 `/usage`（不经过模型），按报告中的 `**名称** — **N%**` 行解析，启动与应答各限时 30 秒。结果复用 5 分钟，`refresh` 时重读；其他智能体返回空。RoveTerm 不读取任何登录令牌（`rove_ai::quota`，有单元测试） |
 | `ai_rename(id, title)` | 给会话起名（1–120 个字符，运行中或已结束均可），写入 `ai/renamed` 记录 |
 | `ai_prompt(id, text)` | 发出提示并等待回合结束，返回结束原因 |
 | `ai_cancel` / `ai_answer` / `ai_set_mode` / `ai_stop` | 取消回合、回答审批、切换审批模式、结束会话 |
@@ -116,6 +117,8 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 - 内置 MCP server 以应用自身的可执行文件加 `--mcp-bridge` 交给 Agent，并在启动 Agent 之前就开始接受桥接连接：Agent 在 `session/new` 返回前就会启动 MCP server 并等待它应答。
 
 应用退出时结束所有 AI 会话。
+
+ACP 的 `usage_update`（`used` / `size`，对话占用的上下文 token 数与窗口大小）解析为 `SessionUpdate::Usage` 交给界面。
 
 会话设置与继续对话：
 

@@ -240,6 +240,53 @@ fn acp_agents(vault: &rove_vault::Vault) -> Result<Vec<(String, AcpAgent)>, Comm
     Ok(list)
 }
 
+/// An enabled ACP agent of this device, with the environment and sign-in methods it starts
+/// with: its stored key (per the sign-in setting) goes into the agent's key variables.
+async fn acp_launch(
+    state: &AppState,
+    agent_id: &str,
+) -> Result<(AcpAgent, Vec<(String, String)>, Vec<String>), CommandError> {
+    let vault = state.vault.clone();
+    let found = tauri::async_runtime::spawn_blocking(move || acp_agents(&vault))
+        .await
+        .map_err(|error| CommandError::new("app.task", error.to_string()))??
+        .into_iter()
+        .find(|(id, agent)| id == agent_id && agent.enabled)
+        .map(|(_, agent)| agent)
+        .ok_or_else(|| CommandError::new("ai.no_agent", "no such agent"))?;
+    let device = state.vault.device_preferences()?;
+    let key = match device.agents.auth {
+        AgentAuth::Account => None,
+        AgentAuth::Auto => state.vault.ai_key(&format!("acp:{agent_id}"))?,
+        AgentAuth::ApiKey => Some(
+            state
+                .vault
+                .ai_key(&format!("acp:{agent_id}"))?
+                .ok_or_else(|| CommandError::new("ai.no_key", "no API key is stored"))?,
+        ),
+    };
+    let mut extra = vec![("PATH".to_owned(), detect::search_path())];
+    let auth_methods: Vec<String> = match (&key, found.known) {
+        (Some(key), Some(known)) => {
+            for var in known.key_vars {
+                extra.push(((*var).to_owned(), key.to_string()));
+            }
+            known
+                .key_methods
+                .iter()
+                .map(|method| (*method).to_owned())
+                .collect()
+        }
+        (None, Some(known)) => known
+            .account_methods
+            .iter()
+            .map(|method| (*method).to_owned())
+            .collect(),
+        (_, None) => Vec::new(),
+    };
+    Ok((found, extra, auth_methods))
+}
+
 /// Lists the agents of this device: the built-in assistant with each provider, then ACP agents.
 #[tauri::command]
 pub async fn ai_agents(state: State<'_, AppState>) -> Result<AgentList, CommandError> {
@@ -596,44 +643,7 @@ pub async fn ai_start(
             (Arc::new(assistant) as Arc<dyn AgentBackend>, None, started)
         }
         AgentRef::Acp(agent_id) => {
-            let vault = state.vault.clone();
-            let found = tauri::async_runtime::spawn_blocking(move || acp_agents(&vault))
-                .await
-                .map_err(|error| CommandError::new("app.task", error.to_string()))??
-                .into_iter()
-                .find(|(id, agent)| *id == agent_id && agent.enabled)
-                .map(|(_, agent)| agent)
-                .ok_or_else(|| CommandError::new("ai.no_agent", "no such agent"))?;
-            let device = state.vault.device_preferences()?;
-            let key = match device.agents.auth {
-                AgentAuth::Account => None,
-                AgentAuth::Auto => state.vault.ai_key(&format!("acp:{agent_id}"))?,
-                AgentAuth::ApiKey => Some(
-                    state
-                        .vault
-                        .ai_key(&format!("acp:{agent_id}"))?
-                        .ok_or_else(|| CommandError::new("ai.no_key", "no API key is stored"))?,
-                ),
-            };
-            let mut extra = vec![("PATH".to_owned(), detect::search_path())];
-            let auth_methods: Vec<String> = match (&key, found.known) {
-                (Some(key), Some(known)) => {
-                    for var in known.key_vars {
-                        extra.push(((*var).to_owned(), key.to_string()));
-                    }
-                    known
-                        .key_methods
-                        .iter()
-                        .map(|method| (*method).to_owned())
-                        .collect()
-                }
-                (None, Some(known)) => known
-                    .account_methods
-                    .iter()
-                    .map(|method| (*method).to_owned())
-                    .collect(),
-                (_, None) => Vec::new(),
-            };
+            let (found, extra, auth_methods) = acp_launch(state.inner(), &agent_id).await?;
             let listener = McpListener::bind()
                 .await
                 .map_err(|error| CommandError::new("app.io", error.to_string()))?;
@@ -994,4 +1004,125 @@ pub async fn ai_set_option(
         .into_iter()
         .filter(|option| option.category.as_deref() != Some("mode"))
         .collect())
+}
+
+/// Plan usage of a local agent, as far as it reports it.
+#[derive(Debug, Clone, Serialize)]
+pub struct AiQuota {
+    pub windows: Vec<rove_ai::quota::Window>,
+    /// When it was read (Unix milliseconds).
+    pub as_of: i64,
+}
+
+/// How long a read quota is reused before reading it again.
+const QUOTA_REUSE: Duration = Duration::from_secs(300);
+/// Longest the Claude Code probe may take to start, and to answer `/usage`.
+const QUOTA_PROBE: Duration = Duration::from_secs(30);
+
+static QUOTAS: std::sync::Mutex<Option<HashMap<String, (std::time::Instant, AiQuota)>>> =
+    std::sync::Mutex::new(None);
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// The rate-limit windows of local agent `agent` (Codex: from its session logs; Claude Code:
+/// from its `/usage` report, which starts it briefly); `None` for agents that report none.
+/// A recent answer is reused unless `refresh`.
+#[tauri::command]
+pub async fn ai_quota(
+    state: State<'_, AppState>,
+    agent: String,
+    refresh: bool,
+) -> Result<Option<AiQuota>, CommandError> {
+    let AgentRef::Acp(agent_id) = agent_ref(&agent)? else {
+        return Ok(None);
+    };
+    if !refresh
+        && let Some((at, quota)) = QUOTAS
+            .lock()
+            .ok()
+            .and_then(|cache| cache.as_ref()?.get(&agent_id).cloned())
+        && at.elapsed() < QUOTA_REUSE
+    {
+        return Ok(Some(quota));
+    }
+    let windows = match agent_id.as_str() {
+        "codex" => {
+            let home = std::env::var_os("CODEX_HOME")
+                .map(PathBuf::from)
+                .or_else(|| std::env::home_dir().map(|home| home.join(".codex")))
+                .ok_or_else(|| CommandError::new("app.io", "no home directory"))?;
+            tauri::async_runtime::spawn_blocking(move || {
+                rove_ai::quota::codex_quota(&home, now_ms()).unwrap_or_default()
+            })
+            .await
+            .map_err(|error| CommandError::new("app.task", error.to_string()))?
+        }
+        "claude" => claude_usage(state.inner(), &agent_id).await?,
+        _ => return Ok(None),
+    };
+    let quota = AiQuota {
+        windows,
+        as_of: now_ms(),
+    };
+    if let Ok(mut cache) = QUOTAS.lock() {
+        cache
+            .get_or_insert_with(HashMap::new)
+            .insert(agent_id, (std::time::Instant::now(), quota.clone()));
+    }
+    Ok(Some(quota))
+}
+
+/// Starts Claude Code on its own, without tools, asks its local `/usage` command (which does not
+/// reach the model) and reads the limits from the report.
+async fn claude_usage(
+    state: &AppState,
+    agent_id: &str,
+) -> Result<Vec<rove_ai::quota::Window>, CommandError> {
+    let (found, extra, auth_methods) = acp_launch(state, agent_id).await?;
+    let report = Arc::new(std::sync::Mutex::new(String::new()));
+    let sink = {
+        let report = report.clone();
+        Arc::new(move |event: AiEvent| {
+            if let AiEvent::Update {
+                update: acp::SessionUpdate::Message { text, .. },
+            } = event
+                && let Ok(mut report) = report.lock()
+            {
+                report.push_str(&text);
+            }
+        })
+    };
+    let session = Arc::new(AiSession::new(
+        Arc::new(LocalHost),
+        SessionSettings::default(),
+        sink,
+    ));
+    let spec = AgentSpec {
+        program: found.program,
+        args: found.args,
+        env: acp::agent_env(acp::ENV_ALLOWED, &extra),
+        cwd: std::env::home_dir().unwrap_or_else(std::env::temp_dir),
+        auth_methods,
+        mcp: Vec::new(),
+        preferred_modes: Vec::new(),
+        resume: None,
+    };
+    let running = tokio::time::timeout(QUOTA_PROBE, runner::start(&spec, session))
+        .await
+        .map_err(|_| CommandError::new("ai.timeout", "the agent did not start in time"))?
+        .map_err(acp_error)?;
+    let answered = tokio::time::timeout(QUOTA_PROBE, running.prompt("/usage")).await;
+    running.stop().await;
+    match answered {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => return Err(acp_error(error)),
+        Err(_) => return Err(CommandError::new("ai.timeout", "no usage report in time")),
+    }
+    let text = report.lock().map(|text| text.clone()).unwrap_or_default();
+    Ok(rove_ai::quota::claude_limits(&text))
 }
