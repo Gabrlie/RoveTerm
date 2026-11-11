@@ -39,6 +39,8 @@ pub struct FleetTools {
     provider: ProviderPrefs,
     /// The lead's session: its tool calls are reported there (shown and recorded).
     session: Arc<AiSession>,
+    /// Sub-agents run with nobody to ask (a scheduled run).
+    unattended: bool,
     calls: std::sync::atomic::AtomicU64,
 }
 
@@ -48,12 +50,14 @@ impl FleetTools {
         parent: String,
         provider: ProviderPrefs,
         session: Arc<AiSession>,
+        unattended: bool,
     ) -> Self {
         Self {
             app,
             parent,
             provider,
             session,
+            unattended,
             calls: std::sync::atomic::AtomicU64::new(0),
         }
     }
@@ -123,11 +127,13 @@ impl FleetTools {
             let parent = self.parent.clone();
             let provider = self.provider.clone();
             let limit = limit.clone();
+            let unattended = self.unattended;
             running.spawn(async move {
                 let _turn = limit.acquire_owned().await;
-                let result =
-                    crate::commands::ai::run_subagent(&app, &parent, host.id, &provider, &task)
-                        .await;
+                let result = crate::commands::ai::run_subagent(
+                    &app, &parent, host.id, &provider, &task, unattended,
+                )
+                .await;
                 (at, host.name, result)
             });
         }

@@ -828,6 +828,7 @@ pub async fn ai_start(
                     id.clone(),
                     provider.clone(),
                     session.clone(),
+                    false,
                 );
                 Assistant::with_toolbox(
                     client,
@@ -1088,6 +1089,7 @@ async fn start_subagent(
     host_id: rove_vault::HostId,
     provider: &ProviderPrefs,
     task: &str,
+    unattended: bool,
 ) -> Result<(String, Arc<Assistant>), CommandError> {
     let prefs = state.vault.preferences()?;
     let context = AiContext::Host {
@@ -1122,6 +1124,15 @@ async fn start_subagent(
             dangerous: prefs.ai.dangerous.clone(),
         },
         ..SessionSettings::default()
+    };
+    // A scheduled run has nobody to ask.
+    let settings = if unattended {
+        SessionSettings {
+            mode: Mode::Unattended,
+            ..settings
+        }
+    } else {
+        settings
     };
     let session = Arc::new(AiSession::new(host.clone(), settings, sink));
     attach_notes(state, &session, &context);
@@ -1191,16 +1202,18 @@ impl Drop for EndSubagent {
 }
 
 /// Runs `task` with a sub-agent of fleet lead `parent` on host `host_id` to the end of its turn
-/// and ends it; returns its last reply, or why it failed.
+/// and ends it; returns its last reply (with what it had to leave for the user, when
+/// `unattended`), or why it failed.
 pub(crate) async fn run_subagent(
     app: &AppHandle,
     parent: &str,
     host_id: rove_vault::HostId,
     provider: &ProviderPrefs,
     task: &str,
+    unattended: bool,
 ) -> Result<String, String> {
     let state = app.state::<AppState>();
-    let (id, assistant) = start_subagent(app, &state, parent, host_id, provider, task)
+    let (id, assistant) = start_subagent(app, &state, parent, host_id, provider, task, unattended)
         .await
         .map_err(|error| error.message)?;
     let _end = EndSubagent {
@@ -1215,7 +1228,14 @@ pub(crate) async fn run_subagent(
         Err(error) => format!("error: {error}"),
     };
     entry.auditor.turn_ended(&stop);
-    let reply = assistant.last_reply().await;
+    let mut reply = assistant.last_reply().await;
+    let deferred = assistant.session().take_deferred();
+    if !deferred.is_empty() {
+        reply.push_str("\n\nRefused for lack of approval (needs the user's decision):\n");
+        for operation in deferred {
+            reply.push_str(&format!("- {operation}\n"));
+        }
+    }
     match result {
         Ok(_) if reply.trim().is_empty() => Ok(format!("(no reply; the turn ended with {stop})")),
         Ok(_) => Ok(reply),

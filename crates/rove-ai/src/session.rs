@@ -145,6 +145,8 @@ pub struct AiSession {
     /// In the auto mode, looks at ordinary modifications first; allows them at or above the
     /// confidence threshold.
     reviewer: std::sync::RwLock<Option<(Arc<dyn crate::review::Reviewer>, f64)>>,
+    /// Operations refused in the unattended mode, for the user to decide later.
+    deferred: std::sync::Mutex<Vec<String>>,
 }
 
 /// Most tool calls remembered for permission requests; older ones are forgotten all at once.
@@ -288,7 +290,16 @@ impl AiSession {
             calls: Mutex::new(HashMap::new()),
             replaying: std::sync::atomic::AtomicBool::new(false),
             reviewer: std::sync::RwLock::new(None),
+            deferred: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    /// The operations refused in the unattended mode so far, as text; taken once.
+    pub fn take_deferred(&self) -> Vec<String> {
+        self.deferred
+            .lock()
+            .map(|mut deferred| std::mem::take(&mut *deferred))
+            .unwrap_or_default()
     }
 
     /// Lets `reviewer` allow ordinary modifications in the auto mode when it is at least
@@ -311,7 +322,10 @@ impl AiSession {
         if agent_tool
             || assessment.opaque
             || assessment.risk != risk::Risk::Modify
-            || self.policy.lock().await.mode() != Mode::Auto
+            || !matches!(
+                self.policy.lock().await.mode(),
+                Mode::Auto | Mode::Unattended
+            )
         {
             return None;
         }
@@ -565,6 +579,15 @@ impl AiSession {
         };
         if self.review(operation, assessment, agent_tool).await == Some(true) {
             return (true, false);
+        }
+        // Nobody answers: refused, and noted for the user.
+        if self.policy.lock().await.mode() == Mode::Unattended {
+            let request =
+                crate::review::ReviewRequest::new(&self.host.label(), operation, assessment);
+            if let Ok(mut deferred) = self.deferred.lock() {
+                deferred.push(request.operation);
+            }
+            return (false, false);
         }
         let request_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (sender, receiver) = oneshot::channel();

@@ -186,3 +186,26 @@ async fn the_review_mode_leaves_every_change_to_the_user() {
         (1, 0)
     );
 }
+
+#[tokio::test]
+async fn unattended_runs_never_wait_and_note_what_they_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.conf");
+    let path = path.to_str().unwrap();
+    // An unsure judge: the change is refused without asking, and noted.
+    let (session, asked, seen) = session_in(Mode::Unattended, 0.5);
+    assert!(session.write_file(path, "x").await.is_err());
+    assert!(session.run_command("rm -rf /", None, None).await.is_err());
+    assert_eq!(
+        (asked.load(Ordering::SeqCst), seen.load(Ordering::SeqCst)),
+        (0, 1)
+    );
+    let deferred = session.take_deferred();
+    assert_eq!(deferred.len(), 2);
+    assert!(deferred[1].contains("rm -rf /"));
+    assert!(session.take_deferred().is_empty());
+    // A sure judge lets the ordinary change run.
+    let (session, asked, _) = session_in(Mode::Unattended, 0.95);
+    session.write_file(path, "y").await.unwrap();
+    assert_eq!(asked.load(Ordering::SeqCst), 0);
+}

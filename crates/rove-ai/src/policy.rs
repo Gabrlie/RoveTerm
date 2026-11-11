@@ -22,6 +22,9 @@ pub enum Mode {
     /// are always asked about. The policy itself asks: the judge is the session's
     /// ([`crate::session::AiSession::set_reviewer`]).
     Auto,
+    /// Like [`Mode::Auto`] with nobody to ask (scheduled runs): what the judge does not allow,
+    /// and every dangerous operation, is refused and noted for the user's decision instead.
+    Unattended,
 }
 
 /// The kind of an agent's own tool, as ACP names them.
@@ -240,8 +243,12 @@ impl Policy {
             .is_some_and(|grants| grants.iter().all(|grant| self.granted.contains(grant)));
         match self.mode {
             _ if granted => Decision::Allow,
-            Mode::AskByRisk | Mode::Auto if assessment.risk == Risk::ReadOnly => Decision::Allow,
-            Mode::AskByRisk | Mode::AskAll | Mode::Auto => ask,
+            Mode::AskByRisk | Mode::Auto | Mode::Unattended
+                if assessment.risk == Risk::ReadOnly =>
+            {
+                Decision::Allow
+            }
+            Mode::AskByRisk | Mode::AskAll | Mode::Auto | Mode::Unattended => ask,
         }
     }
 
@@ -302,6 +309,10 @@ mod tests {
         assert_eq!(decide(&auto, &ls), Decision::Allow);
         assert_eq!(decide(&auto, &restart), ASK);
         assert_eq!(decide(&auto, &wipe), ASK_ONCE);
+        // Unattended: the same questions; the session answers them without anyone.
+        let unattended = Policy::new(Mode::Unattended, Rules::default());
+        assert_eq!(decide(&unattended, &ls), Decision::Allow);
+        assert_eq!(decide(&unattended, &restart), ASK);
     }
 
     #[test]
