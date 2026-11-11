@@ -175,8 +175,36 @@ impl ConversationStore {
                 break;
             }
         }
+        let deleted =
+            crate::commands::ai::deleted_conversations(self.0.as_ref()).map_err(journal_error)?;
         let mut records = Vec::new();
-        for id in ids {
+        // A deleted conversation is passed on as deleted (a removed record is not: conversations
+        // also leave the synced set by age, and that must not delete them elsewhere).
+        let tombstones = self
+            .0
+            .read(&rove_journal::JournalQuery {
+                kind: Some(rove_ai::audit::KIND_DELETED.to_owned()),
+                limit: Some(10_000),
+                newest_first: true,
+                ..rove_journal::JournalQuery::default()
+            })
+            .map_err(journal_error)?;
+        for tombstone in tombstones {
+            if tombstone.ts < cutoff {
+                break;
+            }
+            let Some(id) = tombstone.payload.get("session").and_then(|id| id.as_str()) else {
+                continue;
+            };
+            if !records.iter().any(|record: &Record| record.id == id) {
+                records.push(Record {
+                    kind: CONVERSATION_KIND.to_owned(),
+                    id: id.to_owned(),
+                    body: serde_json::json!({ "deleted": true }),
+                });
+            }
+        }
+        for id in ids.into_iter().filter(|id| !deleted.contains(id)) {
             let entries: Vec<(i64, String, serde_json::Value)> = self
                 .session(&id)?
                 .into_iter()
@@ -194,6 +222,8 @@ impl ConversationStore {
     }
 
     fn apply(&self, changes: &[Change]) -> Result<(), SyncError> {
+        let deleted =
+            crate::commands::ai::deleted_conversations(self.0.as_ref()).map_err(journal_error)?;
         for change in changes {
             // Ids and sizes from another device are checked like any outside input.
             let Some(body) = &change.body else { continue };
@@ -201,6 +231,15 @@ impl ConversationStore {
                 || change.id.len() > 64
                 || body.to_string().len() > rove_ai::audit::SYNC_MAX * 2
             {
+                continue;
+            }
+            if body.get("deleted") == Some(&serde_json::Value::Bool(true)) {
+                crate::commands::ai::delete_conversation(self.0.as_ref(), &change.id)
+                    .map_err(journal_error)?;
+                continue;
+            }
+            // Deleted here: what another device still has does not bring it back.
+            if deleted.contains(&change.id) {
                 continue;
             }
             let local: Vec<(i64, String)> = self
@@ -657,5 +696,26 @@ mod tests {
         b.sort();
         assert_eq!(a, b);
         assert_eq!(a.len(), 3);
+
+        // Deleted on `a`: gone on `b` too, and `b`'s copy does not bring it back to `a`.
+        crate::commands::ai::delete_conversation(journal_a.as_ref(), "ai-1").unwrap();
+        runtime.block_on(async {
+            rove_sync::sync(&backend, &key, &mut state_a, &store_a)
+                .await
+                .unwrap();
+            rove_sync::sync(&backend, &key, &mut state_b, &store_b)
+                .await
+                .unwrap();
+            rove_sync::sync(&backend, &key, &mut state_a, &store_a)
+                .await
+                .unwrap();
+        });
+        assert!(texts(&journal_b).is_empty());
+        assert!(texts(&journal_a).is_empty());
+        assert!(
+            crate::commands::ai::deleted_conversations(journal_b.as_ref())
+                .unwrap()
+                .contains("ai-1")
+        );
     }
 }

@@ -1,7 +1,7 @@
 //! Bridges session lifecycle live events into journal records without blocking the emitter.
 
 use std::sync::Arc;
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::{Sender, SyncSender, channel, sync_channel};
 
 use rove_kernel::{Disposer, EventBus};
 use rove_session::{SessionExited, SessionOpened};
@@ -20,19 +20,33 @@ pub const KIND_SESSION_EXITED: &str = "session/exited";
 /// the queue has drained.
 #[derive(Clone)]
 pub struct Recorder {
-    queue: Sender<NewRecord>,
+    queue: Sender<Queued>,
+}
+
+enum Queued {
+    Record(NewRecord),
+    /// Answered once everything queued before it is written.
+    Flush(SyncSender<()>),
 }
 
 impl Recorder {
     /// Starts the writer thread for `store`.
     pub fn start(store: Arc<dyn JournalStore>) -> std::io::Result<Self> {
-        let (queue, records) = channel::<NewRecord>();
+        let (queue, records) = channel::<Queued>();
         std::thread::Builder::new()
             .name("journal-writer".into())
             .spawn(move || {
-                while let Ok(record) = records.recv() {
-                    if let Err(error) = store.append(record) {
-                        tracing::error!(%error, "journal append failed");
+                while let Ok(queued) = records.recv() {
+                    match queued {
+                        Queued::Record(record) => {
+                            if let Err(error) = store.append(record) {
+                                tracing::error!(%error, "journal append failed");
+                            }
+                        }
+                        // The asker may have stopped waiting; nothing to do then.
+                        Queued::Flush(done) => {
+                            let _ = done.send(());
+                        }
                     }
                 }
             })?;
@@ -41,8 +55,16 @@ impl Recorder {
 
     /// Queues `record` for appending. Records queued after the writer stopped are dropped.
     pub fn record(&self, record: NewRecord) {
-        if self.queue.send(record).is_err() {
+        if self.queue.send(Queued::Record(record)).is_err() {
             tracing::warn!("journal writer stopped; record dropped");
+        }
+    }
+
+    /// Blocks until every record queued before this call is written (or the writer stopped).
+    pub fn flush(&self) {
+        let (done, wait) = sync_channel(1);
+        if self.queue.send(Queued::Flush(done)).is_ok() {
+            let _ = wait.recv();
         }
     }
 

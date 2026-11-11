@@ -41,7 +41,7 @@ node scripts/check-docs.mjs      # 文档字数上限与相对链接检查
 - **注册即副作用**：每一项服务注册或事件监听都返回 `Disposer`，插件卸载时 drop 即撤销（[kernel](docs/subsystems/kernel.md)）。
 - **能力 seam 由 Definition / Provider / Consumer 三个角色组成**，新增能力时三者一起设计（[术语](docs/glossary.md#seam)）。
 - **Waterfall 监听器必须调用 `next`** 才能把请求交给下一层；不调用即短路。
-- **AI 可见即已记录**：AI 能看到的输入、执行过的命令、读写过的文件都必须能从 Journal 还原。
+- **AI 可见即已记录**：AI 能看到的输入、执行过的命令、读写过的文件都必须能从 Journal 还原；用户主动删除的对话除外。
 - **跨边界 ID 用 newtype**（`SessionId`、`HostId`），不用裸 `String` / `Uuid`。
 - **显式优于隐式**：默认值在所属实现里通过 `resolve(request) -> Spec` 一步确定，不在执行路径里藏 `unwrap_or(default)`。
 - **插件里不写死可调参数**：随部署变化的取值放进校验过的配置字段；协议常量和安全不变量保持固定。

@@ -74,7 +74,8 @@ pub enum JournalError {
     Io(String),
 }
 
-/// Append-only storage of durable events. Definition of the `JournalStore` seam.
+/// Storage of durable events, appended to and read back; records are removed only on the user's
+/// request (deleting a conversation). Definition of the `JournalStore` seam.
 pub trait JournalStore: Send + Sync {
     /// Appends `record` and returns its sequence number.
     fn append(&self, record: NewRecord) -> Result<i64, JournalError>;
@@ -86,6 +87,10 @@ pub trait JournalStore: Send + Sync {
     /// Returns records matching `query` in ascending sequence order, or descending with
     /// [`JournalQuery::newest_first`].
     fn read(&self, query: &JournalQuery) -> Result<Vec<JournalRecord>, JournalError>;
+
+    /// Removes the records of session `session_id` whose kind starts with `kind_prefix` (such as
+    /// `ai/`), when the user deletes them; returns how many were removed.
+    fn delete_session(&self, session_id: &str, kind_prefix: &str) -> Result<usize, JournalError>;
 }
 
 /// `[plugin.journal]` configuration.

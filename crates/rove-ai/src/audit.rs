@@ -29,6 +29,9 @@ pub const KIND_TURN_ENDED: &str = "ai/turn_ended";
 pub const KIND_ENDED: &str = "ai/session_ended";
 /// The session's title: written from the first prompt, and again when the user renames it.
 pub const KIND_RENAMED: &str = "ai/renamed";
+/// The user deleted a conversation (`payload.session`); the record stays, without a session,
+/// so the conversation is not brought back by sync.
+pub const KIND_DELETED: &str = "ai/conversation_deleted";
 
 /// Longest title kept.
 pub const MAX_TITLE: usize = 120;

@@ -3,6 +3,7 @@
 import {
   aiAnswer,
   aiCancel,
+  aiDelete,
   aiPrompt,
   aiSetMode,
   aiStart,
@@ -400,6 +401,14 @@ class AiStore {
     chat.items = itemsFromRecords(records);
     this.chats.set(key, chat);
     this.version += 1;
+  }
+
+  /** Deletes conversation `id`; a panel showing it starts a new conversation. */
+  async delete(id: string): Promise<void> {
+    for (const chat of [...this.chats.values()]) {
+      if (chat.id === id || chat.resumeId === id) await this.reset(chat);
+    }
+    await aiDelete(id);
   }
 
   /** Switches `chat` to `agent`: the conversation starts over when an agent was already talking. */

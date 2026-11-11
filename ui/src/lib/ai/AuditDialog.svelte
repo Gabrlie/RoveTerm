@@ -6,6 +6,8 @@
   import { aiRecords, aiRename, aiSessions, type AiRecord, type AiSessionSummary } from '../ipc';
   import IconButton from '../ui/IconButton.svelte';
   import { auditLine, type AuditLine } from './audit';
+  import { ai } from './ai.svelte';
+  import { ask } from '../ui/confirm.svelte';
 
   interface Props {
     initial?: string | null;
@@ -51,6 +53,28 @@
     } catch (caught) {
       error = errorText(caught);
     }
+  }
+
+  /** Deletes the selected conversation, here and on the synced devices, after asking. */
+  async function remove(): Promise<void> {
+    const session = current;
+    if (!session) return;
+    const name = session.title ?? session.host ?? '';
+    const confirmed = await ask({ title: t('ai.deleteTitle'), message: t('ai.deleteMessage', { name }), confirmLabel: t('ai.delete'), danger: true });
+    if (!confirmed) return;
+    try {
+      await ai.delete(session.id);
+    } catch (caught) {
+      error = errorText(caught);
+      return;
+    }
+    const at = sessions.findIndex((entry) => entry.id === session.id);
+    sessions = sessions.filter((entry) => entry.id !== session.id);
+    records = [];
+    lines = [];
+    const next = sessions[Math.min(at, sessions.length - 1)];
+    selected = null;
+    if (next) void load(next.id);
   }
 
   function time(ts: number): string {
@@ -105,6 +129,7 @@
             <IconButton icon="edit" small label={t('ai.rename')} onclick={() => (renaming = current?.title ?? '')} />
           {/if}
           <span class="spacer"></span>
+          <IconButton icon="remove" small label={t('ai.delete')} onclick={() => void remove()} />
           {#if onresume}
             <button type="button" class="secondary" disabled={!current.agent_ref || !current.context} title={current.agent_ref ? '' : t('ai.resumeUnavailable')} onclick={() => current && onresume?.(current, records)}>{t('ai.resume')}</button>
           {/if}

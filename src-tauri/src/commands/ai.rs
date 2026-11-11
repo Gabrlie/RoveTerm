@@ -837,6 +837,65 @@ pub async fn ai_stop(state: State<'_, AppState>, id: String) -> Result<(), Comma
     Ok(())
 }
 
+/// Deletes conversation `id` at the user's request: stops it when it runs, removes its `ai/*`
+/// records from the journal and leaves an [`audit::KIND_DELETED`] record, which sync passes on
+/// so the other devices delete it too.
+#[tauri::command]
+pub async fn ai_delete(state: State<'_, AppState>, id: String) -> Result<(), CommandError> {
+    check_session_id(&id)?;
+    let entry = state.ai.entries.lock().await.remove(&id);
+    if let Some(entry) = entry {
+        stop(&entry).await;
+    }
+    let recorder = state.ai.recorder.clone();
+    let journal = state.journal.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Records still queued for it are written first, then removed with the rest.
+        recorder.flush();
+        delete_conversation(journal.as_ref(), &id)
+    })
+    .await
+    .map_err(|error| CommandError::new("app.task", error.to_string()))?
+    .map_err(|error| CommandError::new("journal.io", error.to_string()))
+}
+
+/// Removes conversation `id`'s records and marks it deleted (once).
+pub(crate) fn delete_conversation(
+    journal: &dyn rove_journal::JournalStore,
+    id: &str,
+) -> Result<(), rove_journal::JournalError> {
+    journal.delete_session(id, "ai/")?;
+    if !deleted_conversations(journal)?.contains(id) {
+        journal.append(rove_journal::NewRecord {
+            kind: audit::KIND_DELETED.to_owned(),
+            session_id: None,
+            payload: serde_json::json!({ "session": id }),
+        })?;
+    }
+    Ok(())
+}
+
+/// Conversations the user deleted (on this device or another).
+pub(crate) fn deleted_conversations(
+    journal: &dyn rove_journal::JournalStore,
+) -> Result<std::collections::HashSet<String>, rove_journal::JournalError> {
+    Ok(journal
+        .read(&rove_journal::JournalQuery {
+            kind: Some(audit::KIND_DELETED.to_owned()),
+            limit: Some(10_000),
+            ..rove_journal::JournalQuery::default()
+        })?
+        .into_iter()
+        .filter_map(|record| {
+            record
+                .payload
+                .get("session")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect())
+}
+
 /// A past AI session, from the journal.
 #[derive(Debug, Serialize)]
 pub struct AiSessionSummary {

@@ -221,6 +221,7 @@ pub fn run() {
             commands::ai::ai_set_option,
             commands::ai::ai_quota,
             commands::ai::ai_provider_models,
+            commands::ai::ai_delete,
             commands::sync::sync_status,
             commands::sync::sync_connect,
             commands::sync::sync_probe,

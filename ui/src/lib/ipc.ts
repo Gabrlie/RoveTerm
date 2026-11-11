@@ -982,6 +982,12 @@ export function aiProviderTest(provider: ProviderPrefs, key: string | null): Pro
   return invoke('ai_provider_test', { provider, key });
 }
 
+/** Deletes conversation `id` here and, through sync, on the other devices; stops it first when
+ *  it runs. */
+export function aiDelete(id: string): Promise<void> {
+  return invoke('ai_delete', { id });
+}
+
 /** The models `provider` offers; `key` is the typed key, else the stored one. */
 export function aiProviderModels(provider: ProviderPrefs, key: string | null): Promise<ListedModel[]> {
   return invoke('ai_provider_models', { provider, key });

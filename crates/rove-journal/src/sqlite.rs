@@ -81,6 +81,14 @@ impl JournalStore for SqliteJournal {
         Ok(conn.last_insert_rowid())
     }
 
+    fn delete_session(&self, session_id: &str, kind_prefix: &str) -> Result<usize, JournalError> {
+        // A plain prefix comparison: `LIKE` would read `_` and `%` in the prefix as patterns.
+        Ok(self.conn.lock().execute(
+            "DELETE FROM events WHERE session_id = ?1 AND substr(kind, 1, length(?2)) = ?2",
+            rusqlite::params![session_id, kind_prefix],
+        )?)
+    }
+
     fn read(&self, query: &JournalQuery) -> Result<Vec<JournalRecord>, JournalError> {
         let mut sql =
             String::from("SELECT seq, ts, kind, session_id, payload FROM events WHERE 1 = 1");

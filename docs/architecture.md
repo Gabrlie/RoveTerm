@@ -98,7 +98,7 @@ src-tauri 的 OutputSink → ipc::Channel → TermView.write(Uint8Array)
 
 - 凭据只以密文存储；设备主密钥只存在系统钥匙串里（[vault](subsystems/vault.md)）。
 - 启动时静默解锁；解锁失败时应用照常可用，只有需要凭据的操作才请求授权。
-- **AI 可见即已记录**：AI 能看到的输入、执行的命令、读写的文件都能从 Journal 还原。
+- **AI 可见即已记录**：AI 能看到的输入、执行的命令、读写的文件都能从 Journal 还原；唯一的例外是用户主动删除的对话（[ai](subsystems/ai.md) 的 `ai_delete`）。
 - Agent 进程发来的任何"始终允许"或模式请求都不参与决策；只有本地 `Policy` 决定是否放行。
 
 威胁模型和密钥层级见 [security.md](security.md)。

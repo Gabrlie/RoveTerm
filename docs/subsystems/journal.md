@@ -1,6 +1,6 @@
 # journal
 
-`rove-journal` 定义 `JournalStore` seam，并提供基于 SQLite 的追加式事件日志。Journal 事件是重启后仍然存在的事实，用于会话恢复和审计。
+`rove-journal` 定义 `JournalStore` seam，并提供基于 SQLite 的事件日志。Journal 事件是重启后仍然存在的事实，用于会话恢复和审计；记录只追加，唯一的例外是用户删除某个 AI 对话时移除它的记录。
 
 ## JournalStore seam
 
@@ -10,6 +10,8 @@ pub trait JournalStore: Send + Sync {
     /// 追加一条发生在 `ts`（Unix 毫秒）的记录，如从其他设备同步来的记录。
     fn import(&self, ts: i64, record: NewRecord) -> Result<i64, JournalError>;
     fn read(&self, query: &JournalQuery) -> Result<Vec<JournalRecord>, JournalError>;
+    /// 用户删除时移除会话 `session_id` 中 kind 以 `kind_prefix` 开头的记录，返回移除条数。
+    fn delete_session(&self, session_id: &str, kind_prefix: &str) -> Result<usize, JournalError>;
 }
 ```
 
@@ -34,7 +36,7 @@ pub trait JournalStore: Send + Sync {
 
 ## 写入路径
 
-`Recorder` 订阅 Live 事件，把记录放进队列，由 `journal-writer` 线程依次追加。表结构为单表 `events`，并对 `(session_id, seq)` 建了索引。
+`Recorder` 订阅 Live 事件，把记录放进队列，由 `journal-writer` 线程依次追加。`flush()` 阻塞到此前排队的记录全部写入，删除会话前用它保证仍在队列中的记录也一并删除。表结构为单表 `events`，并对 `(session_id, seq)` 建了索引。
 
 ## 工作区快照
 
