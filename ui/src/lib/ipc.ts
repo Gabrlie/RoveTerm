@@ -310,6 +310,61 @@ export interface AiPrefs {
   review_model: { provider: string; model: string } | null;
   /** How sure the reviewer must be, in percent (50–99). */
   review_confidence: number;
+  /** Tasks the fleet lead runs on a schedule while the app is open. */
+  schedules: Schedule[];
+}
+
+/** When a scheduled task runs, in local time (weekday 0 is Monday). */
+export type Repeat =
+  | { kind: 'once'; at: number }
+  | { kind: 'hourly'; minute: number }
+  | { kind: 'daily'; hour: number; minute: number }
+  | { kind: 'weekly'; weekday: number; hour: number; minute: number };
+
+/** A task the fleet lead runs on its own at set times. */
+export interface Schedule {
+  id: string;
+  name: string;
+  instruction: string;
+  repeat: Repeat;
+  /** Changes the judge is sure of may be made; otherwise the run only checks and reports. */
+  allow_changes: boolean;
+  /** A run missed while the app was closed is made at the next start. */
+  catch_up: boolean;
+  enabled: boolean;
+  created_at: number;
+}
+
+/** How a scheduled task last ran. */
+export interface ScheduleStatus {
+  schedule: string;
+  due: number;
+  status: 'started' | 'done' | 'failed' | 'missed';
+  conversation: string | null;
+  at: number;
+  running: boolean;
+}
+
+export function scheduleStatus(): Promise<ScheduleStatus[]> {
+  return invoke('schedule_status');
+}
+
+/** Runs scheduled task `id` now; `false` when it is running already. */
+export function scheduleRunNow(id: string): Promise<boolean> {
+  return invoke('schedule_run_now', { id });
+}
+
+/** A scheduled run ended. */
+export interface ReportEvent {
+  schedule: string;
+  name: string;
+  conversation: string | null;
+  ok: boolean;
+  error: string | null;
+}
+
+export function onAiReport(handler: (event: ReportEvent) => void): Promise<UnlistenFn> {
+  return listen<ReportEvent>('ai-report', (event) => handler(event.payload));
 }
 
 export interface Preferences {

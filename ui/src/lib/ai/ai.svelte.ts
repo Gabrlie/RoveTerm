@@ -13,11 +13,13 @@ import {
   aiSetOption,
   onAiExternal,
   onAiSubtask,
+  onAiReport,
   onAiUpdate,
   type AiSessionSummary,
   type AiRecord,
   type ExternalEvent,
   type SubtaskEvent,
+  type ReportEvent,
   type AgentCommand,
   type ConfigOption,
   type RequestStats,
@@ -528,6 +530,17 @@ class AiStore {
     this.version += 1;
   }
 
+  /** Scheduled runs that ended since the reports were last looked at. */
+  unreadReports = $state(0);
+  /** Called with each scheduled run that ends. */
+  private reportListeners = new Set<(event: ReportEvent) => void>();
+
+  /** Calls `listener` for each scheduled run that ends, until the returned function is called. */
+  onReport(listener: (event: ReportEvent) => void): () => void {
+    this.reportListeners.add(listener);
+    return () => this.reportListeners.delete(listener);
+  }
+
   /** Routes backend events to their chats; called once. */
   listen(): void {
     if (this.listening) return;
@@ -535,6 +548,10 @@ class AiStore {
     onAiUpdate((id, event) => this.byId[id]?.handle(event)).catch((error: unknown) => console.warn('AI events unavailable', error));
     onAiExternal((event) => this.external(event)).catch((error: unknown) => console.warn('outside agent events unavailable', error));
     onAiSubtask((event) => this.subtask(event)).catch((error: unknown) => console.warn('sub-agent events unavailable', error));
+    onAiReport((event) => {
+      this.unreadReports += 1;
+      for (const listener of this.reportListeners) listener(event);
+    }).catch((error: unknown) => console.warn('report events unavailable', error));
   }
 }
 

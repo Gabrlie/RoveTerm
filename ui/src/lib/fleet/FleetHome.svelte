@@ -5,15 +5,18 @@
   import Icon from '../ui/Icon.svelte';
   import { t } from '../i18n';
   import { aiRecords, aiSessions, type AiRecord, type AiSessionSummary } from '../ipc';
+  import { ai } from '../ai/ai.svelte';
 
   interface Props {
     /** Opens the fleet lead's tab, sending `text` when given. */
     onopen: (text: string | null) => void;
     /** Continues an earlier conversation with the fleet lead. */
     onresume: (summary: AiSessionSummary, records: AiRecord[]) => void;
+    /** Opens the scheduled tasks. */
+    onschedules: () => void;
   }
 
-  let { onopen, onresume }: Props = $props();
+  let { onopen, onresume, onschedules }: Props = $props();
   let draft = $state('');
   let recent = $state<AiSessionSummary[]>([]);
 
@@ -32,10 +35,16 @@
     }
   }
 
-  onMount(() => {
+  function loadRecent(): void {
     aiSessions()
       .then((sessions) => (recent = sessions.filter((session) => session.context?.kind === 'fleet').slice(0, 5)))
       .catch((error: unknown) => console.warn('AI history unavailable', error));
+  }
+
+  onMount(() => {
+    loadRecent();
+    // A scheduled run's report is a new conversation.
+    return ai.onReport(() => loadRecent());
   });
 </script>
 
@@ -46,6 +55,9 @@
       <h2>{t('fleet.home')}</h2>
       <p>{t('fleet.homeHint')}</p>
     </div>
+    <button type="button" class="secondary" onclick={onschedules}>
+      {t('fleet.schedules')}{#if ai.unreadReports > 0}<span class="badge">{t('fleet.newReports', { n: ai.unreadReports })}</span>{/if}
+    </button>
     <button type="button" class="secondary" onclick={() => onopen(null)}>{t('fleet.openAll')}</button>
   </div>
   <div class="input">
@@ -110,6 +122,14 @@
     margin: 0;
     color: var(--fg-muted);
     font-size: var(--text-footnote);
+  }
+  .badge {
+    margin-left: 6px;
+    padding: 0 6px;
+    border-radius: var(--radius-pill);
+    background: var(--accent);
+    color: var(--accent-fg);
+    font-size: 10.5px;
   }
   .input {
     display: flex;

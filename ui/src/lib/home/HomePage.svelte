@@ -87,7 +87,7 @@
   </header>
 
   {#if hosts.items.length > 0}
-    <FleetHome onopen={onfleet} onresume={onfleetresume} />
+    <FleetHome onopen={onfleet} onresume={onfleetresume} onschedules={() => onaction('fleet.schedules')} />
   {/if}
 
   {#if hosts.items.length === 0}

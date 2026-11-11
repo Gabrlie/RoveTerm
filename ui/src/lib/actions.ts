@@ -33,6 +33,7 @@ export type ActionId =
   | 'help.logs'
   | 'fleet.open'
   | 'fleet.new'
+  | 'fleet.schedules'
   | `tab.goto${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
 
 export interface Action {
@@ -79,6 +80,7 @@ export const actions: Action[] = [
   { id: 'help.logs', label: 'action.help.logs', keys: [] },
   { id: 'fleet.open', label: 'action.fleet.open', keys: [] },
   { id: 'fleet.new', label: 'action.fleet.new', keys: [] },
+  { id: 'fleet.schedules', label: 'action.fleet.schedules', keys: [] },
   ...([1, 2, 3, 4, 5, 6, 7, 8, 9] as const).map(
     (n): Action => ({ id: `tab.goto${n}`, label: 'action.tab.goto', keys: [`App+${n}`], hidden: true }),
   ),

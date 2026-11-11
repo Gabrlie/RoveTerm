@@ -17,6 +17,7 @@
   import KeysDialog from './lib/keys/KeysDialog.svelte';
   import HomePage from './lib/home/HomePage.svelte';
   import { ai } from './lib/ai/ai.svelte';
+  import SchedulesDialog from './lib/fleet/SchedulesDialog.svelte';
   import RightPanel, { type RightPage } from './lib/panels/RightPanel.svelte';
   import BottomPanel from './lib/panels/BottomPanel.svelte';
   import { keys } from './lib/keys/keys.svelte';
@@ -32,7 +33,7 @@
   import { isActionId, nativeMenuLabels, nativeMenus } from './lib/menu';
   import { terminals } from './lib/terminal/registry';
   import { workspace, type PaneTarget } from './lib/workspace/workspace.svelte';
-  import { logsReveal, menuSet, type AiRecord, type AiSessionSummary, onHostKeyPrompt, onMenuAction, workspaceLoad, workspaceSave, type CredentialKind, type HostEntry, type HostKeyPrompt } from './lib/ipc';
+  import { aiRecords, aiSessions, logsReveal, menuSet, type AiRecord, type AiSessionSummary, onHostKeyPrompt, onMenuAction, workspaceLoad, workspaceSave, type CredentialKind, type HostEntry, type HostKeyPrompt } from './lib/ipc';
   import { parseSnapshot } from './lib/workspace/snapshot';
   import { errorText, t } from './lib/i18n';
   import type { PaneId } from './lib/layout/layout';
@@ -168,6 +169,23 @@
     if (text) {
       const chat = ai.chat({ kind: 'fleet' });
       if (!chat.busy && !chat.starting) void chat.send(text, null);
+    }
+  }
+
+  let schedulesOpen = $state(false);
+
+  /** Opens fleet lead conversation `id` (a scheduled run's report) in its tab. */
+  async function openConversation(id: string): Promise<void> {
+    try {
+      const summary = (await aiSessions()).find((session) => session.id === id);
+      if (!summary) {
+        notify(t('ai.historyEmpty'), 'info');
+        return;
+      }
+      schedulesOpen = false;
+      await resumeFleet(summary, await aiRecords(id));
+    } catch (error) {
+      notify(errorText(error), 'error');
     }
   }
 
@@ -327,6 +345,10 @@
       case 'fleet.open':
         openFleet();
         break;
+      case 'fleet.schedules':
+        ai.unreadReports = 0;
+        schedulesOpen = true;
+        break;
       case 'fleet.new':
         void ai.reset(ai.chat({ kind: 'fleet' }), ai.fleetAgent).then(() => openFleet());
         break;
@@ -448,6 +470,14 @@
     }, 1500);
   });
 
+  // Scheduled runs report even when no AI view is open.
+  $effect(() => {
+    ai.listen();
+    return ai.onReport((event) =>
+      notify(event.ok ? t('schedule.done', { name: event.name }) : t('schedule.failed', { name: event.name, error: event.error ?? '' }), event.ok ? 'info' : 'error'),
+    );
+  });
+
   onMount(() => {
     workspaceLoad()
       .then((stored) => {
@@ -546,6 +576,10 @@
     onsubmit={submitPassword}
     onclose={() => (passwordRequest = null)}
   />
+{/if}
+
+{#if schedulesOpen}
+  <SchedulesDialog onclose={() => (schedulesOpen = false)} onopenreport={(id) => void openConversation(id)} />
 {/if}
 
 {#if keysOpen}
