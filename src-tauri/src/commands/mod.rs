@@ -10,6 +10,7 @@ pub mod keys;
 pub mod menu;
 pub mod monitor;
 pub mod prefs;
+pub mod schedules;
 pub mod session;
 pub mod sftp;
 pub mod snippets;

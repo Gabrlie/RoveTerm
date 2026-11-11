@@ -4413,6 +4413,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "fontdb",
+ "jiff",
  "rove-ai",
  "rove-fs",
  "rove-journal",

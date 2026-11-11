@@ -93,6 +93,7 @@ pub trait KeyCache: Send + Sync {
 | `ai.max_steps` | 40 | 1–200，内置助手一个回合内最多的模型请求次数 |
 | `ai.request_timeout_secs` | 180 | 30–1800，内置助手等待回复开始及两段之间的最长时间 |
 | `ai.reviewer` | `model` | `model` / `chosen` / `jev`，自动模式下普通修改的判断者；旧值 `off` 读作 `model` |
+| `ai.schedules` | 空 | 总管的定时任务，最多 50 个：id 1–40 个小写字母、数字或 `-` 且不重复；名称 1–60 个字符；指令 1–8000 字节；`repeat` 为 `once {at}`、`hourly {minute}`、`daily {hour, minute}`、`weekly {weekday 0–6 自周一, hour, minute}`；`allow_changes`、`catch_up`（默认是）、`enabled`（默认是）、`created_at` |
 | `ai.review_model` | 空 | `chosen` 判断者所用的 `{provider, model}`，须为已添加服务商的模型，选 `chosen` 时必填 |
 | `ai.review_confidence` | 80 | 50–99（百分比），审阅者放行所需的置信度 |
 | `ai.read_only` / `ai.dangerous` | 空 | 去除首尾空白并丢弃空项，每类最多 200 项、每项最多 100 个字符、不含控制字符；只读项只能是程序名（字母、数字、`-_.+`） |

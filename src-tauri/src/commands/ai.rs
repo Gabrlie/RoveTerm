@@ -828,7 +828,7 @@ pub async fn ai_start(
                     id.clone(),
                     provider.clone(),
                     session.clone(),
-                    false,
+                    None,
                 );
                 Assistant::with_toolbox(
                     client,
@@ -1089,7 +1089,7 @@ async fn start_subagent(
     host_id: rove_vault::HostId,
     provider: &ProviderPrefs,
     task: &str,
-    unattended: bool,
+    unattended: Option<bool>,
 ) -> Result<(String, Arc<Assistant>), CommandError> {
     let prefs = state.vault.preferences()?;
     let context = AiContext::Host {
@@ -1126,7 +1126,7 @@ async fn start_subagent(
         ..SessionSettings::default()
     };
     // A scheduled run has nobody to ask.
-    let settings = if unattended {
+    let settings = if unattended.is_some() {
         SessionSettings {
             mode: Mode::Unattended,
             ..settings
@@ -1137,7 +1137,10 @@ async fn start_subagent(
     let session = Arc::new(AiSession::new(host.clone(), settings, sink));
     attach_notes(state, &session, &context);
     let agent_ref = AgentRef::Builtin(provider.id.clone());
-    session.set_reviewer(reviewer_for(state, &prefs, &agent_ref));
+    // A scheduled run that may not change anything has no judge: every change is refused.
+    if unattended != Some(false) {
+        session.set_reviewer(reviewer_for(state, &prefs, &agent_ref));
+    }
     let key = state
         .vault
         .ai_key(&format!("builtin:{}", provider.id))?
@@ -1203,14 +1206,14 @@ impl Drop for EndSubagent {
 
 /// Runs `task` with a sub-agent of fleet lead `parent` on host `host_id` to the end of its turn
 /// and ends it; returns its last reply (with what it had to leave for the user, when
-/// `unattended`), or why it failed.
+/// unattended), or why it failed. `unattended` is `Some(allow_changes)` in a scheduled run.
 pub(crate) async fn run_subagent(
     app: &AppHandle,
     parent: &str,
     host_id: rove_vault::HostId,
     provider: &ProviderPrefs,
     task: &str,
-    unattended: bool,
+    unattended: Option<bool>,
 ) -> Result<String, String> {
     let state = app.state::<AppState>();
     let (id, assistant) = start_subagent(app, &state, parent, host_id, provider, task, unattended)
@@ -1241,6 +1244,151 @@ pub(crate) async fn run_subagent(
         Ok(_) => Ok(reply),
         Err(error) => Err(error.to_string()),
     }
+}
+
+/// The provider the fleet lead uses: the default agent when it is a provider, else the first.
+pub(crate) fn fleet_provider(prefs: &rove_vault::Preferences) -> Option<ProviderPrefs> {
+    let wanted = prefs
+        .ai
+        .default_agent
+        .as_deref()
+        .and_then(|agent| agent.strip_prefix("builtin:"));
+    prefs
+        .ai
+        .providers
+        .iter()
+        .find(|provider| Some(provider.id.as_str()) == wanted)
+        .or_else(|| prefs.ai.providers.first())
+        .cloned()
+}
+
+/// Runs scheduled task `schedule` once: a fleet lead conversation of its own, titled with the
+/// task's name, whose sub-agents run unattended (making changes only when the task allows and
+/// the judge is sure). Returns the conversation's id, and its report (the lead's last reply) or
+/// why it failed.
+pub(crate) async fn run_scheduled(
+    app: &AppHandle,
+    schedule: &rove_vault::Schedule,
+    when: &str,
+) -> (Option<String>, Result<String, String>) {
+    let state = app.state::<AppState>();
+    let Ok(prefs) = state.vault.preferences() else {
+        return (None, Err("the preferences could not be read".into()));
+    };
+    let Some(provider) = fleet_provider(&prefs) else {
+        return (None, Err("no model provider is set up".into()));
+    };
+    let id = format!("ai-{}", uuid::Uuid::now_v7());
+    let context = AiContext::Fleet;
+    let auditor = Arc::new(Auditor::new(
+        {
+            let recorder = state.ai.recorder.clone();
+            Arc::new(move |record| recorder.record(record))
+        },
+        id.clone(),
+        "fleet",
+    ));
+    auditor.set_titled();
+    let sink = {
+        let app = app.clone();
+        let auditor = auditor.clone();
+        let id = id.clone();
+        Arc::new(move |event: AiEvent| {
+            auditor.event(&event);
+            if let Err(error) = app.emit(AI_EVENT, serde_json::json!({ "id": id, "event": event }))
+            {
+                tracing::warn!(%error, "emitting an AI event failed");
+            }
+        })
+    };
+    let session = Arc::new(AiSession::new(
+        Arc::new(LocalHost),
+        SessionSettings {
+            mode: Mode::Unattended,
+            ..SessionSettings::default()
+        },
+        sink,
+    ));
+    let key = state
+        .vault
+        .ai_key(&format!("builtin:{}", provider.id))
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let idle = Duration::from_secs(u64::from(prefs.ai.request_timeout_secs));
+    let client = match Client::new(endpoint(&provider), &key, idle) {
+        Ok(client) => client.with_cache_key(&id),
+        Err(error) => return (None, Err(error.to_string())),
+    };
+    let tools = crate::commands::fleet::FleetTools::new(
+        app.clone(),
+        id.clone(),
+        provider.clone(),
+        session.clone(),
+        Some(schedule.allow_changes),
+    );
+    let assistant = Arc::new(
+        Assistant::with_toolbox(
+            client,
+            session,
+            crate::commands::fleet::PROMPT.to_owned(),
+            Arc::new(tools),
+        )
+        .with_models(&provider.models)
+        .with_max_steps(prefs.ai.max_steps as usize)
+        .with_contexts(provider.contexts.clone(), provider.context_window),
+    );
+    auditor.started(&SessionInfo {
+        agent: Some(provider.name.clone()),
+        agent_version: Some(provider.model.clone()),
+        mode: "unattended".into(),
+        agent_ref: Some(format!("builtin:{}", provider.id)),
+        context: serde_json::to_value(&context).ok(),
+        agent_session: None,
+        resumed: false,
+        parent: None,
+    });
+    state.ai.entries.lock().await.insert(
+        id.clone(),
+        Arc::new(Entry {
+            backend: assistant.clone(),
+            auditor: auditor.clone(),
+            mcp: None,
+        }),
+    );
+    let changes = if schedule.allow_changes {
+        "Changes the user's judge is sure of are made; other changes are refused and listed."
+    } else {
+        "This run only checks and reports: every change is refused and listed."
+    };
+    let prompt = format!(
+        "Scheduled task \"{}\" ({when}). Nobody is watching this run. {changes}\n\n{}\n\nFinish with a report: a one-line summary, then per server what you found and what was changed, then what needs the user's decision.",
+        schedule.name, schedule.instruction
+    );
+    auditor.prompt(&prompt);
+    state.ai.recorder.record(audit::renamed(
+        &id,
+        &format!("{} · {when}", schedule.name),
+        false,
+    ));
+    let result = assistant.prompt(&prompt).await;
+    let ended = match &result {
+        Ok(reason) => reason.clone(),
+        Err(error) => format!("error: {error}"),
+    };
+    auditor.turn_ended(&ended);
+    let report = assistant.last_reply().await;
+    let entry = state.ai.entries.lock().await.remove(&id);
+    if let Some(entry) = entry {
+        stop(&entry).await;
+    }
+    (
+        Some(id),
+        match result {
+            Ok(_) => Ok(report),
+            Err(error) => Err(error.to_string()),
+        },
+    )
 }
 
 /// Ends sub-agent `id` (its task is done, failed or was cancelled).

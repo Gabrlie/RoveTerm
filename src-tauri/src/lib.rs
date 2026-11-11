@@ -6,6 +6,7 @@ mod error;
 mod logs;
 mod profile;
 mod reveal;
+mod schedule;
 mod sink;
 mod state;
 
@@ -111,6 +112,7 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     tauri::async_runtime::spawn(async move {
         commands::external::restore(&handle).await;
     });
+    schedule::start(app.handle());
     Ok(())
 }
 
@@ -197,6 +199,8 @@ pub fn run() {
             commands::host::host_notes_get,
             commands::host::host_notes_set,
             commands::app::logs_reveal,
+            commands::schedules::schedule_status,
+            commands::schedules::schedule_run_now,
             commands::external::external_status,
             commands::external::external_set,
             commands::external::external_install,

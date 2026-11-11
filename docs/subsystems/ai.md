@@ -147,6 +147,15 @@ ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次
 
 总管的系统提示词要求它为每个子代理写自足的任务，并把结果当作数据。总管的工具调用以工具行报告在它自己的会话中（显示并记入 Journal）。子代理是独立的会话（`run_subagent`），`SessionInfo.parent` 为总管的会话 id，不出现在历史列表中；开始与结束经 `ai-subtask` 事件通知界面。总管回合被取消时，正在运行的子代理随之结束。定时任务中的子代理以无人值守模式运行（`AiSession::take_deferred` 取出被拒绝的操作），这些操作附在子代理结果末尾（"需要你决定"），由总管写进报告。总管只能用内置助手（默认服务商为内置时用它，否则用第一个服务商），`Assistant::with_toolbox` 让它复用同一对话循环。
 
+## 定时任务
+
+总管可以按时间自动运行任务（`ai.schedules`，随同步；`src-tauri/src/schedule.rs`）。每项为名称、给总管的指令、重复方式（一次、每小时第几分、每天几点、每周几几点，按本机时区）、是否允许修改（允许时判断者确信的修改会执行，否则只检查与报告）、错过时是否补跑、启用。
+
+- 应用没有后台常驻：运行期间每分钟检查一次（启动 20 秒后第一次）。每个任务取最近一个已到的时间（`latest_due`），早于任务创建时间或已处理过的不算；该时间在应用运行期间到达（含启动前 1 分钟内）就运行，在关闭期间错过的，允许补跑则运行一次（多次错过只补最近一次），否则记为"已错过"。
+- 每个处理过的时间写一条 `ai/schedule_run`（`schedule`、`due`、`status`：`started` / `done` / `failed` / `missed`、`conversation`），开始时就写，所以退出时被打断的运行不会重做；同一任务不会同时运行两次。
+- 一次运行是一段独立的总管对话（`ai::run_scheduled`）：标题为"任务名 · 时间"，会话为无人值守模式，子代理按任务是否允许修改以无人值守模式运行；提示中说明无人值守并要求以报告结尾（一句话概况、各服务器的发现与变更、需要用户决定的事项）。结束时发出 `ai-report` 事件。
+- 命令：`schedule_status()`（各任务最近一次的处理）、`schedule_run_now(id)`（立即运行，不影响定时）。
+
 ## 开放给本机智能体
 
 用户在终端中自己运行的 Agent（Claude Code、Codex 等）可以经 RoveTerm 使用已保存的主机（`src-tauri/src/commands/external.rs`）。按设备开关（`DevicePrefs.agents.expose`，默认关闭）：

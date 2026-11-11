@@ -119,6 +119,87 @@ pub struct AiPrefs {
     pub review_model: Option<ReviewModel>,
     /// How sure the reviewer must be to let an operation run, in percent (50–99).
     pub review_confidence: u8,
+    /// Tasks the fleet lead runs on a schedule while the app is open.
+    pub schedules: Vec<Schedule>,
+}
+
+/// A task the fleet lead runs on its own at set times.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Schedule {
+    /// Stable id: 1–40 lowercase letters, digits or `-`.
+    pub id: String,
+    pub name: String,
+    /// What the fleet lead is told to do.
+    pub instruction: String,
+    pub repeat: Repeat,
+    /// Changes the judge is sure of may be made; otherwise the run only checks and reports.
+    #[serde(default)]
+    pub allow_changes: bool,
+    /// A run missed while the app was closed is made at the next start (the latest one only).
+    #[serde(default = "yes")]
+    pub catch_up: bool,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// When it was made (Unix milliseconds): times before it are not due.
+    pub created_at: i64,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// When a schedule runs, in the device's local time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Repeat {
+    /// Once, at `at` (Unix milliseconds).
+    Once { at: i64 },
+    /// Every hour at `minute`.
+    Hourly { minute: u8 },
+    /// Every day at `hour`:`minute`.
+    Daily { hour: u8, minute: u8 },
+    /// Every week on `weekday` (0 Monday … 6 Sunday) at `hour`:`minute`.
+    Weekly { weekday: u8, hour: u8, minute: u8 },
+}
+
+/// Most schedules kept.
+const MAX_SCHEDULES: usize = 50;
+
+impl Schedule {
+    fn validate(&mut self) -> Result<(), VaultError> {
+        let invalid = |message: &str| Err(VaultError::Invalid(message.into()));
+        if self.id.is_empty()
+            || self.id.len() > 40
+            || !self
+                .id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            return invalid("a schedule id is not valid");
+        }
+        self.name = self.name.trim().to_owned();
+        if self.name.is_empty() || self.name.chars().count() > 60 {
+            return invalid("a schedule name must be 1–60 characters");
+        }
+        self.instruction = self.instruction.trim().to_owned();
+        if self.instruction.is_empty() || self.instruction.len() > 8000 {
+            return invalid("a schedule's instruction must be 1–8000 bytes");
+        }
+        let ok = match self.repeat {
+            Repeat::Once { at } => at > 0,
+            Repeat::Hourly { minute } => minute < 60,
+            Repeat::Daily { hour, minute } => hour < 24 && minute < 60,
+            Repeat::Weekly {
+                weekday,
+                hour,
+                minute,
+            } => weekday < 7 && hour < 24 && minute < 60,
+        };
+        if !ok || self.created_at <= 0 {
+            return invalid("a schedule's time is not valid");
+        }
+        Ok(())
+    }
 }
 
 /// The judge of the auto mode.
@@ -155,6 +236,7 @@ impl Default for AiPrefs {
             request_timeout_secs: 180,
             reviewer: ReviewerKind::Model,
             review_model: None,
+            schedules: Vec::new(),
             review_confidence: 80,
         }
     }
@@ -598,6 +680,21 @@ impl AiPrefs {
                     "the judge's model must be one of a provider's models".into(),
                 ));
             }
+        }
+        if self.schedules.len() > MAX_SCHEDULES {
+            return Err(VaultError::Invalid("too many schedules".into()));
+        }
+        for schedule in &mut self.schedules {
+            schedule.validate()?;
+        }
+        let mut ids: Vec<&str> = self
+            .schedules
+            .iter()
+            .map(|schedule| schedule.id.as_str())
+            .collect();
+        ids.sort_unstable();
+        if ids.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(VaultError::Invalid("two schedules share an id".into()));
         }
         if !(50..=99).contains(&self.review_confidence) {
             return Err(VaultError::Invalid(

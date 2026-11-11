@@ -1210,3 +1210,49 @@ fn host_notes_follow_their_host_and_sync_on_their_own() {
             .all(|record| record.kind != "host_notes")
     );
 }
+
+#[test]
+fn schedules_are_checked() {
+    let vault = unlocked();
+    let task = |id: &str, repeat: Repeat| Schedule {
+        id: id.into(),
+        name: " Daily check ".into(),
+        instruction: "check disks".into(),
+        repeat,
+        allow_changes: false,
+        catch_up: true,
+        enabled: true,
+        created_at: 1,
+    };
+    let mut prefs = Preferences::default();
+    prefs.ai.schedules = vec![task("daily", Repeat::Daily { hour: 9, minute: 0 })];
+    assert_eq!(
+        vault.set_preferences(prefs.clone()).unwrap().ai.schedules[0].name,
+        "Daily check"
+    );
+    prefs.ai.schedules = vec![task(
+        "bad",
+        Repeat::Daily {
+            hour: 24,
+            minute: 0,
+        },
+    )];
+    assert!(vault.set_preferences(prefs.clone()).is_err());
+    prefs.ai.schedules = vec![
+        task("same", Repeat::Hourly { minute: 5 }),
+        task(
+            "same",
+            Repeat::Weekly {
+                weekday: 6,
+                hour: 1,
+                minute: 0,
+            },
+        ),
+    ];
+    assert!(vault.set_preferences(prefs.clone()).is_err());
+    prefs.ai.schedules = vec![task("Upper", Repeat::Hourly { minute: 5 })];
+    assert!(vault.set_preferences(prefs).is_err());
+    // Older records have no schedules.
+    let old: Preferences = serde_json::from_value(serde_json::json!({ "ai": {} })).unwrap();
+    assert!(old.ai.schedules.is_empty());
+}

@@ -39,8 +39,8 @@ pub struct FleetTools {
     provider: ProviderPrefs,
     /// The lead's session: its tool calls are reported there (shown and recorded).
     session: Arc<AiSession>,
-    /// Sub-agents run with nobody to ask (a scheduled run).
-    unattended: bool,
+    /// `Some(allow_changes)` in a scheduled run: sub-agents run with nobody to ask.
+    unattended: Option<bool>,
     calls: std::sync::atomic::AtomicU64,
 }
 
@@ -50,7 +50,7 @@ impl FleetTools {
         parent: String,
         provider: ProviderPrefs,
         session: Arc<AiSession>,
-        unattended: bool,
+        unattended: Option<bool>,
     ) -> Self {
         Self {
             app,
