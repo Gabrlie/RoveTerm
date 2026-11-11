@@ -113,6 +113,23 @@ pub struct AiPrefs {
     pub max_steps: u32,
     /// How long the built-in assistant waits for a reply to start, and between its pieces.
     pub request_timeout_secs: u32,
+    /// Who looks at ordinary modifications in the review mode before the user is asked.
+    pub reviewer: ReviewerKind,
+    /// How sure the reviewer must be to let an operation run, in percent (50–99).
+    pub review_confidence: u8,
+}
+
+/// The reviewer of the review mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewerKind {
+    /// The user is asked about every modification.
+    #[default]
+    Off,
+    /// The built-in assistant's model (for local agents: the default provider's).
+    Model,
+    /// TypeSafe's Jev, with its own API key.
+    Jev,
 }
 
 impl Default for AiPrefs {
@@ -125,6 +142,8 @@ impl Default for AiPrefs {
             dangerous: Vec::new(),
             max_steps: 40,
             request_timeout_secs: 180,
+            reviewer: ReviewerKind::Off,
+            review_confidence: 80,
         }
     }
 }
@@ -549,6 +568,11 @@ impl AiPrefs {
         if !(1..=200).contains(&self.max_steps) {
             return Err(VaultError::Invalid(
                 "the requests per turn must be 1–200".into(),
+            ));
+        }
+        if !(50..=99).contains(&self.review_confidence) {
+            return Err(VaultError::Invalid(
+                "the review confidence must be 50–99 percent".into(),
             ));
         }
         if !(30..=1800).contains(&self.request_timeout_secs) {

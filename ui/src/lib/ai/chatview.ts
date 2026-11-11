@@ -53,8 +53,9 @@ export type ChatItem =
       answer: AiAnswer | null | undefined;
       outcome: AiOutcome | null;
     }
-  /** An operation that ran (or was refused) without asking. */
-  | { kind: 'operation'; operation: AiOperation; assessment: Assessment; approved: boolean; outcome: AiOutcome }
+  /** An operation that ran (or was refused) without asking; `reviewer` names the reviewer that
+   *  let it run. */
+  | { kind: 'operation'; operation: AiOperation; assessment: Assessment; approved: boolean; outcome: AiOutcome; reviewer?: string }
   | { kind: 'notice'; text: string; code: string | null }
   /** The agent lost its connection to the model service: retrying, given up, or back. */
   | { kind: 'connection'; detail: string; retries: number; state: 'retrying' | 'failed' | 'recovered' }
@@ -94,7 +95,9 @@ export function waitingApproval(items: ChatItem[], requestId: number): ApprovalI
 
 /** An operation that ran by itself and succeeded, which may fold with its neighbours. */
 function quiet(item: ChatItem): item is OperationItem {
-  if (item.kind !== 'operation' || item.approved) return false;
+  // Only reads fold together: a change that ran without asking (auto mode, a reviewer) stays
+  // on its own row.
+  if (item.kind !== 'operation' || item.approved || item.reviewer || item.assessment.risk !== 'read_only') return false;
   const outcome = item.outcome;
   if (outcome.result === 'denied' || outcome.result === 'failed') return false;
   return outcome.result !== 'command' || outcome.output.exit_code === 0;
@@ -179,6 +182,8 @@ function outcomeOf(value: unknown): AiOutcome {
 export function itemsFromRecords(records: AiRecord[]): ChatItem[] {
   const items: ChatItem[] = [];
   const text = (record: AiRecord): string => (typeof record.payload.text === 'string' ? record.payload.text : '');
+  /** The reviewer that let the next operation run. */
+  let reviewed: { operation: string; reviewer: string } | null = null;
   for (const record of records) {
     const payload = record.payload;
     switch (record.kind) {
@@ -236,9 +241,16 @@ export function itemsFromRecords(records: AiRecord[]): ChatItem[] {
         const outcome = outcomeOf(payload.outcome);
         const approval = approvalFor(items, operation);
         if (approval) approval.outcome = outcome;
-        else if (operation.op !== 'agent_tool') items.push({ kind: 'operation', operation, assessment: assessed(payload.risk), approved: payload.approved === true, outcome });
+        else if (operation.op !== 'agent_tool') {
+          const reviewer = reviewed?.operation === JSON.stringify(operation) ? reviewed.reviewer : undefined;
+          items.push({ kind: 'operation', operation, assessment: assessed(payload.risk), approved: payload.approved === true, outcome, reviewer });
+        }
+        reviewed = null;
         break;
       }
+      case 'ai/reviewed':
+        reviewed = payload.allowed === true && typeof payload.reviewer === 'string' ? { operation: JSON.stringify(payload.operation), reviewer: payload.reviewer } : null;
+        break;
       case 'ai/compacted':
         items.push({ kind: 'compacted', summary: typeof payload.summary === 'string' ? payload.summary : '' });
         break;

@@ -74,6 +74,10 @@ export function auditLine(entry: AiRecord): AuditLine | null {
       if (!result && payload.status) note = str(payload.status);
       return { kind, text, note, detail, tone };
     }
+    case 'reviewed': {
+      const percent = typeof payload.confidence === 'number' ? ` ${Math.round(payload.confidence * 100)}%` : '';
+      return { kind, text: subject(payload.operation), note: `${str(payload.reviewer)}${percent}`, detail: '', tone: payload.allowed === true ? 'muted' : 'warning' };
+    }
     case 'compacted':
       return { kind, text: '', note: '', detail: str(payload.summary), tone: 'muted' };
     case 'turn_ended':

@@ -119,3 +119,21 @@ test('a compaction is rebuilt from its record', () => {
   const items = itemsFromRecords([{ ts: 1, kind: 'ai/compacted', payload: { summary: 'earlier' } }]);
   assert.deepEqual(items, [{ kind: 'compacted', summary: 'earlier' }]);
 });
+
+test('an operation the reviewer let run keeps its reviewer', () => {
+  const operation = { op: 'write_file', path: '/etc/motd' };
+  const items = itemsFromRecords([
+    { ts: 1, kind: 'ai/reviewed', payload: { operation, reviewer: 'jev', allowed: true, confidence: 0.9 } },
+    { ts: 2, kind: 'ai/file_write', payload: { operation, risk: 'modify', approved: false, outcome: { result: 'written', bytes: 1, sha256: '', previous_sha256: null, lines_before: 0, lines_after: 1 } } },
+    { ts: 3, kind: 'ai/file_write', payload: { operation, risk: 'modify', approved: false, outcome: { result: 'written', bytes: 1, sha256: '', previous_sha256: null, lines_before: 0, lines_after: 1 } } },
+  ]);
+  assert.equal(items[0]?.kind === 'operation' ? items[0].reviewer : 'x', 'jev');
+  assert.equal(items[1]?.kind === 'operation' ? items[1].reviewer : 'x', undefined);
+});
+
+test('only successful reads fold together', () => {
+  const read = (path: string): ChatItem => ({ kind: 'operation', operation: { op: 'read_file', path }, assessment: readOnly, approved: false, outcome: { result: 'read', bytes: 1, sha256: '', truncated: false } });
+  const write: ChatItem = { kind: 'operation', operation: { op: 'write_file', path: '/c' }, assessment: { ...readOnly, risk: 'modify' }, approved: false, outcome: { result: 'written', bytes: 1, sha256: '', previous_sha256: null, lines_before: 0, lines_after: 1 }, reviewer: 'model' };
+  const laid = rows([read('/a'), read('/b'), write]);
+  assert.deepEqual(laid.map((row) => row.kind), ['group', 'item']);
+});

@@ -42,6 +42,14 @@ pub enum AiEvent {
         request_id: u64,
         answer: Option<Answer>,
     },
+    /// A reviewer looked at an operation before the user would have been asked; `allowed` when
+    /// it runs on the reviewer's word.
+    Reviewed {
+        operation: Operation,
+        reviewer: String,
+        allowed: bool,
+        confidence: f64,
+    },
     /// An operation ran, or was refused, on the session's host.
     Executed {
         operation: Operation,
@@ -124,6 +132,9 @@ pub struct AiSession {
     /// The agent is replaying an earlier conversation (`session/load`): RoveTerm shows that
     /// conversation from its own journal, so the replay is not reported again.
     replaying: std::sync::atomic::AtomicBool,
+    /// In the review mode, looks at ordinary modifications first; allows them at or above the
+    /// confidence threshold.
+    reviewer: std::sync::RwLock<Option<(Arc<dyn crate::review::Reviewer>, f64)>>,
 }
 
 /// Most tool calls remembered for permission requests; older ones are forgotten all at once.
@@ -265,7 +276,60 @@ impl AiSession {
             terminal: OnceLock::new(),
             calls: Mutex::new(HashMap::new()),
             replaying: std::sync::atomic::AtomicBool::new(false),
+            reviewer: std::sync::RwLock::new(None),
         }
+    }
+
+    /// Lets `reviewer` allow ordinary modifications in the review mode when it is at least
+    /// `threshold` (0–1) sure; `None` asks the user about all of them.
+    pub fn set_reviewer(&self, reviewer: Option<(Arc<dyn crate::review::Reviewer>, f64)>) {
+        if let Ok(mut slot) = self.reviewer.write() {
+            *slot = reviewer;
+        }
+    }
+
+    /// The reviewer's word on an operation the policy would ask about, when one applies: only in
+    /// the review mode, for ordinary modifications the agent showed in full (not dangerous, not
+    /// opaque, not its own tools). `None` when no reviewer applies or it failed.
+    async fn review(
+        &self,
+        operation: &Operation,
+        assessment: &Assessment,
+        agent_tool: bool,
+    ) -> Option<bool> {
+        if agent_tool
+            || assessment.opaque
+            || assessment.risk != risk::Risk::Modify
+            || self.policy.lock().await.mode() != Mode::AskByRisk
+        {
+            return None;
+        }
+        let (reviewer, threshold) = self.reviewer.read().ok()?.clone()?;
+        let request = crate::review::ReviewRequest::new(&self.host.label(), operation, assessment);
+        let verdict = match tokio::time::timeout(crate::review::TIMEOUT, reviewer.review(&request))
+            .await
+        {
+            Ok(Ok(verdict)) => verdict,
+            Ok(Err(error)) => {
+                tracing::warn!(reviewer = reviewer.name(), %error, "review failed; asking the user");
+                return None;
+            }
+            Err(_) => {
+                tracing::warn!(
+                    reviewer = reviewer.name(),
+                    "review timed out; asking the user"
+                );
+                return None;
+            }
+        };
+        let allowed = verdict.allow && verdict.confidence >= threshold;
+        (self.sink)(AiEvent::Reviewed {
+            operation: operation.clone(),
+            reviewer: reviewer.name().to_owned(),
+            allowed,
+            confidence: verdict.confidence,
+        });
+        Some(allowed)
     }
 
     /// While `on`, updates from the agent are dropped (it replays an earlier conversation).
@@ -395,6 +459,9 @@ impl AiSession {
             Decision::Allow => return (true, false),
             Decision::Ask { rememberable } => rememberable,
         };
+        if self.review(operation, assessment, agent_tool).await == Some(true) {
+            return (true, false);
+        }
         let request_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (sender, receiver) = oneshot::channel();
         self.approvals.lock().await.insert(request_id, sender);

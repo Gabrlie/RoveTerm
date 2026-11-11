@@ -170,6 +170,8 @@ pub struct AgentChoice {
 pub struct AgentList {
     pub agents: Vec<AgentChoice>,
     pub default: Option<String>,
+    /// The Jev reviewer's key is stored.
+    pub jev_key: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -285,6 +287,78 @@ async fn acp_launch(
     Ok((found, extra, auth_methods))
 }
 
+/// Vault key of the Jev reviewer.
+const JEV_KEY: &str = "review:jev";
+
+/// The reviewer of the review mode as the preferences choose it, with its confidence threshold:
+/// the session's model (for local agents, the default provider's), or Jev with its key. `None`
+/// when it is off or cannot work (no provider, no key), so the user is asked as before.
+fn reviewer_for(
+    state: &AppState,
+    prefs: &rove_vault::Preferences,
+    agent: &AgentRef,
+) -> Option<(Arc<dyn rove_ai::review::Reviewer>, f64)> {
+    let threshold = f64::from(prefs.ai.review_confidence) / 100.0;
+    let reviewer: Arc<dyn rove_ai::review::Reviewer> = match prefs.ai.reviewer {
+        rove_vault::ReviewerKind::Off => return None,
+        rove_vault::ReviewerKind::Model => {
+            let wanted = match agent {
+                AgentRef::Builtin(id) => Some(id.clone()),
+                AgentRef::Acp(_) => prefs
+                    .ai
+                    .default_agent
+                    .as_deref()
+                    .and_then(|agent| agent.strip_prefix("builtin:"))
+                    .map(str::to_owned),
+            };
+            let provider = prefs
+                .ai
+                .providers
+                .iter()
+                .find(|provider| Some(&provider.id) == wanted.as_ref())
+                .or_else(|| prefs.ai.providers.first())?;
+            let key = state
+                .vault
+                .ai_key(&format!("builtin:{}", provider.id))
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            let client = Client::new(endpoint(provider), &key, rove_ai::review::TIMEOUT)
+                .map_err(|error| tracing::warn!(%error, "the model reviewer is unavailable"))
+                .ok()?;
+            Arc::new(rove_ai::review::ModelReviewer::new(client))
+        }
+        rove_vault::ReviewerKind::Jev => {
+            let Some(key) = state.vault.ai_key(JEV_KEY).ok().flatten() else {
+                tracing::warn!("the Jev reviewer has no key; the user is asked instead");
+                return None;
+            };
+            let reviewer = rove_ai::review::JevReviewer::new(rove_ai::review::JEV_URL, &key)
+                .map_err(|error| tracing::warn!(%error, "the Jev reviewer is unavailable"))
+                .ok()?;
+            Arc::new(reviewer)
+        }
+    };
+    Some((reviewer, threshold))
+}
+
+/// Stores the Jev reviewer's API key sealed on this device (synced like the agents' keys), or
+/// removes it with `None`.
+#[tauri::command]
+pub async fn ai_set_review_key(
+    state: State<'_, AppState>,
+    key: Option<String>,
+) -> Result<(), CommandError> {
+    state.ensure_unlocked().await?;
+    if key.is_none() {
+        tracing::info!(agent = JEV_KEY, "AI key removed by the user");
+    }
+    let key = key.map(Zeroizing::new);
+    Ok(state
+        .vault
+        .set_ai_key(JEV_KEY, key.as_deref().map(String::as_str))?)
+}
+
 /// Lists the agents of this device: the built-in assistant with each provider, then ACP agents.
 #[tauri::command]
 pub async fn ai_agents(state: State<'_, AppState>) -> Result<AgentList, CommandError> {
@@ -333,6 +407,7 @@ pub async fn ai_agents(state: State<'_, AppState>) -> Result<AgentList, CommandE
     Ok(AgentList {
         agents,
         default: prefs.ai.default_agent,
+        jev_key: keys.iter().any(|key| key == JEV_KEY),
     })
 }
 
@@ -629,6 +704,7 @@ pub async fn ai_start(
         ..SessionSettings::default()
     };
     let session = Arc::new(AiSession::new(host.clone(), settings, sink));
+    session.set_reviewer(reviewer_for(state.inner(), &prefs, &agent));
     if let Some(terminal) = terminal {
         let id: SessionId = terminal.parse()?;
         session.set_terminal_source(Arc::new(Screen {

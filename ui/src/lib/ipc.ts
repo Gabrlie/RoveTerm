@@ -294,6 +294,10 @@ export interface AiPrefs {
   max_steps: number;
   /** How long the built-in assistant waits for a reply, 30–1800 seconds. */
   request_timeout_secs: number;
+  /** Who looks at ordinary modifications in the review mode before the user is asked. */
+  reviewer: 'off' | 'model' | 'jev';
+  /** How sure the reviewer must be, in percent (50–99). */
+  review_confidence: number;
 }
 
 export interface Preferences {
@@ -856,6 +860,13 @@ export interface AgentChoice {
 export interface AgentList {
   agents: AgentChoice[];
   default: string | null;
+  /** The Jev reviewer's key is stored. */
+  jev_key: boolean;
+}
+
+/** Stores the Jev reviewer's API key sealed on this device; `null` removes it. */
+export function aiSetReviewKey(key: string | null): Promise<void> {
+  return invoke('ai_set_review_key', { key });
 }
 
 /** A mode the agent itself offers (such as read-only). */
@@ -991,6 +1002,8 @@ export type AiEvent =
   | { event: 'update'; update: SessionUpdate }
   | { event: 'approval'; request_id: number; operation: AiOperation; assessment: Assessment; rememberable: boolean; agent_tool: boolean }
   | { event: 'approved'; request_id: number; answer: AiAnswer | null }
+  /** A reviewer looked at an operation; `allowed` when it runs on the reviewer's word. */
+  | { event: 'reviewed'; operation: AiOperation; reviewer: string; allowed: boolean; confidence: number }
   | { event: 'executed'; operation: AiOperation; assessment: Assessment; approved: boolean; outcome: AiOutcome };
 
 /** The agents of this device: the built-in assistant with each provider, then ACP agents. */

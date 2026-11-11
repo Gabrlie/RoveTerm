@@ -13,6 +13,7 @@ pub mod llm;
 pub mod mcp;
 pub mod policy;
 pub mod quota;
+pub mod review;
 pub mod risk;
 pub mod runner;
 pub mod screen;

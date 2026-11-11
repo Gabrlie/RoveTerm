@@ -8,7 +8,7 @@
   import ContextMenu, { type MenuItem } from '../../ui/ContextMenu.svelte';
   import { ask } from '../../ui/confirm.svelte';
   import { errorText, t } from '../../i18n';
-  import { aiProviderModels, aiProviderTest, aiSetKey, type AgentAuth, type AgentChoice, type AiMode, type ProviderFormat, type ProviderPrefs, type ReasoningEffort } from '../../ipc';
+  import { aiProviderModels, aiProviderTest, aiSetKey, aiSetReviewKey, type AgentAuth, type AgentChoice, type AiMode, type ProviderFormat, type ProviderPrefs, type ReasoningEffort } from '../../ipc';
   import { ai } from '../../ai/ai.svelte';
   import { prefs } from '../prefs.svelte';
   import { editDevice, editPrefs, settingsError } from '../edit.svelte';
@@ -53,6 +53,25 @@
     { value: 'responses', label: t('ai.format.responses') },
     { value: 'anthropic', label: t('ai.format.anthropic') },
   ];
+  const REVIEWERS: { value: 'off' | 'model' | 'jev'; label: string }[] = [
+    { value: 'off', label: t('ai.reviewer.off') },
+    { value: 'model', label: t('ai.reviewer.model') },
+    { value: 'jev', label: t('ai.reviewer.jev') },
+  ];
+  const CONFIDENCES = [60, 70, 80, 90, 95];
+  let jevKey = $state('');
+
+  /** Stores (or removes, with `null`) the Jev reviewer's key. */
+  async function saveJevKey(key: string | null): Promise<void> {
+    try {
+      await aiSetReviewKey(key);
+      jevKey = '';
+      await ai.refreshAgents();
+    } catch (error) {
+      notify(errorText(error), 'error');
+    }
+  }
+
   /** Choices for the requests per turn and the reply timeout (seconds). */
   const STEPS = [10, 20, 40, 80, 120, 200];
   const TIMEOUTS = [60, 120, 180, 300, 600, 1200, 1800];
@@ -410,6 +429,28 @@
     <span class="form-label">{t('ai.dangerousRules')}<small>{t('ai.dangerousHint')}</small></span>
     <textarea class="mono" rows="3" bind:value={dangerous} spellcheck="false" onblur={() => void editPrefs((draft) => (draft.ai.dangerous = lines(dangerous)))} aria-label={t('ai.dangerousRules')}></textarea>
   </div>
+</div>
+
+<p class="section-label">{t('ai.review')}</p>
+<div class="form-group">
+  <div class="form-row">
+    <span class="form-label">{t('ai.reviewerLabel')}<small>{t('ai.reviewerHint')}</small></span>
+    <div class="control"><Select label={t('ai.reviewerLabel')} value={rules.reviewer} options={REVIEWERS} onchange={(value) => void editPrefs((draft) => (draft.ai.reviewer = value))} /></div>
+  </div>
+  {#if rules.reviewer !== 'off'}
+    <div class="form-row">
+      <span class="form-label">{t('ai.reviewConfidence')}<small>{t('ai.reviewConfidenceHint')}</small></span>
+      <div class="control"><Select label={t('ai.reviewConfidence')} value={String(rules.review_confidence)} options={[...new Set([...CONFIDENCES, rules.review_confidence])].sort((a, b) => a - b).map((n) => ({ value: String(n), label: `${n}%` }))} onchange={(value) => void editPrefs((draft) => (draft.ai.review_confidence = Number(value)))} /></div>
+    </div>
+  {/if}
+  {#if rules.reviewer === 'jev'}
+    <div class="form-row">
+      <span class="form-label">{t('ai.jevKey')}<small>{ai.agents?.jev_key ? t('ai.keyStored') : t('ai.jevKeyHint')}</small></span>
+      <input class="field" type="password" bind:value={jevKey} autocomplete="off" placeholder={ai.agents?.jev_key ? '••••••••' : ''} aria-label={t('ai.jevKey')} />
+      <button type="button" class="secondary" disabled={!jevKey.trim()} onclick={() => void saveJevKey(jevKey.trim())}>{t('ai.keySave')}</button>
+      {#if ai.agents?.jev_key}<button type="button" class="plain danger-text" onclick={() => void saveJevKey(null)}>{t('ai.keyRemove')}</button>{/if}
+    </div>
+  {/if}
 </div>
 {#if settingsError.text}<p class="form-note error">{settingsError.text}</p>{/if}
 

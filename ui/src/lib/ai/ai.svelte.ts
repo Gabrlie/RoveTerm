@@ -71,6 +71,8 @@ export class Chat {
   stats = $state<RequestStats | null>(null);
   /** Settings of the running agent the user can change (model, reasoning effort). */
   options = $state<ConfigOption[]>([]);
+  /** The reviewer that let the next operation run, until it is reported. */
+  private reviewed: { operation: string; reviewer: string } | null = null;
   /** The agent's slash commands, as it last listed them. */
   commands = $state<AgentCommand[]>([]);
   /** Settings chosen before the agent started, applied once it has. */
@@ -190,6 +192,9 @@ export class Chat {
         if (item) item.answer = event.answer;
         break;
       }
+      case 'reviewed':
+        this.reviewed = event.allowed ? { operation: JSON.stringify(event.operation), reviewer: event.reviewer } : null;
+        break;
       case 'executed':
       {
         // The result of an approved operation completes its approval's row.
@@ -197,8 +202,10 @@ export class Chat {
         if (approval) approval.outcome = event.outcome;
         // The agent's own tools show as tool items; operations here are RoveTerm's.
         else if (event.operation.op !== 'agent_tool') {
-          this.items.push({ kind: 'operation', operation: event.operation, assessment: event.assessment, approved: event.approved, outcome: event.outcome });
+          const reviewer = this.reviewed?.operation === JSON.stringify(event.operation) ? this.reviewed.reviewer : undefined;
+          this.items.push({ kind: 'operation', operation: event.operation, assessment: event.assessment, approved: event.approved, outcome: event.outcome, reviewer });
         }
+        this.reviewed = null;
         break;
       }
     }

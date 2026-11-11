@@ -31,6 +31,9 @@ pub const KIND_ENDED: &str = "ai/session_ended";
 pub const KIND_RENAMED: &str = "ai/renamed";
 /// The built-in assistant summarized the earlier conversation (`payload.summary`).
 pub const KIND_COMPACTED: &str = "ai/compacted";
+/// A reviewer looked at an operation before the user would have been asked (`payload.reviewer`,
+/// `allowed`, `confidence`, `operation`).
+pub const KIND_REVIEWED: &str = "ai/reviewed";
 /// The user deleted a conversation (`payload.session`); the record stays, without a session,
 /// so the conversation is not brought back by sync.
 pub const KIND_DELETED: &str = "ai/conversation_deleted";
@@ -426,6 +429,18 @@ impl Auditor {
                 self.write(
                     KIND_APPROVAL,
                     json!({ "request_id": request_id, "answer": answer }),
+                );
+            }
+            AiEvent::Reviewed {
+                operation,
+                reviewer,
+                allowed,
+                confidence,
+            } => {
+                self.flush();
+                self.write(
+                    KIND_REVIEWED,
+                    json!({ "operation": operation, "reviewer": reviewer, "allowed": allowed, "confidence": confidence }),
                 );
             }
             AiEvent::Executed {

@@ -331,12 +331,13 @@
 
 <svelte:window onpointerdown={onWindowPointer} />
 
-{#snippet operationRow(key: string, operation: AiOperation, outcome: AiOutcome | null, state: RowState)}
+{#snippet operationRow(key: string, operation: AiOperation, outcome: AiOutcome | null, state: RowState, reviewer?: string)}
   {@const output = outputOf(outcome)}
   <button type="button" class="op {state}" aria-expanded={!!expanded[key]} disabled={!output} onclick={() => toggle(key)}>
     <span class="op-icon"><Icon name={verbIcon(operation)} size={13} /></span>
     <span class="op-verb" title={verb(operation)}>{verb(operation)}</span>
     {#if subject(operation)}<code class="op-subject" title={subject(operation)}>{subject(operation)}</code>{/if}
+    {#if reviewer}<span class="reviewed" title={t('ai.reviewedBy', { reviewer: t(`ai.reviewer.${reviewer}` as MessageKey) })}>{t('ai.reviewed')}</span>{/if}
     <span class="op-state" title={t(`ai.state.${state}` as MessageKey)}><Icon name={stateIcon(state)} size={12} /></span>
   </button>
   {#if expanded[key] && output}<pre class="op-output selectable">{output}</pre>{/if}
@@ -420,7 +421,7 @@
         {#if expanded[key]}
           <div class="group-items">
             {#each row.items as item, at (at)}
-              {@render operationRow(`${key}-${at}`, item.operation, item.outcome, outcomeState(item.outcome))}
+              {@render operationRow(`${key}-${at}`, item.operation, item.outcome, outcomeState(item.outcome), item.reviewer)}
             {/each}
           </div>
         {/if}
@@ -445,7 +446,7 @@
           </button>
           {#if expanded[key] && text}<pre class="op-output selectable">{text}</pre>{/if}
         {:else if item.kind === 'operation'}
-          {@render operationRow(key, item.operation, item.outcome, outcomeState(item.outcome))}
+          {@render operationRow(key, item.operation, item.outcome, outcomeState(item.outcome), item.reviewer)}
         {:else if item.kind === 'approval'}
           {@const dangerous = item.assessment.risk === 'dangerous'}
           {#if item.answer === undefined}
@@ -833,6 +834,14 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-family: var(--font-mono);
+  }
+  .reviewed {
+    flex: none;
+    padding: 0 5px;
+    border-radius: var(--radius-pill);
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 10.5px;
   }
   .op-state {
     display: flex;
