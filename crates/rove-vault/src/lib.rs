@@ -41,7 +41,7 @@ pub use prefs::{
 };
 pub use snippets::{Snippet, SnippetDraft, SnippetId};
 pub use store::{LockReason, LockState, MAX_JUMP_DEPTH, SCHEMA_VERSION, Vault};
-pub use sync::{SYNC_KINDS, SYNC_SECRET_KINDS, SyncChange, SyncLocal, SyncRecord};
+pub use sync::{PREF_SECTIONS, SYNC_KINDS, SYNC_SECRET_KINDS, SyncChange, SyncLocal, SyncRecord};
 
 /// Errors returned by the vault.
 #[derive(Debug, thiserror::Error)]

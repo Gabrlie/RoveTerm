@@ -1001,3 +1001,60 @@ fn connection_preferences_are_validated() {
         Err(VaultError::Invalid(_))
     ));
 }
+
+#[test]
+fn preferences_sync_by_section_and_providers_one_by_one() {
+    let provider = rove_vault::ProviderPrefs {
+        id: "deepseek".into(),
+        name: "DeepSeek".into(),
+        format: rove_vault::ProviderFormat::Chat,
+        base_url: "https://api.deepseek.com/v1".into(),
+        model: "deepseek-chat".into(),
+        models: Vec::new(),
+        max_tokens: None,
+        effort: None,
+    };
+    // Only `a` has a provider; `b` changed its terminal font.
+    let a = unlocked();
+    let mut prefs = Preferences::default();
+    prefs.ai.providers.push(provider.clone());
+    a.set_preferences(prefs).unwrap();
+    let b = unlocked();
+    let mut prefs = Preferences::default();
+    prefs.terminal.font_size = 18;
+    b.set_preferences(prefs).unwrap();
+
+    // `b`'s whole preferences arrive at `a`: the sections apply, `a` keeps its provider.
+    a.apply_sync(&as_changes(b.sync_records().unwrap())).unwrap();
+    let merged = a.preferences().unwrap();
+    assert_eq!(merged.terminal.font_size, 18);
+    assert_eq!(merged.ai.providers, std::slice::from_ref(&provider));
+
+    // The provider reaches `b` on its own, and so does its removal.
+    b.apply_sync(&as_changes(a.sync_records().unwrap())).unwrap();
+    assert_eq!(b.preferences().unwrap().ai.providers.len(), 1);
+    b.apply_sync(&[SyncChange {
+        kind: "ai_provider".into(),
+        id: "deepseek".into(),
+        body: None,
+    }])
+    .unwrap();
+    assert!(b.preferences().unwrap().ai.providers.is_empty());
+
+    // The whole record of older versions is ignored, as is a deletion of it.
+    let before = a.preferences().unwrap();
+    a.apply_sync(&[
+        SyncChange {
+            kind: "prefs".into(),
+            id: "app".into(),
+            body: Some(serde_json::to_value(Preferences::default()).unwrap()),
+        },
+        SyncChange {
+            kind: "prefs".into(),
+            id: "app".into(),
+            body: None,
+        },
+    ])
+    .unwrap();
+    assert_eq!(a.preferences().unwrap(), before);
+}

@@ -14,12 +14,13 @@ use zeroize::Zeroizing;
 use crate::model::now_millis;
 use crate::{
     AuthMethod, ForwardId, ForwardSpec, HostDraft, HostId, HostOs, HostRoute, KeyId, KeySecret,
-    Preferences, Secret, SnippetDraft, SnippetId, Vault, VaultError,
+    Preferences, ProviderPrefs, Secret, SnippetDraft, SnippetId, Vault, VaultError,
 };
 
 /// Record kinds, in the order changes are applied (parents first).
-pub const SYNC_KINDS: [&str; 7] = [
-    "prefs",
+pub const SYNC_KINDS: [&str; 8] = [
+    "pref",
+    "ai_provider",
     "host",
     "key",
     "host_secret",
@@ -27,6 +28,13 @@ pub const SYNC_KINDS: [&str; 7] = [
     "snippet",
     "ai_key",
 ];
+
+/// Sections of the preferences, each synced as its own `pref` record so that a change to one
+/// never overwrites another. The model providers leave the `ai` section and sync one by one as
+/// `ai_provider` records. (Older versions synced the whole as one `prefs` record, which new
+/// versions ignore: last writer wins on a whole record lost one device's providers to another
+/// device's other settings.)
+pub const PREF_SECTIONS: [&str; 5] = ["appearance", "terminal", "files", "status", "ai"];
 /// Kinds that carry secrets, which [`Vault::reset_secrets`] discards on this device: after a
 /// reset the sync space has to restore them rather than learn that they are gone.
 pub const SYNC_SECRET_KINDS: [&str; 3] = ["host_secret", "key", "ai_key"];
@@ -145,11 +153,26 @@ impl Vault {
     /// deleted and the deletion would spread to other devices.
     pub fn sync_records(&self) -> Result<Vec<SyncRecord>, VaultError> {
         self.with_cipher(|_| Ok(()))?;
-        let mut records = vec![SyncRecord {
-            kind: "prefs",
-            id: "app".into(),
-            body: json(&self.preferences()?)?,
-        }];
+        let prefs = self.preferences()?;
+        let mut whole = json(&prefs)?;
+        if let Some(ai) = whole.get_mut("ai").and_then(Value::as_object_mut) {
+            ai.remove("providers");
+        }
+        let mut records: Vec<SyncRecord> = PREF_SECTIONS
+            .iter()
+            .map(|section| SyncRecord {
+                kind: "pref",
+                id: (*section).to_owned(),
+                body: whole.get(*section).cloned().unwrap_or(Value::Null),
+            })
+            .collect();
+        for provider in &prefs.ai.providers {
+            records.push(SyncRecord {
+                kind: "ai_provider",
+                id: provider.id.clone(),
+                body: json(provider)?,
+            });
+        }
         for host in self.list_hosts()? {
             let id = host.id.to_string();
             if let Some(secret) = self.secret(host.id)? {
@@ -261,8 +284,34 @@ impl Vault {
     fn upsert_synced(&self, kind: &str, id: &str, value: &Value) -> Result<(), VaultError> {
         let now = now_millis();
         match kind {
-            "prefs" => {
-                self.set_preferences(body::<Preferences>(value)?)?;
+            // The whole preferences as older versions synced them: see `PREF_SECTIONS`.
+            "prefs" => {}
+            "pref" => {
+                if !PREF_SECTIONS.contains(&id) {
+                    return Ok(());
+                }
+                let mut whole = json(&self.preferences()?)?;
+                let mut section = value.clone();
+                if id == "ai"
+                    && let Some(fields) = section.as_object_mut()
+                {
+                    // Providers sync on their own; this device keeps the ones it has.
+                    fields.insert("providers".into(), whole["ai"]["providers"].clone());
+                }
+                whole[id] = section;
+                self.set_preferences(body::<Preferences>(&whole)?)?;
+            }
+            "ai_provider" => {
+                let provider: ProviderPrefs = body(value)?;
+                if provider.id != id {
+                    return Err(VaultError::Invalid("provider record under another id".into()));
+                }
+                let mut prefs = self.preferences()?;
+                match prefs.ai.providers.iter_mut().find(|entry| entry.id == id) {
+                    Some(entry) => *entry = provider,
+                    None => prefs.ai.providers.push(provider),
+                }
+                self.set_preferences(prefs)?;
             }
             "host" => {
                 let host_id: HostId = id.parse()?;
@@ -389,6 +438,14 @@ impl Vault {
 
     fn delete_synced(&self, kind: &str, id: &str) -> Result<(), VaultError> {
         match kind {
+            "ai_provider" => {
+                let mut prefs = self.preferences()?;
+                let before = prefs.ai.providers.len();
+                prefs.ai.providers.retain(|entry| entry.id != id);
+                if prefs.ai.providers.len() != before {
+                    self.set_preferences(prefs)?;
+                }
+            }
             "host" => match self.delete_host(id.parse()?) {
                 Ok(()) | Err(VaultError::HostNotFound(_)) => {}
                 Err(error) => return Err(error),
