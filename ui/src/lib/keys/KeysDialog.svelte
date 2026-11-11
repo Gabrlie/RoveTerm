@@ -1,6 +1,7 @@
 <script lang="ts">
   import { writeClipboard } from '../ui/clipboard';
-  // The key library: list on the left, the selected key or a generate/import form on the right.
+  // The key library, laid out like the settings: keys on the left, the selected key (or the
+  // generate / import form) on the right as grouped cards.
   import { onMount } from 'svelte';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
@@ -56,6 +57,19 @@
   let installNeedsPassword = $state(false);
 
   const selected = $derived(keys.items.find((key) => key.id === selectedId) ?? null);
+  let query = $state('');
+  const shown = $derived(keys.items.filter((key) => !query.trim() || `${key.name} ${key.algorithm}`.toLowerCase().includes(query.trim().toLowerCase())));
+  /** Hosts that log in with the selected key. */
+  const usedBy = $derived(selected ? hosts.items.filter((host) => host.auth.method === 'key' && host.auth.key === selected.id) : []);
+
+  /** `ssh-ed25519` as `Ed25519`, for the list's tag. */
+  function algorithmTag(algorithm: string): string {
+    const lower = algorithm.toLowerCase();
+    if (lower.includes('ed25519')) return 'Ed25519';
+    if (lower.includes('ecdsa')) return 'ECDSA';
+    if (lower.includes('rsa')) return 'RSA';
+    return algorithm;
+  }
   const hostOptions = $derived(hosts.items.map((host) => ({ value: host.id, label: `${host.name} (${host.username}@${host.hostname})` })));
 
   function reset(next: Mode): void {
@@ -247,146 +261,191 @@
   });
 </script>
 
-<Dialog title={t('keys.title')} {onclose} width={760}>
+<Dialog title={t('keys.title')} {onclose} width={800}>
   <div class="layout">
-    <aside>
+    <nav aria-label={t('keys.title')}>
+      <div class="search">
+        <Icon name="search" size={13} />
+        <input bind:value={query} placeholder={t('keys.search')} aria-label={t('keys.search')} spellcheck="false" />
+      </div>
       <div class="list">
-        {#each keys.items as key (key.id)}
+        {#each shown as key (key.id)}
           <button type="button" class="item" class:active={mode === 'view' && key.id === selectedId} onclick={() => select(key)}>
-            <Icon name="key" size={14} />
+            <span class="glyph"><Icon name="key" size={12} /></span>
             <span class="text">
               <span class="name">{key.name}</span>
-              <span class="meta">{key.algorithm}{key.has_private ? '' : ` · ${t('keys.missingPrivate')}`}</span>
+              <span class="meta">
+                <span class="tag">{algorithmTag(key.algorithm)}</span>
+                {#if !key.has_private}<span class="warn">{t('keys.missingPrivate')}</span>{/if}
+              </span>
             </span>
           </button>
         {:else}
-          <p class="empty">{t('keys.empty')}</p>
+          <p class="empty">{keys.items.length === 0 ? t('keys.empty') : t('host.noMatch')}</p>
         {/each}
       </div>
       <div class="add">
-        <button type="button" class:active={mode === 'generate'} onclick={() => reset('generate')}><Icon name="add" size={14} />{t('keys.generate')}</button>
-        <button type="button" class:active={mode === 'import'} onclick={() => reset('import')}><Icon name="importConfig" size={14} />{t('keys.import')}</button>
+        <button type="button" class:active={mode === 'generate'} onclick={() => reset('generate')}><Icon name="add" size={13} />{t('keys.generate')}</button>
+        <button type="button" class:active={mode === 'import'} onclick={() => reset('import')}><Icon name="importConfig" size={13} />{t('keys.import')}</button>
       </div>
-    </aside>
+    </nav>
 
-    <section>
+    <div class="pane">
       {#if mode === 'view' && selected}
         <div class="head">
           {#if renaming}
             <form class="rename" onsubmit={rename}>
               <!-- svelte-ignore a11y_autofocus -->
-              <input bind:value={name} required autofocus />
-              <button type="submit" class="secondary">{t('common.save')}</button>
+              <input class="field" bind:value={name} required autofocus aria-label={t('keys.name')} />
+              <button type="submit" class="primary">{t('common.save')}</button>
+              <button type="button" class="secondary" onclick={() => ((renaming = false), (name = selected?.name ?? ''))}>{t('common.cancel')}</button>
             </form>
           {:else}
-            <h3>{selected.name}</h3>
+            <h2>{selected.name}</h2>
             <IconButton icon="edit" label={t('keys.rename')} small onclick={() => (renaming = true)} />
-            <IconButton icon="remove" label={t('keys.delete')} small danger onclick={() => void remove()} />
+            <span class="spacer"></span>
+            <button type="button" class="secondary danger-text" onclick={() => void remove()}>{t('keys.delete')}</button>
           {/if}
         </div>
-        <p class="meta selectable">{selected.algorithm} · {selected.fingerprint}</p>
 
-        {#if editingPublic}
-          <label
-            >{t('keys.publicKey')}
-            <textarea rows="3" bind:value={publicKey} spellcheck="false"></textarea>
-          </label>
-          <p class="hint">{t('keys.publicHint')}</p>
-          <div class="row-actions">
-            <button type="button" class="secondary" onclick={() => (editingPublic = false)}>{t('common.cancel')}</button>
-            <button type="button" class="primary" onclick={() => void savePublic()}>{t('common.save')}</button>
+        <div class="form-group">
+          <div class="form-row">
+            <span class="form-label">{t('keys.type')}</span>
+            <span class="value">{selected.algorithm}</span>
           </div>
-        {:else}
-          <label
-            >{t('keys.publicKey')}
-            <textarea readonly rows="3" value={selected.public_key}></textarea>
-          </label>
-        {/if}
-        <div class="row-actions">
-          <button type="button" class="secondary" onclick={() => void copy(selected.public_key)}>{t('keys.copyPublic')}</button>
-          {#if selected.has_private && !editingPublic}
-            <button type="button" class="secondary" onclick={startEditPublic}>{t('keys.editPublic')}</button>
-          {/if}
+          <div class="form-row">
+            <span class="form-label">{t('keys.fingerprint')}</span>
+            <span class="value mono selectable">{selected.fingerprint}</span>
+            <IconButton icon="copy" small label={t('edit.copy')} onclick={() => void copy(selected.fingerprint)} />
+          </div>
+          <div class="form-row">
+            <span class="form-label">{t('keys.usedBy')}</span>
+            <span class="value">{usedBy.length > 0 ? usedBy.map((host) => host.name).join(', ') : t('keys.unused')}</span>
+          </div>
+        </div>
+
+        <p class="section-label">{t('keys.publicKey')}</p>
+        <div class="form-group">
+          <div class="form-row stacked">
+            {#if editingPublic}
+              <textarea class="mono" rows="3" bind:value={publicKey} spellcheck="false" aria-label={t('keys.publicKey')}></textarea>
+              <p class="hint">{t('keys.publicHint')}</p>
+              <div class="actions">
+                <button type="button" class="secondary" onclick={() => (editingPublic = false)}>{t('common.cancel')}</button>
+                <button type="button" class="primary" onclick={() => void savePublic()}>{t('common.save')}</button>
+              </div>
+            {:else}
+              <pre class="key selectable">{selected.public_key}</pre>
+              <div class="actions">
+                {#if selected.has_private}<button type="button" class="secondary" onclick={startEditPublic}>{t('keys.editPublic')}</button>{/if}
+                <button type="button" class="primary" onclick={() => void copy(selected.public_key)}>{t('keys.copyPublic')}</button>
+              </div>
+            {/if}
+          </div>
+        </div>
+
+        <p class="section-label">{t('keys.privateKey')}</p>
+        <div class="form-group">
           {#if selected.has_private}
-            <button type="button" class="secondary" onclick={() => void reveal()}>{revealed ? t('keys.hidePrivate') : t('keys.showPrivate')}</button>
+            {#if revealed}
+              <div class="form-row stacked">
+                <pre class="key selectable">{revealed.private_key}</pre>
+                <div class="actions">
+                  {#if revealed.passphrase}<span class="hint grow">{t('keys.hasPassphrase')}</span>{/if}
+                  <button type="button" class="secondary" onclick={() => void reveal()}>{t('keys.hidePrivate')}</button>
+                  <button type="button" class="primary" onclick={() => revealed && void copy(revealed.private_key)}>{t('keys.copyPrivate')}</button>
+                </div>
+              </div>
+            {:else}
+              <div class="form-row">
+                <span class="form-label">{t('keys.privateStored')}<small>{t('keys.privateStoredHint')}</small></span>
+                <button type="button" class="secondary" onclick={() => void reveal()}>{t('keys.showPrivate')}</button>
+              </div>
+            {/if}
+          {:else}
+            <div class="form-row"><span class="form-label"><small class="warn">{t('keys.missingPrivateHint')}</small></span></div>
           {/if}
         </div>
-        {#if revealed}
-          <label
-            >{t('keys.privateKey')}
-            <textarea readonly rows="6" value={revealed.private_key}></textarea>
-          </label>
-          <div class="row-actions">
-            <button type="button" class="secondary" onclick={() => revealed && void copy(revealed.private_key)}>{t('keys.copyPrivate')}</button>
-            {#if revealed.passphrase}<span class="meta">{t('keys.hasPassphrase')}</span>{/if}
-          </div>
-        {/if}
 
-        <form class="install" onsubmit={install}>
-          <h4>{t('keys.installTitle')}</h4>
-          <p class="hint">{t('keys.installHint')}</p>
+        <p class="section-label">{t('keys.installTitle')}</p>
+        <form class="form-group" onsubmit={install}>
           {#if hostOptions.length > 0}
-            <div class="row">
-              <label>{t('keys.installHost')}<Select bind:value={installHost} options={hostOptions} /></label>
-              {#if installNeedsPassword}
-                <label>{t('host.password')}<input type="password" bind:value={installPassword} autocomplete="off" /></label>
-              {/if}
+            <div class="form-row">
+              <span class="form-label">{t('keys.installHost')}<small>{t('keys.installHint')}</small></span>
+              <div class="control"><Select bind:value={installHost} options={hostOptions} /></div>
             </div>
-            <div class="row-actions">
+            {#if installNeedsPassword}
+              <div class="form-row">
+                <span class="form-label">{t('host.password')}</span>
+                <input class="field" type="password" bind:value={installPassword} autocomplete="off" aria-label={t('host.password')} />
+              </div>
+            {/if}
+            <div class="form-row end">
               <button type="submit" class="primary" disabled={busy}>{t('keys.install')}</button>
             </div>
           {:else}
-            <p class="hint">{t('keys.noHosts')}</p>
+            <div class="form-row"><span class="form-label"><small>{t('keys.noHosts')}</small></span></div>
           {/if}
         </form>
       {:else if mode === 'generate' || mode === 'import'}
-        <form id="key-form" class="form" onsubmit={submitNew}>
-          <h3>{mode === 'generate' ? t('keys.generate') : t('keys.import')}</h3>
-          <label>{t('keys.name')}<input bind:value={name} required autocomplete="off" /></label>
-          {#if mode === 'generate'}
-            <div class="row">
-              <label
-                >{t('keys.type')}
-                <Select
-                  bind:value={kind}
-                  options={[
-                    { value: 'ed25519', label: 'Ed25519' },
-                    { value: 'ecdsa_p256', label: 'ECDSA P-256' },
-                    { value: 'rsa3072', label: 'RSA 3072' },
-                  ]}
-                />
-              </label>
-              <label>{t('keys.comment')}<input bind:value={comment} placeholder="me@laptop" autocomplete="off" /></label>
+        <form id="key-form" onsubmit={submitNew}>
+          <div class="head"><h2>{mode === 'generate' ? t('keys.generate') : t('keys.import')}</h2></div>
+          <div class="form-group">
+            <div class="form-row">
+              <span class="form-label">{t('keys.name')}</span>
+              <input class="field" bind:value={name} required autocomplete="off" aria-label={t('keys.name')} />
             </div>
-          {:else}
-            <label
-              >{t('keys.privateKey')}
-              <textarea rows="7" bind:value={privateKey} required spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
-            </label>
-            <div class="row-actions">
-              <button type="button" class="secondary" onclick={(event) => void loadKey(event)}>{t('keys.fromFile')}</button>
+            {#if mode === 'generate'}
+              <div class="form-row">
+                <span class="form-label">{t('keys.type')}</span>
+                <div class="control">
+                  <Select
+                    bind:value={kind}
+                    options={[
+                      { value: 'ed25519', label: 'Ed25519' },
+                      { value: 'ecdsa_p256', label: 'ECDSA P-256' },
+                      { value: 'rsa3072', label: 'RSA 3072' },
+                    ]}
+                  />
+                </div>
+              </div>
+              <div class="form-row">
+                <span class="form-label">{t('keys.comment')}</span>
+                <input class="field" bind:value={comment} placeholder="me@laptop" autocomplete="off" aria-label={t('keys.comment')} />
+              </div>
+            {/if}
+            <div class="form-row">
+              <span class="form-label">{mode === 'generate' ? t('keys.newPassphrase') : t('host.passphrase')}</span>
+              <input class="field" type="password" bind:value={passphrase} autocomplete="new-password" class:attention={needsPassphrase} aria-label={t('host.passphrase')} />
             </div>
-            <label
-              >{t('keys.publicKeyOptional')}
-              <textarea rows="2" bind:value={publicKey} spellcheck="false" placeholder="ssh-ed25519 AAAA… comment"></textarea>
-            </label>
-            <p class="hint">{t('keys.publicHint')}</p>
+          </div>
+          {#if mode === 'import'}
+            <p class="section-label">{t('keys.privateKey')}</p>
+            <div class="form-group">
+              <div class="form-row stacked">
+                <textarea class="mono" rows="7" bind:value={privateKey} required spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" aria-label={t('keys.privateKey')}></textarea>
+                <div class="actions"><button type="button" class="secondary" onclick={(event) => void loadKey(event)}>{t('keys.fromFile')}</button></div>
+              </div>
+            </div>
+            <p class="section-label">{t('keys.publicKeyOptional')}</p>
+            <div class="form-group">
+              <div class="form-row stacked">
+                <textarea class="mono" rows="2" bind:value={publicKey} spellcheck="false" placeholder="ssh-ed25519 AAAA… comment" aria-label={t('keys.publicKeyOptional')}></textarea>
+                <p class="hint">{t('keys.publicHint')}</p>
+              </div>
+            </div>
           {/if}
-          <label
-            >{mode === 'generate' ? t('keys.newPassphrase') : t('host.passphrase')}
-            <input type="password" bind:value={passphrase} autocomplete="new-password" class:attention={needsPassphrase} />
-          </label>
-          <div class="row-actions">
-            <button type="submit" class="primary" disabled={busy}>{busy && mode === 'generate' ? t('keys.generating') : t('common.save')}</button>
+          <div class="submit">
+            <button type="submit" class="primary" disabled={busy}>{busy && mode === 'generate' ? t('keys.generating') : mode === 'generate' ? t('keys.generate') : t('keys.import')}</button>
           </div>
         </form>
       {/if}
-      {#if error}<p class="error">{error}</p>{/if}
-      {#if notice}<p class="notice">{notice}</p>{/if}
-    </section>
+      {#if error}<p class="message error">{error}</p>{/if}
+      {#if notice}<p class="message notice">{notice}</p>{/if}
+    </div>
   </div>
   {#snippet actions()}
-    <button type="button" class="secondary" onclick={onclose}>{t('common.close')}</button>
+    <button type="button" class="primary" onclick={onclose}>{t('settings.done')}</button>
   {/snippet}
 </Dialog>
 
@@ -397,45 +456,81 @@
 <style>
   .layout {
     display: flex;
-    gap: var(--space-4);
-    min-height: 380px;
+    height: min(580px, 70vh);
+    margin: 0 calc(-1 * var(--space-5));
+    box-shadow:
+      inset 0 1px 0 var(--separator),
+      inset 0 -1px 0 var(--separator);
   }
-  aside {
-    flex: 0 0 210px;
+  nav {
+    flex: 0 0 220px;
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    padding-right: var(--space-3);
+    padding: var(--space-3) var(--space-2);
     box-shadow: inset -1px 0 0 var(--separator);
+    min-height: 0;
+  }
+  .search {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 28px;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--fill);
+    color: var(--fg-muted);
+  }
+  .search input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    color: var(--fg);
+    font: inherit;
+    font-size: var(--text-footnote);
+    outline: none;
+    padding: 0;
   }
   .list {
     flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 2px;
     overflow-y: auto;
   }
-  .item,
-  .add button {
+  .item {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    padding: var(--space-1) var(--space-2);
+    padding: 5px var(--space-2);
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--fg);
     font: inherit;
     text-align: left;
-    cursor: pointer;
+    cursor: default;
   }
-  .item:hover,
-  .add button:hover {
+  .item:hover:not(.active) {
     background: var(--fill-hover);
   }
-  .item.active,
-  .add button.active {
-    background: var(--accent-soft);
+  .item.active {
+    background: var(--accent);
+    color: var(--accent-fg);
+  }
+  .glyph {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    background: linear-gradient(to bottom, color-mix(in srgb, var(--sys-orange, #ff9f0a) 80%, #fff), var(--sys-orange, #ff9f0a));
+    color: #fff;
+    box-shadow: 0 0.5px 1px rgb(0 0 0 / 0.15);
   }
   .text {
     display: flex;
@@ -447,13 +542,32 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .meta,
-  .hint,
+  .meta {
+    display: flex;
+    gap: var(--space-1);
+    align-items: center;
+    font-size: 11px;
+  }
+  .tag {
+    padding: 0 5px;
+    border-radius: var(--radius-pill);
+    background: var(--fill);
+    color: var(--fg-muted);
+  }
+  .item.active .tag {
+    background: rgb(255 255 255 / 0.2);
+    color: inherit;
+  }
+  .warn {
+    color: var(--warning);
+  }
+  .item.active .warn {
+    color: inherit;
+  }
   .empty {
-    margin: 0;
+    margin: var(--space-3) var(--space-2);
     color: var(--fg-muted);
     font-size: var(--text-footnote);
-    overflow-wrap: anywhere;
   }
   .add {
     display: flex;
@@ -462,57 +576,152 @@
     padding-top: var(--space-2);
     box-shadow: inset 0 1px 0 var(--separator);
   }
-  section {
+  .add button {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 28px;
+    padding: 0 var(--space-2);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    font-size: var(--text-footnote);
+    text-align: left;
+  }
+  .add button:hover,
+  .add button.active {
+    background: var(--fill-hover);
+  }
+  .pane {
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: var(--space-3);
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-5) var(--space-6);
+    overflow-y: auto;
+    background: color-mix(in srgb, var(--fill) 50%, transparent);
+  }
+  .pane > :global(*),
+  form > :global(*) {
+    flex-shrink: 0;
+  }
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .pane :global(.section-label) {
+    margin-top: var(--space-3);
   }
   .head {
     display: flex;
     align-items: center;
     gap: var(--space-1);
+    min-height: 32px;
   }
-  h3 {
+  h2 {
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--text-large);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .spacer,
+  .grow {
     flex: 1;
-    margin: 0;
-    font-size: var(--text-title);
-  }
-  h4 {
-    margin: 0;
-    font-size: var(--text-body);
   }
   .rename {
     flex: 1;
-    display: flex;
-    gap: var(--space-2);
+    flex-direction: row;
+    align-items: center;
   }
-  .rename input {
+  .rename .field {
     flex: 1;
   }
-  .form,
-  .install {
-    display: flex;
+  .value {
+    min-width: 0;
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg-muted);
+    font-size: var(--text-footnote);
+    text-align: right;
+  }
+  .mono {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+  }
+  .stacked {
     flex-direction: column;
-    gap: var(--space-3);
+    align-items: stretch;
+    gap: var(--space-2);
   }
-  .install {
-    padding-top: var(--space-3);
-    box-shadow: inset 0 1px 0 var(--separator);
+  .key {
+    margin: 0;
+    max-height: 160px;
+    overflow: auto;
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--fill);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
-  .row-actions {
+  textarea {
+    resize: vertical;
+    padding: var(--space-2);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    box-shadow: 0 0 0 1px var(--separator);
+    color: var(--fg);
+  }
+  .actions {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: var(--space-2);
-    margin-top: calc(-1 * var(--space-1));
   }
-  .notice {
+  .end {
+    justify-content: flex-end;
+  }
+  .hint {
     margin: 0;
-    color: var(--accent);
-    font-size: var(--text-footnote);
+    color: var(--fg-muted);
+    font-size: 11px;
+  }
+  .field {
+    width: 240px;
+  }
+  .control {
+    width: 260px;
+  }
+  .submit {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: var(--space-2);
   }
   .attention {
-    outline: 2px solid color-mix(in srgb, var(--danger) 60%, transparent);
+    box-shadow: 0 0 0 1px var(--danger);
+  }
+  .danger-text {
+    color: var(--danger);
+  }
+  .message {
+    margin: 0;
+    font-size: var(--text-footnote);
+  }
+  .error {
+    color: var(--danger);
+  }
+  .notice {
+    color: var(--success);
   }
 </style>
