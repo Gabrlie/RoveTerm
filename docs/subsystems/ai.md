@@ -119,7 +119,7 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 
 会话设置与继续对话：
 
-- 会话设置采用 ACP 的 session config options（`configOptions`、`session/set_config_option`、`config_option_update` 通知），只保留单选项，分组的选项展平；类别为 `mode` 的项不交给界面，审批由 RoveTerm 的模式管理。Codex 以此提供模型与推理强度。内置助手提供一个 `model` 设置，选项为服务商的默认模型加 `models`；切换后从下一次请求起生效，对话历史保留。
+- 会话设置采用 ACP 的 session config options（`configOptions`、`session/set_config_option`、`config_option_update` 通知），保留单选项（分组的选项展平）与开关项（`type: "boolean"`，如 Claude Code 的快速模式，设置时传布尔值）；类别为 `mode` 的项不交给界面，审批由 RoveTerm 的模式管理。只在较旧的 `models` 字段（`availableModels`、`currentModelId`）报告模型的智能体，合成一个 `model` 设置，改用 `session/set_model`。智能体对修改不回报设置列表时，按已接受的值更新。Codex 以此提供模型与推理强度。内置助手提供 `model`（服务商的默认模型加 `models`）与 `effort`（默认、minimal、low、medium、high、xhigh、max）两个设置，对话中修改从下一次请求起生效，历史保留。
 - `ai/session_started` 记录 `SessionInfo`：Agent 名称与版本、审批模式、`agent_ref`、主机上下文、Agent 自己的会话 id、是否为继续。会话的第一条提示写一条自动的 `ai/renamed`（第一行，最多 60 个字符），用户改名再写一条，最新的为准；继续时已有标题则不再自动命名。
 - 继续 ACP 会话：Agent 声明 `loadSession` 能力时用 `session/load` 重开它自己的会话，期间 Agent 回放的旧对话不再上报（界面从 Journal 还原）；重开失败则开新会话。继续内置助手：用 `audit::transcript` 从记录还原提示与回复（执行过的操作以一行说明附在回复中，不含工具输出）作为历史。
 
@@ -134,6 +134,8 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 | `anthropic` | `/messages` | `x-api-key` 与 `anthropic-version` | 按内容块索引累积文本、思考（含签名）和 `tool_use` 的 `input_json_delta`，`message_stop` 结束 |
 
 对话以统一的 `Message`（用户、助手含工具调用、工具结果）传给客户端，由它转换成各格式的请求；Anthropic 的同一轮工具结果合并进一条用户消息，签名的思考块在下一轮原样回传。
+
+推理强度按格式换算：OpenAI Chat 的 `reasoning_effort` 与 Responses 的 `reasoning.effort` 取 minimal 至 xhigh（max 按 xhigh）；Anthropic 用自适应思考（`thinking: {type: "adaptive", display: "summarized"}`）加 `output_config.effort`（low 至 max，minimal 按 low），不再发送固定的思考预算，当前模型会拒绝它。
 
 安全与限制：基础地址必须是 http(s)、不含凭据与查询；重定向只在同源内跟随，key 不会被带到别处；API key 只在请求头中，错误文本里出现的 key 替换为 `***`；单次回复最多 8 MiB；首包与两段之间超过空闲时限即超时；流没有正常结束视为错误。
 

@@ -460,3 +460,45 @@ async fn a_session_that_cannot_be_reopened_starts_anew() {
     assert_eq!(running.started().agent_session.as_deref(), Some("new-1"));
     drop(script.await.unwrap());
 }
+
+#[tokio::test]
+async fn older_model_lists_and_boolean_settings_can_be_changed() {
+    let (session, _received, mut fake, (read, write)) = harness();
+    let script = tokio::spawn(async move {
+        fake.answer("initialize", json!({ "protocolVersion": 1, "authMethods": [] }))
+            .await;
+        fake.answer(
+            "session/new",
+            json!({
+                "sessionId": "s1",
+                "models": { "currentModelId": "sonnet", "availableModels": [{ "modelId": "sonnet", "name": "Sonnet" }, { "modelId": "opus", "name": "Opus", "description": "Most capable" }] },
+                "configOptions": [{ "id": "fast", "name": "Fast mode", "type": "boolean", "currentValue": false }],
+            }),
+        )
+        .await;
+        let model = fake.answer("session/set_model", json!({})).await;
+        assert_eq!(model["params"], json!({ "sessionId": "s1", "modelId": "opus" }));
+        let fast = fake.answer("session/set_config_option", json!({})).await;
+        assert_eq!(
+            fast["params"],
+            json!({ "sessionId": "s1", "configId": "fast", "value": true })
+        );
+        fake
+    });
+    let agent = acp::connect(read, write, session.clone()).await.unwrap();
+    let running = runner::open(agent, session.clone(), &AgentSpec::default())
+        .await
+        .unwrap();
+    let options = &running.started().config_options;
+    assert_eq!(options.len(), 2);
+    assert_eq!(options[0].id, "model");
+    assert_eq!(options[0].choices[1].description.as_deref(), Some("Most capable"));
+    assert_eq!(options[1].kind, acp::ConfigKind::Boolean);
+    assert_eq!(options[1].current, "false");
+
+    let after = running.set_config_option("model", "opus").await.unwrap();
+    assert_eq!(after[0].current, "opus");
+    let after = running.set_config_option("fast", "true").await.unwrap();
+    assert_eq!(after[1].current, "true");
+    drop(script.await.unwrap());
+}

@@ -52,9 +52,13 @@ pub enum ProviderFormat {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningEffort {
+    Minimal,
     Low,
     Medium,
     High,
+    #[serde(rename = "xhigh")]
+    XHigh,
+    Max,
 }
 
 /// A model provider of the built-in assistant. Its API key is kept apart, on each device.

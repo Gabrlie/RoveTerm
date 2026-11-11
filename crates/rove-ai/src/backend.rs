@@ -116,10 +116,11 @@ impl AgentBackend for Assistant {
         id: &str,
         value: &str,
     ) -> Result<Vec<ConfigOption>, BackendError> {
-        if id != "model" {
-            return Err(BackendError::Invalid(format!("no setting {id}")));
+        match id {
+            "model" => self.set_model(value)?,
+            "effort" => self.set_effort(value)?,
+            _ => return Err(BackendError::Invalid(format!("no setting {id}"))),
         }
-        self.set_model(value)?;
         Ok(self.config_options())
     }
 }

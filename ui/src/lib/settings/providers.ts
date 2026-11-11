@@ -1,5 +1,8 @@
 // Model providers of the built-in assistant: presets that fill in the form, and ids for new ones.
-import type { ProviderFormat, ProviderPrefs } from '../ipc';
+import type { ProviderFormat, ProviderPrefs, ReasoningEffort } from '../ipc';
+
+/** Reasoning effort levels, least first. */
+export const EFFORT_LEVELS: readonly ReasoningEffort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 export interface ProviderPreset {
   id: string;
@@ -14,7 +17,7 @@ export interface ProviderPreset {
 
 export const PRESETS: ProviderPreset[] = [
   { id: 'openai', name: 'OpenAI', format: 'responses', base_url: 'https://api.openai.com/v1', modelHint: 'gpt-5', keyless: false },
-  { id: 'anthropic', name: 'Anthropic', format: 'anthropic', base_url: 'https://api.anthropic.com/v1', modelHint: 'claude-sonnet-4-5', keyless: false },
+  { id: 'anthropic', name: 'Anthropic', format: 'anthropic', base_url: 'https://api.anthropic.com/v1', modelHint: 'claude-opus-5-5', keyless: false },
   { id: 'deepseek', name: 'DeepSeek', format: 'chat', base_url: 'https://api.deepseek.com/v1', modelHint: 'deepseek-chat', keyless: false },
   { id: 'openrouter', name: 'OpenRouter', format: 'chat', base_url: 'https://openrouter.ai/api/v1', modelHint: 'openai/gpt-5', keyless: false },
   { id: 'ollama', name: 'Ollama', format: 'chat', base_url: 'http://localhost:11434/v1', modelHint: 'qwen3', keyless: true },

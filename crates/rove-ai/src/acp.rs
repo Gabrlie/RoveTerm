@@ -236,16 +236,29 @@ pub struct AgentInfo {
     pub load_session: bool,
 }
 
-/// A setting of a session the agent offers (ACP session config options), such as its model or
-/// reasoning effort; only select options are kept.
+/// A setting of a session the agent offers (ACP session config options), such as its model,
+/// reasoning effort or a fast mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ConfigOption {
     pub id: String,
     pub name: String,
     /// `model`, `mode`, `thought_level`, or another category the agent names.
     pub category: Option<String>,
+    pub kind: ConfigKind,
+    /// The chosen value; `true` or `false` for a [`ConfigKind::Boolean`].
     pub current: String,
+    /// The values of a [`ConfigKind::Select`].
     pub choices: Vec<ConfigChoice>,
+    /// Built from the agent's older `models` field: changed with `session/set_model`.
+    #[serde(skip)]
+    pub legacy: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigKind {
+    Select,
+    Boolean,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -273,8 +286,21 @@ pub fn parse_config_options(value: Option<&Value>) -> Vec<ConfigOption> {
     };
     options
         .iter()
-        .filter(|option| option.get("type").and_then(Value::as_str) == Some("select"))
         .filter_map(|option| {
+            if option.get("type").and_then(Value::as_str) == Some("boolean") {
+                return Some(ConfigOption {
+                    id: string(option, "id")?,
+                    name: string(option, "name")?,
+                    category: string(option, "category"),
+                    kind: ConfigKind::Boolean,
+                    current: option.get("currentValue")?.as_bool()?.to_string(),
+                    choices: Vec::new(),
+                    legacy: false,
+                });
+            }
+            if option.get("type").and_then(Value::as_str) != Some("select") {
+                return None;
+            }
             let choices: Vec<ConfigChoice> = option
                 .get("options")
                 .and_then(Value::as_array)?
@@ -291,8 +317,10 @@ pub fn parse_config_options(value: Option<&Value>) -> Vec<ConfigOption> {
                 id: string(option, "id")?,
                 name: string(option, "name")?,
                 category: string(option, "category"),
+                kind: ConfigKind::Select,
                 current: string(option, "currentValue")?,
                 choices,
+                legacy: false,
             })
         })
         .take(MAX_OPTIONS)
@@ -898,8 +926,54 @@ fn session_of(session_id: String, result: &Value) -> NewSession {
                     .collect()
             })
             .unwrap_or_default(),
-        config_options: parse_config_options(result.get("configOptions")),
+        config_options: with_legacy_models(
+            parse_config_options(result.get("configOptions")),
+            result.get("models"),
+        ),
     }
+}
+
+/// Adds the model choice of an agent that reports it in the older `models` field
+/// (`availableModels`, `currentModelId`) rather than as a config option.
+fn with_legacy_models(mut options: Vec<ConfigOption>, models: Option<&Value>) -> Vec<ConfigOption> {
+    let has_model = options
+        .iter()
+        .any(|option| option.category.as_deref() == Some("model") || option.id == "model");
+    let Some(models) = models.filter(|_| !has_model) else {
+        return options;
+    };
+    let choices: Vec<ConfigChoice> = models
+        .get("availableModels")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|model| {
+                    let value = string(model, "modelId")?;
+                    Some(ConfigChoice {
+                        name: string(model, "name").unwrap_or_else(|| value.clone()),
+                        description: string(model, "description"),
+                        value,
+                    })
+                })
+                .take(MAX_CHOICES)
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(current) = string(models, "currentModelId").filter(|_| !choices.is_empty()) {
+        options.insert(
+            0,
+            ConfigOption {
+                id: "model".into(),
+                name: "Model".into(),
+                category: Some("model".into()),
+                kind: ConfigKind::Select,
+                current,
+                choices,
+                legacy: true,
+            },
+        );
+    }
+    options
 }
 
 impl Agent {
@@ -996,13 +1070,19 @@ impl Agent {
         Ok(session_of(session_id.to_owned(), &result))
     }
 
-    /// Sets one of the session's [`ConfigOption`]s; returns all of them as they now are.
+    /// Sets one of the session's [`ConfigOption`]s (`value` is `true` / `false` for a boolean
+    /// one); returns all of them as the agent now reports them, empty when it reports none.
     pub async fn set_config_option(
         &self,
         session_id: &str,
         config_id: &str,
+        kind: ConfigKind,
         value: &str,
     ) -> Result<Vec<ConfigOption>, AcpError> {
+        let value = match kind {
+            ConfigKind::Boolean => Value::Bool(value == "true"),
+            ConfigKind::Select => Value::String(value.to_owned()),
+        };
         let result = self
             .request(
                 "session/set_config_option",
@@ -1010,6 +1090,16 @@ impl Agent {
             )
             .await?;
         Ok(parse_config_options(result.get("configOptions")))
+    }
+
+    /// Switches the model of an agent that offers it in the older `models` field.
+    pub async fn set_model(&self, session_id: &str, model_id: &str) -> Result<(), AcpError> {
+        self.request(
+            "session/set_model",
+            json!({ "sessionId": session_id, "modelId": model_id }),
+        )
+        .await
+        .map(|_| ())
     }
 
     pub async fn set_mode(&self, session_id: &str, mode_id: &str) -> Result<(), AcpError> {

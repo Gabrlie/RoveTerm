@@ -252,6 +252,9 @@ export interface StatusPrefs {
 /** How much the user is asked before an AI agent acts. */
 export type AiMode = 'ask_by_risk' | 'ask_all' | 'auto';
 
+/** How much a model reasons; each API takes the nearest level it knows. */
+export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
 export type ProviderFormat = 'chat' | 'responses' | 'anthropic';
 
 /** A model provider of the built-in assistant; its key is kept apart, on each device. */
@@ -265,7 +268,7 @@ export interface ProviderPrefs {
   /** Other models to switch to in a conversation. */
   models: string[];
   max_tokens: number | null;
-  effort: 'low' | 'medium' | 'high' | null;
+  effort: ReasoningEffort | null;
 }
 
 export interface AiPrefs {
@@ -853,6 +856,8 @@ export interface ConfigOption {
   name: string;
   /** `model`, `thought_level`, or another category the agent names. */
   category: string | null;
+  kind: 'select' | 'boolean';
+  /** `true` / `false` for a boolean setting. */
   current: string;
   choices: { value: string; name: string; description: string | null }[];
 }

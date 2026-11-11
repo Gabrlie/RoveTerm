@@ -16,6 +16,7 @@
   import { t, type MessageKey } from '../i18n';
   import type { AgentChoice, AiAnswer, AiContext, AiMode, AiOperation, AiOutcome, AiRecord, AiSessionSummary, ConfigOption, Risk } from '../ipc';
   import { prefs } from '../settings/prefs.svelte';
+  import { EFFORT_LEVELS } from '../settings/providers';
   import { notify } from '../ui/toast.svelte';
   import type { IconName } from '../ui/icons';
 
@@ -135,13 +136,44 @@
     const provider = prefs.value.ai.providers.find((entry) => `builtin:${entry.id}` === agentRef);
     if (!provider) return [];
     const models = [provider.model, ...provider.models];
-    return [{ id: 'model', name: t('ai.model'), category: 'model', current: provider.model, choices: models.map((model) => ({ value: model, name: model, description: null })) }];
+    return [
+      { id: 'model', name: t('ai.model'), category: 'model', kind: 'select', current: provider.model, choices: models.map((model) => ({ value: model, name: model, description: null })) },
+      { id: 'effort', name: t('ai.effort'), category: 'thought_level', kind: 'select', current: provider.effort ?? 'default', choices: ['default', ...EFFORT_LEVELS].map((level) => ({ value: level, name: level, description: null })) },
+    ];
   });
   const modelSetting = $derived(settings.find((option) => option.category === 'model') ?? settings[0]);
 
   function choiceName(option: ConfigOption): string {
     const value = chat.optionValue(option);
-    return option.choices.find((entry) => entry.value === value)?.name ?? value;
+    return entryName(option, option.choices.find((entry) => entry.value === value) ?? { value, name: value });
+  }
+
+  /** A choice's name; the built-in assistant's effort levels in the user's language. */
+  function entryName(option: ConfigOption, entry: { value: string; name: string }): string {
+    if (option.id === 'effort' && agentRef?.startsWith('builtin:')) {
+      const key = `ai.effort.${entry.value}` as MessageKey;
+      if (t(key) !== key) return t(key);
+    }
+    return entry.name;
+  }
+
+  /** The option's title; the built-in assistant's in the user's language. */
+  function optionName(option: ConfigOption): string {
+    if (!agentRef?.startsWith('builtin:')) return option.name;
+    return option.id === 'effort' ? t('ai.effort') : option.id === 'model' ? t('ai.model') : option.name;
+  }
+
+  /** Opens the model menu; an agent that has not started yet starts first, to list its models. */
+  async function openSettings(): Promise<void> {
+    if (settingsOpen) {
+      settingsOpen = false;
+      return;
+    }
+    if (!chat.id && agentRef?.startsWith('acp:')) {
+      await chat.prepare(terminalPane?.sessionId ?? null);
+      if (!chat.id) return;
+    }
+    settingsOpen = true;
   }
 
   async function resume(summary: AiSessionSummary, records: AiRecord[]): Promise<void> {
@@ -430,21 +462,30 @@
             </div>
           {/if}
         </div>
-        {#if modelSetting}
+        {#if modelSetting || (agentRef?.startsWith('acp:') && !chat.id)}
           <div class="picker spread" bind:this={settingsPicker}>
-            <button type="button" class="pick" onclick={() => (settingsOpen = !settingsOpen)} aria-expanded={settingsOpen} title={t('ai.modelSettings')}>
-              <span class="pick-name">{choiceName(modelSetting)}</span><Icon name="chevronDown" size={11} />
+            <button type="button" class="pick" onclick={() => void openSettings()} aria-expanded={settingsOpen} title={t('ai.modelSettings')} disabled={chat.starting}>
+              <span class="pick-name">{chat.starting ? t('ai.loadingModels') : modelSetting ? choiceName(modelSetting) : t('ai.model')}</span><Icon name="chevronDown" size={11} />
             </button>
             {#if settingsOpen}
               <div class="menu" role="menu" aria-label={t('ai.modelSettings')}>
+                {#if settings.length === 0}<p class="menu-title">{t('ai.noModelSettings')}</p>{/if}
                 {#each settings as option (option.id)}
-                  <p class="menu-title">{option.name}</p>
+                  {#if option.kind === 'boolean'}
+                    {@const on = chat.optionValue(option) === 'true'}
+                    <button type="button" role="menuitemcheckbox" aria-checked={on} class="menu-item toggle-row" onclick={() => void chat.setOption(option.id, on ? 'false' : 'true')}>
+                      <span class="menu-name">{option.name}</span>
+                      <span class="switch-mark" class:on></span>
+                    </button>
+                  {:else}
+                  <p class="menu-title">{optionName(option)}</p>
                   {#each option.choices as entry (entry.value)}
                     <button type="button" role="menuitemradio" aria-checked={entry.value === chat.optionValue(option)} class="menu-item" class:current={entry.value === chat.optionValue(option)} onclick={() => ((settingsOpen = false), void chat.setOption(option.id, entry.value))}>
-                      <span class="menu-name">{entry.name}</span>
+                      <span class="menu-name">{entryName(option, entry)}</span>
                       {#if entry.description}<span class="menu-detail wrap">{entry.description}</span>{/if}
                     </button>
                   {/each}
+                  {/if}
                 {/each}
               </div>
             {/if}
@@ -1039,6 +1080,37 @@
     right: 0;
     width: auto;
     bottom: calc(100% + 6px);
+  }
+  .toggle-row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .switch-mark {
+    position: relative;
+    width: 26px;
+    height: 15px;
+    border-radius: 8px;
+    background: var(--fill-hover);
+    transition: background var(--dur-fast) var(--ease-out);
+  }
+  .switch-mark::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 0.5px 1px rgb(0 0 0 / 0.25);
+    transition: transform var(--dur-fast) var(--ease-out);
+  }
+  .switch-mark.on {
+    background: var(--success);
+  }
+  .switch-mark.on::after {
+    transform: translateX(11px);
   }
   .menu-detail.wrap {
     white-space: normal;

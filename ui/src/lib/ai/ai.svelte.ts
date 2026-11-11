@@ -216,10 +216,16 @@ export class Chat {
 
   /** Sends `text`, starting the agent first when needed. `terminal` is the user's terminal on the
    *  host; `again` sends the last message once more without repeating it in the conversation. */
-  async send(text: string, terminal: SessionId | null, again = false): Promise<void> {
-    if (this.busy || this.starting || !text.trim()) return;
-    if (!again) this.items.push({ kind: 'user', text });
-    if (!this.id) {
+  /** Starts the agent without sending anything (to list its models before the first message). */
+  async prepare(terminal: SessionId | null): Promise<void> {
+    if (this.id || this.starting) return;
+    await this.start(terminal);
+  }
+
+  /** Starts the agent; `false` when it could not (a notice says why). */
+  private async start(terminal: SessionId | null): Promise<boolean> {
+    if (this.id) return true;
+    {
       this.starting = true;
       try {
         const agent = this.agent ?? ai.defaultAgent;
@@ -240,11 +246,18 @@ export class Chat {
         if (this.title) await aiRename(started.id, this.title);
       } catch (error) {
         this.notice(error);
-        return;
+        return false;
       } finally {
         this.starting = false;
       }
     }
+    return true;
+  }
+
+  async send(text: string, terminal: SessionId | null, again = false): Promise<void> {
+    if (this.busy || this.starting || !text.trim()) return;
+    if (!again) this.items.push({ kind: 'user', text });
+    if (!(await this.start(terminal))) return;
     const id = this.id;
     if (!id) return;
     this.busy = true;

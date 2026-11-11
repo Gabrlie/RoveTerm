@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::acp::{self, AcpError, Agent, ConfigOption, McpServer, NewSession, SessionMode};
+use crate::acp::{
+    self, AcpError, Agent, ConfigKind, ConfigOption, McpServer, NewSession, SessionMode,
+};
 use crate::session::AiSession;
 
 /// How to run an agent.
@@ -49,6 +51,8 @@ pub struct Running {
     session: Arc<AiSession>,
     acp_session: String,
     started: Started,
+    /// The session's settings as they now are.
+    options: std::sync::Mutex<Vec<ConfigOption>>,
 }
 
 /// Starts the agent of `spec` for `session`. Anything the agent connects to while starting (the
@@ -120,10 +124,12 @@ pub async fn open(
         agent_session: Some(created.session_id.clone()),
         resumed,
     };
+    tracing::debug!(agent = ?started.agent, options = ?started.config_options, "agent session settings");
     Ok(Running {
         agent,
         session,
         acp_session: created.session_id,
+        options: std::sync::Mutex::new(started.config_options.clone()),
         started,
     })
 }
@@ -176,9 +182,43 @@ impl Running {
         id: &str,
         value: &str,
     ) -> Result<Vec<ConfigOption>, AcpError> {
-        self.agent
-            .set_config_option(&self.acp_session, id, value)
-            .await
+        let option = self
+            .options
+            .lock()
+            .ok()
+            .and_then(|options| options.iter().find(|option| option.id == id).cloned());
+        let reported = match &option {
+            Some(option) if option.legacy => {
+                self.agent.set_model(&self.acp_session, value).await?;
+                Vec::new()
+            }
+            Some(option) => {
+                self.agent
+                    .set_config_option(&self.acp_session, id, option.kind, value)
+                    .await?
+            }
+            None => {
+                self.agent
+                    .set_config_option(&self.acp_session, id, ConfigKind::Select, value)
+                    .await?
+            }
+        };
+        let mut options = self.options.lock().map_err(|_| AcpError::Closed)?;
+        if reported.is_empty() {
+            // The agent did not report its settings: the change it accepted is the news.
+            if let Some(changed) = options.iter_mut().find(|option| option.id == id) {
+                value.clone_into(&mut changed.current);
+            }
+        } else {
+            // Keep the older-API model choice, which the agent's own list does not include.
+            let legacy: Vec<ConfigOption> = options
+                .iter()
+                .filter(|option| option.legacy && !reported.iter().any(|new| new.id == option.id))
+                .cloned()
+                .collect();
+            *options = legacy.into_iter().chain(reported).collect();
+        }
+        Ok(options.clone())
     }
 
     /// Switches the agent to one of its [`Started::modes`].

@@ -8,12 +8,12 @@
   import ContextMenu, { type MenuItem } from '../../ui/ContextMenu.svelte';
   import { ask } from '../../ui/confirm.svelte';
   import { errorText, t } from '../../i18n';
-  import { aiProviderTest, aiSetKey, type AgentAuth, type AgentChoice, type AiMode, type ProviderFormat, type ProviderPrefs } from '../../ipc';
+  import { aiProviderTest, aiSetKey, type AgentAuth, type AgentChoice, type AiMode, type ProviderFormat, type ProviderPrefs, type ReasoningEffort } from '../../ipc';
   import { ai } from '../../ai/ai.svelte';
   import { prefs } from '../prefs.svelte';
   import { editDevice, editPrefs, settingsError } from '../edit.svelte';
   import { notify } from '../../ui/toast.svelte';
-  import { customAgentId, fromPreset, PRESETS, type ProviderPreset } from '../providers';
+  import { customAgentId, EFFORT_LEVELS, fromPreset, PRESETS, type ProviderPreset } from '../providers';
 
   const rules = $derived(prefs.value.ai);
   const providers = $derived(prefs.value.ai.providers);
@@ -40,12 +40,7 @@
     { value: 'responses', label: t('ai.format.responses') },
     { value: 'anthropic', label: t('ai.format.anthropic') },
   ];
-  const EFFORTS: { value: 'default' | 'low' | 'medium' | 'high'; label: string }[] = [
-    { value: 'default', label: t('ai.effort.default') },
-    { value: 'low', label: t('ai.effort.low') },
-    { value: 'medium', label: t('ai.effort.medium') },
-    { value: 'high', label: t('ai.effort.high') },
-  ];
+  const EFFORTS: { value: 'default' | ReasoningEffort; label: string }[] = (['default', ...EFFORT_LEVELS] as const).map((value) => ({ value, label: t(`ai.effort.${value}`) }));
   const MODES: { value: AiMode; label: string }[] = [
     { value: 'ask_all', label: t('ai.mode.ask_all') },
     { value: 'ask_by_risk', label: t('ai.mode.ask_by_risk') },

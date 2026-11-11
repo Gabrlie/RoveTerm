@@ -8,8 +8,8 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::acp::{ConfigChoice, ConfigOption, SessionUpdate};
-use crate::llm::{Client, Delta, LlmError, Message, ToolSpec};
+use crate::acp::{ConfigChoice, ConfigKind, ConfigOption, SessionUpdate};
+use crate::llm::{Client, Delta, Effort, LlmError, Message, ToolSpec};
 use crate::session::{AiEvent, AiSession};
 use crate::tools;
 
@@ -139,12 +139,49 @@ impl Assistant {
             .unwrap_or_default()
     }
 
-    /// The model to answer with, as a session setting.
+    /// The model to answer with and how much it reasons, as session settings.
     pub fn config_options(&self) -> Vec<ConfigOption> {
-        vec![ConfigOption {
+        let effort = self
+            .client
+            .read()
+            .ok()
+            .and_then(|client| client.endpoint().effort);
+        let name = |effort: Option<Effort>| {
+            effort
+                .and_then(|effort| serde_json::to_value(effort).ok())
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "default".into())
+        };
+        let levels = [
+            None,
+            Some(Effort::Minimal),
+            Some(Effort::Low),
+            Some(Effort::Medium),
+            Some(Effort::High),
+            Some(Effort::XHigh),
+            Some(Effort::Max),
+        ];
+        let effort_option = ConfigOption {
+            id: "effort".into(),
+            name: "Reasoning effort".into(),
+            category: Some("thought_level".into()),
+            kind: ConfigKind::Select,
+            current: name(effort),
+            choices: levels
+                .iter()
+                .map(|level| ConfigChoice {
+                    value: name(*level),
+                    name: name(*level),
+                    description: None,
+                })
+                .collect(),
+            legacy: false,
+        };
+        let mut options = vec![ConfigOption {
             id: "model".into(),
             name: "Model".into(),
             category: Some("model".into()),
+            kind: ConfigKind::Select,
             current: self.model(),
             choices: self
                 .models
@@ -155,7 +192,26 @@ impl Assistant {
                     description: None,
                 })
                 .collect(),
-        }]
+            legacy: false,
+        }];
+        options.push(effort_option);
+        options
+    }
+
+    /// Reasons at `effort` (`default`, `minimal` … `max`) from the next request on.
+    pub fn set_effort(&self, effort: &str) -> Result<(), AssistantError> {
+        let level = if effort == "default" {
+            None
+        } else {
+            Some(
+                serde_json::from_value::<Effort>(serde_json::Value::String(effort.to_owned()))
+                    .map_err(|_| AssistantError::UnknownModel(effort.to_owned()))?,
+            )
+        };
+        if let Ok(mut client) = self.client.write() {
+            *client = client.with_effort(level);
+        }
+        Ok(())
     }
 
     /// Answers with `model` (one of the offered models) from the next request on; the

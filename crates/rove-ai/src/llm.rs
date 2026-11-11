@@ -29,13 +29,42 @@ pub enum Format {
     Anthropic,
 }
 
-/// How much the model should reason, where the format can set it.
+/// How much the model should reason, where the format can set it; each format takes the
+/// nearest level it knows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Effort {
+    Minimal,
     Low,
     Medium,
     High,
+    #[serde(rename = "xhigh")]
+    XHigh,
+    Max,
+}
+
+impl Effort {
+    /// OpenAI's `reasoning_effort` / `reasoning.effort`: `minimal` to `xhigh`.
+    fn openai(self) -> &'static str {
+        match self {
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh | Self::Max => "xhigh",
+        }
+    }
+
+    /// Anthropic's `output_config.effort`: `low` to `max`.
+    fn anthropic(self) -> &'static str {
+        match self {
+            Self::Minimal | Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
 }
 
 /// Where and how to reach a model.
@@ -179,6 +208,13 @@ impl Client {
 
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
+    }
+
+    /// The same client reasoning at `effort` (`None`: the model's default).
+    pub fn with_effort(&self, effort: Option<Effort>) -> Self {
+        let mut client = self.clone();
+        client.endpoint.effort = effort;
+        client
     }
 
     /// The same client asking `model` instead.
@@ -343,7 +379,7 @@ fn chat_body(endpoint: &Endpoint, system: &str, messages: &[Message], tools: &[T
         body["max_completion_tokens"] = json!(max);
     }
     if let Some(effort) = endpoint.effort {
-        body["reasoning_effort"] = json!(effort);
+        body["reasoning_effort"] = json!(effort.openai());
     }
     body
 }
@@ -386,19 +422,9 @@ fn responses_body(
         body["max_output_tokens"] = json!(max);
     }
     if let Some(effort) = endpoint.effort {
-        body["reasoning"] = json!({ "effort": effort, "summary": "auto" });
+        body["reasoning"] = json!({ "effort": effort.openai(), "summary": "auto" });
     }
     body
-}
-
-/// Thinking budget for an effort, below the request's `max_tokens`.
-fn thinking_budget(effort: Effort, max_tokens: u32) -> u32 {
-    let budget = match effort {
-        Effort::Low => 2_048,
-        Effort::Medium => 8_192,
-        Effort::High => 24_000,
-    };
-    budget.min(max_tokens.saturating_sub(1_024)).max(1_024)
 }
 
 fn anthropic_body(
@@ -468,9 +494,11 @@ fn anthropic_body(
             .map(|tool| json!({ "name": tool.name, "description": tool.description, "input_schema": tool.parameters }))
             .collect();
     }
+    // Current models take adaptive thinking with an effort level; fixed thinking budgets are
+    // refused by them. A summary of the reasoning is asked for, to show it while it streams.
     if let Some(effort) = endpoint.effort {
-        body["thinking"] =
-            json!({ "type": "enabled", "budget_tokens": thinking_budget(effort, max_tokens) });
+        body["thinking"] = json!({ "type": "adaptive", "display": "summarized" });
+        body["output_config"] = json!({ "effort": effort.anthropic() });
     }
     body
 }
@@ -952,6 +980,19 @@ mod tests {
         assert_eq!(body["messages"][1]["content"][0]["type"], "thinking");
         assert_eq!(body["messages"][1]["content"][1]["input"]["command"], "ls");
         assert_eq!(body["messages"][2]["content"].as_array().unwrap().len(), 2);
-        assert_eq!(body["thinking"]["budget_tokens"], 3072);
+        assert_eq!(body["thinking"], json!({ "type": "adaptive", "display": "summarized" }));
+        assert_eq!(body["output_config"]["effort"], "high");
+        let max = Endpoint {
+            effort: Some(Effort::Max),
+            ..endpoint.clone()
+        };
+        assert_eq!(anthropic_body(&max, "s", &messages, &[])["output_config"]["effort"], "max");
+        assert_eq!(chat_body(&max, "s", &messages, &[])["reasoning_effort"], "xhigh");
+        let minimal = Endpoint {
+            effort: Some(Effort::Minimal),
+            ..endpoint
+        };
+        assert_eq!(anthropic_body(&minimal, "s", &messages, &[])["output_config"]["effort"], "low");
+        assert_eq!(responses_body(&minimal, "s", &messages, &[])["reasoning"]["effort"], "minimal");
     }
 }
