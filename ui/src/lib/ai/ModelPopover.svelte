@@ -5,12 +5,16 @@
   import Icon from '../ui/Icon.svelte';
   import { t } from '../i18n';
   import type { ConfigOption } from '../ipc';
-  import { effortIndex } from './composer';
+  import { effortIndex, fastValue, speedToggle } from './composer';
 
   interface Props {
     model: ConfigOption | null;
     effort: ConfigOption | null;
     toggles: ConfigOption[];
+    /** A speed setting with a fast tier, shown as the fast switch. */
+    speed: ConfigOption | null;
+    /** A setting's title as shown. */
+    title: (option: ConfigOption) => string;
     /** The value in effect for `option` (changes the user made before the agent started too). */
     value: (option: ConfigOption) => string;
     /** A choice's name as shown. */
@@ -21,7 +25,7 @@
     busy: boolean;
   }
 
-  let { model, effort, toggles, value, label, onset, onopen, busy }: Props = $props();
+  let { model, effort, toggles, speed, title, value, label, onset, onopen, busy }: Props = $props();
   let open = $state(false);
   let view = $state<'main' | 'models'>('main');
   let root = $state<HTMLDivElement>();
@@ -79,15 +83,22 @@
   {#if open}
     <div class="popover" role="dialog" aria-label={t('ai.modelSettings')}>
       {#if view === 'main'}
-        {#if !model && !effort && toggles.length === 0}
+        {#if !model && !effort && toggles.length === 0 && !speed}
           <p class="empty">{t('ai.noModelSettings')}</p>
         {/if}
-        {#if toggles.length > 0}
+        {#if toggles.length > 0 || speed}
           <div class="toggles">
+            {#if speed}
+              {@const option = speed}
+              {@const on = value(option) === fastValue(option)}
+              <button type="button" class="chip" class:on role="switch" aria-checked={on} title={title(option)} onclick={() => onset(option.id, speedToggle(option, value(option)))}>
+                <Icon name="quickConnect" size={11} />{t('ai.fastMode')}
+              </button>
+            {/if}
             {#each toggles as option (option.id)}
               {@const on = value(option) === 'true'}
-              <button type="button" class="chip" class:on role="switch" aria-checked={on} title={option.name} onclick={() => onset(option.id, on ? 'false' : 'true')}>
-                <Icon name="quickConnect" size={11} />{option.name}
+              <button type="button" class="chip" class:on role="switch" aria-checked={on} title={title(option)} onclick={() => onset(option.id, on ? 'false' : 'true')}>
+                <Icon name="quickConnect" size={11} />{title(option)}
               </button>
             {/each}
           </div>
@@ -101,7 +112,7 @@
         {#if effort && effort.choices.length > 1}
           <div class="effort">
             <div class="effort-head">
-              <span>{t('ai.effort')}</span>
+              <span>{title(effort)}</span>
               <span class="effort-value">{effortChoice ? label(effort, effortChoice) : ''}</span>
             </div>
             <input

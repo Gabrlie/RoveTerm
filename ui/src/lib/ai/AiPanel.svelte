@@ -10,7 +10,7 @@
   import AuditDialog from './AuditDialog.svelte';
   import UsageMeter from './UsageMeter.svelte';
   import ModelPopover from './ModelPopover.svelte';
-  import { builtinCommands, slashItems, slashQuery, splitOptions, type SlashItem } from './composer';
+  import { builtinCommands, choiceKey, optionKey, slashItems, slashQuery, splitOptions, type SlashItem } from './composer';
   import { ai, contextKey } from './ai.svelte';
   import { outcomeState, rows, subject, toolSubject, type ApprovalItem } from './chatview';
   import { hostOf, workspace } from '../workspace/workspace.svelte';
@@ -161,17 +161,14 @@
 
   /** A choice's name; the built-in assistant's effort levels in the user's language. */
   function entryName(option: ConfigOption, entry: { value: string; name: string }): string {
-    if (option.id === 'effort' && agentRef?.startsWith('builtin:')) {
-      const key = `ai.effort.${entry.value}` as MessageKey;
-      if (t(key) !== key) return t(key);
-    }
-    return entry.name;
+    const key = choiceKey(option, entry.value);
+    return key ? t(key) : entry.name;
   }
 
-  /** The option's title; the built-in assistant's in the user's language. */
+  /** The option's title, in the user's language when RoveTerm knows the setting. */
   function optionName(option: ConfigOption): string {
-    if (!agentRef?.startsWith('builtin:')) return option.name;
-    return option.id === 'effort' ? t('ai.effort') : option.id === 'model' ? t('ai.model') : option.name;
+    const key = optionKey(option);
+    return key ? t(key) : option.name;
   }
 
   /** Starts a local agent that has not started yet, without a message, so that it lists its
@@ -559,6 +556,8 @@
           model={split.model}
           effort={split.effort}
           toggles={split.toggles}
+          speed={split.speed}
+          title={optionName}
           value={(option) => chat.optionValue(option)}
           label={entryName}
           onset={(option, value) => void chat.setOption(option, value)}

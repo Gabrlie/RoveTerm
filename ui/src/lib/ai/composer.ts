@@ -2,6 +2,7 @@
 // (model, reasoning effort, switches such as fast mode), and what the `/` menu lists (the
 // agent's commands and its other settings).
 import type { AgentCommand, ConfigOption } from '../ipc';
+import type { MessageKey } from '../i18n';
 
 /** An agent's settings, by where the input card shows them. */
 export interface SplitOptions {
@@ -9,6 +10,9 @@ export interface SplitOptions {
   effort: ConfigOption | null;
   /** On/off settings, shown as switches in the model popover (Claude Code's fast mode). */
   toggles: ConfigOption[];
+  /** A choice of speed with a fast tier (Codex's `service_tier`), switched in the model popover;
+   *  its other tiers stay in the `/` menu. */
+  speed: ConfigOption | null;
   /** Everything else, listed in the `/` menu. */
   others: ConfigOption[];
 }
@@ -20,8 +24,61 @@ export function splitOptions(options: readonly ConfigOption[]): SplitOptions {
     options.find((option) => option !== model && option.kind === 'select' && /effort|reasoning|thought/i.test(option.id)) ??
     null;
   const toggles = options.filter((option) => option.kind === 'boolean');
+  const speed =
+    options.find((option) => option.kind === 'select' && option !== model && option !== effort && SPEED.test(`${option.id} ${option.name}`) && fastValue(option) !== null) ?? null;
   const others = options.filter((option) => option !== model && option !== effort && option.kind !== 'boolean');
-  return { model, effort, toggles, others };
+  return { model, effort, toggles, speed, others };
+}
+
+const SPEED = /fast|speed|service[_ -]?tier|priority/i;
+
+/** The fast tier of a speed setting. */
+export function fastValue(option: ConfigOption): string | null {
+  return option.choices.find((choice) => /^(fast|priority)$/i.test(choice.value) || /^fast\b/i.test(choice.name))?.value ?? null;
+}
+
+/** What the fast switch sets: the fast tier when it is off, else the standard tier (`default`,
+ *  `standard`, `auto`, else the first other one). */
+export function speedToggle(option: ConfigOption, current: string): string {
+  const fast = fastValue(option);
+  if (fast !== null && current !== fast) return fast;
+  const others = option.choices.filter((choice) => choice.value !== fast);
+  return (others.find((choice) => /^(default|standard|auto|normal)$/i.test(choice.value)) ?? others[0])?.value ?? current;
+}
+
+/** The dictionary entry naming a setting RoveTerm knows, whatever agent offers it. */
+export function optionKey(option: ConfigOption): MessageKey | null {
+  if (option.category === 'model') return 'ai.model';
+  if (option.category === 'thought_level' || /^(effort|reasoning[_-]?effort|thought[_-]?level)$/i.test(option.id)) return 'ai.effort';
+  if (SPEED.test(option.id) || /fast/i.test(option.name)) return 'ai.fastMode';
+  const known: Record<string, MessageKey> = { sandbox: 'ai.option.sandbox', sandbox_mode: 'ai.option.sandbox', approval: 'ai.option.approval', approval_policy: 'ai.option.approval', personality: 'ai.option.personality' };
+  return known[option.id.toLowerCase()] ?? null;
+}
+
+const CHOICES: Record<string, MessageKey> = {
+  minimal: 'ai.effort.minimal',
+  low: 'ai.effort.low',
+  medium: 'ai.effort.medium',
+  high: 'ai.effort.high',
+  xhigh: 'ai.effort.xhigh',
+  max: 'ai.effort.max',
+  none: 'ai.effort.none',
+  fast: 'ai.speed.fast',
+  priority: 'ai.speed.fast',
+  flex: 'ai.speed.flex',
+  default: 'ai.speed.default',
+  standard: 'ai.speed.default',
+  'read-only': 'ai.sandbox.readOnly',
+  'workspace-write': 'ai.sandbox.workspaceWrite',
+  'danger-full-access': 'ai.sandbox.fullAccess',
+  full: 'ai.sandbox.fullAccess',
+};
+
+/** The dictionary entry naming a choice RoveTerm knows (effort levels, speed tiers, sandbox
+ *  modes); model names and other choices keep the agent's name. */
+export function choiceKey(option: ConfigOption, value: string): MessageKey | null {
+  if (option.category === 'model') return null;
+  return CHOICES[value.toLowerCase()] ?? null;
 }
 
 /** Commands of the built-in assistant, shown in its `/` menu. It has none yet; this is where
