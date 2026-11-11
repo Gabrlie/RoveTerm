@@ -163,6 +163,8 @@ export class Chat {
           this.usage = { used: update.used, size: update.size };
         } else if (update.kind === 'commands') {
           this.commands = update.commands;
+        } else if (update.kind === 'compacted') {
+          this.items.push({ kind: 'compacted', summary: update.summary });
         } else if (update.kind === 'stats') {
           const { kind: _kind, ...stats } = update;
           this.stats = stats;

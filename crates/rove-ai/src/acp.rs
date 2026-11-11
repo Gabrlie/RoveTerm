@@ -108,6 +108,11 @@ pub enum SessionUpdate {
         used: u64,
         size: u64,
     },
+    /// The built-in assistant summarized the earlier conversation to stay within the context
+    /// window.
+    Compacted {
+        summary: String,
+    },
     /// The agent's slash commands (its full list each time).
     Commands {
         commands: Vec<AgentCommand>,

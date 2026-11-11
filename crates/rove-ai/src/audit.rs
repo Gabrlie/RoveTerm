@@ -29,6 +29,8 @@ pub const KIND_TURN_ENDED: &str = "ai/turn_ended";
 pub const KIND_ENDED: &str = "ai/session_ended";
 /// The session's title: written from the first prompt, and again when the user renames it.
 pub const KIND_RENAMED: &str = "ai/renamed";
+/// The built-in assistant summarized the earlier conversation (`payload.summary`).
+pub const KIND_COMPACTED: &str = "ai/compacted";
 /// The user deleted a conversation (`payload.session`); the record stays, without a session,
 /// so the conversation is not brought back by sync.
 pub const KIND_DELETED: &str = "ai/conversation_deleted";
@@ -386,6 +388,12 @@ impl Auditor {
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .push_str(text);
+            }
+            AiEvent::Update {
+                update: SessionUpdate::Compacted { summary },
+            } => {
+                self.flush();
+                self.write(KIND_COMPACTED, json!({ "summary": summary }));
             }
             // The agent's own tools: what it reported once they finished.
             AiEvent::Update {

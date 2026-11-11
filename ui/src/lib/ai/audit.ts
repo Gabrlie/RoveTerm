@@ -74,6 +74,8 @@ export function auditLine(entry: AiRecord): AuditLine | null {
       if (!result && payload.status) note = str(payload.status);
       return { kind, text, note, detail, tone };
     }
+    case 'compacted':
+      return { kind, text: '', note: '', detail: str(payload.summary), tone: 'muted' };
     case 'turn_ended':
       return { kind, text: '', note: str(payload.stop_reason), detail: '', tone: 'muted' };
     case 'session_ended':

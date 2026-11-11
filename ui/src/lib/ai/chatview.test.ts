@@ -114,3 +114,8 @@ test('answers in a continued session reach its own approvals', () => {
   assert.equal(waitingApproval(items, 1), fresh);
   assert.equal(waitingApproval([{ ...fresh, answer: 'allow_once' }], 1), undefined);
 });
+
+test('a compaction is rebuilt from its record', () => {
+  const items = itemsFromRecords([{ ts: 1, kind: 'ai/compacted', payload: { summary: 'earlier' } }]);
+  assert.deepEqual(items, [{ kind: 'compacted', summary: 'earlier' }]);
+});

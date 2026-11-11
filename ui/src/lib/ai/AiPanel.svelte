@@ -481,6 +481,11 @@
             {@const state = item.answer === 'deny' || item.answer === null ? 'denied' : outcomeState(item.outcome)}
             {@render operationRow(key, item.operation, item.outcome, state)}
           {/if}
+        {:else if item.kind === 'compacted'}
+          <details class="compacted">
+            <summary>{t('ai.compacted')}</summary>
+            <p class="selectable">{item.summary}</p>
+          </details>
         {:else if item.kind === 'connection'}
           <div class="connection {item.state}">
             <button type="button" class="op" aria-expanded={!!expanded[key]} onclick={() => toggle(key)}>
@@ -750,6 +755,29 @@
     background: var(--fill);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+  .compacted summary {
+    color: var(--fg-subtle);
+    font-size: 11px;
+    text-align: center;
+    list-style: none;
+    cursor: default;
+  }
+  .compacted summary::before,
+  .compacted summary::after {
+    content: '— ';
+  }
+  .compacted summary::after {
+    content: ' —';
+  }
+  .compacted p {
+    margin: var(--space-1) 0 0;
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--fill);
+    color: var(--fg-muted);
+    font-size: var(--text-footnote);
+    white-space: pre-wrap;
   }
   .thought summary {
     color: var(--fg-muted);

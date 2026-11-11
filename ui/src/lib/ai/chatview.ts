@@ -57,7 +57,9 @@ export type ChatItem =
   | { kind: 'operation'; operation: AiOperation; assessment: Assessment; approved: boolean; outcome: AiOutcome }
   | { kind: 'notice'; text: string; code: string | null }
   /** The agent lost its connection to the model service: retrying, given up, or back. */
-  | { kind: 'connection'; detail: string; retries: number; state: 'retrying' | 'failed' | 'recovered' };
+  | { kind: 'connection'; detail: string; retries: number; state: 'retrying' | 'failed' | 'recovered' }
+  /** The earlier conversation was summarized to stay within the context window. */
+  | { kind: 'compacted'; summary: string };
 
 export type OperationItem = Extract<ChatItem, { kind: 'operation' }>;
 export type ApprovalItem = Extract<ChatItem, { kind: 'approval' }>;
@@ -237,6 +239,9 @@ export function itemsFromRecords(records: AiRecord[]): ChatItem[] {
         else if (operation.op !== 'agent_tool') items.push({ kind: 'operation', operation, assessment: assessed(payload.risk), approved: payload.approved === true, outcome });
         break;
       }
+      case 'ai/compacted':
+        items.push({ kind: 'compacted', summary: typeof payload.summary === 'string' ? payload.summary : '' });
+        break;
       case 'ai/turn_ended': {
         const reason = typeof payload.stop_reason === 'string' ? payload.stop_reason : '';
         if (!reason.startsWith('error: ')) break;
