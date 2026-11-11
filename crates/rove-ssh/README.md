@@ -9,7 +9,7 @@ SSH Provider：认证、host key 校验，打开 PTY shell channel，`FileSystem
 - `SshConnector::open_terminal` 复用同一 `user@host:port`（主机名不区分大小写）的连接，每个终端是一个独立的 channel；并发打开同一目标时只建立一条连接。复用时忽略传入的 `AuthSpec`。
 - 连接上最后一个终端关闭后，连接再空闲 `idle_disconnect_secs` 秒才断开；期间有新终端打开则取消断开。
 - 复用的连接打开 channel 失败时，丢弃这条连接并重连一次。调用方可以用 `evict` 主动丢弃一条坏掉的共享连接。
-- `open_live` 只在已有存活连接时打开 channel，不需要凭据；没有存活连接时返回 `None`。应用在解析凭据之前先调用它，因此在已连接的主机上分屏不会再次索取密码。
+- `live` 从不等待正在进行的连接（此时返回 `None`）；`open_live` 只在已有存活连接时打开 channel，不需要凭据；没有存活连接时返回 `None`。应用在解析凭据之前先调用它，因此在已连接的主机上分屏不会再次索取密码。
 - `SshConnector::connect` 建立不进入连接池的独立连接；`live` 返回存活的共享连接，不会新建。
 - `SshConnection::open_sftp` 打开 SFTP 会话 `SftpFs`（实现 `rove_fs::FileSystem`）。会话和终端一样持有 channel 租约；服务器不提供 `sftp` 子系统时返回 `SshError::Sftp`。
 - `Forwards` 在共享连接上运行 local、remote、dynamic（SOCKS5）转发；运行中的转发持有 channel 租约，连接关闭时状态变为 `failed`。状态变化通过 Live 事件 `ForwardStatus` 广播。

@@ -400,10 +400,12 @@ impl SshConnector {
         Ok(connection)
     }
 
-    /// Returns the live shared connection to `target`, if any, without connecting.
+    /// Returns the live shared connection to `target`, if any, without connecting. Never waits:
+    /// while a connection to `target` is being made (which can wait on the user, such as a host
+    /// key confirmation), it returns `None` instead of waiting behind it.
     pub async fn live(&self, target: &SshTarget) -> Option<Arc<SshConnection>> {
         let slot = self.pool.slot(pool::PoolKey::of(target));
-        let guard = slot.connection.lock().await;
+        let guard = slot.connection.try_lock().ok()?;
         let connection = guard
             .as_ref()
             .filter(|connection| !connection.is_closed())?;
@@ -535,6 +537,41 @@ mod tests {
 
     fn pw(text: &str) -> Zeroizing<String> {
         Zeroizing::new(text.into())
+    }
+
+    struct Trusting;
+
+    #[async_trait::async_trait]
+    impl HostKeyVerifier for Trusting {
+        async fn verify(
+            &self,
+            _hostname: &str,
+            _port: u16,
+            _route: &str,
+            _key: &rove_vault::HostKey,
+        ) -> Result<(), HostKeyRejection> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn live_does_not_wait_behind_a_connection_being_made() {
+        let connector = SshConnector::new(&SshConfig::default(), Arc::new(Trusting));
+        let target = SshTarget {
+            hostname: "203.0.113.1".into(),
+            port: 22,
+            username: "root".into(),
+            host_id: None,
+            title: None,
+            route: String::new(),
+        };
+        // A connection attempt holds the slot (as one waiting on the user would).
+        let slot = connector.pool.slot(pool::PoolKey::of(&target));
+        let _connecting = slot.connection.lock().await;
+        let found = tokio::time::timeout(std::time::Duration::from_secs(1), connector.live(&target))
+            .await
+            .expect("live waited for the connection attempt");
+        assert!(found.is_none());
     }
 
     #[test]

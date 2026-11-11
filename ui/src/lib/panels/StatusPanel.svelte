@@ -27,7 +27,11 @@
   import { sourceKey } from '../workspace/workspace.svelte';
 
   /** With no `source` (nothing remote focused) the panel shows its skeleton and samples nothing. */
-  let { source, visible }: { source: RemoteSource | null; visible: boolean } = $props();
+  /** `session` is the focused terminal's session: when it connects, sampling starts at once. */
+  let { source, visible, session = null }: { source: RemoteSource | null; visible: boolean; session?: string | null } = $props();
+
+  /** Longest a sample may take before the panel stops waiting for it. */
+  const SAMPLE_LIMIT_MS = 20_000;
 
   /** Samples kept per core: two minutes at the default interval. */
   const HISTORY = 40;
@@ -59,7 +63,10 @@
   async function sample(): Promise<void> {
     if (!source || !key) return;
     try {
-      const next = await serverStats(source);
+      const next = await Promise.race([
+        serverStats(source),
+        new Promise<never>((_, reject) => setTimeout(() => reject({ code: 'ssh.not_connected', message: 'no answer' }), SAMPLE_LIMIT_MS)),
+      ]);
       if (stopped) return;
       const now = Date.now();
       if (previous) {
@@ -100,8 +107,10 @@
     }, prefs.value.status.interval_secs * 1000);
   }
 
-  // Sample immediately when shown, then on a timer while visible.
+  // Sample immediately when shown or when the focused terminal connects, then on a timer while
+  // visible.
   $effect(() => {
+    void session;
     if (visible) {
       void sample().then(schedule);
     } else {

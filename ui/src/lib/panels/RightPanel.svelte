@@ -43,7 +43,7 @@
       <AiPanel {onsettings} />
     {:else if page === 'status'}
       {#key source ? sourceKey(source) : ''}
-        <StatusPanel {source} visible={true} />
+        <StatusPanel {source} visible={true} session={workspace.focusedPane?.sessionId ?? null} />
       {/key}
     {:else}
       <SnippetsPanel />

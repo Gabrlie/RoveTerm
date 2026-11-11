@@ -49,7 +49,7 @@
 `SshConnector` 按 (小写主机名, 端口, 用户名, 路线) 维护连接池；地址相同但经不同跳板机或代理到达的主机不会共用连接：
 
 - `shared(target, auth)` 返回该目标的存活连接；没有时用 `auth` 直连新建。`shared_via(target, auth, via)` 按 `via` 建立传输。每个目标有一把异步锁，并发请求只会建立一条连接。
-- `live(target)` 返回存活连接，不需要凭据；没有时返回 `None`。`open_live(target, size)` 在它之上打开 shell。
+- `live(target)` 返回存活连接，不需要凭据；没有时返回 `None`。它从不等待：同一目标正在建立连接（可能在等用户确认主机密钥或输入密码）时也返回 `None`，调用方不会卡在连接之后。`open_live(target, size)` 在它之上打开 shell。
 - `open_terminal` 在共享连接上打开 channel；如果复用的连接打开 channel 失败，丢弃它并重连一次。
 - `evict(target, connection)` 在该连接仍是共享连接时把它移出连接池，已打开的 channel 不受影响。
 - 每个打开的 channel 持有一个租约。最后一个租约释放后，启动一个 `idle_disconnect_secs` 的计时器；期间连接被再次取出或打开新 channel，计时作废，否则断开连接。
