@@ -843,7 +843,8 @@ fn check_session_id(id: &str) -> Result<(), CommandError> {
     Ok(())
 }
 
-/// The `ai/*` records of session `id`, oldest first.
+/// The `ai/*` records of session `id`, oldest first (by time: records synced from another
+/// device are appended later but keep their own time).
 async fn session_records(
     state: &AppState,
     id: String,
@@ -859,10 +860,12 @@ async fn session_records(
     .await
     .map_err(|error| CommandError::new("app.task", error.to_string()))?
     .map_err(|error| CommandError::new("journal.read", error.to_string()))?;
-    Ok(records
+    let mut records: Vec<rove_journal::JournalRecord> = records
         .into_iter()
         .filter(|record| record.kind.starts_with("ai/"))
-        .collect())
+        .collect();
+    records.sort_by_key(|record| record.ts);
+    Ok(records)
 }
 
 /// The newest records of `kind`.
@@ -933,8 +936,13 @@ pub async fn ai_sessions(
                 id,
             })
         })
-        .take(MAX_SESSIONS as usize)
-        .collect())
+        .collect::<Vec<_>>())
+    .map(|mut sessions| {
+        // Synced conversations are appended late but keep their own time.
+        sessions.sort_by_key(|session| std::cmp::Reverse(session.started));
+        sessions.truncate(MAX_SESSIONS as usize);
+        sessions
+    })
 }
 
 /// The audit records of AI session `id`, oldest first.

@@ -120,3 +120,19 @@ fn newest_first_reads_the_latest_record_of_a_kind() {
     assert_eq!(latest.len(), 1);
     assert_eq!(latest[0].seq, last);
 }
+
+#[test]
+fn imported_records_keep_their_time() {
+    let journal = SqliteJournal::open_in_memory().unwrap();
+    journal.append(record("a/x", Some("s1"))).unwrap();
+    journal.import(1_000, record("a/y", Some("s1"))).unwrap();
+    let records = journal
+        .read(&JournalQuery {
+            session_id: Some("s1".into()),
+            ..JournalQuery::default()
+        })
+        .unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[1].ts, 1_000);
+    assert!(records[0].ts > 1_000);
+}

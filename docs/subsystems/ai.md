@@ -107,7 +107,7 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 | `ai_rename(id, title)` | 给会话起名（1–120 个字符，运行中或已结束均可），写入 `ai/renamed` 记录 |
 | `ai_prompt(id, text)` | 发出提示并等待回合结束，返回结束原因 |
 | `ai_cancel` / `ai_answer` / `ai_set_mode` / `ai_stop` | 取消回合、回答审批、切换审批模式、结束会话 |
-| `ai_sessions()` / `ai_records(id)` | 从 Journal 读出最近 100 个 AI 会话（同一 id 继续过的只列一次，按最近一次开始；附标题、`agent_ref` 与主机上下文），以及某个会话的全部 `ai/*` 记录（最多 5000 条），供审计回看与继续对话 |
+| `ai_sessions()` / `ai_records(id)` | 从 Journal 读出最近 100 个 AI 会话（含从其他设备同步来的，见 [sync](sync.md#应用中的同步)；列表按开始时间、记录按发生时间排序；同一 id 继续过的只列一次，按最近一次开始；附标题、`agent_ref` 与主机上下文），以及某个会话的全部 `ai/*` 记录（最多 5000 条），供审计回看与继续对话 |
 
 启动时：
 

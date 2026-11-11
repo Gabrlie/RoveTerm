@@ -7,6 +7,8 @@
 ```rust
 pub trait JournalStore: Send + Sync {
     fn append(&self, record: NewRecord) -> Result<i64, JournalError>;
+    /// 追加一条发生在 `ts`（Unix 毫秒）的记录，如从其他设备同步来的记录。
+    fn import(&self, ts: i64, record: NewRecord) -> Result<i64, JournalError>;
     fn read(&self, query: &JournalQuery) -> Result<Vec<JournalRecord>, JournalError>;
 }
 ```

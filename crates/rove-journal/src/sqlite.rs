@@ -68,11 +68,15 @@ fn now_millis() -> i64 {
 
 impl JournalStore for SqliteJournal {
     fn append(&self, record: NewRecord) -> Result<i64, JournalError> {
+        self.import(now_millis(), record)
+    }
+
+    fn import(&self, ts: i64, record: NewRecord) -> Result<i64, JournalError> {
         let payload = serde_json::to_string(&record.payload)?;
         let conn = self.conn.lock();
         conn.execute(
             "INSERT INTO events (ts, kind, session_id, payload) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![now_millis(), record.kind, record.session_id, payload],
+            rusqlite::params![ts, record.kind, record.session_id, payload],
         )?;
         Ok(conn.last_insert_rowid())
     }

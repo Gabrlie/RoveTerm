@@ -100,6 +100,141 @@ fn sync_error(error: SyncError) -> CommandError {
     CommandError::new(code, error.to_string())
 }
 
+/// Record kind of a synced AI conversation (its journal records).
+const CONVERSATION_KIND: &str = "ai_conversation";
+/// Most conversations synced: the most recently started.
+const MAX_CONVERSATIONS: usize = 100;
+/// Conversations started longer ago than this are not synced.
+const CONVERSATION_AGE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
+
+/// What a device syncs: the vault's records, and its recent AI conversations from the journal.
+struct SyncStore {
+    vault: VaultStore,
+    conversations: ConversationStore,
+}
+
+impl RecordStore for SyncStore {
+    fn records(&self) -> Result<Vec<Record>, SyncError> {
+        let mut records = self.vault.records()?;
+        records.extend(self.conversations.records()?);
+        Ok(records)
+    }
+
+    fn apply(&self, changes: &[Change]) -> Result<(), SyncError> {
+        let (conversations, others): (Vec<Change>, Vec<Change>) = changes
+            .iter()
+            .cloned()
+            .partition(|change| change.kind == CONVERSATION_KIND);
+        self.vault.apply(&others)?;
+        self.conversations.apply(&conversations)
+    }
+}
+
+/// Recent AI conversations as sync records; arriving ones are merged into the journal (records
+/// it lacks are added with their own time). The journal only appends, so deletions are ignored.
+struct ConversationStore(Arc<dyn rove_journal::JournalStore>);
+
+fn journal_error(error: rove_journal::JournalError) -> SyncError {
+    SyncError::Store(error.to_string())
+}
+
+impl ConversationStore {
+    fn session(&self, id: &str) -> Result<Vec<rove_journal::JournalRecord>, SyncError> {
+        self.0
+            .read(&rove_journal::JournalQuery {
+                session_id: Some(id.to_owned()),
+                limit: Some(5000),
+                ..rove_journal::JournalQuery::default()
+            })
+            .map_err(journal_error)
+    }
+
+    fn records(&self) -> Result<Vec<Record>, SyncError> {
+        let starts = self
+            .0
+            .read(&rove_journal::JournalQuery {
+                kind: Some(rove_ai::audit::KIND_STARTED.to_owned()),
+                limit: Some(1000),
+                newest_first: true,
+                ..rove_journal::JournalQuery::default()
+            })
+            .map_err(journal_error)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis() as i64);
+        let cutoff = now - CONVERSATION_AGE_MS;
+        let mut ids: Vec<String> = Vec::new();
+        for start in starts {
+            let Some(id) = start.session_id.filter(|_| start.ts >= cutoff) else {
+                continue;
+            };
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+            if ids.len() >= MAX_CONVERSATIONS {
+                break;
+            }
+        }
+        let mut records = Vec::new();
+        for id in ids {
+            let entries: Vec<(i64, String, serde_json::Value)> = self
+                .session(&id)?
+                .into_iter()
+                .map(|record| (record.ts, record.kind, record.payload))
+                .collect();
+            if let Some(body) = rove_ai::audit::conversation_body(&entries) {
+                records.push(Record {
+                    kind: CONVERSATION_KIND.to_owned(),
+                    id,
+                    body,
+                });
+            }
+        }
+        Ok(records)
+    }
+
+    fn apply(&self, changes: &[Change]) -> Result<(), SyncError> {
+        for change in changes {
+            // Ids and sizes from another device are checked like any outside input.
+            let Some(body) = &change.body else { continue };
+            if !change.id.starts_with("ai-")
+                || change.id.len() > 64
+                || body.to_string().len() > rove_ai::audit::SYNC_MAX * 2
+            {
+                continue;
+            }
+            let local: Vec<(i64, String)> = self
+                .session(&change.id)?
+                .into_iter()
+                .map(|record| (record.ts, record.kind))
+                .collect();
+            for (ts, kind, payload) in rove_ai::audit::missing_records(&local, body) {
+                self.0
+                    .import(
+                        ts,
+                        rove_journal::NewRecord {
+                            kind,
+                            session_id: Some(change.id.clone()),
+                            payload,
+                        },
+                    )
+                    .map_err(journal_error)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl RecordStore for ConversationStore {
+    fn records(&self) -> Result<Vec<Record>, SyncError> {
+        ConversationStore::records(self)
+    }
+
+    fn apply(&self, changes: &[Change]) -> Result<(), SyncError> {
+        ConversationStore::apply(self, changes)
+    }
+}
+
 /// The vault as the sync engine's record store.
 struct VaultStore(Arc<Vault>);
 
@@ -322,7 +457,7 @@ pub async fn sync_setup(
         local.state
     };
     round(
-        &state.vault,
+        state.inner(),
         backend.as_ref(),
         &local.target,
         &key,
@@ -336,20 +471,25 @@ pub async fn sync_setup(
 /// then holds the remote changes already written to the vault). A space that no longer opens
 /// with `key` stops syncing until the password is entered again.
 async fn round(
-    vault: &Arc<Vault>,
+    state: &AppState,
     backend: &dyn SyncBackend,
     target: &SyncTarget,
     key: &SyncKey,
     mut sync_state: SyncState,
     secret: Option<&Zeroizing<String>>,
 ) -> Result<Report, CommandError> {
+    let vault = &state.vault;
     if let Err(error) = rove_sync::verify_space(backend, key).await {
         if matches!(error, SyncError::SpaceChanged) {
             write_local(vault, target, &sync_state, None, secret)?;
         }
         return Err(sync_error(error));
     }
-    let result = rove_sync::sync(backend, key, &mut sync_state, &VaultStore(vault.clone())).await;
+    let store = SyncStore {
+        vault: VaultStore(vault.clone()),
+        conversations: ConversationStore(state.journal.clone()),
+    };
+    let result = rove_sync::sync(backend, key, &mut sync_state, &store).await;
     write_local(vault, target, &sync_state, Some(key), secret)?;
     result.map_err(sync_error)
 }
@@ -387,7 +527,7 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<Report, CommandError
     })?;
     let backend = target.backend(secret.as_deref().map(String::as_str))?;
     round(
-        &state.vault,
+        state.inner(),
         backend.as_ref(),
         &target,
         &key,
@@ -435,5 +575,67 @@ mod tests {
             assert_ne!(fresh.device, "device-1");
             assert!(key.is_none());
         }
+    }
+
+    /// A conversation recorded on one device shows up on another, continues there, and the
+    /// continuation comes back without repeats.
+    #[test]
+    fn conversations_sync_both_ways() {
+        use rove_journal::{JournalQuery, JournalStore, NewRecord, SqliteJournal};
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let space = tempfile::tempdir().unwrap();
+        let backend = FolderBackend::new(space.path());
+        let key = SyncKey::from_bytes([3; 32]);
+        let device = |name: &str| {
+            let journal: Arc<dyn JournalStore> = Arc::new(SqliteJournal::open_in_memory().unwrap());
+            (journal.clone(), ConversationStore(journal), SyncState::new(name))
+        };
+        let (journal_a, store_a, mut state_a) = device("a");
+        let (journal_b, store_b, mut state_b) = device("b");
+        let add = |journal: &Arc<dyn JournalStore>, kind: &str, text: &str| {
+            journal
+                .append(NewRecord {
+                    kind: kind.into(),
+                    session_id: Some("ai-1".into()),
+                    payload: serde_json::json!({ "text": text }),
+                })
+                .unwrap();
+        };
+        add(&journal_a, rove_ai::audit::KIND_STARTED, "");
+        add(&journal_a, rove_ai::audit::KIND_PROMPT, "disk?");
+        let texts = |journal: &Arc<dyn JournalStore>| -> Vec<String> {
+            journal
+                .read(&JournalQuery {
+                    session_id: Some("ai-1".into()),
+                    ..JournalQuery::default()
+                })
+                .unwrap()
+                .into_iter()
+                .map(|record| format!("{}:{}", record.kind, record.payload["text"].as_str().unwrap_or("")))
+                .collect()
+        };
+        runtime.block_on(async {
+            rove_sync::sync(&backend, &key, &mut state_a, &store_a).await.unwrap();
+            rove_sync::sync(&backend, &key, &mut state_b, &store_b).await.unwrap();
+        });
+        assert_eq!(texts(&journal_b).len(), 2);
+
+        add(&journal_b, rove_ai::audit::KIND_PROMPT, "thanks");
+        runtime.block_on(async {
+            rove_sync::sync(&backend, &key, &mut state_b, &store_b).await.unwrap();
+            rove_sync::sync(&backend, &key, &mut state_a, &store_a).await.unwrap();
+            // Nothing new either way: the stores settle.
+            let settled = rove_sync::sync(&backend, &key, &mut state_a, &store_a).await.unwrap();
+            assert_eq!(settled.pushed, 0);
+        });
+        let mut a = texts(&journal_a);
+        let mut b = texts(&journal_b);
+        a.sort();
+        b.sort();
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 3);
     }
 }

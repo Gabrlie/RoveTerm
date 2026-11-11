@@ -79,6 +79,10 @@ pub trait JournalStore: Send + Sync {
     /// Appends `record` and returns its sequence number.
     fn append(&self, record: NewRecord) -> Result<i64, JournalError>;
 
+    /// Appends `record` that happened at `ts` (Unix milliseconds) elsewhere, such as a record
+    /// synced from another device; returns its sequence number.
+    fn import(&self, ts: i64, record: NewRecord) -> Result<i64, JournalError>;
+
     /// Returns records matching `query` in ascending sequence order, or descending with
     /// [`JournalQuery::newest_first`].
     fn read(&self, query: &JournalQuery) -> Result<Vec<JournalRecord>, JournalError>;

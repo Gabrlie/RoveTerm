@@ -76,6 +76,94 @@ pub fn renamed(ai_session: &str, title: &str, auto: bool) -> NewRecord {
     }
 }
 
+/// Longest text kept per field of a synced conversation.
+const SYNC_CLIP: usize = 2 * 1024;
+/// Largest synced conversation (JSON bytes); a longer one keeps its newest records.
+pub const SYNC_MAX: usize = 64 * 1024;
+
+/// `value` with every string longer than [`SYNC_CLIP`] bytes cut short.
+fn clipped(value: &Value) -> Value {
+    match value {
+        Value::String(text) if text.len() > SYNC_CLIP => {
+            let mut end = SYNC_CLIP;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            Value::String(format!("{}…", &text[..end]))
+        }
+        Value::Array(items) => Value::Array(items.iter().map(clipped).collect()),
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, value)| (key.clone(), clipped(value)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// A session's records (`ts`, `kind`, `payload`) as one synced conversation: ordered by time,
+/// long texts clipped, at most [`SYNC_MAX`] bytes (the oldest records give way, but never the
+/// start and title records); `None` without a start record.
+pub fn conversation_body(records: &[(i64, String, Value)]) -> Option<Value> {
+    let mut entries: Vec<Value> = records
+        .iter()
+        .filter(|(_, kind, _)| kind.starts_with("ai/"))
+        .map(|(ts, kind, payload)| json!({ "ts": ts, "kind": kind, "payload": clipped(payload) }))
+        .collect();
+    entries.sort_by_key(|entry| entry["ts"].as_i64().unwrap_or(0));
+    // Without its start record a conversation could not be listed or continued.
+    if !entries.iter().any(|entry| entry["kind"] == KIND_STARTED) {
+        return None;
+    }
+    let pinned = |entry: &Value| entry["kind"] == KIND_STARTED || entry["kind"] == KIND_RENAMED;
+    let mut size: usize = entries.iter().map(|entry| entry.to_string().len() + 1).sum();
+    let mut dropped = vec![false; entries.len()];
+    for (at, entry) in entries.iter().enumerate() {
+        if size <= SYNC_MAX {
+            break;
+        }
+        if !pinned(entry) {
+            size -= entry.to_string().len() + 1;
+            dropped[at] = true;
+        }
+    }
+    let kept: Vec<&Value> = entries
+        .iter()
+        .zip(&dropped)
+        .filter(|(_, dropped)| !**dropped)
+        .map(|(entry, _)| entry)
+        .collect();
+    Some(json!({ "records": kept }))
+}
+
+/// The records of a synced conversation `body` that the local session (its records' `ts` and
+/// `kind`) does not have yet. Records are told apart by time and kind, counting repeats, so the
+/// clipped copies of local records are not added again.
+pub fn missing_records(local: &[(i64, String)], body: &Value) -> Vec<(i64, String, Value)> {
+    let mut have: std::collections::HashMap<(i64, &str), usize> = std::collections::HashMap::new();
+    for (ts, kind) in local {
+        *have.entry((*ts, kind.as_str())).or_default() += 1;
+    }
+    let mut seen: std::collections::HashMap<(i64, String), usize> = std::collections::HashMap::new();
+    body.get("records")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let ts = entry.get("ts")?.as_i64()?;
+            let kind = entry.get("kind")?.as_str()?;
+            if !kind.starts_with("ai/") || kind.len() > 64 {
+                return None;
+            }
+            let count = seen.entry((ts, kind.to_owned())).or_default();
+            *count += 1;
+            let local = have.get(&(ts, kind)).copied().unwrap_or(0);
+            (*count > local).then(|| (ts, kind.to_owned(), entry.get("payload").cloned().unwrap_or(Value::Null)))
+        })
+        .collect()
+}
+
 /// The conversation of a session from its records (`kind`, `payload`, oldest first), for the
 /// built-in assistant to go on with: prompts and replies, with what ran noted in the replies.
 /// Tool output is left out.
@@ -456,6 +544,40 @@ mod tests {
             .map(|record| record.kind)
             .collect();
         assert_eq!(kinds, [KIND_STARTED, KIND_PROMPT, KIND_RENAMED, KIND_ENDED]);
+    }
+
+    #[test]
+    fn conversations_sync_clipped_and_merge_without_repeats() {
+        let records = vec![
+            (2, KIND_PROMPT.to_owned(), json!({ "text": "x".repeat(10_000) })),
+            (1, KIND_STARTED.to_owned(), json!({ "agent": "A" })),
+            (3, KIND_MESSAGE.to_owned(), json!({ "text": "hi" })),
+            (3, KIND_MESSAGE.to_owned(), json!({ "text": "again" })),
+        ];
+        let body = conversation_body(&records).unwrap();
+        let list = body["records"].as_array().unwrap();
+        assert_eq!(list[0]["kind"], KIND_STARTED);
+        assert!(list[1]["payload"]["text"].as_str().unwrap().len() < 3_000);
+
+        // A device that has the start and one of the two messages gets the rest.
+        let local = vec![(1, KIND_STARTED.to_owned()), (3, KIND_MESSAGE.to_owned())];
+        let missing = missing_records(&local, &body);
+        assert_eq!(missing.len(), 2);
+        assert_eq!(missing[0].1, KIND_PROMPT);
+        assert_eq!(missing[1].2["text"], "again");
+        assert!(missing_records(&records.iter().map(|(ts, kind, _)| (*ts, kind.clone())).collect::<Vec<_>>(), &body).is_empty());
+
+        // A conversation too long keeps its start and its newest records.
+        let mut long: Vec<(i64, String, Value)> = (1..200)
+            .map(|at| (at, KIND_MESSAGE.to_owned(), json!({ "text": format!("{at}{}", "y".repeat(1_000)) })))
+            .collect();
+        assert!(conversation_body(&long).is_none(), "no start record");
+        long.push((0, KIND_STARTED.to_owned(), json!({})));
+        let body = conversation_body(&long).unwrap();
+        assert!(body.to_string().len() <= SYNC_MAX + 1024);
+        let list = body["records"].as_array().unwrap();
+        assert_eq!(list[0]["kind"], KIND_STARTED);
+        assert!(list.last().unwrap()["payload"]["text"].as_str().unwrap().starts_with("199"));
     }
 
     #[test]
