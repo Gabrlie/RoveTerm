@@ -52,6 +52,8 @@ export function auditLine(entry: AiRecord): AuditLine | null {
     case 'file_write':
     case 'list_dir':
     case 'terminal_read':
+    case 'notes_read':
+    case 'notes_write':
     case 'tool_call': {
       const outcome = record(payload.outcome);
       const result = str(outcome.result);

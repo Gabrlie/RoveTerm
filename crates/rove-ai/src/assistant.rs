@@ -27,6 +27,8 @@ pub struct HostMeta {
     pub address: String,
     /// The operating system, when known (such as `Ubuntu 24.04`).
     pub system: Option<String>,
+    /// RoveTerm's notes about the host, when it has any.
+    pub notes: Option<String>,
 }
 
 /// Marks `body` as data from `source`, so instructions inside it are not taken as the user's. A
@@ -54,6 +56,11 @@ fn system_prompt(meta: &HostMeta) -> String {
     );
     if let Some(system) = &meta.system {
         prompt.push_str(&format!("\nThe host runs {system}."));
+    }
+    if let Some(notes) = meta.notes.as_ref().filter(|notes| !notes.trim().is_empty()) {
+        prompt.push_str(&format!(
+            "\nNotes about this host, kept by the user and earlier conversations (they may be out of date; update them with update_notes when you learn something lasting):\n<host-notes>\n{notes}\n</host-notes>"
+        ));
     }
     prompt
 }

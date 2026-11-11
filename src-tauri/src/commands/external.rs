@@ -25,12 +25,14 @@ use crate::error::CommandError;
 use crate::state::AppState;
 
 /// The host tools an outside agent may use; each takes the host by name or id.
-const HOST_TOOLS: [&str; 5] = [
+const HOST_TOOLS: [&str; 7] = [
     "run_command",
     "read_file",
     "write_file",
     "edit_file",
     "list_dir",
+    "read_notes",
+    "update_notes",
 ];
 /// Longest an install command may take.
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -275,7 +277,7 @@ fn host_specs() -> Value {
         "description": "List the servers saved in RoveTerm: id, name, group, tags, address and system.",
         "inputSchema": { "type": "object", "properties": {} }
     })];
-    if let Some(specs) = rove_ai::tools::specs("the host named in `host`").as_array() {
+    if let Some(specs) = rove_ai::tools::specs("the host named in `host`", true).as_array() {
         for spec in specs {
             let Some(name) = spec["name"].as_str() else {
                 continue;
@@ -441,7 +443,9 @@ mod tests {
                 "read_file",
                 "write_file",
                 "edit_file",
-                "list_dir"
+                "list_dir",
+                "read_notes",
+                "update_notes"
             ]
         );
         let run = &specs[1]["inputSchema"];

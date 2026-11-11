@@ -100,6 +100,14 @@ pub trait TerminalSource: Send + Sync {
     async fn recent(&self, lines: usize) -> Option<String>;
 }
 
+/// The notes RoveTerm keeps about the session's host (what runs there, what to watch for).
+#[async_trait]
+pub trait NotesSource: Send + Sync {
+    async fn read(&self) -> Result<String, String>;
+    /// Replaces the notes; an empty text removes them.
+    async fn write(&self, text: &str) -> Result<(), String>;
+}
+
 /// Settings of one session.
 #[derive(Debug, Clone, Default)]
 pub struct SessionSettings {
@@ -126,6 +134,8 @@ pub struct AiSession {
     next_id: AtomicU64,
     jobs: Mutex<HashMap<String, Job>>,
     terminal: OnceLock<Arc<dyn TerminalSource>>,
+    /// The host's notes, for a saved host.
+    notes: OnceLock<Arc<dyn NotesSource>>,
     /// The agent's tool calls by id, with every field reported so far: a permission request may
     /// name a call reported earlier and leave out what it does.
     calls: Mutex<HashMap<String, ToolCall>>,
@@ -274,6 +284,7 @@ impl AiSession {
             next_id: AtomicU64::new(1),
             jobs: Mutex::new(HashMap::new()),
             terminal: OnceLock::new(),
+            notes: OnceLock::new(),
             calls: Mutex::new(HashMap::new()),
             replaying: std::sync::atomic::AtomicBool::new(false),
             reviewer: std::sync::RwLock::new(None),
@@ -340,6 +351,99 @@ impl AiSession {
     /// Lets the agent read the user's terminal through [`AiSession::read_terminal`].
     pub fn set_terminal_source(&self, source: Arc<dyn TerminalSource>) {
         let _ = self.terminal.set(source);
+    }
+
+    /// Lets the agent read and update the host's notes.
+    pub fn set_notes_source(&self, source: Arc<dyn NotesSource>) {
+        let _ = self.notes.set(source);
+    }
+
+    /// The host has notes the agent may use (it is a saved host).
+    pub fn has_notes(&self) -> bool {
+        self.notes.get().is_some()
+    }
+
+    /// The host's notes, recorded like any other read.
+    pub async fn read_notes(&self) -> Result<String, ClientError> {
+        let source = self
+            .notes
+            .get()
+            .ok_or_else(|| ClientError::invalid("this host keeps no notes"))?;
+        let operation = Operation::ReadNotes;
+        let assessment = self.assess(&operation).await;
+        let (allowed, approved) = self.authorize(&operation, &assessment, false).await;
+        if !allowed {
+            self.report(operation, assessment, approved, Outcome::Denied);
+            return Err(ClientError::denied(
+                "the user did not allow reading the notes",
+            ));
+        }
+        match source.read().await {
+            Ok(text) => {
+                let outcome = Outcome::Read {
+                    bytes: text.len(),
+                    sha256: sha256(text.as_bytes()),
+                    truncated: false,
+                };
+                self.report(operation, assessment, approved, outcome);
+                Ok(text)
+            }
+            Err(error) => {
+                self.report(
+                    operation,
+                    assessment,
+                    approved,
+                    Outcome::Failed {
+                        error: error.clone(),
+                    },
+                );
+                Err(ClientError::new(acp::code::INTERNAL, error))
+            }
+        }
+    }
+
+    /// Replaces the host's notes after the policy allows it.
+    pub async fn update_notes(&self, text: &str) -> Result<(), ClientError> {
+        let source = self
+            .notes
+            .get()
+            .ok_or_else(|| ClientError::invalid("this host keeps no notes"))?;
+        let previous = source.read().await.unwrap_or_default();
+        let operation = Operation::UpdateNotes {
+            diff: crate::edit::diff(&previous, text),
+        };
+        let assessment = self.assess(&operation).await;
+        let (allowed, approved) = self.authorize(&operation, &assessment, false).await;
+        if !allowed {
+            self.report(operation, assessment, approved, Outcome::Denied);
+            return Err(ClientError::denied(
+                "the user did not allow changing the notes",
+            ));
+        }
+        match source.write(text).await {
+            Ok(()) => {
+                let outcome = Outcome::Written {
+                    bytes: text.len(),
+                    sha256: sha256(text.as_bytes()),
+                    previous_sha256: Some(sha256(previous.as_bytes())),
+                    lines_before: previous.lines().count(),
+                    lines_after: text.lines().count(),
+                };
+                self.report(operation, assessment, approved, outcome);
+                Ok(())
+            }
+            Err(error) => {
+                self.report(
+                    operation,
+                    assessment,
+                    approved,
+                    Outcome::Failed {
+                        error: error.clone(),
+                    },
+                );
+                Err(ClientError::invalid(error))
+            }
+        }
     }
 
     /// The last `lines` lines of the user's terminal on the host, after the policy allows it.

@@ -194,6 +194,8 @@ pub fn run() {
             commands::sftp::transfer_clear,
             commands::sftp::transfer_reveal,
             commands::app::log_write,
+            commands::host::host_notes_get,
+            commands::host::host_notes_set,
             commands::app::logs_reveal,
             commands::external::external_status,
             commands::external::external_set,

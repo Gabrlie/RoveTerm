@@ -2,7 +2,8 @@
   // Create or edit a host. The draft stays in the form when saving fails (for example a denied unlock).
   import Dialog from '../ui/Dialog.svelte';
   import Select from '../ui/Select.svelte';
-  import { hostCreate, hostUpdate, type AuthMethod, type HostDraft, type HostEntry, type HostRoute, type Secret } from '../ipc';
+  import { onMount } from 'svelte';
+  import { hostCreate, hostNotesGet, hostNotesSet, hostUpdate, type AuthMethod, type HostDraft, type HostEntry, type HostRoute, type Secret } from '../ipc';
   import { errorText, t } from '../i18n';
   import { hosts } from './hosts.svelte';
 
@@ -51,6 +52,19 @@
     .map((candidate) => ({ value: candidate.id, label: `${candidate.name} (${candidate.username}@${candidate.hostname})` }));
   let error = $state('');
   let saving = $state(false);
+  /** Notes kept about the host, for the user and the AI agents; saved with the host. */
+  let notes = $state('');
+  let notesLoaded = '';
+
+  onMount(() => {
+    if (!initial) return;
+    hostNotesGet(initial.id)
+      .then((text) => {
+        notes = text;
+        notesLoaded = text;
+      })
+      .catch((caught: unknown) => console.warn('host notes unavailable', caught));
+  });
   const hasSecret = initial?.has_secret ?? false;
 
   function auth(): AuthMethod {
@@ -116,8 +130,8 @@
     saving = true;
     error = '';
     try {
-      if (initial) await hostUpdate(initial.id, draft, secret(), false);
-      else await hostCreate(draft, secret());
+      const saved = initial ? await hostUpdate(initial.id, draft, secret(), false) : await hostCreate(draft, secret());
+      if (notes.trim() !== notesLoaded.trim()) await hostNotesSet(saved.id, notes);
       await hosts.refresh();
       onclose();
     } catch (caught) {
@@ -200,6 +214,7 @@
         <label class="port">{t('host.port')}<input type="number" min="1" max="65535" bind:value={proxyPort} required /></label>
       </div>
     {/if}
+    <label>{t('host.notes')}<textarea bind:value={notes} rows="4" spellcheck="false" placeholder={t('host.notesHint')}></textarea></label>
     {#if error}<p class="error">{error}</p>{/if}
   </form>
   {#snippet actions()}

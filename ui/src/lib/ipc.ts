@@ -172,6 +172,16 @@ export function hostCreate(draft: HostDraft, secret: Secret | null): Promise<Hos
   return invoke('host_create', { draft, secret });
 }
 
+/** The notes kept about host `id` (what runs there, what to watch for); empty when none. */
+export function hostNotesGet(id: HostId): Promise<string> {
+  return invoke('host_notes_get', { id });
+}
+
+/** Replaces the notes kept about host `id`; empty text removes them. */
+export function hostNotesSet(id: HostId, text: string): Promise<void> {
+  return invoke('host_notes_set', { id, text });
+}
+
 export function hostUpdate(id: HostId, draft: HostDraft, secret: Secret | null, clearSecret: boolean): Promise<Host> {
   return invoke('host_update', { id, draft, secret, clearSecret });
 }
@@ -928,6 +938,9 @@ export type AiOperation =
   | { op: 'edit_file'; path: string; diff: string }
   | { op: 'list_dir'; path: string }
   | { op: 'read_terminal' }
+  | { op: 'read_notes' }
+  /** `diff`: removed lines after `- `, added after `+ `. */
+  | { op: 'update_notes'; diff: string }
   | {
       op: 'agent_tool';
       kind: string;

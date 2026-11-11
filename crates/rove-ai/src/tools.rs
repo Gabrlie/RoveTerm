@@ -24,8 +24,28 @@ fn result(text: String, is_error: bool) -> ToolResult {
     ToolResult { text, is_error }
 }
 
-/// The tools' names, descriptions and argument schemas, for a session on `host`.
-pub fn specs(host: &str) -> Value {
+/// The tools' names, descriptions and argument schemas, for a session on `host`; `notes` adds
+/// the tools of the host's notes (a saved host).
+pub fn specs(host: &str, notes: bool) -> Value {
+    let mut specs = base_specs(host);
+    if notes && let Some(list) = specs.as_array_mut() {
+        list.push(json!({
+            "name": "read_notes",
+            "description": format!("Read RoveTerm's notes about {host}: what runs there, what to watch for, earlier changes worth knowing."),
+            "inputSchema": { "type": "object", "properties": {} }
+        }));
+        list.push(json!({
+            "name": "update_notes",
+            "description": format!("Replace RoveTerm's notes about {host} with `text` (read them first and keep what still holds). Record lasting facts: services, versions, paths, decisions, changes you made. Usually needs the user's approval."),
+            "inputSchema": { "type": "object", "properties": {
+                "text": { "type": "string", "description": "The whole notes, Markdown, at most 16 KiB" }
+            }, "required": ["text"] }
+        }));
+    }
+    specs
+}
+
+fn base_specs(host: &str) -> Value {
     json!([
         {
             "name": "run_command",
@@ -210,6 +230,18 @@ pub async fn call(
                     }
                     result(listing, false)
                 }
+                Err(error) => result(error.message, true),
+            })
+        }
+        "read_notes" => Ok(match session.read_notes().await {
+            Ok(text) if text.is_empty() => result("(no notes yet)".into(), false),
+            Ok(text) => result(text, false),
+            Err(error) => result(error.message, true),
+        }),
+        "update_notes" => {
+            let text = argument(arguments, "text")?;
+            Ok(match session.update_notes(text).await {
+                Ok(()) => result("the notes are updated".into(), false),
                 Err(error) => result(error.message, true),
             })
         }

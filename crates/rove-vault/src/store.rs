@@ -17,7 +17,7 @@ use crate::{
 };
 
 /// Version of the on-disk schema, stored in `PRAGMA user_version`. Only ever increases.
-pub const SCHEMA_VERSION: i32 = 9;
+pub const SCHEMA_VERSION: i32 = 10;
 
 /// Longest chain of jump hosts a route may form.
 pub const MAX_JUMP_DEPTH: usize = 4;
@@ -170,7 +170,9 @@ impl Vault {
     /// Deletes every stored secret and unlocks with a fresh master key. The only way out of
     /// [`LockReason::KeyLost`]. Hosts and known hosts are kept.
     pub fn reset_secrets(&self) -> Result<LockState, VaultError> {
-        tracing::warn!("resetting the vault: stored passwords, private keys and AI keys are removed");
+        tracing::warn!(
+            "resetting the vault: stored passwords, private keys and AI keys are removed"
+        );
         let key = MasterKey::generate()?;
         self.key_cache.store(&key)?;
         {
@@ -851,6 +853,19 @@ fn migrate(conn: &Connection) -> Result<(), VaultError> {
             "BEGIN;
              UPDATE preferences SET key = 'ai_key:acp:codex' WHERE key = 'ai_key';
              PRAGMA user_version = 9;
+             COMMIT;",
+        )?;
+    }
+    if version < 10 {
+        // Notes about each host, kept by the user and the AI agents.
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE host_notes (
+                 host_id TEXT PRIMARY KEY REFERENCES hosts(id) ON DELETE CASCADE,
+                 text TEXT NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             PRAGMA user_version = 10;
              COMMIT;",
         )?;
     }

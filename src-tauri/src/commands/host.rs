@@ -78,6 +78,22 @@ pub async fn host_update(
     Ok(host)
 }
 
+/// The notes kept about host `id` (empty when there are none).
+#[tauri::command]
+pub fn host_notes_get(state: State<'_, AppState>, id: String) -> Result<String, CommandError> {
+    Ok(state.vault.host_notes(id.parse()?)?)
+}
+
+/// Replaces the notes kept about host `id`; empty text removes them.
+#[tauri::command]
+pub fn host_notes_set(
+    state: State<'_, AppState>,
+    id: String,
+    text: String,
+) -> Result<(), CommandError> {
+    Ok(state.vault.set_host_notes(id.parse()?, &text)?)
+}
+
 /// Deletes a host and its stored secret.
 #[tauri::command]
 pub fn host_delete(state: State<'_, AppState>, id: String) -> Result<(), CommandError> {

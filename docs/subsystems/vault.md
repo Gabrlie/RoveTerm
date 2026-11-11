@@ -105,11 +105,13 @@ pub trait KeyCache: Send + Sync {
 
 ## 同步
 
+主机备注（`notes.rs`，表 `host_notes`，结构版本 10）：每台主机一段，最多 16 KiB、除换行与制表符外不含控制字符，空文本即删除，随主机删除；以单独的 `host_notes` 记录同步（不随 `host` 记录），AI 更新备注不会覆盖用户对主机的修改。
+
 AI key 被删除时写日志（只记 id，不记 key）：用户在设置中移除（`AI key removed by the user`）、其他设备经同步删除（`AI key removed by another device through sync`），以及重置凭据库时（`resetting the vault`），便于追查 key 的丢失来源。
 
 `src/sync.rs` 是 vault 一侧的同步接口，不涉及同步协议（见 [sync](sync.md)）：
 
-- `sync_records()` 列出全部可同步记录（种类 `pref`（偏好按节：appearance、terminal、files、status、ai，ai 节不含服务商）、`ai_provider`（每个服务商一条）、`host`、`key`、`host_secret`、`forward`、`snippet`、`ai_key`；偏好按节同步，一台设备改了某一节不会覆盖其他节，也不会带走另一台的服务商；旧版本的整体记录 `prefs` 及其删除被忽略，旧版本也忽略新的种类；内容为 JSON）：主机不含连接时间，含检测到的系统；凭据与私钥为明文 JSON，交给同步引擎密封后才离开本机。需要已解锁，否则凭据会看似被删除并把删除扩散到其他设备。
+- `sync_records()` 列出全部可同步记录（种类 `host_notes`（主机备注）、`pref`（偏好按节：appearance、terminal、files、status、ai，ai 节不含服务商）、`ai_provider`（每个服务商一条）、`host`、`key`、`host_secret`、`forward`、`snippet`、`ai_key`；偏好按节同步，一台设备改了某一节不会覆盖其他节，也不会带走另一台的服务商；旧版本的整体记录 `prefs` 及其删除被忽略，旧版本也忽略新的种类；内容为 JSON）：主机不含连接时间，含检测到的系统；凭据与私钥为明文 JSON，交给同步引擎密封后才离开本机。需要已解锁，否则凭据会看似被删除并把删除扩散到其他设备。
 - `apply_sync(changes)` 写入来自其他设备的变更：先按父到子的顺序写入新增和修改，再按子到父删除；内容像本地编辑一样校验，引用的主机不存在时跳过对应的凭据与转发，未知种类忽略。密钥缺少私钥时保留本机已有的私钥。
 - AI 的 API key 按 Agent 分别保存：`set_ai_key(id, Some(key))` 用设备主密钥密封后存在 `preferences` 表的 `ai_key:<id>` 记录中，`id` 为 `builtin:<服务商 id>` 或 `acp:<智能体 id>`，AAD 绑定该 id，挪到别的记录下无法打开（需已解锁；key 去除首尾空白，不能为空、含空白或控制字符，最多 4096 字节），`None` 删除；`ai_key(id)` 需已解锁，`ai_key_ids()` 锁定时也可读。schema 9 把旧的单个 key 改名为 `ai_key:acp:codex`，它仍以旧的 AAD 打开，且只有这条记录可以。key 作为 `ai_key` 记录随端到端加密的同步分段同步（每台设备再用自己的设备密钥密封）；`reset_secrets()` 会一并删除这些记录。应用在重置后让同步从空间恢复密码与私钥（见 [sync](sync.md#应用中的同步)）。
 - `sync_local()` / `set_sync_local()` 读写本机的同步设置（后端位置、同步状态、同步密钥、存储密码），存在 `preferences` 表的 `sync` 记录中，不参与同步；同步密钥和存储密码（如 WebDAV 密码）用设备主密钥分别密封，锁定时读出为空。

@@ -113,6 +113,7 @@ fn assistant(base: &str, answer: Answer) -> (Arc<Assistant>, mpsc::UnboundedRece
         name: "test".into(),
         address: "local".into(),
         system: Some("Linux".into()),
+        notes: None,
     };
     (Arc::new(Assistant::new(client, session, &meta)), received)
 }

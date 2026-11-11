@@ -590,6 +590,39 @@ fn mode(mode: AiMode) -> Mode {
     }
 }
 
+/// The notes of a saved host, in the vault.
+struct VaultNotes {
+    vault: Arc<rove_vault::Vault>,
+    host: rove_vault::HostId,
+}
+
+#[async_trait]
+impl rove_ai::session::NotesSource for VaultNotes {
+    async fn read(&self) -> Result<String, String> {
+        self.vault
+            .host_notes(self.host)
+            .map_err(|error| error.to_string())
+    }
+
+    async fn write(&self, text: &str) -> Result<(), String> {
+        self.vault
+            .set_host_notes(self.host, text)
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// Lets `session` keep the notes of `context`'s host, when it is a saved host.
+pub(crate) fn attach_notes(state: &AppState, session: &AiSession, context: &AiContext) {
+    if let AiContext::Host { host_id } = context
+        && let Ok(host) = host_id.parse()
+    {
+        session.set_notes_source(Arc::new(VaultNotes {
+            vault: state.vault.clone(),
+            host,
+        }));
+    }
+}
+
 /// The session's host and what the assistant is told about it.
 fn host_of(
     state: &AppState,
@@ -601,6 +634,7 @@ fn host_of(
                 name: "this computer".into(),
                 address: "local".into(),
                 system: Some(std::env::consts::OS.into()),
+                notes: None,
             };
             (
                 Arc::new(LocalHost),
@@ -622,6 +656,11 @@ fn host_of(
                         os.name.clone()
                     }
                 }),
+                notes: state
+                    .vault
+                    .host_notes(host.id)
+                    .ok()
+                    .filter(|notes| !notes.is_empty()),
             };
             let source = Arc::new(Pooled {
                 ssh: state.ssh.clone(),
@@ -640,6 +679,7 @@ fn host_of(
                 name: label.clone(),
                 address: label.clone(),
                 system: None,
+                notes: None,
             };
             let source = Arc::new(Pooled {
                 ssh: state.ssh.clone(),
@@ -739,6 +779,7 @@ pub async fn ai_start(
     };
     let session = Arc::new(AiSession::new(host.clone(), settings, sink));
     session.set_reviewer(reviewer_for(state.inner(), &prefs, &agent));
+    attach_notes(state.inner(), &session, &context);
     if let Some(terminal) = terminal {
         let id: SessionId = terminal.parse()?;
         session.set_terminal_source(Arc::new(Screen {
@@ -955,6 +996,7 @@ pub(crate) async fn start_external(
         ..SessionSettings::default()
     };
     let session = Arc::new(AiSession::new(host.clone(), settings, sink));
+    attach_notes(state, &session, &context);
     session.set_reviewer(reviewer_for(
         state,
         &prefs,

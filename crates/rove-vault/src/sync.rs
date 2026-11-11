@@ -18,12 +18,13 @@ use crate::{
 };
 
 /// Record kinds, in the order changes are applied (parents first).
-pub const SYNC_KINDS: [&str; 8] = [
+pub const SYNC_KINDS: [&str; 9] = [
     "pref",
     "ai_provider",
     "host",
     "key",
     "host_secret",
+    "host_notes",
     "forward",
     "snippet",
     "ai_key",
@@ -246,6 +247,13 @@ impl Vault {
                 body: json(&body)?,
             });
         }
+        for (host, text) in self.all_host_notes()? {
+            records.push(SyncRecord {
+                kind: "host_notes",
+                id: host,
+                body: serde_json::json!({ "text": text }),
+            });
+        }
         for agent in self.ai_key_ids()? {
             if let Some(key) = self.ai_key(&agent)? {
                 records.push(SyncRecord {
@@ -304,7 +312,9 @@ impl Vault {
             "ai_provider" => {
                 let provider: ProviderPrefs = body(value)?;
                 if provider.id != id {
-                    return Err(VaultError::Invalid("provider record under another id".into()));
+                    return Err(VaultError::Invalid(
+                        "provider record under another id".into(),
+                    ));
                 }
                 let mut prefs = self.preferences()?;
                 match prefs.ai.providers.iter_mut().find(|entry| entry.id == id) {
@@ -362,6 +372,16 @@ impl Vault {
                 let host_id: HostId = id.parse()?;
                 if self.host(host_id).is_ok() {
                     self.set_secret(host_id, &body::<Secret>(value)?)?;
+                }
+            }
+            "host_notes" => {
+                let host_id: HostId = id.parse()?;
+                let text = value
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| VaultError::Invalid("host notes without text".into()))?;
+                if self.host(host_id).is_ok() {
+                    self.set_host_notes(host_id, text)?;
                 }
             }
             "key" => {
@@ -451,6 +471,10 @@ impl Vault {
                 Err(error) => return Err(error),
             },
             "host_secret" => self.delete_secret(id.parse()?)?,
+            "host_notes" => match self.set_host_notes(id.parse()?, "") {
+                Ok(()) | Err(VaultError::HostNotFound(_)) => {}
+                Err(error) => return Err(error),
+            },
             "ai_key" => {
                 // Keys do not leave by themselves: which device removed one is worth knowing.
                 tracing::info!(agent = %id, "AI key removed by another device through sync");

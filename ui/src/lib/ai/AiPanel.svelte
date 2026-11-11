@@ -267,6 +267,9 @@
         return 'edit';
       case 'list_dir':
         return 'folder';
+      case 'read_notes':
+      case 'update_notes':
+        return 'snippets';
       case 'agent_tool':
         return 'command';
     }
@@ -491,7 +494,7 @@
               </div>
               {#if subject(item.operation)}<pre class="approval-subject selectable">{subject(item.operation)}</pre>{/if}
               {#if item.operation.op === 'agent_tool' && item.operation.detail}<p class="approval-detail selectable">{item.operation.detail}</p>{/if}
-              {#if item.operation.op === 'edit_file'}
+              {#if item.operation.op === 'edit_file' || item.operation.op === 'update_notes'}
                 <pre class="diff selectable">{#each item.operation.diff.split('\n') as line, at (at)}<span class:removed={line.startsWith('- ')} class:added={line.startsWith('+ ')}>{line}{'\n'}</span>{/each}</pre>
               {/if}
               <p class="approval-where">{item.agentTool ? t('ai.agentTool') : t('ai.on', { host: hostInText })}</p>

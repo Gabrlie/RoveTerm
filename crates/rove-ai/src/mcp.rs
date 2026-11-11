@@ -68,7 +68,7 @@ impl McpTools for SessionTools {
     }
 
     fn specs(&self) -> Value {
-        crate::tools::specs(&self.0.host().label())
+        crate::tools::specs(&self.0.host().label(), self.0.has_notes())
     }
 
     async fn call(

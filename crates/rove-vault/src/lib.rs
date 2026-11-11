@@ -10,6 +10,8 @@ mod forward;
 mod key_cache;
 mod keys;
 mod model;
+mod notes;
+pub use notes::MAX_NOTES;
 mod prefs;
 mod snippets;
 mod store;
@@ -36,8 +38,8 @@ pub use model::{
 pub use prefs::{
     Accent, AgentAuth, AgentPrefs, AgentsPrefs, AiMode, AiPrefs, AppearancePrefs, Bell,
     ConflictChoice, ConnectionPrefs, CursorStyle, CustomAgent, DevicePrefs, FilePrefs, Language,
-    Preferences, ProviderFormat, ProviderPrefs, ReasoningEffort, ReviewModel, ReviewerKind, RightClick, StatusPrefs,
-    TerminalPrefs, Theme,
+    Preferences, ProviderFormat, ProviderPrefs, ReasoningEffort, ReviewModel, ReviewerKind,
+    RightClick, StatusPrefs, TerminalPrefs, Theme,
 };
 pub use snippets::{Snippet, SnippetDraft, SnippetId};
 pub use store::{LockReason, LockState, MAX_JUMP_DEPTH, SCHEMA_VERSION, Vault};

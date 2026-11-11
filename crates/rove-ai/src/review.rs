@@ -40,6 +40,10 @@ impl ReviewRequest {
             Operation::ReadFile { path } => format!("read the file {path}"),
             Operation::ListDir { path } => format!("list the directory {path}"),
             Operation::ReadTerminal => "read the user's terminal".to_owned(),
+            Operation::ReadNotes => "read RoveTerm's notes about the host".to_owned(),
+            Operation::UpdateNotes { diff } => {
+                format!("change RoveTerm's notes about the host:\n{diff}")
+            }
             Operation::AgentTool { title, command, .. } => match command {
                 Some(command) => format!("{title}: run {command}"),
                 None => title.clone(),

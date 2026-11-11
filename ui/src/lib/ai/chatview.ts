@@ -144,6 +144,8 @@ export function subject(operation: AiOperation): string {
     case 'list_dir':
       return operation.path;
     case 'read_terminal':
+    case 'read_notes':
+    case 'update_notes':
       return '';
     case 'agent_tool':
       return operation.command ?? operation.path ?? '';
@@ -220,6 +222,8 @@ export function itemsFromRecords(records: AiRecord[]): ChatItem[] {
       case 'ai/file_write':
       case 'ai/list_dir':
       case 'ai/terminal_read':
+      case 'ai/notes_read':
+      case 'ai/notes_write':
       case 'ai/tool_call': {
         if (!('operation' in payload)) {
           // One of the agent's own tools, as it reported it.

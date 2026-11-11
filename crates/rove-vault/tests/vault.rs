@@ -1165,3 +1165,48 @@ fn the_auto_judge_reads_old_records_and_checks_its_model() {
     });
     assert!(vault.set_preferences(prefs).is_err());
 }
+
+#[test]
+fn host_notes_follow_their_host_and_sync_on_their_own() {
+    let a = unlocked();
+    let host = a
+        .create_host(draft("n.example", AuthMethod::Agent))
+        .unwrap();
+    assert_eq!(a.host_notes(host.id).unwrap(), "");
+    a.set_host_notes(host.id, "  nginx + postgres 16\nbackups at 02:00  ")
+        .unwrap();
+    assert_eq!(
+        a.host_notes(host.id).unwrap(),
+        "nginx + postgres 16\nbackups at 02:00"
+    );
+    assert!(
+        a.set_host_notes(host.id, &"x".repeat(MAX_NOTES + 1))
+            .is_err()
+    );
+    assert!(a.set_host_notes(host.id, "bell\u{7}").is_err());
+
+    // Another device gets the host and its notes, and later their removal.
+    let b = unlocked();
+    b.apply_sync(&as_changes(a.sync_records().unwrap()))
+        .unwrap();
+    assert_eq!(
+        b.host_notes(host.id).unwrap(),
+        "nginx + postgres 16\nbackups at 02:00"
+    );
+    b.apply_sync(&[SyncChange {
+        kind: "host_notes".into(),
+        id: host.id.to_string(),
+        body: None,
+    }])
+    .unwrap();
+    assert_eq!(b.host_notes(host.id).unwrap(), "");
+
+    // Removing the host removes its notes.
+    a.delete_host(host.id).unwrap();
+    assert!(
+        a.sync_records()
+            .unwrap()
+            .iter()
+            .all(|record| record.kind != "host_notes")
+    );
+}

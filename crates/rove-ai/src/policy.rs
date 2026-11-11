@@ -65,6 +65,12 @@ pub enum Operation {
     },
     /// Read what the user's terminal on the host shows.
     ReadTerminal,
+    /// Read the notes RoveTerm keeps about the host.
+    ReadNotes,
+    /// Replace the host's notes; `diff` shows the change.
+    UpdateNotes {
+        diff: String,
+    },
     /// One of the agent's own tools; `command` is set when it runs a shell command.
     AgentTool {
         kind: ToolKind,
@@ -85,7 +91,16 @@ impl Operation {
         match self {
             Self::Command { command } => risk::assess_command(command, rules),
             Self::ReadFile { path } | Self::ListDir { path } => risk::assess_read(path),
-            Self::ReadTerminal => Assessment::new(),
+            Self::ReadTerminal | Self::ReadNotes => Assessment::new(),
+            Self::UpdateNotes { .. } => {
+                let mut assessment = Assessment::new();
+                assessment.risk = Risk::Modify;
+                assessment.reasons.push(risk::Reason {
+                    code: "update_notes",
+                    detail: String::new(),
+                });
+                assessment
+            }
             Self::WriteFile { path } | Self::EditFile { path, .. } => risk::assess_write(path),
             Self::AgentTool {
                 command: Some(command),
@@ -145,6 +160,8 @@ impl Operation {
             }
             Self::ReadFile { path } | Self::ListDir { path } => Some(vec![format!("read:{path}")]),
             Self::ReadTerminal => Some(vec!["terminal".to_owned()]),
+            Self::ReadNotes => Some(vec!["notes:read".to_owned()]),
+            Self::UpdateNotes { .. } => Some(vec!["notes:write".to_owned()]),
             Self::AgentTool { kind, .. } => Some(vec![format!("tool:{kind:?}")]),
         }
     }
