@@ -174,7 +174,8 @@
     position: relative;
     flex: 1;
     min-height: 0;
-    background: var(--term-bg);
+    /* The app's theme; only a terminal paints the terminal scheme (TermView). */
+    background: var(--surface);
   }
   .home {
     position: absolute;
