@@ -563,16 +563,49 @@ pub async fn ai_provider_models(
         .map_err(|error| CommandError::new("ai.model", error.to_string()))
 }
 
-/// A remote host's live connection, from the app's pool.
-struct Pooled {
-    ssh: Arc<SshConnector>,
-    target: SshTarget,
+/// A remote host's connection from the app's pool.
+enum Pooled {
+    /// A saved host: the live connection, else a new one made in the background with the
+    /// host's stored credentials (never asking for a password or passphrase). It is shared, so a
+    /// terminal opened later reuses it.
+    Saved {
+        app: AppHandle,
+        host: rove_vault::HostId,
+    },
+    /// A quick-connect address has no stored credentials: only its live connection.
+    Live {
+        ssh: Arc<SshConnector>,
+        target: SshTarget,
+    },
 }
 
 #[async_trait]
 impl ConnectionSource for Pooled {
-    async fn connection(&self) -> Option<Arc<SshConnection>> {
-        self.ssh.live(&self.target).await
+    async fn connection(&self) -> Result<Arc<SshConnection>, String> {
+        let (app, host) = match self {
+            Self::Live { ssh, target } => {
+                return ssh.live(target).await.ok_or_else(|| {
+                    "it is not connected; ask the user to open a terminal to it".to_owned()
+                });
+            }
+            Self::Saved { app, host } => (app, *host),
+        };
+        let state = app.state::<AppState>();
+        let source = crate::connect::Source::Host {
+            host_id: host,
+            typed: None,
+            remember: false,
+        };
+        crate::connect::with_connection(&state, &source, None, |connection| async move {
+            Ok(connection)
+        })
+        .await
+        .map_err(|error| match error.code {
+            "ssh.credentials_required" | "ssh.passphrase_required" => {
+                "it needs a password or key passphrase that is not saved; ask the user to connect to it once in a terminal and save the password".to_owned()
+            }
+            _ => error.message,
+        })
     }
 }
 
@@ -633,6 +666,7 @@ pub(crate) fn attach_notes(state: &AppState, session: &AiSession, context: &AiCo
 
 /// The session's host and what the assistant is told about it.
 fn host_of(
+    app: &AppHandle,
     state: &AppState,
     context: &AiContext,
 ) -> Result<(Arc<dyn Host>, HostMeta, PathBuf), CommandError> {
@@ -670,9 +704,9 @@ fn host_of(
                     .ok()
                     .filter(|notes| !notes.is_empty()),
             };
-            let source = Arc::new(Pooled {
-                ssh: state.ssh.clone(),
-                target,
+            let source = Arc::new(Pooled::Saved {
+                app: app.clone(),
+                host: host.id,
             });
             (
                 Arc::new(RemoteHost::new(label, source)),
@@ -700,7 +734,7 @@ fn host_of(
                 system: None,
                 notes: None,
             };
-            let source = Arc::new(Pooled {
+            let source = Arc::new(Pooled::Live {
                 ssh: state.ssh.clone(),
                 target,
             });
@@ -728,7 +762,7 @@ pub async fn ai_start(
     let agent = agent_ref(&agent_text)?;
     state.ensure_unlocked().await?;
     let prefs = state.vault.preferences()?;
-    let (host, meta, cwd) = host_of(state.inner(), &context)?;
+    let (host, meta, cwd) = host_of(&app, state.inner(), &context)?;
     std::fs::create_dir_all(&cwd)
         .map_err(|error| CommandError::new("app.io", error.to_string()))?;
 
@@ -1008,7 +1042,7 @@ pub(crate) async fn start_external(
     let context = AiContext::Host {
         host_id: host_id.to_string(),
     };
-    let (host, _meta, _cwd) = host_of(state, &context)?;
+    let (host, _meta, _cwd) = host_of(app, state, &context)?;
     let id = format!("ai-{}", uuid::Uuid::now_v7());
     let auditor = Arc::new(Auditor::new(
         {
@@ -1101,7 +1135,7 @@ async fn start_subagent(
     let context = AiContext::Host {
         host_id: host_id.to_string(),
     };
-    let (host, meta, _cwd) = host_of(state, &context)?;
+    let (host, meta, _cwd) = host_of(app, state, &context)?;
     let id = format!("ai-{}", uuid::Uuid::now_v7());
     let auditor = Arc::new(Auditor::new(
         {

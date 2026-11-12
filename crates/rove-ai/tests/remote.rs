@@ -22,8 +22,12 @@ struct Source(Mutex<Option<Arc<SshConnection>>>);
 
 #[async_trait]
 impl ConnectionSource for Source {
-    async fn connection(&self) -> Option<Arc<SshConnection>> {
-        self.0.lock().await.clone()
+    async fn connection(&self) -> Result<Arc<SshConnection>, String> {
+        self.0
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "closed".to_owned())
     }
 }
 
@@ -98,10 +102,10 @@ async fn runs_commands_and_edits_files_on_the_remote_host() {
         ["app.conf"]
     );
 
-    // Without a connection the host says so instead of connecting.
+    // Without a connection the host passes on why.
     *source.0.lock().await = None;
     assert_eq!(
         host.run("true", None, &limits).await,
-        Err(HostError::NotConnected)
+        Err(HostError::Unreachable("closed".into()))
     );
 }

@@ -39,9 +39,9 @@ impl Default for Limits {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum HostError {
-    /// The host has no open connection; the user has to connect a terminal first.
-    #[error("the host is not connected; open a terminal to it first")]
-    NotConnected,
+    /// No connection to the host could be had; why, for the agent to pass on.
+    #[error("the host could not be reached: {0}")]
+    Unreachable(String),
     #[error("timed out after {0} seconds")]
     Timeout(u64),
     #[error("{0} is larger than the limit of {1} bytes")]
@@ -270,11 +270,12 @@ async fn read_capped(
     }
 }
 
-/// Gives the live connection of a remote host, if there is one. The app implements it with its
-/// connection pool; it never connects or asks for credentials.
+/// Gives a connection to a remote host: the live one, or a new one made without asking the user
+/// anything (stored credentials only). The app implements it with its connection pool; `Err`
+/// says why there is none.
 #[async_trait]
 pub trait ConnectionSource: Send + Sync {
-    async fn connection(&self) -> Option<Arc<SshConnection>>;
+    async fn connection(&self) -> Result<Arc<SshConnection>, String>;
 }
 
 /// An SFTP session and the connection it belongs to.
@@ -299,8 +300,9 @@ impl RemoteHost {
 
     async fn connection(&self) -> Result<Arc<SshConnection>, HostError> {
         match self.source.connection().await {
-            Some(connection) if !connection.is_closed() => Ok(connection),
-            _ => Err(HostError::NotConnected),
+            Ok(connection) if !connection.is_closed() => Ok(connection),
+            Ok(_) => Err(HostError::Unreachable("the connection closed".into())),
+            Err(reason) => Err(HostError::Unreachable(reason)),
         }
     }
 }
