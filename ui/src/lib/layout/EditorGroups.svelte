@@ -18,9 +18,11 @@
     onedithost: (hostId: string) => void;
     /** Opens the AI settings (from the fleet lead's tab). */
     onaisettings: () => void;
+    /** Opens the fleet lead's scheduled tasks. */
+    onschedules: () => void;
   }
 
-  let { home, oncredentials, onedithost, onaisettings }: Props = $props();
+  let { home, oncredentials, onedithost, onaisettings, onschedules }: Props = $props();
 
   /** Space between group cards, in CSS pixels; matches `--gap-panel`. */
   const GAP = 6;
@@ -130,7 +132,7 @@
     {#if group && rect}
       {@const shown = group.active === pane.id}
       <div class="slot" class:hidden={!shown} style={stageStyle(rect)} data-stage={group.id} role="presentation" onpointerdown={() => focusGroup(group.id)}>
-        <PaneView {pane} {shown} focused={workspace.focusedGroupId === group.id && shown} {oncredentials} {onedithost} {onaisettings} />
+        <PaneView {pane} {shown} focused={workspace.focusedGroupId === group.id && shown} {oncredentials} {onedithost} {onaisettings} {onschedules} />
       </div>
     {/if}
   {/each}

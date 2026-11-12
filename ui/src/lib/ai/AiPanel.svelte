@@ -26,7 +26,7 @@
 
   /** `fleet`: the fleet lead's conversation on all saved hosts, shown as a page of its own
    *  (a tab), with RoveTerm's assistant only. */
-  let { onsettings, fleet = false }: { onsettings: () => void; fleet?: boolean } = $props();
+  let { onsettings, fleet = false, onschedules }: { onsettings: () => void; fleet?: boolean; /** The fleet lead's scheduled tasks. */ onschedules?: () => void } = $props();
 
   type RowState = 'running' | 'done' | 'failed' | 'denied' | 'waiting';
 
@@ -543,6 +543,12 @@
     {/if}
     <span class="spacer"></span>
     <IconButton icon="add" small label={t('ai.newChat')} disabled={chat.busy || chat.starting} onclick={() => void ai.reset(chat)} />
+    {#if fleet && onschedules}
+      <span class="schedules">
+        <IconButton icon="clock" small label={t('fleet.schedules')} onclick={onschedules} />
+        {#if ai.unreadReports > 0}<span class="dot" aria-label={t('fleet.newReports', { n: ai.unreadReports })}></span>{/if}
+      </span>
+    {/if}
     <IconButton icon="history" small label={t('ai.history')} onclick={() => (historyOpen = true)} />
     <IconButton icon="settings" small label={t('ai.openSettings')} onclick={onsettings} />
   </div>
@@ -1496,5 +1502,19 @@
   .send.stop {
     background: var(--fg);
     color: var(--surface);
+  }
+  .schedules {
+    position: relative;
+    display: inline-flex;
+  }
+  .schedules .dot {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    pointer-events: none;
   }
 </style>

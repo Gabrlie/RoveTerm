@@ -26,9 +26,11 @@
     /** Opens the editor of a saved host. */
     onedithost: (hostId: string) => void;
     onaisettings: () => void;
+    /** Opens the fleet lead's scheduled tasks. */
+    onschedules: () => void;
   }
 
-  let { pane, shown, focused, oncredentials, onedithost, onaisettings }: Props = $props();
+  let { pane, shown, focused, oncredentials, onedithost, onaisettings, onschedules }: Props = $props();
   let view = $state<TermView>();
 
   /** The saved host was deleted (here or on another device) and the tab holds no live session:
@@ -102,7 +104,7 @@
     />
   {:else if pane.target.kind === 'fleet'}
     <div class="fleet">
-      <AiPanel fleet onsettings={onaisettings} />
+      <AiPanel fleet onsettings={onaisettings} {onschedules} />
     </div>
   {:else}
     <TermView

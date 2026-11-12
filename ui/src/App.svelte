@@ -540,7 +540,7 @@
         onfleetresume={(summary, records) => void resumeFleet(summary, records)}
       />
     {/snippet}
-    <EditorGroups {home} oncredentials={requestPaneCredentials} onedithost={(hostId) => (editing = hosts.find(hostId) ?? undefined)} onaisettings={() => openSettings('ai')} />
+    <EditorGroups {home} oncredentials={requestPaneCredentials} onedithost={(hostId) => (editing = hosts.find(hostId) ?? undefined)} onaisettings={() => openSettings('ai')} onschedules={() => run('fleet.schedules')} />
     {#if bottomOpen}
       <div class="edge horizontal" role="separator" aria-orientation="horizontal" onpointerdown={resizeBottom}></div>
     {/if}
