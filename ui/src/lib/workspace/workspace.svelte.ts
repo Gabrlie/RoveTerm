@@ -347,6 +347,12 @@ class Workspace {
     if (group) this.focusedGroupId = group.id;
   }
 
+  /** Shows tab `paneId` in its group and focuses it. */
+  reveal(paneId: PaneId): void {
+    const group = this.groupOf(paneId);
+    if (group) this.activate(group.id, paneId);
+  }
+
   /** Lets a restored tab connect; called when it is first shown. */
   undefer(paneId: PaneId): void {
     const state = this.panes[paneId];

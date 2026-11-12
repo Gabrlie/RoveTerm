@@ -99,6 +99,7 @@ export const en = {
   'rail.quickConnect': 'Quick connect',
   'rail.import': 'Import from system',
   'action.ai.open': 'Open AI',
+  'action.ai.showWaiting': 'Show the waiting approval',
   'action.panel.bottom': 'Toggle files panel',
   'status.title': 'Status',
   'status.unsupported': 'Server status is available for Linux servers only.',

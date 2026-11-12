@@ -101,6 +101,7 @@ export const zhCN: Messages = {
   'rail.quickConnect': '快速连接',
   'rail.import': '从系统导入',
   'action.ai.open': '打开 AI',
+  'action.ai.showWaiting': '查看待审批',
   'action.panel.bottom': '显示或隐藏文件面板',
   'status.title': '状态',
   'status.unsupported': '服务器状态只支持 Linux 服务器。',

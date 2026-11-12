@@ -110,7 +110,7 @@
   </div>
   <div class="right">
     {#if ai.waiting > 0}
-      <button type="button" class="pill" onclick={() => onaction('ai.open')}>{t('status.waiting', { n: ai.waiting })}</button>
+      <button type="button" class="pill" onclick={() => onaction('ai.showWaiting')}>{t('status.waiting', { n: ai.waiting })}</button>
     {/if}
     {#if sync.status?.ready}
       <span class:failed={!!sync.lastError} class:spinning={sync.running} class="sync">

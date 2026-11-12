@@ -24,6 +24,7 @@ export type ActionId =
   | 'panel.right'
   | 'panel.bottom'
   | 'ai.open'
+  | 'ai.showWaiting'
   | 'panel.status'
   | 'panel.snippets'
   | 'panel.transfers'
@@ -71,6 +72,7 @@ export const actions: Action[] = [
   { id: 'panel.right', label: 'action.panel.right', keys: ['App+L'] },
   { id: 'panel.bottom', label: 'action.panel.bottom', keys: ['App+J'] },
   { id: 'ai.open', label: 'action.ai.open', keys: ['App+I'] },
+  { id: 'ai.showWaiting', label: 'action.ai.showWaiting', keys: [] },
   { id: 'panel.status', label: 'action.panel.status', keys: [] },
   { id: 'panel.snippets', label: 'action.panel.snippets', keys: [] },
   { id: 'panel.transfers', label: 'action.panel.transfers', keys: [] },

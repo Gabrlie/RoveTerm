@@ -106,6 +106,22 @@
     lastRightPage = page;
   }
 
+  /** Shows where the first waiting approval is: the fleet lead's tab for it and its sub-agents,
+   *  else that host's tab (when open) with the AI page. */
+  function showWaiting(): void {
+    const chat = ai.firstWaiting();
+    if (chat?.context.kind === 'fleet') {
+      openFleet();
+      return;
+    }
+    if (chat?.context.kind === 'host') {
+      const tab = workspace.tabsOfHost(chat.context.host_id)[0];
+      if (tab) workspace.reveal(tab);
+    }
+    rightPage = 'ai';
+    lastRightPage = 'ai';
+  }
+
   /** The focused tab is on a remote host. */
   const focusedRemote = $derived.by(() => {
     const pane = workspace.focusedPane;
@@ -384,6 +400,9 @@
         break;
       case 'ai.open':
         toggleRight('ai');
+        break;
+      case 'ai.showWaiting':
+        showWaiting();
         break;
       case 'host.quickConnect':
         quickOpen = true;

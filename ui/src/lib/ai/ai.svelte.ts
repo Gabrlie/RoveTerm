@@ -392,6 +392,13 @@ class AiStore {
     return count;
   }
 
+  /** The first conversation with an approval waiting for the user. */
+  firstWaiting(): Chat | null {
+    void this.version;
+    for (const chat of this.chats.values()) if (chat.waiting > 0) return chat;
+    return null;
+  }
+
   chat(context: AiContext): Chat {
     void this.version;
     const key = contextKey(context);
