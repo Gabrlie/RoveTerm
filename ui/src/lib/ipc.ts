@@ -1048,7 +1048,7 @@ export type SessionUpdate =
   | { kind: 'usage'; used: number; size: number }
   | { kind: 'commands'; commands: AgentCommand[] }
   | { kind: 'compacted'; summary: string }
-  | { kind: 'stats'; input_tokens: number | null; output_tokens: number | null; first_token_ms: number | null; tokens_per_second: number | null };
+  | { kind: 'stats'; input_tokens: number | null; cached_tokens: number | null; output_tokens: number | null; first_token_ms: number | null; tokens_per_second: number | null };
 
 /** A command the agent offers, run by sending `/<name>` as a prompt. */
 export interface AgentCommand {

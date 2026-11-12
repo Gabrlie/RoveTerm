@@ -176,6 +176,8 @@ fn listed_model(entry: &Value) -> Option<ListedModel> {
 pub struct Stats {
     /// Tokens the request took in (cached ones included).
     pub input_tokens: Option<u64>,
+    /// Of `input_tokens`, those read from the provider's prompt cache.
+    pub cached_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     /// From sending the request to the first text or reasoning.
     pub first_token_ms: Option<u64>,
@@ -808,6 +810,7 @@ struct StreamState {
     stop: String,
     finished: bool,
     input_tokens: Option<u64>,
+    cached_tokens: Option<u64>,
     output_tokens: Option<u64>,
 }
 
@@ -833,15 +836,24 @@ impl StreamState {
             stop: String::new(),
             finished: false,
             input_tokens: None,
+            cached_tokens: None,
             output_tokens: None,
         }
     }
 
     /// Takes the token counts of a usage object, under the format's names.
-    fn usage(&mut self, usage: Option<&Value>, input: &[&str], output: &str) {
+    /// Takes the token counts of `usage`: the sum of the `input` fields, the first of the
+    /// `cached` pointers present, and the `output` field.
+    fn usage(&mut self, usage: Option<&Value>, input: &[&str], cached: &[&str], output: &str) {
         let Some(usage) = usage.filter(|usage| usage.is_object()) else {
             return;
         };
+        if let Some(count) = cached
+            .iter()
+            .find_map(|pointer| usage.pointer(pointer).and_then(Value::as_u64))
+        {
+            self.cached_tokens = Some(count);
+        }
         let counts: Vec<u64> = input
             .iter()
             .filter_map(|name| usage.get(*name).and_then(Value::as_u64))
@@ -887,7 +899,16 @@ impl StreamState {
         if let Some(error) = value.get("error") {
             return Err(LlmError::Protocol(error_message(&error.to_string())));
         }
-        self.usage(value.get("usage"), &["prompt_tokens"], "completion_tokens");
+        // OpenAI reports cached tokens in the details, DeepSeek as cache hits.
+        self.usage(
+            value.get("usage"),
+            &["prompt_tokens"],
+            &[
+                "/prompt_tokens_details/cached_tokens",
+                "/prompt_cache_hit_tokens",
+            ],
+            "completion_tokens",
+        );
         let Some(choice) = value.pointer("/choices/0") else {
             return Ok(false);
         };
@@ -971,6 +992,7 @@ impl StreamState {
                 self.usage(
                     value.pointer("/response/usage"),
                     &["input_tokens"],
+                    &["/input_tokens_details/cached_tokens"],
                     "output_tokens",
                 );
                 self.stop = value
@@ -1086,6 +1108,7 @@ impl StreamState {
                     "cache_read_input_tokens",
                     "cache_creation_input_tokens",
                 ],
+                &["/cache_read_input_tokens"],
                 "output_tokens",
             ),
             "message_delta" => {
@@ -1096,6 +1119,7 @@ impl StreamState {
                         "cache_read_input_tokens",
                         "cache_creation_input_tokens",
                     ],
+                    &["/cache_read_input_tokens"],
                     "output_tokens",
                 );
                 if let Some(reason) = value.pointer("/delta/stop_reason").and_then(Value::as_str) {
@@ -1147,6 +1171,7 @@ impl StreamState {
             stop: self.stop,
             stats: Stats {
                 input_tokens: self.input_tokens,
+                cached_tokens: self.cached_tokens,
                 output_tokens: self.output_tokens,
                 ..Stats::default()
             },

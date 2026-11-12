@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { contextPercent, contextTokens, speed, tokens, wait, windowName } from './quota.ts';
+import { addCache, cacheRate, contextPercent, contextTokens, speed, tokens, wait, windowName } from './quota.ts';
 
 const window = (minutes: number | null, label = '') => ({ label, minutes, used_percent: 10, resets_at: null, resets_text: null });
 
@@ -29,4 +29,15 @@ test('request stats read as speed, wait and context', () => {
   assert.equal(contextTokens({ input_tokens: 1000, output_tokens: 20 }), 1020);
   assert.equal(contextTokens({ input_tokens: null, output_tokens: 20 }), null);
   assert.equal(contextTokens(null), null);
+});
+
+test('cache hits are a share of the input, summed over reporting requests', () => {
+  let totals = { input: 0, cached: 0 };
+  totals = addCache(totals, { input_tokens: 100, cached_tokens: 80 });
+  totals = addCache(totals, { input_tokens: 50, cached_tokens: null });
+  totals = addCache(totals, { input_tokens: 100, cached_tokens: 100 });
+  assert.deepEqual(totals, { input: 200, cached: 180 });
+  assert.equal(cacheRate(totals.cached, totals.input), 90);
+  assert.equal(cacheRate(null, 100), null);
+  assert.equal(cacheRate(0, 0), null);
 });

@@ -485,7 +485,7 @@ async fn token_counts_are_read_in_each_format() {
         ),
         (
             "",
-            json!({ "choices": [], "usage": { "prompt_tokens": 120, "completion_tokens": 7 } }),
+            json!({ "choices": [], "usage": { "prompt_tokens": 120, "completion_tokens": 7, "prompt_tokens_details": { "cached_tokens": 96 } } }),
         ),
     ]) + "data: [DONE]\n\n";
     let (base, seen) = serve(200, chat).await;
@@ -498,8 +498,12 @@ async fn token_counts_are_read_in_each_format() {
         true
     );
     assert_eq!(
-        (reply.stats.input_tokens, reply.stats.output_tokens),
-        (Some(120), Some(7))
+        (
+            reply.stats.input_tokens,
+            reply.stats.cached_tokens,
+            reply.stats.output_tokens
+        ),
+        (Some(120), Some(96), Some(7))
     );
     assert!(reply.stats.first_token_ms.is_some());
 
@@ -507,7 +511,7 @@ async fn token_counts_are_read_in_each_format() {
         ("response.output_text.delta", json!({ "delta": "ok" })),
         (
             "response.completed",
-            json!({ "response": { "usage": { "input_tokens": 50, "output_tokens": 3 } } }),
+            json!({ "response": { "usage": { "input_tokens": 50, "output_tokens": 3, "input_tokens_details": { "cached_tokens": 0 } } } }),
         ),
     ]);
     let (base, _seen) = serve(200, responses).await;
@@ -516,8 +520,12 @@ async fn token_counts_are_read_in_each_format() {
         .await
         .unwrap();
     assert_eq!(
-        (reply.stats.input_tokens, reply.stats.output_tokens),
-        (Some(50), Some(3))
+        (
+            reply.stats.input_tokens,
+            reply.stats.cached_tokens,
+            reply.stats.output_tokens
+        ),
+        (Some(50), Some(0), Some(3))
     );
 
     let anthropic = sse(&[
@@ -545,9 +553,31 @@ async fn token_counts_are_read_in_each_format() {
         .await
         .unwrap();
     assert_eq!(
-        (reply.stats.input_tokens, reply.stats.output_tokens),
-        (Some(100), Some(12))
+        (
+            reply.stats.input_tokens,
+            reply.stats.cached_tokens,
+            reply.stats.output_tokens
+        ),
+        (Some(100), Some(90), Some(12))
     );
+
+    // DeepSeek names cache hits on its own.
+    let deepseek = sse(&[
+        (
+            "",
+            json!({ "choices": [{ "delta": { "content": "ok" }, "finish_reason": "stop" }] }),
+        ),
+        (
+            "",
+            json!({ "choices": [], "usage": { "prompt_tokens": 40, "completion_tokens": 2, "prompt_cache_hit_tokens": 32 } }),
+        ),
+    ]) + "data: [DONE]\n\n";
+    let (base, _seen) = serve(200, deepseek).await;
+    let reply = client(Format::Chat, &base, "k")
+        .complete("s", &messages, &[], &mut |_| {})
+        .await
+        .unwrap();
+    assert_eq!(reply.stats.cached_tokens, Some(32));
 }
 
 #[tokio::test]

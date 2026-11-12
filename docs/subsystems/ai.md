@@ -129,7 +129,7 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 
 应用退出时结束所有 AI 会话。
 
-ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次是完整列表；名称去掉开头的 `/`，空名或含空白的丢弃，最多 200 条，说明与参数提示各截到 500 个字符）。ACP 的 `usage_update`（`used` / `size`，对话占用的上下文 token 数与窗口大小）解析为 `SessionUpdate::Usage` 交给界面。内置助手每次请求后发出 `SessionUpdate::Stats`：输入（含缓存）与输出 token、首字时间（发出请求到第一段文字或推理）、tokens/s（输出 token 除以生成时长）；token 数取自服务商的 usage（Chat 请求带 `stream_options.include_usage`，Responses 读 `response.completed`，Anthropic 读 `message_start` 与 `message_delta`），未报告的项为空。统计不写入 Journal。知道模型的上下文窗口时（服务商的 `contexts`，否则 `context_window`），内置助手每次请求后还发出 `SessionUpdate::Usage`（输入加输出 token 与窗口大小）。
+ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次是完整列表；名称去掉开头的 `/`，空名或含空白的丢弃，最多 200 条，说明与参数提示各截到 500 个字符）。ACP 的 `usage_update`（`used` / `size`，对话占用的上下文 token 数与窗口大小）解析为 `SessionUpdate::Usage` 交给界面。内置助手每次请求后发出 `SessionUpdate::Stats`：输入（含缓存）、其中命中缓存的（`cached_tokens`：Chat 的 `prompt_tokens_details.cached_tokens` 或 DeepSeek 的 `prompt_cache_hit_tokens`，Responses 的 `input_tokens_details.cached_tokens`，Anthropic 的 `cache_read_input_tokens`）与输出 token、首字时间（发出请求到第一段文字或推理）、tokens/s（输出 token 除以生成时长）；token 数取自服务商的 usage（Chat 请求带 `stream_options.include_usage`，Responses 读 `response.completed`，Anthropic 读 `message_start` 与 `message_delta`），未报告的项为空。界面的用量弹窗显示缓存命中率：最近一次请求，以及本对话中报告了缓存的请求累计。统计不写入 Journal。知道模型的上下文窗口时（服务商的 `contexts`，否则 `context_window`），内置助手每次请求后还发出 `SessionUpdate::Usage`（输入加输出 token 与窗口大小）。
 
 会话设置与继续对话：
 

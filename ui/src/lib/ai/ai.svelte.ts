@@ -36,6 +36,7 @@ import {
   type ToolCall,
 } from '../ipc';
 import { errorText, t, type MessageKey } from '../i18n';
+import { addCache, type CacheTotals } from './quota';
 import { approvalFor, connectionProblem, itemsFromRecords, titleOf, waitingApproval, type ChatItem } from './chatview';
 import { prefs } from '../settings/prefs.svelte';
 
@@ -77,6 +78,8 @@ export class Chat {
   usage = $state<{ used: number; size: number } | null>(null);
   /** The built-in assistant's last request. */
   stats = $state<RequestStats | null>(null);
+  /** Input and cached tokens of this conversation's requests that reported their cache. */
+  cache = $state<CacheTotals>({ input: 0, cached: 0 });
   /** Settings of the running agent the user can change (model, reasoning effort). */
   options = $state<ConfigOption[]>([]);
   /** The reviewer that let the next operation run, until it is reported. */
@@ -184,6 +187,7 @@ export class Chat {
         } else if (update.kind === 'stats') {
           const { kind: _kind, ...stats } = update;
           this.stats = stats;
+          this.cache = addCache(this.cache, stats);
         } else if (update.kind === 'config_options') {
           this.options = update.options.filter((option) => option.category !== 'mode');
         }

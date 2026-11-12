@@ -5,7 +5,7 @@
   import { aiQuota, type AiQuota, type QuotaWindow, type RequestStats } from '../ipc';
   import { errorText } from '../i18n';
   import IconButton from '../ui/IconButton.svelte';
-  import { contextPercent, contextTokens, speed, tokens, wait, windowName } from './quota';
+  import { cacheRate, contextPercent, contextTokens, speed, tokens, wait, windowName, type CacheTotals } from './quota';
 
   interface Props {
     /** The chat's agent (`acp:codex`…), or null. */
@@ -13,11 +13,15 @@
     usage: { used: number; size: number } | null;
     /** The built-in assistant's last request. */
     stats?: RequestStats | null;
+    /** The conversation's input and cached tokens so far. */
+    cache?: CacheTotals | null;
     /** A turn is running; the context is read again when it ends. */
     busy?: boolean;
   }
 
-  let { agent, usage, stats = null, busy = false }: Props = $props();
+  let { agent, usage, stats = null, cache = null, busy = false }: Props = $props();
+  const lastHit = $derived(cacheRate(stats?.cached_tokens ?? null, stats?.input_tokens ?? null));
+  const totalHit = $derived(cache ? cacheRate(cache.cached, cache.input) : null);
   let open = $state(false);
   let root = $state<HTMLDivElement>();
   let quota = $state<AiQuota | null>(null);
@@ -115,6 +119,7 @@
             <div class="row"><span>{t('ai.quota.output')}</span><span class="value">{t('ai.quota.tokens', { tokens: tokens(stats.output_tokens) })}</span></div>
           {/if}
           <div class="row"><span>{t('ai.quota.speed')}</span><span class="value">{stats.tokens_per_second !== null ? speed(stats.tokens_per_second) : '—'}</span></div>
+          <div class="row" title={t('ai.quota.cacheHint')}><span>{t('ai.quota.cache')}</span><span class="value">{lastHit !== null ? `${Math.round(lastHit)}%` : '—'}{#if totalHit !== null} · {t('ai.quota.cacheTotal', { percent: Math.round(totalHit) })}{/if}</span></div>
           <div class="row"><span>{t('ai.quota.firstToken')}</span><span class="value">{stats.first_token_ms !== null ? wait(stats.first_token_ms) : '—'}</span></div>
           <p class="note">{t('ai.quota.lastRequest')}</p>
         {/if}

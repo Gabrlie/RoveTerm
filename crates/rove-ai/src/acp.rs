@@ -120,6 +120,8 @@ pub enum SessionUpdate {
     /// The built-in assistant's last request: tokens in and out, and how fast they came.
     Stats {
         input_tokens: Option<u64>,
+        /// Of `input_tokens`, those read from the provider's prompt cache.
+        cached_tokens: Option<u64>,
         output_tokens: Option<u64>,
         first_token_ms: Option<u64>,
         tokens_per_second: Option<f64>,

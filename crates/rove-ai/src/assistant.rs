@@ -413,6 +413,7 @@ impl Assistant {
             self.session.emit(AiEvent::Update {
                 update: SessionUpdate::Stats {
                     input_tokens: reply.stats.input_tokens,
+                    cached_tokens: reply.stats.cached_tokens,
                     output_tokens: reply.stats.output_tokens,
                     first_token_ms: reply.stats.first_token_ms,
                     tokens_per_second: reply.stats.tokens_per_second(),

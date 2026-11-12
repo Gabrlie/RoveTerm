@@ -39,3 +39,21 @@ export function contextTokens(stats: { input_tokens: number | null; output_token
   if (stats?.input_tokens == null) return null;
   return stats.input_tokens + (stats.output_tokens ?? 0);
 }
+
+/** Input and cached tokens summed over the requests that reported their cache. */
+export interface CacheTotals {
+  input: number;
+  cached: number;
+}
+
+/** `totals` with request `stats` added, when it reported its cache. */
+export function addCache(totals: CacheTotals, stats: { input_tokens: number | null; cached_tokens: number | null }): CacheTotals {
+  if (stats.input_tokens == null || stats.cached_tokens == null) return totals;
+  return { input: totals.input + stats.input_tokens, cached: totals.cached + stats.cached_tokens };
+}
+
+/** Percent of `input` tokens read from the cache, or null when nothing was counted. */
+export function cacheRate(cached: number | null, input: number | null): number | null {
+  if (cached == null || input == null || input <= 0) return null;
+  return Math.min(100, (cached / input) * 100);
+}
