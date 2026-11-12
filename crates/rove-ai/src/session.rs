@@ -21,6 +21,22 @@ use crate::host::{self, CommandOutput, Entry, Host, HostError, Limits, shell_quo
 use crate::policy::{Answer, Decision, Mode, Operation, Policy, ToolKind};
 use crate::risk::{self, Assessment, Rules};
 
+/// Why the auto mode's judge did not let an operation run, so the user was asked.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReviewNote {
+    /// The judge would not allow it, or was not sure enough.
+    Declined { reviewer: String, confidence: f64 },
+    /// No judge is set up (no model provider or key).
+    NoJudge,
+    /// The judge failed or did not answer in time.
+    Failed { reviewer: String },
+    /// What runs is not shown in full (a script, a computed command): only the user decides.
+    Opaque,
+    /// Dangerous operations are always the user's.
+    Dangerous,
+}
+
 /// What happened in a session, for the UI and the audit trail.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -36,6 +52,8 @@ pub enum AiEvent {
         rememberable: bool,
         /// One of the agent's own tools, which runs on this machine whatever the session's host.
         agent_tool: bool,
+        /// In the auto mode, why the judge did not let it run.
+        review: Option<ReviewNote>,
     },
     /// An approval was answered (`None`: withdrawn because the turn was cancelled).
     Approved {
@@ -318,18 +336,28 @@ impl AiSession {
         operation: &Operation,
         assessment: &Assessment,
         agent_tool: bool,
-    ) -> Option<bool> {
+    ) -> Result<(), Option<ReviewNote>> {
         if agent_tool
-            || assessment.opaque
-            || assessment.risk != risk::Risk::Modify
             || !matches!(
                 self.policy.lock().await.mode(),
                 Mode::Auto | Mode::Unattended
             )
         {
-            return None;
+            return Err(None);
         }
-        let (reviewer, threshold) = self.reviewer.read().ok()?.clone()?;
+        match assessment.risk {
+            risk::Risk::Dangerous => return Err(Some(ReviewNote::Dangerous)),
+            risk::Risk::Modify => {}
+            // Asked about although read-only: a rule or grant decides, not the judge.
+            risk::Risk::ReadOnly => return Err(None),
+        }
+        if assessment.opaque {
+            return Err(Some(ReviewNote::Opaque));
+        }
+        let Some((reviewer, threshold)) = self.reviewer.read().ok().and_then(|slot| slot.clone())
+        else {
+            return Err(Some(ReviewNote::NoJudge));
+        };
         let request = crate::review::ReviewRequest::new(&self.host.label(), operation, assessment);
         let verdict = match tokio::time::timeout(crate::review::TIMEOUT, reviewer.review(&request))
             .await
@@ -337,14 +365,18 @@ impl AiSession {
             Ok(Ok(verdict)) => verdict,
             Ok(Err(error)) => {
                 tracing::warn!(reviewer = reviewer.name(), %error, "review failed; asking the user");
-                return None;
+                return Err(Some(ReviewNote::Failed {
+                    reviewer: reviewer.name().to_owned(),
+                }));
             }
             Err(_) => {
                 tracing::warn!(
                     reviewer = reviewer.name(),
                     "review timed out; asking the user"
                 );
-                return None;
+                return Err(Some(ReviewNote::Failed {
+                    reviewer: reviewer.name().to_owned(),
+                }));
             }
         };
         let allowed = verdict.allow && verdict.confidence >= threshold;
@@ -354,7 +386,14 @@ impl AiSession {
             allowed,
             confidence: verdict.confidence,
         });
-        Some(allowed)
+        if allowed {
+            Ok(())
+        } else {
+            Err(Some(ReviewNote::Declined {
+                reviewer: reviewer.name().to_owned(),
+                confidence: verdict.confidence,
+            }))
+        }
     }
 
     /// While `on`, updates from the agent are dropped (it replays an earlier conversation).
@@ -524,6 +563,12 @@ impl AiSession {
         }
     }
 
+    /// The approval mode now.
+    pub async fn mode(&self) -> Mode {
+        self.policy.lock().await.mode()
+    }
+
+    /// Changes the approval mode, for the operations asked about from now on.
     pub async fn set_mode(&self, mode: Mode) {
         self.policy.lock().await.set_mode(mode);
     }
@@ -577,9 +622,10 @@ impl AiSession {
             Decision::Allow => return (true, false),
             Decision::Ask { rememberable } => rememberable,
         };
-        if self.review(operation, assessment, agent_tool).await == Some(true) {
-            return (true, false);
-        }
+        let review = match self.review(operation, assessment, agent_tool).await {
+            Ok(()) => return (true, false),
+            Err(note) => note,
+        };
         // Nobody answers: refused, and noted for the user.
         if self.policy.lock().await.mode() == Mode::Unattended {
             let request =
@@ -598,6 +644,7 @@ impl AiSession {
             assessment: assessment.clone(),
             rememberable,
             agent_tool,
+            review,
         });
         let Ok(answer) = receiver.await else {
             return (false, false);

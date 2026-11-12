@@ -1079,9 +1079,17 @@ export type AiOutcome =
 
 export type AiAnswer = 'allow_once' | 'allow_session' | 'deny';
 
+/** Why the auto mode's judge did not let an operation run, so the user is asked. */
+export type ReviewNote =
+  | { kind: 'declined'; reviewer: string; confidence: number }
+  | { kind: 'no_judge' }
+  | { kind: 'failed'; reviewer: string }
+  | { kind: 'opaque' }
+  | { kind: 'dangerous' };
+
 export type AiEvent =
   | { event: 'update'; update: SessionUpdate }
-  | { event: 'approval'; request_id: number; operation: AiOperation; assessment: Assessment; rememberable: boolean; agent_tool: boolean }
+  | { event: 'approval'; request_id: number; operation: AiOperation; assessment: Assessment; rememberable: boolean; agent_tool: boolean; review: ReviewNote | null }
   | { event: 'approved'; request_id: number; answer: AiAnswer | null }
   /** A reviewer looked at an operation; `allowed` when it runs on the reviewer's word. */
   | { event: 'reviewed'; operation: AiOperation; reviewer: string; allowed: boolean; confidence: number }

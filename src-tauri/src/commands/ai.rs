@@ -46,6 +46,8 @@ struct Entry {
     auditor: Arc<Auditor>,
     /// The built-in MCP server of an ACP agent.
     mcp: Option<tokio::task::JoinHandle<()>>,
+    /// The fleet lead conversation that started this sub-agent.
+    parent: Option<String>,
 }
 
 /// AI sessions of this app.
@@ -950,6 +952,7 @@ pub async fn ai_start(
             backend,
             auditor,
             mcp,
+            parent: None,
         }),
     );
     Ok(started)
@@ -1063,6 +1066,7 @@ pub(crate) async fn start_external(
             backend: Arc::new(ExternalBackend(session.clone())),
             auditor,
             mcp: None,
+            parent: None,
         }),
     );
     tracing::info!(session = %id, agent = client, "an outside agent started working on a host");
@@ -1084,13 +1088,15 @@ pub const AI_SUBTASK_EVENT: &str = "ai-subtask";
 /// own conversation (with `parent`) and announced to the UI. Returns its id and assistant.
 async fn start_subagent(
     app: &AppHandle,
-    state: &AppState,
     parent: &str,
     host_id: rove_vault::HostId,
     provider: &ProviderPrefs,
     task: &str,
+    lead_mode: Mode,
     unattended: Option<bool>,
 ) -> Result<(String, Arc<Assistant>), CommandError> {
+    let state = app.state::<AppState>();
+    let state = state.inner();
     let prefs = state.vault.preferences()?;
     let context = AiContext::Host {
         host_id: host_id.to_string(),
@@ -1117,22 +1123,18 @@ async fn start_subagent(
             }
         })
     };
+    // The lead's mode now; a scheduled run has nobody to ask.
     let settings = SessionSettings {
-        mode: mode(prefs.ai.mode),
+        mode: if unattended.is_some() {
+            Mode::Unattended
+        } else {
+            lead_mode
+        },
         rules: Rules {
             read_only: prefs.ai.read_only.clone(),
             dangerous: prefs.ai.dangerous.clone(),
         },
         ..SessionSettings::default()
-    };
-    // A scheduled run has nobody to ask.
-    let settings = if unattended.is_some() {
-        SessionSettings {
-            mode: Mode::Unattended,
-            ..settings
-        }
-    } else {
-        settings
     };
     let session = Arc::new(AiSession::new(host.clone(), settings, sink));
     attach_notes(state, &session, &context);
@@ -1175,6 +1177,7 @@ async fn start_subagent(
             backend: assistant.clone(),
             auditor,
             mcp: None,
+            parent: Some(parent.to_owned()),
         }),
     );
     if let Err(error) = app.emit(
@@ -1206,19 +1209,22 @@ impl Drop for EndSubagent {
 
 /// Runs `task` with a sub-agent of fleet lead `parent` on host `host_id` to the end of its turn
 /// and ends it; returns its last reply (with what it had to leave for the user, when
-/// unattended), or why it failed. `unattended` is `Some(allow_changes)` in a scheduled run.
+/// unattended), or why it failed. It runs in the lead's approval mode `lead_mode`;
+/// `unattended` is `Some(allow_changes)` in a scheduled run.
 pub(crate) async fn run_subagent(
     app: &AppHandle,
     parent: &str,
     host_id: rove_vault::HostId,
     provider: &ProviderPrefs,
     task: &str,
+    lead_mode: Mode,
     unattended: Option<bool>,
 ) -> Result<String, String> {
     let state = app.state::<AppState>();
-    let (id, assistant) = start_subagent(app, &state, parent, host_id, provider, task, unattended)
-        .await
-        .map_err(|error| error.message)?;
+    let (id, assistant) =
+        start_subagent(app, parent, host_id, provider, task, lead_mode, unattended)
+            .await
+            .map_err(|error| error.message)?;
     let _end = EndSubagent {
         app: app.clone(),
         id: id.clone(),
@@ -1354,6 +1360,7 @@ pub(crate) async fn run_scheduled(
             backend: assistant.clone(),
             auditor: auditor.clone(),
             mcp: None,
+            parent: None,
         }),
     );
     let changes = if schedule.allow_changes {
@@ -1468,21 +1475,31 @@ pub async fn ai_answer(
         .await)
 }
 
-/// Changes the approval mode of session `id`.
+/// Changes the approval mode of session `id`, and of the sub-agents it is running.
 #[tauri::command]
 pub async fn ai_set_mode(
     state: State<'_, AppState>,
     id: String,
     mode: AiMode,
 ) -> Result<(), CommandError> {
-    state
-        .ai
-        .get(&id)
-        .await?
-        .backend
-        .session()
-        .set_mode(self::mode(mode))
-        .await;
+    let mode = self::mode(mode);
+    let affected: Vec<Arc<Entry>> = {
+        let entries = state.ai.entries.lock().await;
+        if !entries.contains_key(&id) {
+            drop(entries);
+            // The same error as an unknown session.
+            state.ai.get(&id).await?;
+            return Ok(());
+        }
+        entries
+            .iter()
+            .filter(|(key, entry)| **key == id || entry.parent.as_deref() == Some(id.as_str()))
+            .map(|(_, entry)| entry.clone())
+            .collect()
+    };
+    for entry in affected {
+        entry.backend.session().set_mode(mode).await;
+    }
     Ok(())
 }
 

@@ -120,6 +120,8 @@ impl FleetTools {
                 })?;
             work.push((find_host(&state, host)?, text.to_owned()));
         }
+        // Sub-agents ask the way the lead does now.
+        let lead_mode = self.session.mode().await;
         let limit = Arc::new(tokio::sync::Semaphore::new(CONCURRENCY));
         let mut running = tokio::task::JoinSet::new();
         for (at, (host, task)) in work.into_iter().enumerate() {
@@ -131,7 +133,7 @@ impl FleetTools {
             running.spawn(async move {
                 let _turn = limit.acquire_owned().await;
                 let result = crate::commands::ai::run_subagent(
-                    &app, &parent, host.id, &provider, &task, unattended,
+                    &app, &parent, host.id, &provider, &task, lead_mode, unattended,
                 )
                 .await;
                 (at, host.name, result)

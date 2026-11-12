@@ -143,7 +143,7 @@ ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次
 总管是所有已保存主机上的内置助手（`AiContext::Fleet`，`src-tauri/src/commands/fleet.rs`），自己不在任何主机上执行操作，只有三个工具：
 
 - `list_hosts`、`read_notes(host)`（与开放给本机智能体的同名工具同源）；
-- `delegate(tasks: [{host, task}])`：每项在该主机上启动一个子代理（内置助手 + 主机工具与备注，沿用用户的审批模式、规则与判断者），最多 4 个同时运行、一次最多 16 项，各自跑完一个回合后返回最后的回复（每项截到 4 KiB）。
+- `delegate(tasks: [{host, task}])`：每项在该主机上启动一个子代理（内置助手 + 主机工具与备注，沿用总管对话此刻的审批模式以及用户的规则与判断者；在总管对话中切换模式时，正在运行的子代理随之切换），最多 4 个同时运行、一次最多 16 项，各自跑完一个回合后返回最后的回复（每项截到 4 KiB）。
 
 总管的系统提示词要求它为每个子代理写自足的任务，并把结果当作数据。总管的工具调用以工具行报告在它自己的会话中（显示并记入 Journal）。子代理是独立的会话（`run_subagent`），`SessionInfo.parent` 为总管的会话 id，不出现在历史列表中；开始与结束经 `ai-subtask` 事件通知界面。总管回合被取消时，正在运行的子代理随之结束。定时任务中的子代理以无人值守模式运行（`AiSession::take_deferred` 取出被拒绝的操作），这些操作附在子代理结果末尾（"需要你决定"），由总管写进报告。总管只能用内置助手（默认服务商为内置时用它，否则用第一个服务商），`Assistant::with_toolbox` 让它复用同一对话循环。
 
@@ -178,7 +178,7 @@ ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次
 
 对话以统一的 `Message`（用户、助手含工具调用、工具结果）传给客户端，由它转换成各格式的请求；Anthropic 的同一轮工具结果合并进一条用户消息，签名的思考块在下一轮原样回传。
 
-自动模式的判断者（`review.rs`）：自动模式（`Auto`）下，策略要询问用户的普通修改（风险为 modify、非 opaque、非 Agent 自己的工具）先交给审阅者，审阅者放行且置信度不低于 `ai.review_confidence` 时直接执行，否则照常询问；危险操作始终询问用户。审阅者看到主机名、操作描述（命令，或文件路径与改动，最多 8 KiB）与被标记的原因，看不到文件全文与凭据；20 秒内无结论、出错或未配置时询问用户。判断者三选一（`ai.reviewer`）：`model` 用会话的服务商模型（本机智能体用默认服务商，没有时用第一个）；`chosen` 用指定的服务商与模型（`ai.review_model`，可选更便宜的）；`jev` 见下。`ModelReviewer`发一次不带工具、不带推理的请求，只认 `allow` 一个词；`JevReviewer` 向 TypeSafe 的 `/v1/systemone` 发一个 Choice 问题（`allow` / `ask`），取其置信度，key 存为 `ai_key` 的 `review:jev`（`ai_set_review_key`，随同步）。结论发出 `AiEvent::Reviewed`，Journal 记 `ai/reviewed`（审阅者、是否放行、置信度、操作），放行的操作在对话中带"已审阅"标记，只读操作以外的行不再并入"已执行 N 个只读操作"。
+自动模式的判断者（`review.rs`）：自动模式（`Auto`）下，策略要询问用户的普通修改（风险为 modify、非 opaque、非 Agent 自己的工具）先交给审阅者，审阅者放行且置信度不低于 `ai.review_confidence` 时直接执行，否则照常询问；危险操作始终询问用户。审阅者看到主机名、操作描述（命令，或文件路径与改动，最多 8 KiB）与被标记的原因，看不到文件全文与凭据；20 秒内无结论、出错或未配置时询问用户。判断者三选一（`ai.reviewer`）：`model` 用会话的服务商模型（本机智能体用默认服务商，没有时用第一个）；`chosen` 用指定的服务商与模型（`ai.review_model`，可选更便宜的）；`jev` 见下。`ModelReviewer`发一次不带工具、不带推理的请求，只认 `allow` 一个词；`JevReviewer` 向 TypeSafe 的 `/v1/systemone` 发一个 Choice 问题（`allow` / `ask`），取其置信度，key 存为 `ai_key` 的 `review:jev`（`ai_set_review_key`，随同步）。结论发出 `AiEvent::Reviewed`，Journal 记 `ai/reviewed`（审阅者、是否放行、置信度、操作），放行的操作在对话中带"已审阅"标记，只读操作以外的行不再并入"已执行 N 个只读操作"。自动与无人值守模式下询问用户时，`AiEvent::Approval.review`（`ReviewNote`，同记入 `ai/approval`）说明判断者为何没有放行：没把握（附置信度）、没有判断者、判断者出错或超时、内容不能完整展示（opaque）、危险操作；审批卡片显示这一行。
 
 上下文压缩：知道模型的上下文窗口时，若上一次请求（输入加输出）已超过窗口的 80%，下一次请求前把当前回合之前的对话用同一模型总结（不带工具的一次请求，各消息截到 2000 字节，提示中说明对话是数据），摘要放在当前回合的用户消息开头（`<summary-of-earlier-conversation>`），不拆开工具调用与结果；只有当前一个回合时不压缩；总结失败时照常继续。压缩发出 `SessionUpdate::Compacted`，Journal 记 `ai/compacted`（摘要），对话中显示为可展开的"已压缩较早的对话"，继续历史对话时按记录还原该行。
 

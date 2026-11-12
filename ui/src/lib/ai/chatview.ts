@@ -1,7 +1,7 @@
 // What an AI conversation shows: its items as the backend reported them, and how they are laid
 // out — an approval and the result of the operation it allowed are one row, and operations that
 // ran by themselves (read-only, without approval) fold into one line when several follow each other.
-import type { AiAnswer, AiOperation, AiOutcome, AiRecord, Assessment, Risk, ToolCall } from '../ipc';
+import type { AiAnswer, AiOperation, AiOutcome, AiRecord, Assessment, ReviewNote, Risk, ToolCall } from '../ipc';
 
 /** Text that reports a lost or refused connection to the model service (as Codex warns while it
  *  retries, or as a turn fails), rather than a reply. */
@@ -49,6 +49,8 @@ export type ChatItem =
       assessment: Assessment;
       rememberable: boolean;
       agentTool: boolean;
+      /** In the auto mode, why the judge did not let it run. */
+      review: ReviewNote | null;
       /** `undefined` while waiting; `null` when withdrawn. */
       answer: AiAnswer | null | undefined;
       outcome: AiOutcome | null;
@@ -211,6 +213,7 @@ export function itemsFromRecords(records: AiRecord[]): ChatItem[] {
             assessment: { ...assessed(payload.risk), reasons: Array.isArray(payload.reasons) ? (payload.reasons as Assessment['reasons']) : [] },
             rememberable: false,
             agentTool: payload.agent_tool === true,
+            review: (payload.review as ReviewNote | null | undefined) ?? null,
             answer: undefined,
             outcome: null,
           });

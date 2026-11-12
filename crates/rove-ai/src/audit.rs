@@ -427,10 +427,11 @@ impl Auditor {
                 operation,
                 assessment,
                 agent_tool,
+                review,
                 ..
             } => {
                 self.flush();
-                self.write(KIND_APPROVAL, json!({ "request_id": request_id, "asked": operation, "risk": assessment.risk, "reasons": assessment.reasons, "agent_tool": agent_tool }));
+                self.write(KIND_APPROVAL, json!({ "request_id": request_id, "asked": operation, "risk": assessment.risk, "reasons": assessment.reasons, "agent_tool": agent_tool, "review": review }));
             }
             AiEvent::Approved { request_id, answer } => {
                 self.write(
@@ -527,6 +528,7 @@ mod tests {
             assessment: assessment.clone(),
             rememberable: true,
             agent_tool: false,
+            review: None,
         });
         audit.event(&AiEvent::Approved {
             request_id: 1,

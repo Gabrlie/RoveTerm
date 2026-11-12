@@ -209,3 +209,83 @@ async fn unattended_runs_never_wait_and_note_what_they_refused() {
     session.write_file(path, "y").await.unwrap();
     assert_eq!(asked.load(Ordering::SeqCst), 0);
 }
+
+/// The note on each approval a session in `mode` asks (all denied), with or without a reviewer
+/// of `confidence`.
+async fn notes_of(
+    mode: Mode,
+    confidence: Option<f64>,
+    run: impl AsyncFnOnce(&AiSession),
+) -> Vec<Option<rove_ai::session::ReviewNote>> {
+    let (events, mut received) = mpsc::unbounded_channel::<AiEvent>();
+    let session = Arc::new(AiSession::new(
+        Arc::new(LocalHost),
+        SessionSettings {
+            mode,
+            ..SessionSettings::default()
+        },
+        Arc::new(move |event| {
+            let _ = events.send(event);
+        }),
+    ));
+    if let Some(confidence) = confidence {
+        session.set_reviewer(Some((
+            Arc::new(Agreeable {
+                confidence,
+                seen: Arc::new(AtomicUsize::new(0)),
+            }),
+            0.8,
+        )));
+    }
+    let notes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = notes.clone();
+    let denier = Arc::downgrade(&session);
+    let listener = tokio::spawn(async move {
+        while let Some(event) = received.recv().await {
+            if let (AiEvent::Approval { request_id, review, .. }, Some(session)) =
+                (&event, denier.upgrade())
+            {
+                kept.lock().unwrap().push(review.clone());
+                session.answer(*request_id, Answer::Deny).await;
+            }
+        }
+    });
+    run(&session).await;
+    drop(session);
+    let _ = listener.await;
+    Arc::try_unwrap(notes).unwrap().into_inner().unwrap()
+}
+
+#[tokio::test]
+async fn approvals_say_why_the_judge_did_not_decide() {
+    use rove_ai::session::ReviewNote;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.conf");
+    let path = path.to_str().unwrap().to_owned();
+    let write = |path: String| async move |session: &AiSession| {
+        let _ = session.write_file(&path, "x").await;
+    };
+    assert_eq!(
+        notes_of(Mode::Auto, Some(0.5), write(path.clone())).await,
+        [Some(ReviewNote::Declined {
+            reviewer: "test".into(),
+            confidence: 0.5
+        })]
+    );
+    assert_eq!(
+        notes_of(Mode::Auto, None, write(path.clone())).await,
+        [Some(ReviewNote::NoJudge)]
+    );
+    assert_eq!(
+        notes_of(Mode::Auto, Some(0.9), async |session: &AiSession| {
+            let _ = session.run_command("rm -rf /", None, None).await;
+        })
+        .await,
+        [Some(ReviewNote::Dangerous)]
+    );
+    // The review mode leaves every change to the user: nothing to explain.
+    assert_eq!(
+        notes_of(Mode::AskByRisk, Some(0.9), write(path)).await,
+        [None]
+    );
+}

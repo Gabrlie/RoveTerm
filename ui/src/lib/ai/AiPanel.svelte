@@ -18,7 +18,7 @@
   import { terminals } from '../terminal/registry';
   import { vault } from '../vault/vault.svelte';
   import { t, type MessageKey } from '../i18n';
-  import type { AgentChoice, AiAnswer, AiContext, AiMode, AiOperation, AiOutcome, AiRecord, AiSessionSummary, ConfigOption, Risk } from '../ipc';
+  import type { AgentChoice, AiAnswer, AiContext, AiMode, AiOperation, AiOutcome, AiRecord, AiSessionSummary, ConfigOption, ReviewNote, Risk } from '../ipc';
   import { prefs } from '../settings/prefs.svelte';
   import { EFFORT_LEVELS } from '../settings/providers';
   import { notify } from '../ui/toast.svelte';
@@ -285,6 +285,22 @@
     return t(`ai.verb.${operation.op}` as MessageKey);
   }
 
+  /** Why the auto mode's judge left this to the user. */
+  function reviewText(note: ReviewNote): string {
+    switch (note.kind) {
+      case 'declined':
+        return t('ai.why.declined', { reviewer: t(`ai.reviewer.${note.reviewer}` as MessageKey), percent: Math.round(note.confidence * 100) });
+      case 'failed':
+        return t('ai.why.failed', { reviewer: t(`ai.reviewer.${note.reviewer}` as MessageKey) });
+      case 'no_judge':
+        return t('ai.why.noJudge');
+      case 'opaque':
+        return t('ai.why.opaque');
+      case 'dangerous':
+        return t('ai.why.dangerous');
+    }
+  }
+
   function reason(code: string, detail: string, operation: AiOperation): string {
     const key = `ai.reason.${code}` as MessageKey;
     const text = t(key) === key ? code : t(key);
@@ -415,6 +431,7 @@
                 <pre class="diff selectable">{#each item.operation.diff.split('\n') as line, at (at)}<span class:removed={line.startsWith('- ')} class:added={line.startsWith('+ ')}>{line}{'\n'}</span>{/each}</pre>
               {/if}
               <p class="approval-where">{item.agentTool ? t('ai.agentTool') : t('ai.on', { host: target.subtaskOf ?? hostInText })}</p>
+              {#if item.review}<p class="approval-why">{reviewText(item.review)}</p>{/if}
               {#if item.assessment.reasons.length > 0}
                 <ul class="reasons">
                   {#each item.assessment.reasons as entry, at (at)}<li>{reason(entry.code, entry.detail, item.operation)}</li>{/each}
@@ -1105,7 +1122,8 @@
   .connection.recovered {
     color: var(--fg-muted);
   }
-  .approval-where {
+  .approval-where,
+  .approval-why {
     margin: var(--space-1) 0 0;
     color: var(--fg-muted);
     font-size: 11px;

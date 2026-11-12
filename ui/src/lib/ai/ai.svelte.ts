@@ -197,6 +197,7 @@ export class Chat {
           assessment: event.assessment,
           rememberable: event.rememberable,
           agentTool: event.agent_tool,
+          review: event.review,
           answer: undefined,
           outcome: null,
         });
