@@ -86,8 +86,9 @@ impl ExternalAccess {
         Ok(())
     }
 
-    /// Stops serving and removes the config file (also on exit; the next start writes it again
-    /// when access is on). Conversations already open end when their agents disconnect.
+    /// Stops serving, which also drops the connections already open (their conversations end),
+    /// and removes the config file (also on exit; the next start writes it again when access is
+    /// on).
     pub fn disable(&self) {
         if let Some(task) = self.task.lock().ok().and_then(|mut task| task.take()) {
             task.abort();

@@ -140,13 +140,23 @@ impl McpListener {
     }
 
     /// Serves bridge connections, each with tools from `factory`, until the returned task is
-    /// aborted.
+    /// aborted. Aborting it also ends the connections already open, and their tools are told.
     pub fn serve_with(self, factory: ToolsFactory) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            while let Ok((stream, _)) = self.listener.accept().await {
+            // Owned here, so they end with this task.
+            let mut connections = tokio::task::JoinSet::new();
+            loop {
+                let stream = tokio::select! {
+                    accepted = self.listener.accept() => match accepted {
+                        Ok((stream, _)) => stream,
+                        Err(_) => break,
+                    },
+                    Some(_) = connections.join_next(), if !connections.is_empty() => continue,
+                };
                 let tools = factory();
                 let token = self.token.clone();
-                tokio::spawn(async move {
+                connections.spawn(async move {
+                    let mut closing = Closing(Some(tools.clone()));
                     let (reader, mut writer) = stream.into_split();
                     let mut reader = BufReader::new(reader);
                     let mut presented = String::new();
@@ -163,10 +173,22 @@ impl McpListener {
                         return;
                     }
                     serve(reader, writer, tools.clone()).await;
+                    closing.0 = None;
                     tools.closed().await;
                 });
             }
         })
+    }
+}
+
+/// Tells a connection's tools that it closed when its task is aborted before it could.
+struct Closing(Option<Arc<dyn McpTools>>);
+
+impl Drop for Closing {
+    fn drop(&mut self) {
+        if let (Some(tools), Ok(runtime)) = (self.0.take(), tokio::runtime::Handle::try_current()) {
+            runtime.spawn(async move { tools.closed().await });
+        }
     }
 }
 

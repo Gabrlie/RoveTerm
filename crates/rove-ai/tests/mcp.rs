@@ -256,3 +256,47 @@ async fn each_connection_gets_its_tools_and_is_told_when_it_closes() {
     assert!(tools.closed.load(std::sync::atomic::Ordering::SeqCst));
     server.abort();
 }
+
+#[tokio::test]
+async fn stopping_the_server_ends_open_connections() {
+    let tools = Arc::new(Recording::default());
+    let listener = McpListener::bind().await.unwrap();
+    let config = listener.config().unwrap();
+    let shared = tools.clone();
+    let server = listener.serve_with(Arc::new(move || {
+        shared.clone() as Arc<dyn rove_ai::mcp::McpTools>
+    }));
+    let stream = TcpStream::connect(&config.addr).await.unwrap();
+    let (reader, mut writer) = stream.into_split();
+    writer
+        .write_all(format!("{}\n", config.token).as_bytes())
+        .await
+        .unwrap();
+    let mut connection = Connection {
+        lines: BufReader::new(reader).lines(),
+        writer,
+        next: 0,
+    };
+    connection
+        .call("initialize", json!({ "protocolVersion": "2025-06-18" }))
+        .await;
+
+    server.abort();
+    let _ = server.await;
+    // The open connection is closed by the server, and its tools were told.
+    let line = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        connection.lines.next_line(),
+    )
+    .await
+    .expect("the connection stays open");
+    assert!(matches!(line, Ok(None) | Err(_)));
+    for _ in 0..50 {
+        if tools.closed.load(std::sync::atomic::Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(tools.closed.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(tools.calls.lock().unwrap().is_empty());
+}
