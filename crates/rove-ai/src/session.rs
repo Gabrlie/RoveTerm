@@ -108,6 +108,10 @@ pub enum Outcome {
     },
 }
 
+/// Why a write approved by the user was not made.
+const CHANGED_WHILE_WAITING: &str =
+    "the file changed while waiting for approval, and the change no longer applies; read it again";
+
 /// Receives a session's events.
 pub type EventSink = Arc<dyn Fn(AiEvent) + Send + Sync>;
 
@@ -774,6 +778,10 @@ impl AiSession {
         let operation = Operation::WriteFile {
             path: path.to_owned(),
         };
+        // The contents the approval is about (none when the file does not exist yet).
+        let previous = host::read_text(self.host.as_ref(), path, &self.limits)
+            .await
+            .ok();
         let assessment = self.assess(&operation).await;
         let (allowed, approved) = self.authorize(&operation, &assessment, false).await;
         if !allowed {
@@ -782,10 +790,21 @@ impl AiSession {
                 "the user did not allow writing this file",
             ));
         }
-        // The previous contents, for the audit trail.
-        let previous = host::read_text(self.host.as_ref(), path, &self.limits)
+        // Changed by someone else while the approval waited: their change is not overwritten.
+        let now = host::read_text(self.host.as_ref(), path, &self.limits)
             .await
             .ok();
+        if now.as_ref().map(|text| &text.content) != previous.as_ref().map(|text| &text.content) {
+            self.report(
+                operation,
+                assessment,
+                approved,
+                Outcome::Failed {
+                    error: CHANGED_WHILE_WAITING.into(),
+                },
+            );
+            return Err(ClientError::invalid(CHANGED_WHILE_WAITING));
+        }
         match host::write_text(self.host.as_ref(), path, content, &self.limits).await {
             Ok(()) => {
                 let outcome = Outcome::Written {
@@ -848,6 +867,31 @@ impl AiSession {
                 "the user did not allow editing this file",
             ));
         }
+        // Changed while the approval waited: the approved replacement is made on the file as it
+        // is now, when it still applies the same way; otherwise nothing is written.
+        let fresh = host::read_text(self.host.as_ref(), path, &self.limits)
+            .await
+            .ok()
+            .filter(|fresh| !fresh.truncated);
+        let redone = match fresh {
+            Some(fresh) if fresh.content == current.content => Some((content, current)),
+            Some(fresh) => crate::edit::replace(&fresh.content, old, new, replace_all)
+                .ok()
+                .filter(|(_, again)| *again == count)
+                .map(|(redone, _)| (redone, fresh)),
+            None => None,
+        };
+        let Some((content, current)) = redone else {
+            self.report(
+                operation,
+                assessment,
+                approved,
+                Outcome::Failed {
+                    error: CHANGED_WHILE_WAITING.into(),
+                },
+            );
+            return Err(ClientError::invalid(CHANGED_WHILE_WAITING));
+        };
         match host::write_text(self.host.as_ref(), path, &content, &self.limits).await {
             Ok(()) => {
                 let outcome = Outcome::Written {
