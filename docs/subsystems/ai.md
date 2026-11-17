@@ -21,6 +21,7 @@
 - `sudo`、`env`、`nohup`、`timeout`、`xargs` 等包装器会被跳过，评估真正运行的程序；`sudo` 和 `doas` 至少为 `Modify`。
 - 程序名来自变量或展开（`$CMD`）、运行脚本或解释器代码时，结果标为 `opaque`：至少为 `Modify`，且不能"本会话允许"。
 - 重定向：写普通文件为 `Modify`，写系统路径或磁盘设备为 `Dangerous`，`/dev/null` 等不计。here-document 的内容不当作命令。
+- `sed` 解析脚本（`-e`、`--expression` 或第一个操作数）：`w`/`W`/`e` 命令与 `s` 的 `w`/`e` 标志、无法识别的命令为 `Modify`；`awk` 去掉字符串字面量后检查 `system(…)`（允许空格）、`print`/`printf` 重定向到文件或命令（写标准输出、标准错误、`/dev/null` 不计）、`cmd | getline` 与 `|&`。两者的脚本来自文件（`-f`）或展开时为 opaque。
 
 文件操作：读取为 `ReadOnly`，读取秘密文件（SSH 私钥、`/etc/shadow`、云凭据、`.env`、`*.pem`、`*.key`）为 `Modify`；写入为 `Modify`，写系统路径为 `Dangerous`。Agent 自带的工具按 ACP 的工具种类判断：读取、搜索、思考、抓取为只读，编辑、移动、删除为修改，执行但未给出命令的为不透明的修改。
 

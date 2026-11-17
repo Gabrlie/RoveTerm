@@ -454,6 +454,351 @@ pub fn is_secret_path(path: &str) -> bool {
         || path == ".env"
 }
 
+/// The scripts a `sed` command runs (`-e` values, else its first operand); `None` when one is
+/// not visible (a script file or a computed word).
+fn sed_scripts(args: &[Word]) -> Option<Vec<String>> {
+    let mut scripts = Vec::new();
+    let mut positional = None;
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        let text = arg.text.as_str();
+        at += 1;
+        if text == "--" {
+            positional = positional.or_else(|| args.get(at));
+            break;
+        }
+        if let Some(long) = text.strip_prefix("--") {
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, None), |(n, v)| (n, Some(v)));
+            match name {
+                "expression" => match value {
+                    Some(value) => scripts.push((value.to_owned(), arg.dynamic)),
+                    None => {
+                        let script = args.get(at)?;
+                        at += 1;
+                        scripts.push((script.text.clone(), script.dynamic));
+                    }
+                },
+                "file" => return None,
+                "line-length" if value.is_none() => at += 1,
+                _ => {}
+            }
+            continue;
+        }
+        if let Some(cluster) = text.strip_prefix('-').filter(|cluster| !cluster.is_empty()) {
+            // The first letter that takes a value ends the cluster; the value follows it or is
+            // the next argument.
+            if let Some(index) = cluster.find(['e', 'f', 'l']) {
+                let letter = &cluster[index..=index];
+                let rest = &cluster[index + 1..];
+                let value = if rest.is_empty() {
+                    let next = args.get(at)?;
+                    at += 1;
+                    (next.text.clone(), next.dynamic)
+                } else {
+                    (rest.to_owned(), arg.dynamic)
+                };
+                match letter {
+                    "e" => scripts.push(value),
+                    "f" => return None,
+                    _ => {}
+                }
+            }
+            continue;
+        }
+        if positional.is_none() {
+            positional = Some(arg);
+        }
+    }
+    if scripts.is_empty() {
+        let script = positional?;
+        scripts.push((script.text.clone(), script.dynamic));
+    }
+    if scripts.iter().any(|(_, dynamic)| *dynamic) {
+        return None;
+    }
+    Some(scripts.into_iter().map(|(script, _)| script).collect())
+}
+
+/// Whether `sed` script `script` writes files or runs commands: the `w`, `W` and `e` commands
+/// and the `w` and `e` flags of `s`. A command it does not know counts as writing.
+fn sed_writes(script: &str) -> bool {
+    let chars: Vec<char> = script.chars().collect();
+    let mut at = 0;
+    // Skips a delimited part (a regex or replacement) that starts after `delimiter`.
+    let skip_part = |at: &mut usize, delimiter: char| {
+        while let Some(&c) = chars.get(*at) {
+            *at += 1;
+            if c == '\\' {
+                *at += 1;
+            } else if c == delimiter {
+                return;
+            }
+        }
+    };
+    let skip_line = |at: &mut usize| {
+        while let Some(&c) = chars.get(*at) {
+            *at += 1;
+            if c == '\n' {
+                return;
+            }
+        }
+    };
+    loop {
+        while chars
+            .get(at)
+            .is_some_and(|c| c.is_whitespace() || matches!(c, ';' | '{' | '}'))
+        {
+            at += 1;
+        }
+        let Some(&first) = chars.get(at) else {
+            return false;
+        };
+        // Up to two addresses, with `!`.
+        let mut c = first;
+        for _ in 0..2 {
+            match c {
+                '0'..='9' | '$' | '~' | '+' => {
+                    while chars
+                        .get(at)
+                        .is_some_and(|c| c.is_ascii_digit() || matches!(c, '$' | '~' | '+'))
+                    {
+                        at += 1;
+                    }
+                }
+                '/' => {
+                    at += 1;
+                    skip_part(&mut at, '/');
+                    while chars.get(at).is_some_and(|c| matches!(c, 'I' | 'M')) {
+                        at += 1;
+                    }
+                }
+                '\\' => {
+                    let Some(&delimiter) = chars.get(at + 1) else {
+                        return true;
+                    };
+                    at += 2;
+                    skip_part(&mut at, delimiter);
+                    while chars.get(at).is_some_and(|c| matches!(c, 'I' | 'M')) {
+                        at += 1;
+                    }
+                }
+                _ => break,
+            }
+            while chars.get(at).is_some_and(|c| *c == ' ') {
+                at += 1;
+            }
+            if chars.get(at) == Some(&',') {
+                at += 1;
+                while chars.get(at).is_some_and(|c| *c == ' ') {
+                    at += 1;
+                }
+                let Some(&next) = chars.get(at) else {
+                    return true;
+                };
+                c = next;
+            } else {
+                break;
+            }
+        }
+        while chars.get(at).is_some_and(|c| *c == '!' || *c == ' ') {
+            at += 1;
+        }
+        let Some(&command) = chars.get(at) else {
+            return false;
+        };
+        at += 1;
+        match command {
+            'w' | 'W' | 'e' => return true,
+            // Labels and branches end at `;` or the end of the line.
+            ':' | 'b' | 't' | 'T' | 'v' => {
+                while chars.get(at).is_some_and(|c| !matches!(c, ';' | '\n')) {
+                    at += 1;
+                }
+            }
+            // A comment, text (`a\` lines continue) or a file to read: to the end of the line.
+            '#' | 'a' | 'i' | 'c' | 'r' | 'R' => loop {
+                let start = at;
+                skip_line(&mut at);
+                let line: String = chars[start..at].iter().collect();
+                if at >= chars.len() || !line.trim_end_matches('\n').ends_with('\\') {
+                    break;
+                }
+            },
+            's' | 'y' => {
+                let Some(&delimiter) = chars.get(at) else {
+                    return true;
+                };
+                at += 1;
+                skip_part(&mut at, delimiter);
+                skip_part(&mut at, delimiter);
+                if command == 's' {
+                    while let Some(&flag) = chars.get(at) {
+                        if flag == 'w' || flag == 'e' {
+                            return true;
+                        }
+                        if !(flag.is_ascii_alphanumeric()) {
+                            break;
+                        }
+                        at += 1;
+                    }
+                }
+            }
+            'q' | 'Q' | 'l' | 'L' => {
+                while chars
+                    .get(at)
+                    .is_some_and(|c| c.is_ascii_digit() || *c == ' ')
+                {
+                    at += 1;
+                }
+            }
+            '=' | 'd' | 'D' | 'n' | 'N' | 'p' | 'P' | 'h' | 'H' | 'g' | 'G' | 'x' | 'z' | 'F' => {}
+            _ => return true,
+        }
+    }
+}
+
+/// The program an `awk` command runs (its first operand, or `--source` / `-e` values); `None`
+/// when it is not visible (a program file or a computed word).
+fn awk_program(args: &[Word]) -> Option<String> {
+    let mut sources = Vec::new();
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        let text = arg.text.as_str();
+        at += 1;
+        if text == "--" {
+            let program = args.get(at)?;
+            sources.push(program);
+            break;
+        }
+        if let Some(long) = text.strip_prefix("--") {
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, None), |(n, v)| (n, Some(v)));
+            match name {
+                "file" | "exec" | "load" | "include" => return None,
+                "source" => {
+                    if value.is_some() {
+                        sources.push(arg);
+                    } else {
+                        sources.push(args.get(at)?);
+                        at += 1;
+                    }
+                }
+                "field-separator" | "assign" if value.is_none() => at += 1,
+                _ => {}
+            }
+            continue;
+        }
+        if let Some(cluster) = text.strip_prefix('-').filter(|cluster| !cluster.is_empty()) {
+            match cluster.chars().next() {
+                Some('f' | 'E' | 'l') => return None,
+                Some('e') => {
+                    if cluster.len() > 1 {
+                        sources.push(arg);
+                    } else {
+                        sources.push(args.get(at)?);
+                        at += 1;
+                    }
+                }
+                Some('F' | 'v' | 'i') if cluster.len() == 1 => at += 1,
+                _ => {}
+            }
+            continue;
+        }
+        if sources.is_empty() {
+            sources.push(arg);
+        }
+        break;
+    }
+    if sources.is_empty() || sources.iter().any(|source| source.dynamic) {
+        return None;
+    }
+    Some(
+        sources
+            .iter()
+            .map(|source| source.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+/// Whether awk `program` writes files or runs commands: `system(…)`, output redirected to a file
+/// or a command, `cmd | getline` and coprocesses. String literals are left out first, so their
+/// text does not count; writing to the standard streams does not count either.
+fn awk_writes(program: &str) -> bool {
+    let mut code = String::with_capacity(program.len());
+    let mut chars = program.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '"' {
+            code.push(c);
+            continue;
+        }
+        let mut literal = String::new();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => {
+                    if let Some(next) = chars.next() {
+                        literal.push(next);
+                    }
+                }
+                '"' => break,
+                _ => literal.push(c),
+            }
+        }
+        // A redirection to a standard stream reads as no redirection at all.
+        if matches!(
+            literal.as_str(),
+            "/dev/stdout" | "/dev/stderr" | "/dev/null" | "-"
+        ) {
+            let trimmed = code.trim_end();
+            let cut = trimmed
+                .strip_suffix(">>")
+                .or_else(|| trimmed.strip_suffix('>'))
+                .map(str::len);
+            if let Some(len) = cut {
+                code.truncate(len);
+            }
+        }
+        code.push_str("\"\"");
+    }
+    let word_at = |at: usize, word: &str| {
+        code[at..].starts_with(word)
+            && !code[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+            && !code[at + word.len()..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+    };
+    if code.contains("|&") {
+        return true;
+    }
+    for (at, _) in code.char_indices() {
+        if word_at(at, "system") && code[at + "system".len()..].trim_start().starts_with('(') {
+            return true;
+        }
+        if word_at(at, "getline") && code[..at].trim_end().ends_with('|') {
+            return true;
+        }
+        for word in ["print", "printf"] {
+            if word_at(at, word) {
+                let statement = code[at + word.len()..]
+                    .split([';', '}', '\n'])
+                    .next()
+                    .unwrap_or_default();
+                if statement.contains(['>', '|']) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Short options of `args` merged (`-rf` and `-r -f` both give `rf`) plus long options.
 fn flags(args: &[Word]) -> (String, Vec<&str>) {
     let mut short = String::new();
@@ -868,17 +1213,33 @@ fn program(
             if short.contains('i') || long.iter().any(|flag| flag.starts_with("in-place")) {
                 modify(assessment, "write_file");
             }
+            match sed_scripts(args) {
+                Some(scripts) => {
+                    if scripts.iter().any(|script| sed_writes(script)) {
+                        modify(assessment, "write_file");
+                    }
+                }
+                // A script file or a computed script: what runs is not visible.
+                None => {
+                    assessment.opaque = true;
+                    modify(assessment, "script");
+                }
+            }
         }
         "awk" | "gawk" | "mawk" | "nawk" => {
-            if args.iter().any(|arg| {
-                arg.text.contains("system(")
-                    || arg.text.contains("print >")
-                    || arg.text.contains("printf >")
-                    || arg.text.contains("| getline")
-                    || arg.text.contains("|&")
-            }) || short.contains('i')
-            {
+            if short.contains('i') {
                 modify(assessment, "modify");
+            }
+            match awk_program(args) {
+                Some(program) => {
+                    if awk_writes(&program) {
+                        modify(assessment, "modify");
+                    }
+                }
+                None => {
+                    assessment.opaque = true;
+                    modify(assessment, "script");
+                }
             }
         }
         "sort" => {
@@ -1240,6 +1601,57 @@ mod tests {
             "env",
             "watch -n 2 'df -h'",
             "cat <<EOF\nrm -rf /\nEOF",
+        ] {
+            assert_eq!(risk(line), Risk::ReadOnly, "{line}");
+        }
+    }
+
+    #[test]
+    fn sed_and_awk_that_write_or_run_commands() {
+        for line in [
+            "sed -n 'w /tmp/x' app.log",
+            "sed -n '/err/W out.txt' app.log",
+            "sed 's/a/b/w changed.txt' f",
+            "sed 's/a/b/gw changed.txt' f",
+            "sed 's|a|b|e' f",
+            "sed '1e id' f",
+            "sed -e p -e 'w /tmp/x' f",
+            "sed --expression='w /tmp/x' f",
+            "sed -ne '$w last' f",
+            "sed ':a;N;$!ba;w all' f",
+            "sed -f script.sed f",
+            "sed \"$SCRIPT\" f",
+            "awk '{system (\"rm x\")}' f",
+            "awk '{system(\"rm x\")}' f",
+            "awk '{print > \"out\"}' f",
+            "awk '{ print $1, $2 >> \"out\" }' f",
+            "awk '{printf \"%s\\n\", $1 > \"out\"}' f",
+            "awk '{print | \"sh\"}' f",
+            "awk 'BEGIN { \"date\" | getline d; print d }'",
+            "awk 'BEGIN { print \"ls\" |& \"sh\" }'",
+            "awk -f prog.awk f",
+            "gawk -i inplace '{print}' f",
+            "awk -F: '{print $1 > \"users\"}' /etc/passwd",
+        ] {
+            assert_eq!(risk(line), Risk::Modify, "{line}");
+        }
+        for line in [
+            "sed -n 1,5p f",
+            "sed -n '/start/,/end/p' f",
+            "sed 's/a/b/g' f",
+            "sed -E 's/(a|b)+/x/2' f",
+            "sed -e 's/a/b/' -e '/^#/d' f",
+            "sed ':a;N;$!ba;s/\\n/ /g' f",
+            "sed '/x/a\\ appended line' f",
+            "sed 'y/abc/xyz/' f",
+            "awk '{print $2}' f",
+            "awk '$3 > 80 {print $1}' f",
+            "awk -F: '{print $1}' /etc/passwd",
+            "awk -v n=3 'NR > n {print}' f",
+            "awk '{print \"a>b|c\"}' f",
+            "awk '{print \"warning\" > \"/dev/stderr\"}' f",
+            "awk '{n = sprintf(\"%d\", $1); print n}' f",
+            "awk '/foo|bar/ {print $0}' f",
         ] {
             assert_eq!(risk(line), Risk::ReadOnly, "{line}");
         }
