@@ -442,16 +442,29 @@ fn is_system_path(path: &str) -> bool {
 /// Whether reading `path` exposes a secret.
 pub fn is_secret_path(path: &str) -> bool {
     let path = path.replace('\\', "/");
-    let path = if path.starts_with("~/") {
-        format!("/{path}")
-    } else {
+    // Relative and `~/` paths are checked as if rooted, so `.ssh/id_rsa` matches too.
+    let path = if path.starts_with('/') {
         path
+    } else {
+        format!("/{path}")
     };
-    SECRET_MARKERS.iter().any(|marker| path.contains(marker))
+    let name = path.rsplit('/').next().unwrap_or_default();
+    let public = path.ends_with(".pub");
+    // The `.ssh` directory itself, or names in it chosen by a pattern, may take in the keys.
+    let ssh_dir = path.trim_end_matches('/').ends_with("/.ssh")
+        || path
+            .split_once("/.ssh/")
+            .is_some_and(|(_, rest)| rest.contains(['*', '?', '[']));
+    let key_name = name.starts_with("id_")
+        && ["rsa", "dsa", "ecdsa", "ed25519"]
+            .iter()
+            .any(|kind| name[3..].starts_with(kind));
+    (SECRET_MARKERS.iter().any(|marker| path.contains(marker)) && !public)
+        || (key_name && !public)
+        || ssh_dir
         || path.ends_with(".pem")
         || path.ends_with(".key")
         || path.ends_with("/.env")
-        || path == ".env"
 }
 
 /// The scripts a `sed` command runs (`-e` values, else its first operand); `None` when one is
@@ -1012,6 +1025,24 @@ fn assess_segment(
     assessment.programs.insert(name.clone());
     if elevated {
         assessment.raise(Risk::Modify, "elevated", name.clone());
+    }
+    // Secrets read through a command are asked about like reading them with the file tool.
+    // Programs that only name or use a key without showing it are left out.
+    if !matches!(name.as_str(), "ls" | "stat" | "test" | "[" | "ssh" | "file") {
+        let named = args.iter().map(|arg| {
+            arg.text
+                .split_once('=')
+                .filter(|_| arg.text.starts_with('-'))
+                .map_or(arg.text.as_str(), |(_, value)| value)
+        });
+        let read = segment
+            .redirects
+            .iter()
+            .filter(|redirect| !redirect.writes)
+            .map(|redirect| redirect.target.text.as_str());
+        if let Some(path) = named.chain(read).find(|path| is_secret_path(path)) {
+            assessment.raise(Risk::Modify, "read_secret", path.to_owned());
+        }
     }
     program(&mut assessment, &name, args, previous, rules, depth);
     assessment
@@ -1601,6 +1632,47 @@ mod tests {
             "env",
             "watch -n 2 'df -h'",
             "cat <<EOF\nrm -rf /\nEOF",
+        ] {
+            assert_eq!(risk(line), Risk::ReadOnly, "{line}");
+        }
+    }
+
+    #[test]
+    fn commands_that_read_secrets_are_asked_about() {
+        for line in [
+            "cat ~/.ssh/id_ed25519",
+            "cat /home/me/.ssh/id_rsa",
+            "base64 < ~/.ssh/id_rsa",
+            "head -c 100 .ssh/id_ecdsa",
+            "cat id_rsa",
+            "tar czf - ~/.ssh",
+            "cp -r ~/.ssh/ /tmp/keys",
+            "cat ~/.ssh/*",
+            "grep x /etc/shadow",
+            "less /srv/app/.env",
+            "openssl rsa -in server.key -text",
+            "curl --cacert=ca.pem https://x",
+            "sudo cat /etc/sudoers",
+            "cat ~/.aws/credentials | head",
+        ] {
+            let assessment = assess_command(line, &Rules::default());
+            assert_eq!(assessment.risk, Risk::Modify, "{line}");
+            assert!(
+                assessment
+                    .reasons
+                    .iter()
+                    .any(|reason| reason.code == "read_secret"),
+                "{line}"
+            );
+        }
+        for line in [
+            "cat ~/.ssh/id_ed25519.pub",
+            "cat ~/.ssh/known_hosts",
+            "cat ~/.ssh/authorized_keys",
+            "ls -la ~/.ssh",
+            "stat ~/.ssh/id_rsa",
+            "test -f ~/.ssh/id_rsa",
+            "ssh -i ~/.ssh/id_rsa host uptime",
         ] {
             assert_eq!(risk(line), Risk::ReadOnly, "{line}");
         }

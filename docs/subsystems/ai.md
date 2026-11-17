@@ -23,7 +23,7 @@
 - 重定向：写普通文件为 `Modify`，写系统路径或磁盘设备为 `Dangerous`，`/dev/null` 等不计。here-document 的内容不当作命令。
 - `sed` 解析脚本（`-e`、`--expression` 或第一个操作数）：`w`/`W`/`e` 命令与 `s` 的 `w`/`e` 标志、无法识别的命令为 `Modify`；`awk` 去掉字符串字面量后检查 `system(…)`（允许空格）、`print`/`printf` 重定向到文件或命令（写标准输出、标准错误、`/dev/null` 不计）、`cmd | getline` 与 `|&`。两者的脚本来自文件（`-f`）或展开时为 opaque。
 
-文件操作：读取为 `ReadOnly`，读取秘密文件（SSH 私钥、`/etc/shadow`、云凭据、`.env`、`*.pem`、`*.key`）为 `Modify`；写入为 `Modify`，写系统路径为 `Dangerous`。Agent 自带的工具按 ACP 的工具种类判断：读取、搜索、思考、抓取为只读，编辑、移动、删除为修改，执行但未给出命令的为不透明的修改。
+文件操作：读取为 `ReadOnly`，读取秘密文件（SSH 私钥（`id_rsa` 等，`.pub` 公钥除外）、`.ssh` 目录本身或其中的通配、`/etc/shadow`、云凭据、`.env`、`*.pem`、`*.key`）为 `Modify`（`read_secret`）；命令的参数（含 `--opt=路径` 的值）与输入重定向同样检查，`ls`、`stat`、`test`、`file`、`ssh`（只列名或使用密钥、不显示内容）除外；写入为 `Modify`，写系统路径为 `Dangerous`。Agent 自带的工具按 ACP 的工具种类判断：读取、搜索、思考、抓取为只读，编辑、移动、删除为修改，执行但未给出命令的为不透明的修改。
 
 用户可以在 `Rules` 中追加只读程序名和"危险文本"（命令中出现即为 `Dangerous`，如生产数据库主机名）。
 
