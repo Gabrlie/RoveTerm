@@ -114,6 +114,71 @@ struct SyncStore {
 }
 
 impl RecordStore for SyncStore {
+    fn receipts(
+        &self,
+        key: &SyncKey,
+    ) -> Result<std::collections::BTreeMap<String, rove_sync::Known>, SyncError> {
+        let space = key.fingerprint(b"rove/sync/receipts/v1");
+        let mut receipts: std::collections::BTreeMap<_, _> = serde_json::from_value(
+            self.vault
+                .0
+                .sync_receipt(&space)
+                .map_err(|e| SyncError::Store(e.to_string()))?,
+        )
+        .map_err(|e| SyncError::Format(e.to_string()))?;
+        let journal = self
+            .conversations
+            .0
+            .sync_receipt(&space)
+            .map_err(journal_error)?;
+        receipts.extend(
+            serde_json::from_value::<std::collections::BTreeMap<String, rove_sync::Known>>(journal)
+                .map_err(|e| SyncError::Format(e.to_string()))?,
+        );
+        Ok(receipts)
+    }
+
+    fn apply_tracked(&self, changes: &[Change], key: &SyncKey) -> Result<(), SyncError> {
+        let space = key.fingerprint(b"rove/sync/receipts/v1");
+        let (conversations, others): (Vec<_>, Vec<_>) = changes
+            .iter()
+            .cloned()
+            .partition(|change| change.kind == CONVERSATION_KIND);
+        if !others.is_empty() {
+            self.vault
+                .0
+                .transaction(|| {
+                    self.vault.0.apply_sync_rows(&vault_changes(&others))?;
+                    let old = self.vault.0.sync_receipt(&space)?;
+                    let rows = self
+                        .vault
+                        .records()
+                        .map_err(|e| rove_vault::VaultError::Invalid(e.to_string()))?;
+                    let value = imported_versions(key, old, &others, rows)?;
+                    self.vault.0.set_sync_receipt(&space, &value)
+                })
+                .map_err(|e| SyncError::Store(e.to_string()))?;
+        }
+        if !conversations.is_empty() {
+            let store = &self.conversations;
+            store
+                .0
+                .transaction(&mut || {
+                    let err = |e: SyncError| rove_journal::JournalError::Io(e.to_string());
+                    store.apply(&conversations).map_err(err)?;
+                    let value = imported_versions(
+                        key,
+                        store.0.sync_receipt(&space)?,
+                        &conversations,
+                        store.records().map_err(err)?,
+                    )?;
+                    store.0.set_sync_receipt(&space, &value)
+                })
+                .map_err(journal_error)?;
+        }
+        Ok(())
+    }
+
     fn records(&self) -> Result<Vec<Record>, SyncError> {
         let mut records = self.vault.records()?;
         records.extend(self.conversations.records()?);
@@ -128,6 +193,33 @@ impl RecordStore for SyncStore {
         self.vault.apply(&others)?;
         self.conversations.apply(&conversations)
     }
+}
+
+fn imported_versions(
+    key: &SyncKey,
+    old: serde_json::Value,
+    changes: &[Change],
+    rows: Vec<Record>,
+) -> Result<serde_json::Value, serde_json::Error> {
+    use std::collections::BTreeMap;
+    let mut receipts: BTreeMap<String, rove_sync::Known> = serde_json::from_value(old)?;
+    let rows: BTreeMap<_, _> = rows.into_iter().map(|r| ((r.kind, r.id), r.body)).collect();
+    for change in changes {
+        let body = rows.get(&(change.kind.clone(), change.id.clone()));
+        let fingerprint = match body {
+            Some(body) => key.fingerprint(&serde_json::to_vec(body)?),
+            None => String::new(),
+        };
+        receipts.insert(
+            format!("{}:{}", change.kind, change.id),
+            rove_sync::Known {
+                hlc: change.hlc.clone(),
+                fingerprint,
+                deleted: body.is_none(),
+            },
+        );
+    }
+    serde_json::to_value(receipts)
 }
 
 /// Recent AI conversations as sync records; arriving ones are merged into the journal (records
@@ -277,6 +369,17 @@ impl RecordStore for ConversationStore {
 /// The vault as the sync engine's record store.
 struct VaultStore(Arc<Vault>);
 
+fn vault_changes(changes: &[Change]) -> Vec<SyncChange> {
+    changes
+        .iter()
+        .map(|change| SyncChange {
+            kind: change.kind.clone(),
+            id: change.id.clone(),
+            body: change.body.clone(),
+        })
+        .collect()
+}
+
 impl RecordStore for VaultStore {
     fn records(&self) -> Result<Vec<Record>, SyncError> {
         let records = self
@@ -294,14 +397,7 @@ impl RecordStore for VaultStore {
     }
 
     fn apply(&self, changes: &[Change]) -> Result<(), SyncError> {
-        let changes: Vec<SyncChange> = changes
-            .iter()
-            .map(|change| SyncChange {
-                kind: change.kind.clone(),
-                id: change.id.clone(),
-                body: change.body.clone(),
-            })
-            .collect();
+        let changes = vault_changes(changes);
         self.0
             .apply_sync(&changes)
             .map_err(|error| SyncError::Store(error.to_string()))
@@ -717,5 +813,73 @@ mod tests {
                 .unwrap()
                 .contains("ai-1")
         );
+    }
+    #[tokio::test]
+    async fn recovery_after_a_journal_failure_respects_a_third_devices_update() {
+        use rove_journal::{NewRecord, SqliteJournal};
+        use rove_vault::{MemoryKeyCache, SnippetDraft};
+        let root = tempfile::tempdir().unwrap();
+        let disk = tempfile::tempdir().unwrap();
+        let space = FolderBackend::new(root.path());
+        let key = SyncKey::from_bytes([8; 32]);
+        let cache = Arc::new(MemoryKeyCache::default());
+        let open = |device: &str| {
+            let vault = Arc::new(
+                Vault::open(&disk.path().join(format!("{device}.db")), cache.clone()).unwrap(),
+            );
+            vault.try_unlock();
+            let journal = Arc::new(
+                SqliteJournal::open(&disk.path().join(format!("{device}-journal.db"))).unwrap(),
+            );
+            SyncStore {
+                vault: VaultStore(vault),
+                conversations: ConversationStore(journal),
+            }
+        };
+        let a = open("a");
+        let b = open("b");
+        let c = open("c");
+        let mut sa = SyncState::new("a");
+        let mut sb = SyncState::new("b");
+        let mut sc = SyncState::new("c");
+        for (store, state) in [(&a, &mut sa), (&b, &mut sb), (&c, &mut sc)] {
+            rove_sync::sync(&space, &key, state, store).await.unwrap();
+        }
+        let draft = |name: &str| SnippetDraft {
+            name: name.into(),
+            command: "pwd".into(),
+        };
+        let initial = a.vault.0.create_snippet(draft("imported")).unwrap();
+        a.conversations
+            .0
+            .append(NewRecord {
+                kind: rove_ai::audit::KIND_STARTED.into(),
+                session_id: Some("ai-import".into()),
+                payload: serde_json::json!({}),
+            })
+            .unwrap();
+        rove_sync::sync(&space, &key, &mut sa, &a).await.unwrap();
+        // A journal transaction fails after the Vault transaction has committed.
+        let path = disk.path().join("b-journal.db");
+        let sql = rusqlite::Connection::open(&path).unwrap();
+        sql.execute_batch("CREATE TRIGGER fail_import BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
+        assert!(rove_sync::sync(&space, &key, &mut sb, &b).await.is_err());
+        assert_eq!(b.vault.0.list_snippets().unwrap()[0].name, "imported");
+        drop(b);
+        rove_sync::sync(&space, &key, &mut sc, &c).await.unwrap();
+        c.vault
+            .0
+            .update_snippet(initial.id, draft("newer"))
+            .unwrap();
+        rove_sync::sync(&space, &key, &mut sc, &c).await.unwrap();
+        sql.execute_batch("DROP TRIGGER fail_import").unwrap();
+        let recovered = open("b");
+        let result = rove_sync::sync(&space, &key, &mut sb, &recovered)
+            .await
+            .unwrap();
+        assert_eq!(result.pushed, 0);
+        assert_eq!(recovered.vault.0.list_snippets().unwrap()[0].name, "newer");
+        rove_sync::sync(&space, &key, &mut sc, &c).await.unwrap();
+        assert_eq!(c.vault.0.list_snippets().unwrap()[0].name, "newer");
     }
 }

@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{ReentrantMutex, RwLock};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use zeroize::Zeroizing;
@@ -56,7 +56,7 @@ pub enum LockReason {
 /// Host, secret and known-host storage. Host metadata is always readable; secrets require the
 /// vault to be unlocked with the device master key.
 pub struct Vault {
-    pub(crate) conn: Mutex<Connection>,
+    pub(crate) conn: ReentrantMutex<Connection>,
     cipher: RwLock<Option<FieldCipher>>,
     state: RwLock<LockState>,
     key_cache: Arc<dyn KeyCache>,
@@ -82,13 +82,53 @@ impl Vault {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         migrate(&conn)?;
         Ok(Self {
-            conn: Mutex::new(conn),
+            conn: ReentrantMutex::new(conn),
             cipher: RwLock::new(None),
             state: RwLock::new(LockState::Locked {
                 reason: LockReason::NotAttempted,
             }),
             key_cache,
         })
+    }
+
+    /// Holds the connection across nested store methods until the complete batch commits.
+    pub fn transaction<T>(
+        &self,
+        action: impl FnOnce() -> Result<T, VaultError>,
+    ) -> Result<T, VaultError> {
+        let conn = self.conn.lock();
+        let tx = conn.unchecked_transaction()?;
+        let value = action()?;
+        tx.commit()?;
+        Ok(value)
+    }
+
+    pub fn sync_receipt(&self, space: &str) -> Result<serde_json::Value, VaultError> {
+        let data: Option<Vec<u8>> = self
+            .conn
+            .lock()
+            .query_row(
+                "SELECT value FROM meta WHERE key=?1",
+                [format!("receipts:{space}")],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(match data {
+            Some(data) => serde_json::from_slice(&data)?,
+            None => serde_json::json!({}),
+        })
+    }
+
+    pub fn set_sync_receipt(
+        &self,
+        space: &str,
+        value: &serde_json::Value,
+    ) -> Result<(), VaultError> {
+        self.conn.lock().execute(
+            "INSERT OR REPLACE INTO meta(key,value) VALUES (?1,?2)",
+            params![format!("receipts:{space}"), serde_json::to_vec(value)?],
+        )?;
+        Ok(())
     }
 
     /// Returns the current lock state.
@@ -176,8 +216,8 @@ impl Vault {
         let key = MasterKey::generate()?;
         self.key_cache.store(&key)?;
         {
-            let mut conn = self.conn.lock();
-            let tx = conn.transaction()?;
+            let conn = self.conn.lock();
+            let tx = conn.unchecked_transaction()?;
             tx.execute("DELETE FROM host_secrets", [])?;
             tx.execute("UPDATE ssh_keys SET sealed = NULL", [])?;
             tx.execute("DELETE FROM preferences WHERE key LIKE 'ai_key:%'", [])?;
@@ -268,8 +308,8 @@ impl Vault {
         self.check_auth(&draft.auth)?;
         let now = now_millis();
         {
-            let mut conn = self.conn.lock();
-            let tx = conn.transaction()?;
+            let conn = self.conn.lock();
+            let tx = conn.unchecked_transaction()?;
             tx.execute(
                 "UPDATE hosts SET name = ?2, group_name = ?3, hostname = ?4, port = ?5, username = ?6,
                  auth = ?7, tags = ?8, updated_at = ?9, route = ?10 WHERE id = ?1",
@@ -299,8 +339,14 @@ impl Vault {
 
     /// Deletes a host together with its stored secret. Works while locked.
     pub fn delete_host(&self, id: HostId) -> Result<(), VaultError> {
-        let mut conn = self.conn.lock();
-        let tx = conn.transaction()?;
+        let conn = self.conn.lock();
+        let tx = conn.unchecked_transaction()?;
+        self.delete_host_rows(&tx, id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn delete_host_rows(&self, tx: &Connection, id: HostId) -> Result<(), VaultError> {
         let deleted = tx.execute("DELETE FROM hosts WHERE id = ?1", params![id.to_string()])?;
         if deleted == 0 {
             return Err(VaultError::HostNotFound(id));
@@ -315,7 +361,6 @@ impl Vault {
                 now_millis()
             ],
         )?;
-        tx.commit()?;
         Ok(())
     }
 

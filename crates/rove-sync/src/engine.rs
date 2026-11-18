@@ -40,6 +40,13 @@ pub struct Change {
 pub trait RecordStore: Send + Sync {
     fn records(&self) -> Result<Vec<Record>, SyncError>;
     fn apply(&self, changes: &[Change]) -> Result<(), SyncError>;
+    /// Versions committed by a previous partial import, including the actual merged fingerprints.
+    fn receipts(&self, _key: &SyncKey) -> Result<BTreeMap<String, Known>, SyncError> {
+        Ok(BTreeMap::new())
+    }
+    fn apply_tracked(&self, changes: &[Change], _key: &SyncKey) -> Result<(), SyncError> {
+        self.apply(changes)
+    }
 }
 
 /// What this device last knew about a record.
@@ -174,6 +181,16 @@ pub async fn sync(
     let own_dir = format!("{DEVICES}/{}", next.device);
     crate::backend::check_path(&own_dir)?;
 
+    for (id, receipt) in store.receipts(key)? {
+        if next.known.get(&id).is_none_or(|old| old.hlc < receipt.hlc)
+            && !id
+                .split_once(':')
+                .is_some_and(|(kind, _)| next.defer.contains(kind))
+        {
+            next.clock.observe(&receipt.hlc);
+            next.known.insert(id, receipt);
+        }
+    }
     // Local changes since the last round, timestamped now so they compete with remote ones.
     let mut pending: BTreeMap<String, Change> = BTreeMap::new();
     let mut current: HashMap<String, Record> = HashMap::new();
@@ -317,7 +334,13 @@ pub async fn sync(
         }
         let mut ordered: Vec<Change> = winners.into_values().collect();
         ordered.sort_by(|a, b| a.hlc.cmp(&b.hlc));
-        store.apply(&ordered)?;
+        store.apply_tracked(&ordered, key)?;
+        for (id, receipt) in store.receipts(key)? {
+            if next.known.get(&id).is_some_and(|v| v.hlc == receipt.hlc) {
+                next.known.insert(id.clone(), receipt.clone());
+                applied.known.insert(id, receipt);
+            }
+        }
         report.applied = ordered.len();
     }
 

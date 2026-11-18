@@ -270,6 +270,11 @@ impl Vault {
     /// before parents. Bodies are validated like local edits. Requires the vault to be unlocked.
     /// A child whose parent is missing (a forward of a host deleted meanwhile) is skipped.
     pub fn apply_sync(&self, changes: &[SyncChange]) -> Result<(), VaultError> {
+        self.transaction(|| self.apply_sync_rows(changes))
+    }
+
+    /// Applies the ordered changes inside the caller's transaction.
+    pub fn apply_sync_rows(&self, changes: &[SyncChange]) -> Result<(), VaultError> {
         self.with_cipher(|_| Ok(()))?;
         for kind in SYNC_KINDS {
             for change in changes.iter().filter(|change| change.kind == kind) {
@@ -466,7 +471,7 @@ impl Vault {
                     self.set_preferences(prefs)?;
                 }
             }
-            "host" => match self.delete_host(id.parse()?) {
+            "host" => match self.delete_host_rows(&self.conn.lock(), id.parse()?) {
                 Ok(()) | Err(VaultError::HostNotFound(_)) => {}
                 Err(error) => return Err(error),
             },

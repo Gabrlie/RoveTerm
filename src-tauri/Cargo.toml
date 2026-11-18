@@ -48,4 +48,5 @@ fontdb = "0.24"
 windows-version = "0.1"
 
 [dev-dependencies]
+rusqlite = { version = "0.37", features = ["bundled"] }
 tempfile = "3"

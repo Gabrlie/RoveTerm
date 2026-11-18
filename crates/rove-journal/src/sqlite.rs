@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use parking_lot::Mutex;
+use parking_lot::ReentrantMutex;
 use rusqlite::{Connection, params_from_iter, types::Value};
 
 use crate::{JournalError, JournalQuery, JournalRecord, JournalStore, NewRecord};
@@ -14,7 +14,7 @@ const DEFAULT_LIMIT: u32 = 1000;
 
 /// Journal stored in one SQLite table.
 pub struct SqliteJournal {
-    conn: Mutex<Connection>,
+    conn: ReentrantMutex<Connection>,
 }
 
 impl SqliteJournal {
@@ -61,7 +61,7 @@ impl SqliteJournal {
                 PRAGMA user_version = 2; COMMIT;")?;
         }
         Ok(Self {
-            conn: Mutex::new(conn),
+            conn: ReentrantMutex::new(conn),
         })
     }
 }
@@ -74,6 +74,42 @@ fn now_millis() -> i64 {
 }
 
 impl JournalStore for SqliteJournal {
+    fn transaction(
+        &self,
+        action: &mut dyn FnMut() -> Result<(), JournalError>,
+    ) -> Result<(), JournalError> {
+        let conn = self.conn.lock();
+        let tx = conn.unchecked_transaction()?;
+        action()?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn sync_receipt(&self, space: &str) -> Result<serde_json::Value, JournalError> {
+        use rusqlite::OptionalExtension;
+        let value: Option<String> = self
+            .conn
+            .lock()
+            .query_row(
+                "SELECT value FROM sync_receipts WHERE space=?1",
+                [space],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(match value {
+            Some(value) => serde_json::from_str(&value)?,
+            None => serde_json::json!({}),
+        })
+    }
+
+    fn set_sync_receipt(&self, space: &str, value: &serde_json::Value) -> Result<(), JournalError> {
+        self.conn.lock().execute(
+            "INSERT OR REPLACE INTO sync_receipts(space,value) VALUES (?1,?2)",
+            rusqlite::params![space, serde_json::to_string(value)?],
+        )?;
+        Ok(())
+    }
+
     fn append(&self, record: NewRecord) -> Result<i64, JournalError> {
         self.import(now_millis(), record)
     }

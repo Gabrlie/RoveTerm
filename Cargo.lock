@@ -4485,6 +4485,7 @@ dependencies = [
  "rove-ssh",
  "rove-sync",
  "rove-vault",
+ "rusqlite",
  "serde",
  "serde_json",
  "tauri",
