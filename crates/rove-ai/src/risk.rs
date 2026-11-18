@@ -495,7 +495,9 @@ fn sed_scripts(args: &[Word]) -> Option<Vec<String>> {
                 },
                 "file" => return None,
                 "line-length" if value.is_none() => at += 1,
-                _ => {}
+                "line-length" | "quiet" | "silent" | "regexp-extended" | "posix" | "sandbox"
+                | "null-data" | "separate" | "unbuffered" => {}
+                _ => return None,
             }
             continue;
         }
@@ -631,7 +633,8 @@ fn sed_writes(script: &str) -> bool {
                 }
             }
             // A comment, text (`a\` lines continue) or a file to read: to the end of the line.
-            '#' | 'a' | 'i' | 'c' | 'r' | 'R' => loop {
+            'r' | 'R' => return true,
+            '#' | 'a' | 'i' | 'c' => loop {
                 let start = at;
                 skip_line(&mut at);
                 let line: String = chars[start..at].iter().collect();
@@ -700,7 +703,8 @@ fn awk_program(args: &[Word]) -> Option<String> {
                     }
                 }
                 "field-separator" | "assign" if value.is_none() => at += 1,
-                _ => {}
+                "field-separator" | "assign" | "posix" | "traditional" => {}
+                _ => return None,
             }
             continue;
         }
@@ -715,8 +719,9 @@ fn awk_program(args: &[Word]) -> Option<String> {
                         at += 1;
                     }
                 }
-                Some('F' | 'v' | 'i') if cluster.len() == 1 => at += 1,
-                _ => {}
+                Some('F' | 'v') if cluster.len() == 1 => at += 1,
+                Some('F' | 'v') => {}
+                _ => return None,
             }
             continue;
         }
@@ -787,7 +792,10 @@ fn awk_writes(program: &str) -> bool {
                 .next()
                 .is_some_and(|c| c.is_alphanumeric() || c == '_')
     };
-    if code.contains("|&") {
+    if (code.contains('@') || code.contains("|&"))
+        || code.contains("getline")
+        || code.contains("\\\n")
+    {
         return true;
     }
     for (at, _) in code.char_indices() {
