@@ -122,9 +122,9 @@ fn shutdown(app: &tauri::AppHandle) {
     state.transfers.cancel_all();
     state.forwards.stop_all();
     // The config file names a port that is about to close.
-    state.external.disable();
     state.fs_sessions.clear();
     tauri::async_runtime::block_on(async {
+        state.external.disable().await;
         state.ai.stop_all().await;
         state.sessions.close_all().await;
         state.ssh.disconnect_all().await;

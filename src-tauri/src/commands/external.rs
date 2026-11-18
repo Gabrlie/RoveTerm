@@ -40,13 +40,20 @@ const INSTALL_TIMEOUT: Duration = Duration::from_secs(60);
 /// The running server, while access is on.
 pub struct ExternalAccess {
     config: PathBuf,
-    task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    changes: tokio::sync::Mutex<()>,
+    task: std::sync::Mutex<
+        Option<(
+            tokio_util::sync::CancellationToken,
+            tokio::task::JoinHandle<()>,
+        )>,
+    >,
 }
 
 impl ExternalAccess {
     pub fn new(data_dir: &Path) -> Self {
         Self {
             config: data_dir.join("mcp.json"),
+            changes: tokio::sync::Mutex::new(()),
             task: std::sync::Mutex::new(None),
         }
     }
@@ -54,7 +61,7 @@ impl ExternalAccess {
     fn running(&self) -> bool {
         self.task
             .lock()
-            .map(|task| task.as_ref().is_some_and(|task| !task.is_finished()))
+            .map(|task| task.as_ref().is_some_and(|(_, task)| !task.is_finished()))
             .unwrap_or(false)
     }
 
@@ -72,15 +79,19 @@ impl ExternalAccess {
         )
         .map_err(io)?;
         let app = app.clone();
-        let task = listener.serve_with(Arc::new(move || {
-            Arc::new(HostTools {
-                app: app.clone(),
-                client: std::sync::Mutex::new("Local agent".into()),
-                sessions: tokio::sync::Mutex::new(HashMap::new()),
-            }) as Arc<dyn McpTools>
-        }));
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let task = listener.serve_until(
+            Arc::new(move || {
+                Arc::new(HostTools {
+                    app: app.clone(),
+                    client: std::sync::Mutex::new("Local agent".into()),
+                    sessions: tokio::sync::Mutex::new(HashMap::new()),
+                }) as Arc<dyn McpTools>
+            }),
+            shutdown.clone(),
+        );
         if let Ok(mut slot) = self.task.lock() {
-            *slot = Some(task);
+            *slot = Some((shutdown, task));
         }
         tracing::info!(config = %self.config.display(), "access for local agents is on");
         Ok(())
@@ -89,9 +100,11 @@ impl ExternalAccess {
     /// Stops serving, which also drops the connections already open (their conversations end),
     /// and removes the config file (also on exit; the next start writes it again when access is
     /// on).
-    pub fn disable(&self) {
-        if let Some(task) = self.task.lock().ok().and_then(|mut task| task.take()) {
-            task.abort();
+    pub async fn disable(&self) {
+        let running = self.task.lock().ok().and_then(|mut task| task.take());
+        if let Some((shutdown, task)) = running {
+            shutdown.cancel();
+            let _ = task.await;
             tracing::info!("access for local agents is off");
         }
         match std::fs::remove_file(&self.config) {
@@ -126,6 +139,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// Turns access on at startup when the device preferences say so.
 pub async fn restore(app: &AppHandle) {
     let state = app.state::<AppState>();
+    let _change = state.external.changes.lock().await;
     let on = state
         .vault
         .device_preferences()
@@ -345,14 +359,22 @@ pub async fn external_set(
     state: State<'_, AppState>,
     enabled: bool,
 ) -> Result<ExternalStatus, CommandError> {
+    let change = state.external.changes.lock().await;
+    if !enabled {
+        state.external.disable().await;
+    }
     let mut prefs = state.vault.device_preferences()?;
-    prefs.agents.expose = enabled;
-    state.vault.set_device_preferences(prefs)?;
     if enabled {
         state.external.enable(&app).await?;
-    } else {
-        state.external.disable();
     }
+    prefs.agents.expose = enabled;
+    if let Err(error) = state.vault.set_device_preferences(prefs) {
+        if enabled {
+            state.external.disable().await;
+        }
+        return Err(error.into());
+    }
+    drop(change);
     external_status(state)
 }
 

@@ -142,11 +142,22 @@ impl McpListener {
     /// Serves bridge connections, each with tools from `factory`, until the returned task is
     /// aborted. Aborting it also ends the connections already open, and their tools are told.
     pub fn serve_with(self, factory: ToolsFactory) -> tokio::task::JoinHandle<()> {
+        self.serve_until(factory, tokio_util::sync::CancellationToken::new())
+    }
+
+    /// Stops accepting connections, drops pending calls and awaits each connection's cleanup.
+    pub fn serve_until(
+        self,
+        factory: ToolsFactory,
+        shutdown: tokio_util::sync::CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             // Owned here, so they end with this task.
             let mut connections = tokio::task::JoinSet::new();
             loop {
                 let stream = tokio::select! {
+                    biased;
+                    () = shutdown.cancelled() => break,
                     accepted = self.listener.accept() => match accepted {
                         Ok((stream, _)) => stream,
                         Err(_) => break,
@@ -155,8 +166,10 @@ impl McpListener {
                 };
                 let tools = factory();
                 let token = self.token.clone();
+                let shutdown = shutdown.clone();
                 connections.spawn(async move {
                     let mut closing = Closing(Some(tools.clone()));
+                    let connection = async {
                     let (reader, mut writer) = stream.into_split();
                     let mut reader = BufReader::new(reader);
                     let mut presented = String::new();
@@ -173,10 +186,14 @@ impl McpListener {
                         return;
                     }
                     serve(reader, writer, tools.clone()).await;
-                    closing.0 = None;
+                    };
+                    tokio::select! { biased; () = shutdown.cancelled() => {}, () = connection => {} }
                     tools.closed().await;
+                    closing.0 = None;
                 });
             }
+            shutdown.cancel();
+            while connections.join_next().await.is_some() {}
         })
     }
 }

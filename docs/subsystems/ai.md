@@ -164,7 +164,7 @@ ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次
 
 用户在终端中自己运行的 Agent（Claude Code、Codex 等）可以经 RoveTerm 使用已保存的主机（`src-tauri/src/commands/external.rs`）。按设备开关（`DevicePrefs.agents.expose`，默认关闭）：
 
-- 开启后应用在回环随机端口提供 MCP server，地址与随机 token 写入 `<数据目录>/mcp.json`（Unix 上权限 0600）；关闭或退出时删除该文件、停止监听，并断开已建立的连接（连接任务归监听任务所有，随之终止；各连接的会话照常结束），下次启动时按开关重新写入。Agent 运行 `roveterm --mcp-bridge --mcp-config <该文件>`。
+- 开启后应用在回环随机端口提供 MCP server，地址与随机 token 写入 `<数据目录>/mcp.json`（Unix 上权限 0600）；关闭或退出时删除该文件、停止监听，并断开已建立的连接，关闭操作等待这些连接的会话清理完成，下次启动时按开关重新写入。Agent 运行 `roveterm --mcp-bridge --mcp-config <该文件>`。
 - 设置页的"一键接入"用 Agent 自己的命令添加（先移除旧项）：`claude mcp add --scope user roveterm -- <命令>`、`codex mcp add roveterm -- <命令>`，程序按登录 shell 的 PATH 查找，60 秒超时。其他 Agent 可手动添加显示的命令（stdio）。
 - 工具：`list_hosts`（id、名称、分组、标签、`用户@主机:端口`、系统，不含凭据），以及 `run_command`、`read_file`、`write_file`、`edit_file`、`list_dir`，各多一个必填的 `host`（名称或 id，名称不分大小写，重名时要求 id）。
 - 每个连接对它用到的每台主机各开一个会话（`ai::start_external`）：沿用该用户的审批模式、规则与审阅者，按 Host 上下文记入 Journal（`agent` 为客户端在 `initialize` 报出的名称，无 `agent_ref`，不能在 RoveTerm 中继续）；后端为 `ExternalBackend`（不接受提示，停止时撤回审批与命令）。开始与结束经 `ai-external` 事件通知界面，连接断开时结束其全部会话。

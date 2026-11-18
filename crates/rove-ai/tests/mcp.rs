@@ -263,9 +263,11 @@ async fn stopping_the_server_ends_open_connections() {
     let listener = McpListener::bind().await.unwrap();
     let config = listener.config().unwrap();
     let shared = tools.clone();
-    let server = listener.serve_with(Arc::new(move || {
-        shared.clone() as Arc<dyn rove_ai::mcp::McpTools>
-    }));
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let server = listener.serve_until(
+        Arc::new(move || shared.clone() as Arc<dyn rove_ai::mcp::McpTools>),
+        cancel.clone(),
+    );
     let stream = TcpStream::connect(&config.addr).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     writer
@@ -281,8 +283,9 @@ async fn stopping_the_server_ends_open_connections() {
         .call("initialize", json!({ "protocolVersion": "2025-06-18" }))
         .await;
 
-    server.abort();
-    let _ = server.await;
+    cancel.cancel();
+    server.await.unwrap();
+    assert!(tools.closed.load(std::sync::atomic::Ordering::SeqCst));
     // The open connection is closed by the server, and its tools were told.
     let line = tokio::time::timeout(
         std::time::Duration::from_secs(2),
