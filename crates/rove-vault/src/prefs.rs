@@ -126,6 +126,8 @@ pub struct AiPrefs {
 /// A task the fleet lead runs on its own at set times.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Schedule {
+    #[serde(default)]
+    pub owner: Option<uuid::Uuid>,
     /// Stable id: 1–40 lowercase letters, digits or `-`.
     pub id: String,
     pub name: String,

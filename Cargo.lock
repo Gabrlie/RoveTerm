@@ -4476,6 +4476,7 @@ dependencies = [
  "async-trait",
  "fontdb",
  "jiff",
+ "libc",
  "rove-ai",
  "rove-fs",
  "rove-journal",

@@ -429,6 +429,117 @@ fn read_local(vault: &Vault) -> Result<Option<Local>, CommandError> {
     }))
 }
 
+pub(super) async fn reserve_schedule(
+    vault: &Vault,
+    task: &rove_vault::Schedule,
+    owner: uuid::Uuid,
+) -> Result<(), CommandError> {
+    let Some(local) = read_local(vault)? else {
+        return Ok(());
+    };
+    if let SyncTarget::Folder { path } = &local.target
+        && !shared_claim_volume(Path::new(path))
+    {
+        return Err(CommandError::new(
+            "schedule.claim_storage",
+            "independent directory replicas cannot arbitrate a schedule claim",
+        ));
+    }
+    let key = local
+        .key
+        .ok_or_else(|| CommandError::new("sync.needs_password", "unlock the sync space first"))?;
+    let backend = local
+        .target
+        .backend(local.secret.as_deref().map(String::as_str))?;
+    rove_sync::verify_space(backend.as_ref(), &key)
+        .await
+        .map_err(sync_error)?;
+    reserve_in_space(backend.as_ref(), &key, &task.id, owner).await
+}
+
+/// An exclusive create arbitrates between devices only when they address the same live filesystem.
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "android"))]
+fn shared_claim_volume(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let mut storage = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: statfs writes the complete result on success; the path stays alive for the call.
+    let volume = unsafe {
+        if libc::statfs(path.as_ptr(), storage.as_mut_ptr()) != 0 {
+            return false;
+        }
+        storage.assume_init()
+    };
+    #[cfg(target_os = "macos")]
+    {
+        let name: Vec<_> = volume
+            .f_fstypename
+            .iter()
+            .take_while(|c| **c != 0)
+            .map(|c| *c as u8)
+            .collect();
+        matches!(name.as_slice(), b"nfs" | b"smbfs" | b"afpfs" | b"webdav")
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        // Linux statfs magic numbers for NFS, SMB and CIFS.
+        matches!(
+            volume.f_type as u32,
+            0x6969 | 0x517b | 0xff534d42 | 0xfe534d42
+        )
+    }
+}
+
+#[cfg(windows)]
+fn shared_claim_volume(path: &Path) -> bool {
+    use std::path::{Component, Prefix};
+    matches!(path.components().next(), Some(Component::Prefix(p)) if matches!(p.kind(),Prefix::UNC(..)|Prefix::VerbatimUNC(..)))
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "android",
+    windows
+)))]
+fn shared_claim_volume(_: &Path) -> bool {
+    false
+}
+
+async fn reserve_in_space(
+    backend: &dyn SyncBackend,
+    key: &SyncKey,
+    id: &str,
+    owner: uuid::Uuid,
+) -> Result<(), CommandError> {
+    let identity = format!("schedule:{id}");
+    let path = format!("claims/{}", key.fingerprint(identity.as_bytes()));
+    let sealed = key
+        .seal(owner.as_bytes(), path.as_bytes())
+        .map_err(sync_error)?;
+    if !backend.put_new(&path, &sealed).await.map_err(sync_error)? {
+        let existing = backend
+            .get(&path)
+            .await
+            .map_err(sync_error)?
+            .ok_or_else(|| CommandError::new("sync.format", "schedule claim unavailable"))?;
+        if key
+            .open(&existing, path.as_bytes())
+            .map_err(sync_error)?
+            .as_slice()
+            != owner.as_bytes()
+        {
+            return Err(CommandError::new(
+                "schedule.claimed",
+                "another device owns this task",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn write_local(
     vault: &Vault,
     target: &SyncTarget,
@@ -815,6 +926,26 @@ mod tests {
         );
     }
     #[tokio::test]
+    async fn only_one_device_can_claim_a_shared_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = FolderBackend::new(dir.path());
+        let key = SyncKey::from_bytes([4; 32]);
+        let a = uuid::Uuid::now_v7();
+        let b = uuid::Uuid::now_v7();
+        let (left, right) = tokio::join!(
+            reserve_in_space(&backend, &key, "legacy", a),
+            reserve_in_space(&backend, &key, "legacy", b)
+        );
+        assert_ne!(left.is_ok(), right.is_ok());
+        let winner = if left.is_ok() { a } else { b };
+        assert!(
+            reserve_in_space(&backend, &key, "legacy", winner)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
     async fn recovery_after_a_journal_failure_respects_a_third_devices_update() {
         use rove_journal::{NewRecord, SqliteJournal};
         use rove_vault::{MemoryKeyCache, SnippetDraft};
@@ -881,5 +1012,10 @@ mod tests {
         assert_eq!(recovered.vault.0.list_snippets().unwrap()[0].name, "newer");
         rove_sync::sync(&space, &key, &mut sc, &c).await.unwrap();
         assert_eq!(c.vault.0.list_snippets().unwrap()[0].name, "newer");
+    }
+    #[test]
+    fn an_independent_directory_cannot_arbitrate_between_devices() {
+        let local = tempfile::tempdir().unwrap();
+        assert!(!shared_claim_volume(local.path()));
     }
 }

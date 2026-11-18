@@ -186,10 +186,34 @@ fn record(
     }
 }
 
+fn reserve_run(
+    journal: &dyn rove_journal::JournalStore,
+    schedule: &str,
+    due: i64,
+) -> Result<i64, rove_journal::JournalError> {
+    journal.append(rove_journal::NewRecord {
+        kind: "ai/schedule_claim".into(),
+        session_id: None,
+        payload: serde_json::json!({"schedule":schedule, "due":due}),
+    })
+}
+
 /// Runs `schedule` for its time `due` in the background, unless it is running already.
 pub fn spawn_run(app: &tauri::AppHandle, schedule: Schedule, due: i64) -> bool {
     use tauri::{Emitter, Manager};
-    if !claim(&schedule.id) {
+    let state = app.state::<crate::state::AppState>();
+    if !state
+        .vault
+        .installation_id()
+        .is_ok_and(|id| schedule.owner == Some(id))
+        || !claim(&schedule.id)
+    {
+        return false;
+    }
+    let reserved = reserve_run(state.journal.as_ref(), &schedule.id, due);
+    if let Err(error) = reserved {
+        release(&schedule.id);
+        tracing::warn!(%error, "could not reserve the scheduled run");
         return false;
     }
     let app = app.clone();
@@ -242,7 +266,11 @@ pub fn start(app: &tauri::AppHandle) {
                 Ok(prefs) if !prefs.ai.schedules.is_empty() => {
                     let handled = handled(state.journal.as_ref());
                     let now = now();
+                    let device = state.vault.installation_id().ok();
                     for schedule in prefs.ai.schedules {
+                        if device.is_none() || device != schedule.owner {
+                            continue;
+                        }
                         if is_running(&schedule.id) {
                             continue;
                         }
@@ -284,6 +312,7 @@ mod tests {
 
     fn schedule(repeat: Repeat, catch_up: bool) -> Schedule {
         Schedule {
+            owner: None,
             id: "s".into(),
             name: "s".into(),
             instruction: "check".into(),
@@ -378,5 +407,22 @@ mod tests {
         let mut off = schedule(daily, true);
         off.enabled = false;
         assert_eq!(decide(&off, None, early, &now), Decision::Wait);
+    }
+    #[test]
+    fn a_due_time_can_be_reserved_only_once_even_after_restart() {
+        use rove_journal::SqliteJournal;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("journal.db");
+        let first = SqliteJournal::open(&path).unwrap();
+        let second = SqliteJournal::open(&path).unwrap();
+        std::thread::scope(|scope| {
+            let left = scope.spawn(|| reserve_run(&first, "task", 100));
+            let right = scope.spawn(|| reserve_run(&second, "task", 100));
+            assert_ne!(left.join().unwrap().is_ok(), right.join().unwrap().is_ok());
+        });
+        drop((first, second));
+        let restarted = SqliteJournal::open(&path).unwrap();
+        assert!(reserve_run(&restarted, "task", 100).is_err());
+        assert!(reserve_run(&restarted, "task", 200).is_ok());
     }
 }

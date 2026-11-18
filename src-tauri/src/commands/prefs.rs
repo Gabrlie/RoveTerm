@@ -16,9 +16,21 @@ pub fn prefs_get(state: State<'_, AppState>) -> Result<Preferences, CommandError
 #[tauri::command]
 pub fn prefs_set(
     state: State<'_, AppState>,
-    prefs: Preferences,
+    mut prefs: Preferences,
 ) -> Result<Preferences, CommandError> {
-    Ok(state.vault.set_preferences(prefs)?)
+    Ok(state.vault.transaction(|| {
+        let previous = state.vault.preferences()?;
+        let device = state.vault.installation_id()?;
+        for task in &mut prefs.ai.schedules {
+            task.owner = previous
+                .ai
+                .schedules
+                .iter()
+                .find(|s| s.id == task.id)
+                .map_or(Some(device), |s| s.owner);
+        }
+        state.vault.set_preferences(prefs.clone())
+    })?)
 }
 
 /// Returns this device's preferences, or the defaults.

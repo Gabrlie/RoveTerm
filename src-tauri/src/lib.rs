@@ -209,6 +209,8 @@ pub fn run() {
             commands::host::host_notes_set,
             commands::app::logs_reveal,
             commands::schedules::schedule_status,
+            commands::schedules::schedule_claim,
+            commands::schedules::schedule_device,
             commands::schedules::schedule_run_now,
             commands::external::external_status,
             commands::external::external_set,

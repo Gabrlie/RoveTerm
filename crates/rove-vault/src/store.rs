@@ -91,6 +91,20 @@ impl Vault {
         })
     }
 
+    /// Identity of this installation, independent of its current sync space.
+    pub fn installation_id(&self) -> Result<uuid::Uuid, VaultError> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT OR IGNORE INTO meta(key,value) VALUES ('installation', ?1)",
+            [uuid::Uuid::now_v7().as_bytes().as_slice()],
+        )?;
+        let bytes: Vec<u8> =
+            conn.query_row("SELECT value FROM meta WHERE key='installation'", [], |r| {
+                r.get(0)
+            })?;
+        uuid::Uuid::from_slice(&bytes).map_err(|e| VaultError::Invalid(e.to_string()))
+    }
+
     /// Holds the connection across nested store methods until the complete batch commits.
     pub fn transaction<T>(
         &self,

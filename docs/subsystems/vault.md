@@ -2,6 +2,8 @@
 
 `rove-vault` 存储主机、凭据、known_hosts 和端口转发规则，用设备主密钥按记录加密凭据，并定义 `KeyCache` seam。
 
+设备的安装 ID 单独存储在本机 Vault 中，切换同步空间后仍可识别定时任务归属。
+
 ## KeyCache seam
 
 ```rust

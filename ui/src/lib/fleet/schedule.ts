@@ -1,19 +1,6 @@
 // Scheduled tasks as the dialog shows and edits them.
 import type { Repeat } from '../ipc';
 
-/** A new task's id from its name: a slug, made unique among `taken`. */
-export function scheduleId(name: string, taken: readonly string[]): string {
-  const base =
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 30) || 'task';
-  let id = base;
-  for (let n = 2; taken.includes(id); n += 1) id = `${base}-${n}`;
-  return id;
-}
-
 const pad = (n: number): string => String(n).padStart(2, '0');
 
 /** `09:05`. */

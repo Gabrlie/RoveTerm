@@ -38,6 +38,40 @@ pub fn schedule_status(state: State<'_, AppState>) -> Vec<ScheduleStatus> {
         .collect()
 }
 
+#[tauri::command]
+pub fn schedule_device(state: State<'_, AppState>) -> Result<uuid::Uuid, CommandError> {
+    Ok(state.vault.installation_id()?)
+}
+
+#[tauri::command]
+pub async fn schedule_claim(state: State<'_, AppState>, id: String) -> Result<(), CommandError> {
+    let _lock = state.sync_lock.lock().await;
+    let device = state.vault.installation_id()?;
+    let existing = state
+        .vault
+        .preferences()?
+        .ai
+        .schedules
+        .into_iter()
+        .find(|t| t.id == id && t.owner.is_none())
+        .ok_or_else(|| CommandError::new("schedule.claimed", "task unavailable for claiming"))?;
+    super::sync::reserve_schedule(&state.vault, &existing, device).await?;
+    state.vault.transaction(|| {
+        let mut prefs = state.vault.preferences()?;
+        let task = prefs
+            .ai
+            .schedules
+            .iter_mut()
+            .find(|t| **t == existing)
+            .ok_or_else(|| rove_vault::VaultError::Invalid("task changed while claiming".into()))?;
+        task.owner = Some(device);
+        task.created_at = jiff::Timestamp::now().as_millisecond();
+        state.vault.set_preferences(prefs)?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
 /// Runs scheduled task `id` now, whatever its time; `false` when it is running already.
 #[tauri::command]
 pub fn schedule_run_now(
@@ -52,6 +86,12 @@ pub fn schedule_run_now(
         .into_iter()
         .find(|task| task.id == id)
         .ok_or_else(|| CommandError::new("input.invalid", "no such scheduled task"))?;
+    if task.owner != Some(state.vault.installation_id()?) {
+        return Err(CommandError::new(
+            "schedule.otherDevice",
+            "run this task on its assigned device",
+        ));
+    }
     Ok(schedule::spawn_run(
         &app,
         task,

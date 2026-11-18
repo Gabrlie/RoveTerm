@@ -323,6 +323,7 @@ export type Repeat =
 
 /** A task the fleet lead runs on its own at set times. */
 export interface Schedule {
+  owner: string | null;
   id: string;
   name: string;
   instruction: string;
@@ -344,6 +345,9 @@ export interface ScheduleStatus {
   at: number;
   running: boolean;
 }
+
+export function scheduleClaim(id: string): Promise<void> { return invoke('schedule_claim', { id }); }
+export function scheduleDevice(): Promise<string> { return invoke('schedule_device'); }
 
 export function scheduleStatus(): Promise<ScheduleStatus[]> {
   return invoke('schedule_status');

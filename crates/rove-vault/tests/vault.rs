@@ -1215,6 +1215,7 @@ fn host_notes_follow_their_host_and_sync_on_their_own() {
 fn schedules_are_checked() {
     let vault = unlocked();
     let task = |id: &str, repeat: Repeat| Schedule {
+        owner: None,
         id: id.into(),
         name: " Daily check ".into(),
         instruction: "check disks".into(),

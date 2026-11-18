@@ -8,12 +8,12 @@
   import Switch from '../ui/Switch.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import { errorText, t, type MessageKey } from '../i18n';
-  import { scheduleRunNow, scheduleStatus, type Repeat, type Schedule, type ScheduleStatus } from '../ipc';
+  import { scheduleClaim, scheduleDevice, scheduleRunNow, scheduleStatus, type Repeat, type Schedule, type ScheduleStatus } from '../ipc';
   import { prefs } from '../settings/prefs.svelte';
   import { editPrefs, settingsError } from '../settings/edit.svelte';
   import { notify } from '../ui/toast.svelte';
   import { ask } from '../ui/confirm.svelte';
-  import { clock, parseClock, repeatText, scheduleId } from './schedule';
+  import { clock, parseClock, repeatText } from './schedule';
   import AutostartRow from '../settings/AutostartRow.svelte';
 
   let { onclose, onopenreport }: { onclose: () => void; onopenreport: (conversation: string) => void } = $props();
@@ -26,8 +26,14 @@
   const KINDS: { value: Repeat['kind']; label: string }[] = (['daily', 'weekly', 'hourly', 'once'] as const).map((kind) => ({ value: kind, label: t(`schedule.kind.${kind}`) }));
   const WEEKDAYS = [0, 1, 2, 3, 4, 5, 6].map((day) => ({ value: String(day), label: t(`schedule.day.${day}` as MessageKey) }));
 
+  let device = $state('');
+  async function claimTask(id: string): Promise<void> {
+    try { await scheduleClaim(id); await prefs.current(); await refresh(); }
+    catch (error) { notify(errorText(error), 'error'); }
+  }
   async function refresh(): Promise<void> {
     try {
+      device = await scheduleDevice();
       statuses = Object.fromEntries((await scheduleStatus()).map((status) => [status.schedule, status]));
     } catch (error) {
       console.warn('scheduled task status unavailable', error);
@@ -56,7 +62,7 @@
     const now = Date.now();
     editing = {
       original: null,
-      draft: { id: '', name: '', instruction: '', repeat: { kind: 'daily', hour: 9, minute: 0 }, allow_changes: false, catch_up: true, enabled: true, created_at: now },
+      draft: { owner: null, id: '', name: '', instruction: '', repeat: { kind: 'daily', hour: 9, minute: 0 }, allow_changes: false, catch_up: true, enabled: true, created_at: now },
       time: '09:00',
       once: local(now + 3_600_000),
     };
@@ -108,7 +114,7 @@
     // A changed time starts counting from now: earlier times are not caught up.
     if (!original || JSON.stringify(schedules.find((entry) => entry.id === original)?.repeat) !== JSON.stringify(repeat)) draft.created_at = Date.now();
     await editPrefs((prefsDraft) => {
-      if (!original) draft.id = scheduleId(draft.name, prefsDraft.ai.schedules.map((entry) => entry.id));
+      if (!original) draft.id = crypto.randomUUID();
       const at = prefsDraft.ai.schedules.findIndex((entry) => entry.id === original);
       if (at >= 0) prefsDraft.ai.schedules[at] = draft;
       else prefsDraft.ai.schedules.push(draft);
@@ -184,12 +190,13 @@
         <div class="form-row task">
           <span class="form-label">
             {schedule.name}
-            <small>{describe(schedule)} · {schedule.allow_changes ? t('schedule.mayChange') : t('schedule.checkOnly')} · {lastRun(schedule)}</small>
+            <small>{schedule.owner === device ? t('schedule.thisDevice') : schedule.owner ?? t('schedule.unassigned')} · {describe(schedule)} · {schedule.allow_changes ? t('schedule.mayChange') : t('schedule.checkOnly')} · {lastRun(schedule)}</small>
           </span>
           {#if status?.conversation && status.status !== 'missed'}
             <button type="button" class="plain" onclick={() => status.conversation && onopenreport(status.conversation)}>{t('schedule.report')}</button>
           {/if}
-          <IconButton icon="play" small label={t('schedule.runNow')} disabled={status?.running} onclick={() => void runNow(schedule)} />
+          {#if !schedule.owner}<button type="button" class="plain" onclick={() => void claimTask(schedule.id)}>{t('schedule.claim')}</button>{/if}
+          <IconButton icon="play" small label={t('schedule.runNow')} disabled={status?.running || schedule.owner !== device} onclick={() => void runNow(schedule)} />
           <IconButton icon="edit" small label={t('schedule.edit')} onclick={() => startEdit(schedule)} />
           <IconButton icon="remove" small label={t('schedule.delete')} onclick={() => void remove(schedule)} />
           <Switch label={t('schedule.enabled')} checked={schedule.enabled} onchange={(checked) => void editPrefs((draft) => { const entry = draft.ai.schedules.find((item) => item.id === schedule.id); if (entry) entry.enabled = checked; })} />
