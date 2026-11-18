@@ -96,6 +96,20 @@ pub trait Host: Send + Sync {
         limits: &Limits,
     ) -> Result<CommandOutput, HostError>;
 
+    async fn run_cancellable(
+        &self,
+        command: &str,
+        cwd: Option<&str>,
+        limits: &Limits,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<CommandOutput, HostError> {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(HostError::Failed("command cancelled".into())),
+            result = self.run(command, cwd, limits) => result,
+        }
+    }
+
     /// The host's file system.
     async fn files(&self) -> Result<Arc<dyn FileSystem>, HostError>;
 }
@@ -324,14 +338,39 @@ impl Host for RemoteHost {
         cwd: Option<&str>,
         limits: &Limits,
     ) -> Result<CommandOutput, HostError> {
-        let connection = self.connection().await?;
+        self.run_cancellable(
+            command,
+            cwd,
+            limits,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+    }
+
+    async fn run_cancellable(
+        &self,
+        command: &str,
+        cwd: Option<&str>,
+        limits: &Limits,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<CommandOutput, HostError> {
+        let started = tokio::time::Instant::now();
+        let connection = tokio::select! {
+            () = cancel.cancelled() => return Err(HostError::Failed("command cancelled before execution".into())),
+            result = tokio::time::timeout(limits.timeout, self.connection()) => result.map_err(|_| HostError::Timeout(limits.timeout.as_secs()))??,
+        };
         let line = match cwd {
             Some(dir) => format!("cd {} && {command}", shell_quote(dir)),
             None => command.to_owned(),
         };
-        let output = tokio::time::timeout(limits.timeout, connection.exec(&line, limits.output))
+        let output = connection
+            .exec_controlled(
+                &line,
+                limits.output,
+                cancel,
+                Some(limits.timeout.saturating_sub(started.elapsed())),
+            )
             .await
-            .map_err(|_| HostError::Timeout(limits.timeout.as_secs()))?
             .map_err(|error| HostError::Failed(error.to_string()))?;
         Ok(CommandOutput {
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),

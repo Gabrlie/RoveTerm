@@ -31,8 +31,12 @@ impl ConnectionSource for Source {
     }
 }
 
-async fn connect(root: &std::path::Path) -> (DevServer, Arc<SshConnection>, rove_kernel::Disposer) {
+async fn connect(
+    root: &std::path::Path,
+    ignore_exec_signals: bool,
+) -> (DevServer, Arc<SshConnection>, rove_kernel::Disposer) {
     let config = DevConfig {
+        ignore_exec_signals,
         sftp_root: Some(root.to_path_buf()),
         ..DevConfig::demo()
     };
@@ -66,7 +70,7 @@ async fn connect(root: &std::path::Path) -> (DevServer, Arc<SshConnection>, rove
 #[tokio::test]
 async fn runs_commands_and_edits_files_on_the_remote_host() {
     let root = tempfile::tempdir().unwrap();
-    let (_server, connection, _listener) = connect(root.path()).await;
+    let (_server, connection, _listener) = connect(root.path(), false).await;
     let source = Arc::new(Source(Mutex::new(Some(connection))));
     let host = RemoteHost::new("demo@127.0.0.1", source.clone());
     let limits = Limits::default();
@@ -107,5 +111,76 @@ async fn runs_commands_and_edits_files_on_the_remote_host() {
     assert_eq!(
         host.run("true", None, &limits).await,
         Err(HostError::Unreachable("closed".into()))
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cancellation_and_timeout_wait_for_the_remote_process() {
+    let root = tempfile::tempdir().unwrap();
+    let (_server, connection, _listener) = connect(root.path(), false).await;
+    let host = RemoteHost::new(
+        "test",
+        Arc::new(Source(Mutex::new(Some(connection.clone())))),
+    );
+    let cwd = root.path().to_str();
+    let token = tokio_util::sync::CancellationToken::new();
+    let limits = Limits::default();
+    let run = host.run_cancellable(
+        "touch started; sleep 1; touch finished",
+        cwd,
+        &limits,
+        token.clone(),
+    );
+    let cancel = async {
+        while !root.path().join("started").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        token.cancel();
+    };
+    let (result, ()) = tokio::join!(run, cancel);
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("remote command exited")
+    );
+    let limits = Limits {
+        timeout: Duration::from_millis(150),
+        ..Limits::default()
+    };
+    let error = host
+        .run("sleep 1; touch finished", cwd, &limits)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("timed out: remote command exited")
+    );
+    assert_eq!(
+        connection.exec("echo live", 100).await.unwrap().stdout,
+        b"live\n"
+    );
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert!(!root.path().join("finished").exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ignored_signals_report_an_unconfirmed_exit() {
+    let root = tempfile::tempdir().unwrap();
+    let (_server, connection, _listener) = connect(root.path(), true).await;
+    let host = RemoteHost::new("test", Arc::new(Source(Mutex::new(Some(connection)))));
+    let limits = Limits {
+        timeout: Duration::from_millis(100),
+        ..Limits::default()
+    };
+    assert!(
+        host.run("sleep 10", None, &limits)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("could not confirm")
     );
 }

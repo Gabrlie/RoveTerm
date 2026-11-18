@@ -490,11 +490,36 @@ impl SshConnection {
         command: &str,
         limit: usize,
     ) -> Result<ExecOutput, SshError> {
-        let mut channel = self
-            .handle
-            .channel_open_session()
-            .await
-            .map_err(channel_error)?;
+        self.exec_controlled(
+            command,
+            limit,
+            tokio_util::sync::CancellationToken::new(),
+            None,
+        )
+        .await
+    }
+
+    /// Runs one exec channel and waits for remote exit evidence after requesting termination.
+    pub async fn exec_controlled(
+        self: &Arc<Self>,
+        command: &str,
+        limit: usize,
+        cancel: tokio_util::sync::CancellationToken,
+        timeout: Option<Duration>,
+    ) -> Result<ExecOutput, SshError> {
+        let deadline = async {
+            match timeout {
+                Some(time) => tokio::time::sleep(time).await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::pin!(deadline);
+        let mut channel = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(SshError::Channel("command cancelled before execution".into())),
+            () = &mut deadline => return Err(SshError::Channel("command timed out before execution".into())),
+            channel = self.handle.channel_open_session() => channel.map_err(channel_error)?,
+        };
         let _lease = self.lease();
         channel.exec(true, command).await.map_err(channel_error)?;
         let mut output = ExecOutput::default();
@@ -505,15 +530,25 @@ impl SshConnection {
             data.len() > room
         };
         let mut truncated = false;
-        while let Some(message) = channel.wait().await {
+        let mut confirmed = false;
+        let mut interrupted = None;
+        loop {
+            let message = tokio::select! {
+                biased;
+                () = cancel.cancelled() => { interrupted = Some("cancelled"); break; },
+                () = &mut deadline => { interrupted = Some("timed out"); break; },
+                message = channel.wait() => match message { Some(message) => message, None => break },
+            };
             match message {
                 ChannelMsg::Data { data } => truncated |= append(&mut output.stdout, &data),
                 ChannelMsg::ExtendedData { data, ext: 1 } => {
                     truncated |= append(&mut output.stderr, &data)
                 }
                 ChannelMsg::ExitStatus { exit_status } => {
+                    confirmed = true;
                     output.code = i32::try_from(exit_status).ok();
                 }
+                ChannelMsg::ExitSignal { .. } => confirmed = true,
                 ChannelMsg::Failure => {
                     return Err(SshError::Channel(
                         "the server refused to run the command".into(),
@@ -521,6 +556,43 @@ impl SshConnection {
                 }
                 _ => {}
             }
+        }
+        if let Some(reason) = interrupted {
+            for signal in [russh::Sig::TERM, russh::Sig::KILL] {
+                if confirmed {
+                    break;
+                }
+                let result = tokio::time::timeout(Duration::from_secs(2), async {
+                    channel.signal(signal).await.ok()?;
+                    while let Some(message) = channel.wait().await {
+                        match message {
+                            ChannelMsg::ExitStatus { .. } | ChannelMsg::ExitSignal { .. } => {
+                                return Some(true);
+                            }
+                            ChannelMsg::Close => return None,
+                            _ => {}
+                        }
+                    }
+                    None
+                })
+                .await;
+                match result {
+                    Ok(Some(true)) => confirmed = true,
+                    Ok(None) => break,
+                    _ => {}
+                }
+            }
+            let _ = tokio::time::timeout(Duration::from_secs(1), channel.close()).await;
+            return Err(SshError::Channel(if confirmed {
+                format!("{reason}: remote command exited")
+            } else {
+                format!("{reason}: could not confirm that the remote command stopped")
+            }));
+        }
+        if timeout.is_some() && !confirmed {
+            return Err(SshError::Channel(
+                "could not confirm that the remote command stopped".into(),
+            ));
         }
         output.truncated = truncated;
         Ok(output)

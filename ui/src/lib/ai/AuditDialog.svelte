@@ -144,7 +144,7 @@
             {#if line.text}<span class="text selectable">{line.text}</span>{/if}
             {#if line.note}<span class="note">{noteText(line)}</span>{/if}
             {#if line.detail}
-              <details><summary>{t('ai.historyDetail')}</summary><pre class="selectable">{line.detail}</pre></details>
+              <details><summary>{t('ai.historyDetail')}</summary><pre class="selectable">{line.detail.includes('could not confirm that the remote command stopped') && line.tone === 'danger' ? t('ai.remoteExitUnknown') : line.detail}</pre></details>
             {/if}
           </div>
         </div>

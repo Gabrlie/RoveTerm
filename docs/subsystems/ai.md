@@ -85,7 +85,7 @@ Agent 的环境变量只从白名单（`acp::ENV_ALLOWED`：`PATH`、`HOME`、`L
 
 Agent 的错误响应若在 `data.message` 中给出原因（Codex 的回合失败），显示这段原因而不是笼统的 `Internal error`。
 
-取消回合时撤回所有等待中的审批（视为拒绝）并发送 `session/cancel`；结束会话时中止运行中的命令并结束 Agent 进程。
+取消回合时撤回待审批请求并终止该回合的命令。ACP 同时收到 `session/cancel`。SSH 工具等待远端退出回报；连接中断或服务器忽略信号时，工具与审计报告远端状态未确认。
 
 ## 工具与内置 MCP server
 

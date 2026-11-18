@@ -173,6 +173,7 @@ impl Running {
     /// Stops the current turn: withdraws waiting approvals and tells the agent.
     pub async fn cancel(&self) -> Result<(), AcpError> {
         self.session.withdraw_approvals().await;
+        self.session.stop_jobs().await;
         self.agent.cancel(&self.acp_session)
     }
 

@@ -75,7 +75,7 @@
 
 ## 执行命令与密钥
 
-- `SshConnection::exec(command, limit)` 在不分配 PTY 的 session channel 上运行命令，分别收集 stdout 和 stderr，每路最多 `limit` 字节，超出部分丢弃并置 `truncated`；超时由调用方控制。
+- `SshConnection::exec(command, limit)` 在不分配 PTY 的 session channel 上运行命令，分别收集 stdout 和 stderr，每路最多 `limit` 字节，超出部分丢弃并置 `truncated`；普通采样由调用方控制超时。AI 命令使用 `exec_controlled`，取消或超时后在该 channel 上发送 TERM，等待 2 秒后仍在运行则发送 KILL。收到退出码或退出信号后确认退出，收不到时返回“无法确认远端命令已停止”。
 - `generate_key(kind, comment, passphrase)` 生成 Ed25519、ECDSA P-256 或 RSA 3072 密钥，返回 OpenSSH 格式文本，提供 passphrase 时加密。
 - `check_public_key(public, info)` 确认用户提供的公钥与私钥是同一把密钥（注释可以不同），返回去掉首尾空白的公钥行。
 - `describe_key(private, passphrase)` 解析私钥，返回算法、带注释的 OpenSSH 公钥行和 `SHA256:` 指纹。

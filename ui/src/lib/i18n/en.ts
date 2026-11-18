@@ -522,6 +522,7 @@ export const en = {
   'ai.readOnlyHint': 'Program names, one per line, that never change anything',
   'ai.dangerousRules': 'Always dangerous',
   'ai.dangerousHint': 'Any command containing one of these lines is dangerous (for example a production host name)',
+  'ai.remoteExitUnknown': 'Could not confirm that the remote command stopped',
   'ai.history': 'AI history',
   'ai.delete': 'Delete conversation',
   'ai.deleteTitle': 'Delete this conversation?',

@@ -524,6 +524,7 @@ export const zhCN: Messages = {
   'ai.readOnlyHint': '每行一个程序名，这些程序不会改动任何东西',
   'ai.dangerousRules': '始终视为危险',
   'ai.dangerousHint': '命令中包含任意一行文字即视为危险（例如生产环境的主机名）',
+  'ai.remoteExitUnknown': '无法确认远端命令已停止',
   'ai.history': 'AI 历史',
   'ai.delete': '删除对话',
   'ai.deleteTitle': '删除这个对话？',

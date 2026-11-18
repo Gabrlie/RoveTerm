@@ -37,6 +37,8 @@ pub struct DevConfig {
     pub shell: Option<String>,
     /// Directory relative SFTP paths resolve against; `None` uses the current directory.
     pub sftp_root: Option<PathBuf>,
+    /// Simulates an SSH server that ignores exec channel signals.
+    pub ignore_exec_signals: bool,
 }
 
 impl DevConfig {
@@ -49,6 +51,7 @@ impl DevConfig {
             host_key: generate_key(),
             shell: Some("/bin/sh".into()),
             sftp_root: None,
+            ignore_exec_signals: false,
         }
     }
 }
@@ -137,6 +140,7 @@ impl russh::server::Server for Server {
             channels: HashMap::new(),
             unclaimed: HashMap::new(),
             forwards: HashMap::new(),
+            exec_signals: HashMap::new(),
         }
     }
 }
@@ -153,6 +157,7 @@ struct Client {
     channels: HashMap<ChannelId, ChannelState>,
     /// Session channels kept until a request decides their use; only `sftp` consumes them.
     unclaimed: HashMap<ChannelId, Channel<Msg>>,
+    exec_signals: HashMap<ChannelId, tokio::sync::mpsc::UnboundedSender<russh::Sig>>,
     /// Remote forward listeners by `(address, port)` as requested by the client.
     forwards: HashMap<(String, u32), AbortHandle>,
 }
@@ -404,12 +409,40 @@ impl russh::server::Handler for Client {
         self.unclaimed.remove(&channel);
         let command = String::from_utf8_lossy(data).into_owned();
         let handle = session.handle();
+        let (signals, mut pending) = tokio::sync::mpsc::unbounded_channel();
+        self.exec_signals.insert(channel, signals);
         tokio::spawn(async move {
-            let output = tokio::process::Command::new("sh")
+            let mut process = tokio::process::Command::new("sh");
+            process
                 .arg("-c")
-                .arg(&command)
-                .output()
-                .await;
+                .arg(command)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true);
+            #[cfg(unix)]
+            process.process_group(0);
+            let output = match process.spawn() {
+                Ok(child) => {
+                    #[cfg(unix)]
+                    let group = child.id();
+                    let wait = child.wait_with_output();
+                    tokio::pin!(wait);
+                    loop {
+                        tokio::select! {
+                            output = &mut wait => break output,
+                            signal = pending.recv() => {
+                                #[cfg(unix)]
+                                if let Some(group) = group {
+                                    let signal = match signal { Some(russh::Sig::TERM) => "-TERM", Some(russh::Sig::KILL) | None => "-KILL", _ => continue };
+                                    let _ = tokio::process::Command::new("/bin/kill").args([signal, "--", &format!("-{group}")]).status().await;
+                                }
+                                if signal.is_none() { break wait.await; }
+                            }
+                        }
+                    }
+                }
+                Err(error) => Err(error),
+            };
             let code = match output {
                 Ok(output) => {
                     let _ = handle.data(channel, output.stdout).await;
@@ -466,12 +499,27 @@ impl russh::server::Handler for Client {
         Ok(())
     }
 
+    async fn signal(
+        &mut self,
+        channel: ChannelId,
+        signal: russh::Sig,
+        _: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if !self.config.ignore_exec_signals
+            && let Some(sender) = self.exec_signals.get(&channel)
+        {
+            let _ = sender.send(signal);
+        }
+        Ok(())
+    }
+
     async fn channel_close(
         &mut self,
         channel: ChannelId,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         self.unclaimed.remove(&channel);
+        self.exec_signals.remove(&channel);
         if let Some(terminal) = self
             .channels
             .remove(&channel)

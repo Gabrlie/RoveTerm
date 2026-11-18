@@ -330,6 +330,7 @@ impl Assistant {
             token.cancel();
         }
         self.session.withdraw_approvals().await;
+        self.session.stop_jobs().await;
     }
 
     /// Runs one turn for `text`; returns why it ended (`end_turn`, `cancelled`, `max_turn_requests`).
@@ -352,14 +353,14 @@ impl Assistant {
         let token = CancellationToken::new();
         {
             let mut slot = self.running.lock().map_err(|_| AssistantError::Busy)?;
-            if slot.as_ref().is_some_and(|running| !running.is_cancelled()) {
+            if slot.is_some() {
                 return Err(AssistantError::Busy);
             }
             *slot = Some(token.clone());
         }
         let result = tokio::select! {
             result = self.turn(text) => result,
-            () = token.cancelled() => Ok("cancelled".to_owned()),
+            () = token.cancelled() => { self.session.stop_jobs().await; Ok("cancelled".to_owned()) },
         };
         if let Ok(mut slot) = self.running.lock() {
             *slot = None;

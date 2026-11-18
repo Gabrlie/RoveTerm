@@ -140,6 +140,7 @@ pub struct SessionSettings {
 
 /// A command started with `terminal/create`.
 struct Job {
+    cancel: tokio_util::sync::CancellationToken,
     /// The result once it has ended; an error text when it failed to run.
     done: watch::Receiver<Option<Result<CommandOutput, String>>>,
     task: tokio::task::JoinHandle<()>,
@@ -155,6 +156,11 @@ pub struct AiSession {
     approvals: Mutex<HashMap<u64, oneshot::Sender<Answer>>>,
     next_id: AtomicU64,
     jobs: Mutex<HashMap<String, Job>>,
+    stopping: Mutex<()>,
+    commands: std::sync::Mutex<(
+        tokio_util::sync::CancellationToken,
+        tokio_util::task::TaskTracker,
+    )>,
     terminal: OnceLock<Arc<dyn TerminalSource>>,
     /// The host's notes, for a saved host.
     notes: OnceLock<Arc<dyn NotesSource>>,
@@ -307,6 +313,8 @@ impl AiSession {
             approvals: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             jobs: Mutex::new(HashMap::new()),
+            stopping: Mutex::new(()),
+            commands: Default::default(),
             terminal: OnceLock::new(),
             notes: OnceLock::new(),
             calls: Mutex::new(HashMap::new()),
@@ -598,9 +606,16 @@ impl AiSession {
 
     /// Ends every command still running.
     pub async fn stop_jobs(&self) {
+        let _stopping = self.stopping.lock().await;
+        let (cancel, tasks) =
+            std::mem::take(&mut *self.commands.lock().unwrap_or_else(|e| e.into_inner()));
+        cancel.cancel();
+        tasks.close();
         for (_, job) in self.jobs.lock().await.drain() {
-            job.task.abort();
+            job.cancel.cancel();
+            let _ = job.task.await;
         }
+        tasks.wait().await;
     }
 
     fn check_session(&self, session_id: &str) -> Result<(), ClientError> {
@@ -707,34 +722,42 @@ impl AiSession {
             self.report(operation, assessment, approved, Outcome::Denied);
             return Err(ClientError::denied("the user did not allow this command"));
         }
-        let result = self
-            .host
-            .run(command, cwd, &limits.unwrap_or(self.limits))
-            .await;
-        match result {
-            Ok(output) => {
-                self.report(
-                    operation,
-                    assessment,
-                    approved,
-                    Outcome::Command {
+        let host = self.host.clone();
+        let sink = self.sink.clone();
+        let command = command.to_owned();
+        let cwd = cwd.map(str::to_owned);
+        let limits = limits.unwrap_or(self.limits);
+        let (worker, guard) = {
+            let commands = self.commands.lock().unwrap_or_else(|e| e.into_inner());
+            let cancel = commands.0.child_token();
+            let guard = cancel.clone().drop_guard();
+            let worker = commands.1.spawn(async move {
+                let result = host
+                    .run_cancellable(&command, cwd.as_deref(), &limits, cancel)
+                    .await;
+                let outcome = match &result {
+                    Ok(output) => Outcome::Command {
                         output: output.clone(),
                     },
-                );
-                Ok(output)
-            }
-            Err(error) => {
-                self.report(
+                    Err(error) => Outcome::Failed {
+                        error: error.to_string(),
+                    },
+                };
+                sink(AiEvent::Executed {
                     operation,
                     assessment,
                     approved,
-                    Outcome::Failed {
-                        error: error.to_string(),
-                    },
-                );
-                Err(failure(error))
-            }
-        }
+                    outcome,
+                });
+                result
+            });
+            (worker, guard)
+        };
+        let result = worker
+            .await
+            .map_err(|e| ClientError::invalid(e.to_string()))?;
+        guard.disarm();
+        result.map_err(failure)
     }
 
     /// Reads a text file on the host after the policy allows it.
@@ -1104,8 +1127,12 @@ impl Client for AiSession {
         let host = self.host.clone();
         let sink = self.sink.clone();
         let cwd = cwd.map(str::to_owned);
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let token = cancel.clone();
         let task = tokio::spawn(async move {
-            let result = host.run(&line, cwd.as_deref(), &limits).await;
+            let result = host
+                .run_cancellable(&line, cwd.as_deref(), &limits, token)
+                .await;
             let outcome = match &result {
                 Ok(output) => Outcome::Command {
                     output: output.clone(),
@@ -1125,7 +1152,7 @@ impl Client for AiSession {
         self.jobs
             .lock()
             .await
-            .insert(id.clone(), Job { done, task });
+            .insert(id.clone(), Job { done, task, cancel });
         Ok(id)
     }
 
@@ -1187,7 +1214,7 @@ impl Client for AiSession {
     async fn kill_terminal(&self, session_id: &str, terminal_id: &str) -> Result<(), ClientError> {
         self.check_session(session_id)?;
         if let Some(job) = self.jobs.lock().await.get(terminal_id) {
-            job.task.abort();
+            job.cancel.cancel();
         }
         Ok(())
     }
@@ -1199,7 +1226,8 @@ impl Client for AiSession {
     ) -> Result<(), ClientError> {
         self.check_session(session_id)?;
         if let Some(job) = self.jobs.lock().await.remove(terminal_id) {
-            job.task.abort();
+            job.cancel.cancel();
+            let _ = job.task.await;
         }
         Ok(())
     }

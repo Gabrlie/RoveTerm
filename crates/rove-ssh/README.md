@@ -4,6 +4,8 @@ SSH Provider：认证、host key 校验，打开 PTY shell channel，`FileSystem
 
 ## 契约
 
+- `exec_controlled` 接受命令级取消令牌与超时，等待服务器退出回报，保留同一连接上的其他 channel。
+
 - `SshConnector::connect` 依次完成：TCP 连接（受 `connect_timeout_secs` 限制）→ host key 校验 → 认证。host key 等待用户确认的时间不计入连接超时。
 - host key 由 `HostKeyVerifier` 决定是否接受。默认的 `VaultVerifier`：已记录且一致的密钥直接通过；已记录但不一致的密钥直接拒绝，不询问用户；未知密钥发出 `HostKeyPrompt` Live 事件等待用户回答，用户选择信任后写入 vault。
 - `SshConnector::open_terminal` 复用同一 `user@host:port`（主机名不区分大小写）的连接，每个终端是一个独立的 channel；并发打开同一目标时只建立一条连接。复用时忽略传入的 `AuthSpec`。

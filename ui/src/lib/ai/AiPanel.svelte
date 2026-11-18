@@ -317,7 +317,7 @@
       case 'command':
         return [outcome.output.stdout, outcome.output.stderr].filter(Boolean).join('\n') || t('ai.noOutput');
       case 'failed':
-        return outcome.error;
+        return outcome.error.includes('could not confirm that the remote command stopped') ? t('ai.remoteExitUnknown') : outcome.error;
       case 'written':
         return t('ai.written', { bytes: outcome.bytes, before: outcome.lines_before, after: outcome.lines_after });
       case 'read':
