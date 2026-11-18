@@ -1,6 +1,8 @@
 // Sync state for the UI: status, the last round, and automatic rounds while the app runs.
 import { syncConnect, syncDisable, syncNow, syncProbe, syncSetup, syncStatus, type SyncReport, type SyncStatus, type SyncTarget } from '../ipc';
-import { errorText } from '../i18n';
+import { errorText, t } from '../i18n';
+import { notify } from '../ui/toast.svelte';
+import { runAutoSync } from './auto';
 import { hosts } from '../hosts/hosts.svelte';
 import { keys } from '../keys/keys.svelte';
 import { prefs } from '../settings/prefs.svelte';
@@ -22,8 +24,10 @@ class SyncStore {
   generation = $state(0);
   private timer = 0;
 
-  async refreshStatus(): Promise<void> {
-    this.status = await syncStatus();
+  async refreshStatus(): Promise<SyncStatus> {
+    const status = await syncStatus();
+    this.status = status;
+    return status;
   }
 
   /** Reloads everything a round may have changed. */
@@ -97,10 +101,14 @@ class SyncStore {
 
   /** Syncs now and every few minutes while sync is set up and ready; failures wait for the next turn. */
   startAuto(): void {
-    const tick = async (): Promise<void> => {
-      await this.refreshStatus().catch(() => undefined);
-      if (this.status?.configured && this.status.ready) await this.syncNow().catch(() => undefined);
-    };
+    const tick = () => runAutoSync(
+      () => this.refreshStatus(),
+      () => this.syncNow(),
+      (error) => {
+        this.lastError = errorText(error);
+        notify(t('status.syncFailed', { error: this.lastError }), 'error');
+      },
+    );
     void tick();
     window.clearInterval(this.timer);
     this.timer = window.setInterval(() => void tick(), AUTO_MINUTES * 60_000);
