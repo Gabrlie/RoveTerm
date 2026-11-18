@@ -91,6 +91,36 @@ impl Vault {
         })
     }
 
+    pub fn seal_audit(
+        &self,
+        session: &str,
+        reference: uuid::Uuid,
+        body: &serde_json::Value,
+    ) -> Result<Vec<u8>, VaultError> {
+        let data = Zeroizing::new(serde_json::to_vec(body)?);
+        self.with_cipher(|cipher| {
+            cipher.seal(
+                &data,
+                format!("rove/audit/v1:{session}:{reference}").as_bytes(),
+            )
+        })
+    }
+
+    pub fn open_audit(
+        &self,
+        session: &str,
+        reference: uuid::Uuid,
+        sealed: &[u8],
+    ) -> Result<serde_json::Value, VaultError> {
+        self.with_cipher(|cipher| {
+            let data = cipher.open(
+                sealed,
+                format!("rove/audit/v1:{session}:{reference}").as_bytes(),
+            )?;
+            Ok(serde_json::from_slice(&data)?)
+        })
+    }
+
     /// Identity of this installation, independent of its current sync space.
     pub fn installation_id(&self) -> Result<uuid::Uuid, VaultError> {
         let conn = self.conn.lock();

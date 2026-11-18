@@ -88,11 +88,15 @@ pub enum Outcome {
     /// The agent's own tool was allowed to run (on this machine).
     AgentTool,
     Read {
+        #[serde(skip)]
+        content: String,
         bytes: usize,
         sha256: String,
         truncated: bool,
     },
     Written {
+        #[serde(skip)]
+        content: String,
         bytes: usize,
         sha256: String,
         previous_sha256: Option<String>,
@@ -447,6 +451,7 @@ impl AiSession {
         match source.read().await {
             Ok(text) => {
                 let outcome = Outcome::Read {
+                    content: text.clone(),
                     bytes: text.len(),
                     sha256: sha256(text.as_bytes()),
                     truncated: false,
@@ -489,6 +494,7 @@ impl AiSession {
         match source.write(text).await {
             Ok(()) => {
                 let outcome = Outcome::Written {
+                    content: text.to_owned(),
                     bytes: text.len(),
                     sha256: sha256(text.as_bytes()),
                     previous_sha256: Some(sha256(previous.as_bytes())),
@@ -542,6 +548,7 @@ impl AiSession {
             ));
         };
         let outcome = Outcome::Read {
+            content: text.clone(),
             bytes: text.len(),
             sha256: sha256(text.as_bytes()),
             truncated: false,
@@ -762,6 +769,15 @@ impl AiSession {
 
     /// Reads a text file on the host after the policy allows it.
     pub async fn read_file(&self, path: &str) -> Result<host::FileText, ClientError> {
+        self.read_lines(path, 0, usize::MAX).await
+    }
+
+    pub async fn read_lines(
+        &self,
+        path: &str,
+        skip: usize,
+        take: usize,
+    ) -> Result<host::FileText, ClientError> {
         let operation = Operation::ReadFile {
             path: path.to_owned(),
         };
@@ -774,8 +790,17 @@ impl AiSession {
             ));
         }
         match host::read_text(self.host.as_ref(), path, &self.limits).await {
-            Ok(text) => {
+            Ok(mut text) => {
+                if skip != 0 || take != usize::MAX {
+                    text.content = text
+                        .content
+                        .split_inclusive('\n')
+                        .skip(skip)
+                        .take(take)
+                        .collect();
+                }
                 let outcome = Outcome::Read {
+                    content: text.content.clone(),
                     bytes: text.content.len(),
                     sha256: sha256(text.content.as_bytes()),
                     truncated: text.truncated,
@@ -840,6 +865,7 @@ impl AiSession {
         match host::write_text(self.host.as_ref(), path, content, &self.limits).await {
             Ok(()) => {
                 let outcome = Outcome::Written {
+                    content: content.to_owned(),
                     bytes: content.len(),
                     sha256: sha256(content.as_bytes()),
                     previous_sha256: previous
@@ -927,6 +953,7 @@ impl AiSession {
         match host::write_text(self.host.as_ref(), path, &content, &self.limits).await {
             Ok(()) => {
                 let outcome = Outcome::Written {
+                    content: content.to_owned(),
                     bytes: content.len(),
                     sha256: sha256(content.as_bytes()),
                     previous_sha256: Some(sha256(current.content.as_bytes())),
@@ -1062,18 +1089,9 @@ impl Client for AiSession {
         limit: Option<u32>,
     ) -> Result<String, ClientError> {
         self.check_session(session_id)?;
-        let text = self.read_file(path).await?;
-        if line.is_none() && limit.is_none() {
-            return Ok(text.content);
-        }
         let skip = line.map_or(0, |line| line.saturating_sub(1) as usize);
         let take = limit.map_or(usize::MAX, |limit| limit as usize);
-        Ok(text
-            .content
-            .split_inclusive('\n')
-            .skip(skip)
-            .take(take)
-            .collect())
+        Ok(self.read_lines(path, skip, take).await?.content)
     }
 
     async fn write_text_file(

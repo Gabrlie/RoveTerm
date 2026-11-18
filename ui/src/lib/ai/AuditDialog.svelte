@@ -2,7 +2,7 @@
   // The audit trail of AI sessions: what each agent was asked, what it was allowed, what ran.
   import Dialog from '../ui/Dialog.svelte';
   import { errorText, t, type MessageKey } from '../i18n';
-  import { aiRecords, aiRename, aiSessions, type AiRecord, type AiSessionSummary } from '../ipc';
+  import { aiAuditDetail, aiRecords, aiRename, aiSessions, type AiRecord, type AiSessionSummary } from '../ipc';
   import IconButton from '../ui/IconButton.svelte';
   import { auditLine, type AuditLine } from './audit';
   import { ai } from './ai.svelte';
@@ -36,7 +36,17 @@
   let sessions = $state<AiSessionSummary[]>([]);
   // svelte-ignore state_referenced_locally
   let selected = $state<string | null>(initial);
-  let lines = $state<{ ts: number; line: AuditLine }[]>([]);
+  let lines = $state<{ ts: number; line: AuditLine; reference?: string }[]>([]);
+  async function detail(event: Event, row: (typeof lines)[number]): Promise<void> {
+    if (!(event.currentTarget instanceof HTMLDetailsElement) || !event.currentTarget.open || !selected || !row.reference || row.line.detail) return;
+    const id = selected;
+    try {
+      const payload = await aiAuditDetail(id, row.reference);
+      if (id !== selected) return;
+      const outcome = payload.outcome as Record<string, unknown> | undefined;
+      row.line.detail = typeof outcome?.content === 'string' ? outcome.content : JSON.stringify(payload, null, 2);
+    } catch (caught) { error = errorText(caught); }
+  }
   let error = $state('');
   const parent = $derived(sessions.find((s) => s.id === selected || s.children.some((c) => c.id === selected)) ?? null);
   const current = $derived(parent?.children.find((s) => s.id === selected) ?? parent);
@@ -51,7 +61,7 @@
       records = loaded;
       lines = loaded.flatMap((record) => {
         const line = auditLine(record);
-        return line ? [{ ts: record.ts, line }] : [];
+        return line ? [{ ts: record.ts, line, reference: typeof record.payload?.body_ref === 'string' ? record.payload.body_ref : undefined }] : [];
       });
       error = '';
     } catch (caught) {
@@ -158,15 +168,16 @@
         </div>
       {/if}
       {#if error}<p class="error">{error}</p>{/if}
-      {#each lines as { ts, line }, index (index)}
+      {#each lines as row, index (index)}
+        {@const {ts, line} = row}
         <div class="line {line.tone}">
           <span class="time">{new Date(ts).toLocaleTimeString()}</span>
           <span class="kind">{label(line.kind)}</span>
           <div class="body">
             {#if line.text}<span class="text selectable">{line.text}</span>{/if}
             {#if line.note}<span class="note">{noteText(line)}</span>{/if}
-            {#if line.detail}
-              <details><summary>{t('ai.historyDetail')}</summary><pre class="selectable">{line.detail.includes('could not confirm that the remote command stopped') && line.tone === 'danger' ? t('ai.remoteExitUnknown') : line.detail}</pre></details>
+            {#if line.detail || row.reference}
+              <details ontoggle={(event) => void detail(event, row)}><summary>{t('ai.historyDetail')}</summary><pre class="selectable">{line.detail.includes('could not confirm that the remote command stopped') && line.tone === 'danger' ? t('ai.remoteExitUnknown') : line.detail}</pre></details>
             {/if}
           </div>
         </div>

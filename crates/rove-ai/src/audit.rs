@@ -117,6 +117,35 @@ fn clipped(value: &Value) -> Value {
     }
 }
 
+/// Removes local references and tool data from the shareable projection, including legacy rows.
+pub fn tool_summary(payload: &mut Value) -> bool {
+    let Some(fields) = payload.as_object_mut() else {
+        return false;
+    };
+    fields.remove("body_ref");
+    let mut private = fields.remove("input").is_some();
+    if fields.get("private_text") == Some(&Value::Bool(true)) {
+        for key in ["text", "summary"] {
+            private |= fields.remove(key).is_some();
+        }
+    }
+    for field in ["outcome", "asked", "operation"] {
+        if let Some(data) = fields.get_mut(field).and_then(Value::as_object_mut) {
+            for key in ["stdout", "stderr", "content", "diff", "command", "detail"] {
+                private |= data.remove(key).is_some();
+            }
+        }
+    }
+    if private && let Some(reasons) = fields.get_mut("reasons").and_then(Value::as_array_mut) {
+        for reason in reasons {
+            if let Some(fields) = reason.as_object_mut() {
+                fields.remove("detail");
+            }
+        }
+    }
+    private
+}
+
 /// A session's records (`ts`, `kind`, `payload`) as one synced conversation: ordered by time,
 /// long texts clipped, at most [`SYNC_MAX`] bytes (the oldest records give way, but never the
 /// start and title records); `None` without a start record.
@@ -124,7 +153,11 @@ pub fn conversation_body(records: &[(i64, String, Value)]) -> Option<Value> {
     let mut entries: Vec<Value> = records
         .iter()
         .filter(|(_, kind, _)| kind.starts_with("ai/"))
-        .map(|(ts, kind, payload)| json!({ "ts": ts, "kind": kind, "payload": clipped(payload) }))
+        .map(|(ts, kind, payload)| {
+            let mut summary = payload.clone();
+            tool_summary(&mut summary);
+            json!({ "ts": ts, "kind": kind, "payload": clipped(&summary) })
+        })
         .collect();
     entries.sort_by_key(|entry| entry["ts"].as_i64().unwrap_or(0));
     // Without its start record a conversation could not be listed or continued.
@@ -179,11 +212,11 @@ pub fn missing_records(local: &[(i64, String)], body: &Value) -> Vec<(i64, Strin
             *count += 1;
             let local = have.get(&(ts, kind)).copied().unwrap_or(0);
             (*count > local).then(|| {
-                (
-                    ts,
-                    kind.to_owned(),
-                    entry.get("payload").cloned().unwrap_or(Value::Null),
-                )
+                (ts, kind.to_owned(), {
+                    let mut payload = entry.get("payload").cloned().unwrap_or(Value::Null);
+                    tool_summary(&mut payload);
+                    payload
+                })
             })
         })
         .collect()
@@ -278,6 +311,7 @@ pub struct Auditor {
     /// The start, kept until the session records something else: an agent started and left
     /// without a message leaves no history.
     pending_start: Mutex<Option<SessionInfo>>,
+    private_text: std::sync::atomic::AtomicBool,
     /// Something was written.
     written: std::sync::atomic::AtomicBool,
 }
@@ -292,8 +326,15 @@ impl Auditor {
             thought: Mutex::new(String::new()),
             titled: std::sync::atomic::AtomicBool::new(false),
             pending_start: Mutex::new(None),
+            private_text: Default::default(),
             written: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Subsequent conversation text can quote an approved sensitive read.
+    pub fn protect_text(&self) {
+        self.private_text
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// The session already has a title (it is resumed), so the first prompt does not give one.
@@ -322,6 +363,9 @@ impl Auditor {
         if let Value::Object(fields) = &mut payload {
             fields.insert("host".into(), Value::String(self.host.clone()));
         }
+        if self.private_text.load(std::sync::atomic::Ordering::SeqCst) {
+            payload["private_text"] = true.into();
+        }
         (self.sink)(NewRecord {
             kind: kind.to_owned(),
             session_id: Some(self.ai_session.clone()),
@@ -338,7 +382,12 @@ impl Auditor {
                     .unwrap_or_else(|poisoned| poisoned.into_inner()),
             );
             if !text.is_empty() {
-                let (kept, clipped) = clip(&text);
+                let (kept, clipped) = if self.private_text.load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    (text.clone(), false)
+                } else {
+                    clip(&text)
+                };
                 self.write(
                     kind,
                     json!({ "text": kept, "clipped": clipped, "sha256": sha256(&text) }),
@@ -367,7 +416,11 @@ impl Auditor {
 
     pub fn prompt(&self, text: &str) {
         self.flush();
-        let (kept, clipped) = clip(text);
+        let (kept, clipped) = if self.private_text.load(std::sync::atomic::Ordering::SeqCst) {
+            (text.to_owned(), false)
+        } else {
+            clip(text)
+        };
         self.write(KIND_PROMPT, json!({ "text": kept, "clipped": clipped }));
         if !self.titled.swap(true, std::sync::atomic::Ordering::SeqCst) {
             self.write(
@@ -421,10 +474,7 @@ impl Auditor {
             } => {
                 if matches!(call.status.as_deref(), Some("completed" | "failed")) {
                     self.flush();
-                    let input = call
-                        .raw_input
-                        .as_ref()
-                        .map(|input| clip(&input.to_string()).0);
+                    let input = &call.raw_input;
                     self.write(
                         KIND_TOOL_CALL,
                         json!({ "id": call.id, "title": call.title, "kind": call.kind, "status": call.status, "locations": call.locations, "input": input }),
@@ -468,6 +518,11 @@ impl Auditor {
                 outcome,
             } => {
                 self.flush();
+                if matches!(outcome, Outcome::Read { .. } | Outcome::Command { .. })
+                    && assessment.reasons.iter().any(|r| r.code == "read_secret")
+                {
+                    self.protect_text();
+                }
                 let kind = match operation {
                     Operation::Command { .. } => KIND_COMMAND,
                     Operation::ReadFile { .. } => KIND_FILE_READ,
@@ -480,13 +535,16 @@ impl Auditor {
                 };
                 let outcome = match outcome {
                     Outcome::Command { output } => {
-                        let (stdout, stdout_clipped) = clip(&output.stdout);
-                        let (stderr, stderr_clipped) = clip(&output.stderr);
                         json!({
                             "result": "command", "exit_code": output.exit_code, "truncated": output.truncated,
-                            "stdout": stdout, "stderr": stderr, "clipped": stdout_clipped || stderr_clipped,
+                            "stdout": output.stdout, "stderr": output.stderr,
                             "stdout_sha256": sha256(&output.stdout), "stderr_sha256": sha256(&output.stderr),
                         })
+                    }
+                    Outcome::Read { content, .. } | Outcome::Written { content, .. } => {
+                        let mut data = serde_json::to_value(outcome).unwrap_or(Value::Null);
+                        data["content"] = json!(content);
+                        data
                     }
                     other => serde_json::to_value(other).unwrap_or(Value::Null),
                 };
@@ -593,8 +651,7 @@ mod tests {
         let command = &records[5].payload;
         assert_eq!(command["risk"], "modify");
         assert_eq!(command["approved"], true);
-        assert_eq!(command["outcome"]["clipped"], true);
-        assert_eq!(command["outcome"]["stdout"].as_str().unwrap().len(), CLIP);
+        assert!(command["outcome"]["stdout"].as_str().unwrap().len() > CLIP);
         assert_eq!(
             command["outcome"]["stdout_sha256"].as_str().unwrap().len(),
             64

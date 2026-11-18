@@ -139,6 +139,52 @@ async fn stop(entry: &Entry) {
     entry.auditor.ended();
 }
 
+fn audit_sink(
+    vault: Arc<rove_vault::Vault>,
+    journal: Arc<dyn rove_journal::JournalStore>,
+) -> audit::RecordSink {
+    Arc::new(move |mut record| {
+        let mut summary = record.payload.clone();
+        let result = if audit::tool_summary(&mut summary) {
+            let reference = uuid::Uuid::now_v7();
+            let session = record.session_id.clone().unwrap_or_default();
+            let sealed = vault.seal_audit(&session, reference, &record.payload);
+            record.payload = summary;
+            match sealed {
+                Ok(sealed) => {
+                    record.payload["body_ref"] = serde_json::json!(reference);
+                    journal.append_private(record, &session, &reference.to_string(), &sealed)
+                }
+                Err(error) => {
+                    tracing::error!(%error, "could not seal audit detail");
+                    record.payload["detail_unavailable"] = true.into();
+                    journal.append(record).map(|_| ())
+                }
+            }
+        } else {
+            journal.append(record).map(|_| ())
+        };
+        if let Err(error) = result {
+            tracing::error!(%error, "could not persist audit record");
+        }
+    })
+}
+
+#[tauri::command]
+pub async fn ai_audit_detail(
+    state: State<'_, AppState>,
+    id: String,
+    reference: uuid::Uuid,
+) -> Result<serde_json::Value, CommandError> {
+    check_session_id(&id)?;
+    state.ensure_unlocked().await?;
+    let sealed = state
+        .journal
+        .private_body(&id, &reference.to_string())
+        .map_err(|e| CommandError::new("journal.read", e.to_string()))?;
+    Ok(state.vault.open_audit(&id, reference, &sealed)?)
+}
+
 fn backend_error(error: BackendError) -> CommandError {
     match error {
         BackendError::Acp(error) => acp_error(error),
@@ -846,13 +892,16 @@ pub async fn ai_start(
         |(id, ..)| id.clone(),
     );
     let auditor = Arc::new(Auditor::new(
-        {
-            let recorder = state.ai.recorder.clone();
-            Arc::new(move |record| recorder.record(record))
-        },
+        audit_sink(state.vault.clone(), state.journal.clone()),
         id.clone(),
         host.label(),
     ));
+    if earlier
+        .as_ref()
+        .is_some_and(|(_, _, rows, _)| rows.iter().any(|row| row.payload["private_text"] == true))
+    {
+        auditor.protect_text();
+    }
     if earlier.as_ref().is_some_and(|(.., titled)| *titled) {
         auditor.set_titled();
     }
@@ -1136,10 +1185,7 @@ pub(crate) async fn start_external(
     let (host, _meta, _cwd) = host_of(app, state, &context)?;
     let id = format!("ai-{}", uuid::Uuid::now_v7());
     let auditor = Arc::new(Auditor::new(
-        {
-            let recorder = state.ai.recorder.clone();
-            Arc::new(move |record| recorder.record(record))
-        },
+        audit_sink(state.vault.clone(), state.journal.clone()),
         id.clone(),
         host.label(),
     ));
@@ -1230,10 +1276,7 @@ async fn start_subagent(
     let (host, meta, _cwd) = host_of(app, state, &context)?;
     let id = format!("ai-{}", uuid::Uuid::now_v7());
     let auditor = Arc::new(Auditor::new(
-        {
-            let recorder = state.ai.recorder.clone();
-            Arc::new(move |record| recorder.record(record))
-        },
+        audit_sink(state.vault.clone(), state.journal.clone()),
         id.clone(),
         host.label(),
     ));
@@ -1423,10 +1466,7 @@ pub(crate) async fn run_scheduled(
     let id = format!("ai-{}", uuid::Uuid::now_v7());
     let context = AiContext::Fleet;
     let auditor = Arc::new(Auditor::new(
-        {
-            let recorder = state.ai.recorder.clone();
-            Arc::new(move |record| recorder.record(record))
-        },
+        audit_sink(state.vault.clone(), state.journal.clone()),
         id.clone(),
         "fleet",
     ));
@@ -1665,7 +1705,7 @@ pub async fn ai_delete(state: State<'_, AppState>, id: String) -> Result<(), Com
     tauri::async_runtime::spawn_blocking(move || {
         // Records still queued for it are written first, then removed with the rest.
         recorder.flush();
-        delete_conversation(journal.as_ref(), &id)
+        journal.transaction(&mut || delete_conversation(journal.as_ref(), &id))
     })
     .await
     .map_err(|error| CommandError::new("app.task", error.to_string()))?
@@ -1739,7 +1779,7 @@ pub struct AiRecord {
 /// Most sessions listed.
 const MAX_SESSIONS: u32 = 100;
 /// Most records read of one session.
-const MAX_RECORDS: u32 = 5000;
+const MAX_RECORDS: u32 = u32::MAX;
 
 /// Refuses anything but an AI session id.
 fn check_session_id(id: &str) -> Result<(), CommandError> {
@@ -1770,6 +1810,21 @@ async fn session_records(
         .into_iter()
         .filter(|record| record.kind.starts_with("ai/"))
         .collect();
+    for record in &mut records {
+        if matches!(
+            record.kind.as_str(),
+            audit::KIND_MESSAGE | audit::KIND_PROMPT | audit::KIND_THOUGHT | audit::KIND_COMPACTED
+        ) && let Some(reference) = record.payload["body_ref"].as_str()
+            && let Ok(reference) = reference.parse::<uuid::Uuid>()
+            && let Some(session) = &record.session_id
+        {
+            let sealed = state
+                .journal
+                .private_body(session, &reference.to_string())
+                .map_err(|e| CommandError::new("journal.read", e.to_string()))?;
+            record.payload = state.vault.open_audit(session, reference, &sealed)?;
+        }
+    }
     records.sort_by_key(|record| record.ts);
     Ok(records)
 }
@@ -2166,7 +2221,7 @@ async fn claude_usage(
 #[cfg(test)]
 mod history_tests {
     use super::*;
-    use rove_journal::JournalRecord;
+    use rove_journal::{JournalQuery, JournalRecord, JournalStore, NewRecord, SqliteJournal};
     use serde_json::json;
 
     #[test]
@@ -2201,5 +2256,82 @@ mod history_tests {
             history_summaries(rows, vec![], Some("unknown"))[0].id,
             "ai-old"
         );
+    }
+
+    #[test]
+    fn full_tool_content_is_encrypted_local_and_deleted_with_the_conversation() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = Arc::new(SqliteJournal::open(&dir.path().join("journal.db")).unwrap());
+        let vault = Arc::new(
+            rove_vault::Vault::open(
+                &dir.path().join("vault.db"),
+                Arc::new(rove_vault::MemoryKeyCache::default()),
+            )
+            .unwrap(),
+        );
+        vault.try_unlock();
+        let sink = audit_sink(vault.clone(), journal.clone());
+        let session = "ai-privacy";
+        let body = "unique-local-tool-body".repeat(2000);
+        sink(NewRecord {
+            kind: audit::KIND_STARTED.into(),
+            session_id: Some(session.into()),
+            payload: json!({}),
+        });
+        for (kind, field) in [
+            (audit::KIND_FILE_READ, "content"),
+            (audit::KIND_FILE_WRITE, "content"),
+            (audit::KIND_TERMINAL_READ, "content"),
+            (audit::KIND_COMMAND, "stdout"),
+        ] {
+            sink(NewRecord {
+                kind: kind.into(),
+                session_id: Some(session.into()),
+                payload: json!({"outcome":{field:&body}}),
+            });
+        }
+        let rows = journal.read(&JournalQuery::default()).unwrap();
+        assert_eq!(rows.len(), 5);
+        let mut refs = Vec::new();
+        for row in &rows[1..] {
+            let reference: uuid::Uuid =
+                serde_json::from_value(row.payload["body_ref"].clone()).unwrap();
+            let sealed = journal
+                .private_body(session, &reference.to_string())
+                .unwrap();
+            let opened = vault.open_audit(session, reference, &sealed).unwrap();
+            assert_eq!(
+                opened["outcome"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .next()
+                    .unwrap()
+                    .as_str(),
+                Some(body.as_str())
+            );
+            refs.push(reference);
+        }
+        let projection = audit::conversation_body(
+            &rows
+                .into_iter()
+                .map(|r| (r.ts, r.kind, r.payload))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
+        .to_string();
+        assert!(!projection.contains("unique-local-tool-body") && !projection.contains("body_ref"));
+        for file in std::fs::read_dir(dir.path()).unwrap().flatten() {
+            let bytes = std::fs::read(file.path()).unwrap();
+            assert!(!bytes.windows(22).any(|w| w == b"unique-local-tool-body"));
+        }
+        delete_conversation(journal.as_ref(), session).unwrap();
+        for reference in refs {
+            assert!(
+                journal
+                    .private_body(session, &reference.to_string())
+                    .is_err()
+            );
+        }
     }
 }

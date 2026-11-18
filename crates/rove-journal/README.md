@@ -4,6 +4,8 @@
 
 ## 契约
 
+- `append_private` 在同一事务中追加事件和本机加密正文，`private_body` 按会话与引用读取密文。
+
 - `append` 返回单调递增的 `seq`；`import` 以给定时间追加（同步来的记录），`seq` 仍递增，因此按时间排序要看 `ts`；`read` 按 `seq` 升序返回结果，默认最多 1000 条。
 - `delete_session(session_id, kind_prefix)` 移除某会话中指定前缀类型的记录（用普通前缀比较，不受 `LIKE` 通配符影响）。
 - `Recorder` 在专用写线程上追加记录，事件监听器不会等待磁盘 I/O；`flush()` 等到此前排队的记录写完。写线程在全部 `Recorder` 克隆和订阅都被 drop、队列清空后结束。

@@ -165,22 +165,17 @@ pub async fn call(
         "read_file" => {
             let path = argument(arguments, "path")?;
             absolute(path)?;
-            Ok(match session.read_file(path).await {
+            let skip = arguments
+                .get("line")
+                .and_then(Value::as_u64)
+                .map_or(0, |n| n.saturating_sub(1) as usize);
+            let take = arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map_or(usize::MAX, |n| n as usize);
+            Ok(match session.read_lines(path, skip, take).await {
                 Ok(file) => {
-                    let skip = arguments
-                        .get("line")
-                        .and_then(Value::as_u64)
-                        .map_or(0, |line| line.saturating_sub(1) as usize);
-                    let take = arguments
-                        .get("limit")
-                        .and_then(Value::as_u64)
-                        .map_or(usize::MAX, |limit| limit as usize);
-                    let mut content: String = file
-                        .content
-                        .split_inclusive('\n')
-                        .skip(skip)
-                        .take(take)
-                        .collect();
+                    let mut content = file.content;
                     if file.truncated {
                         content.push_str("\n(file truncated)");
                     }

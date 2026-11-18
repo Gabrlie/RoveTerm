@@ -85,6 +85,32 @@ impl JournalStore for SqliteJournal {
         Ok(())
     }
 
+    fn append_private(
+        &self,
+        record: NewRecord,
+        session: &str,
+        reference: &str,
+        sealed: &[u8],
+    ) -> Result<(), JournalError> {
+        let conn = self.conn.lock();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO audit_bodies VALUES (?1,?2,?3)",
+            rusqlite::params![session, reference, sealed],
+        )?;
+        self.append(record)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn private_body(&self, session: &str, reference: &str) -> Result<Vec<u8>, JournalError> {
+        Ok(self.conn.lock().query_row(
+            "SELECT sealed FROM audit_bodies WHERE session=?1 AND reference=?2",
+            [session, reference],
+            |r| r.get(0),
+        )?)
+    }
+
     fn sync_receipt(&self, space: &str) -> Result<serde_json::Value, JournalError> {
         use rusqlite::OptionalExtension;
         let value: Option<String> = self
@@ -126,7 +152,11 @@ impl JournalStore for SqliteJournal {
 
     fn delete_session(&self, session_id: &str, kind_prefix: &str) -> Result<usize, JournalError> {
         // A plain prefix comparison: `LIKE` would read `_` and `%` in the prefix as patterns.
-        Ok(self.conn.lock().execute(
+        let conn = self.conn.lock();
+        if kind_prefix == "ai/" {
+            conn.execute("DELETE FROM audit_bodies WHERE session=?1", [session_id])?;
+        }
+        Ok(conn.execute(
             "DELETE FROM events WHERE session_id = ?1 AND substr(kind, 1, length(?2)) = ?2",
             rusqlite::params![session_id, kind_prefix],
         )?)

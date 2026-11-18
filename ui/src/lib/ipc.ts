@@ -1260,6 +1260,10 @@ export function aiSessions(role: HistoryRole | null = null): Promise<AiSessionSu
 }
 
 /** The audit records of AI session `id`, oldest first. */
+export function aiAuditDetail(id: string, reference: string): Promise<Record<string, unknown>> {
+  return invoke('ai_audit_detail', { id, reference });
+}
+
 export function aiRecords(id: string): Promise<AiRecord[]> {
   return invoke('ai_records', { id });
 }

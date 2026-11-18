@@ -78,6 +78,14 @@ pub enum JournalError {
 /// request (deleting a conversation). Definition of the `JournalStore` seam.
 pub trait JournalStore: Send + Sync {
     /// Appends `record` and returns its sequence number.
+    fn append_private(
+        &self,
+        record: NewRecord,
+        session: &str,
+        reference: &str,
+        sealed: &[u8],
+    ) -> Result<(), JournalError>;
+    fn private_body(&self, session: &str, reference: &str) -> Result<Vec<u8>, JournalError>;
     fn transaction(
         &self,
         action: &mut dyn FnMut() -> Result<(), JournalError>,
