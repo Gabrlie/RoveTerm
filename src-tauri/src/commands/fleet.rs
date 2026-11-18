@@ -36,7 +36,7 @@ pub struct FleetTools {
     /// The lead's conversation id.
     parent: String,
     /// The provider the lead and its sub-agents use.
-    provider: ProviderPrefs,
+    provider: Arc<std::sync::RwLock<ProviderPrefs>>,
     /// The lead's session: its tool calls are reported there (shown and recorded).
     session: Arc<AiSession>,
     /// `Some(allow_changes)` in a scheduled run: sub-agents run with nobody to ask.
@@ -48,7 +48,7 @@ impl FleetTools {
     pub fn new(
         app: AppHandle,
         parent: String,
-        provider: ProviderPrefs,
+        provider: Arc<std::sync::RwLock<ProviderPrefs>>,
         session: Arc<AiSession>,
         unattended: Option<bool>,
     ) -> Self {
@@ -127,7 +127,11 @@ impl FleetTools {
         for (at, (host, task)) in work.into_iter().enumerate() {
             let app = self.app.clone();
             let parent = self.parent.clone();
-            let provider = self.provider.clone();
+            let provider = self
+                .provider
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
             let limit = limit.clone();
             let unattended = self.unattended;
             running.spawn(async move {

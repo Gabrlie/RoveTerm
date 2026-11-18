@@ -11,6 +11,7 @@ import {
   aiStop,
   aiRename,
   aiSetOption,
+  aiSelectModel,
   onAiExternal,
   onAiSubtask,
   onAiReport,
@@ -275,7 +276,7 @@ export class Chat {
         const agent = this.agent ?? (this.context.kind === 'fleet' ? ai.fleetAgent : ai.defaultAgent);
         if (!agent) throw { code: 'ai.no_agent', message: 'no agent' };
         this.agent = agent;
-        const started = await aiStart(this.context, agent, this.attachTerminal ? terminal : null, this.resumeId);
+        const started = await aiStart(this.context, agent, this.attachTerminal ? terminal : null, this.resumeId, this.selectedModel);
         this.id = started.id;
         this.resumeId = null;
         this.host = started.host;
@@ -332,6 +333,21 @@ export class Chat {
   }
 
   /** Sets one of the agent's settings, or remembers it until the agent starts. */
+  selectedModel = $state<string | null>(null);
+  async selectModel(provider: string, model: string): Promise<void> {
+    if (this.busy || this.starting) return;
+    this.starting = true;
+    try {
+      if (this.id) this.options = await aiSelectModel(this.id, provider, model);
+      this.agent = `builtin:${provider}`;
+      this.selectedModel = model;
+    } catch (error) {
+      this.notice(error);
+    } finally {
+      this.starting = false;
+    }
+  }
+
   async setOption(option: string, value: string): Promise<void> {
     if (!this.id) {
       this.wanted = { ...this.wanted, [option]: value };
@@ -431,6 +447,7 @@ class AiStore {
     if (current) await current.stop();
     const chat = new Chat(key, summary.context);
     chat.agent = summary.agent_ref;
+    chat.selectedModel = summary.model;
     chat.resumeId = summary.id;
     chat.title = summary.title;
     chat.items = itemsFromRecords(records);

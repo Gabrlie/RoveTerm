@@ -32,6 +32,8 @@ export function auditLine(entry: AiRecord): AuditLine | null {
   const payload = entry.payload;
   const kind = entry.kind.replace(/^ai\//, '');
   switch (kind) {
+    case 'model_changed':
+      return { kind, text: [str(payload.provider), str(payload.model)].join(' · '), note: '', detail: '', tone: 'normal' };
     case 'session_started':
       return { kind, text: str(payload.agent), note: str(payload.mode), detail: '', tone: 'muted' };
     case 'prompt':

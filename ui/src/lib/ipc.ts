@@ -981,7 +981,7 @@ export interface ConfigOption {
   kind: 'select' | 'boolean';
   /** `true` / `false` for a boolean setting. */
   current: string;
-  choices: { value: string; name: string; description: string | null }[];
+  choices: { value: string; name: string; description: string | null; group?: string }[];
 }
 
 export type Risk = 'read_only' | 'modify' | 'dangerous';
@@ -1129,11 +1129,15 @@ export function aiSetKey(agent: string, key: string | null): Promise<void> {
 /** Starts `agent` on `context`; `terminal` is the user's terminal session there. */
 /** Starts `agent` on `context`; `terminal` is the user's terminal session there. `resume`
  *  continues an earlier conversation of that agent (same id). */
-export function aiStart(context: AiContext, agent: string, terminal: SessionId | null, resume: string | null = null): Promise<AiStarted> {
-  return invoke('ai_start', { context, agent, terminal, resume });
+export function aiStart(context: AiContext, agent: string, terminal: SessionId | null, resume: string | null = null, model: string | null = null): Promise<AiStarted> {
+  return invoke('ai_start', { context, agent, terminal, resume, model });
 }
 
 /** Sets setting `option` (such as `model`) of session `id`; returns the settings as they now are. */
+export function aiSelectModel(id: string, provider: string, model: string): Promise<ConfigOption[]> {
+  return invoke('ai_select_model', { id, provider, model });
+}
+
 export function aiSetOption(id: string, option: string, value: string): Promise<ConfigOption[]> {
   return invoke('ai_set_option', { id, option, value });
 }
@@ -1227,6 +1231,7 @@ export function onAiUpdate(handler: (id: string, event: AiEvent) => void): Promi
 
 /** A past AI session. */
 export interface AiSessionSummary {
+  model: string | null;
   id: string;
   /** Unix milliseconds. */
   started: number;

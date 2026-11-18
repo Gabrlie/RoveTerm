@@ -42,12 +42,49 @@ const PREFERRED_MODES: &[&str] = &["read-only", "read_only", "readonly", "defaul
 
 /// One running AI session.
 struct Entry {
+    builtin: Option<Arc<InteractiveAssistant>>,
     backend: Arc<dyn AgentBackend>,
     auditor: Arc<Auditor>,
     /// The built-in MCP server of an ACP agent.
     mcp: Option<tokio::task::JoinHandle<()>>,
     /// The fleet lead conversation that started this sub-agent.
     parent: Option<String>,
+}
+
+/// A model change takes the write lock between complete turns.
+struct InteractiveAssistant {
+    assistant: tokio::sync::RwLock<Assistant>,
+    session: Arc<AiSession>,
+    provider: Arc<std::sync::RwLock<ProviderPrefs>>,
+    info: std::sync::Mutex<SessionInfo>,
+}
+
+#[async_trait]
+impl AgentBackend for InteractiveAssistant {
+    async fn prompt(&self, text: &str) -> Result<String, BackendError> {
+        Ok(self.assistant.read().await.prompt(text).await?)
+    }
+    async fn cancel(&self) {
+        self.assistant.read().await.cancel().await;
+    }
+    async fn stop(&self) {
+        self.cancel().await;
+        self.session.stop_jobs().await;
+    }
+    fn session(&self) -> &Arc<AiSession> {
+        &self.session
+    }
+    async fn set_config_option(
+        &self,
+        id: &str,
+        value: &str,
+    ) -> Result<Vec<acp::ConfigOption>, BackendError> {
+        self.assistant
+            .try_write()
+            .map_err(|_| BackendError::Busy)?
+            .set_config_option(id, value)
+            .await
+    }
 }
 
 /// AI sessions of this app.
@@ -757,6 +794,7 @@ pub async fn ai_start(
     agent: String,
     terminal: Option<String>,
     resume: Option<String>,
+    model: Option<String>,
 ) -> Result<AiStarted, CommandError> {
     let agent_text = agent;
     let agent = agent_ref(&agent_text)?;
@@ -782,7 +820,15 @@ pub async fn ai_start(
                     serde_json::from_value::<SessionInfo>(record.payload.clone()).ok()
                 })
                 .ok_or_else(|| CommandError::new("input.invalid", "no such conversation"))?;
-            if info.agent_ref.as_deref() != Some(agent_text.as_str()) {
+            if info.context != serde_json::to_value(&context).ok()
+                || (info.agent_ref.as_deref() != Some(agent_text.as_str())
+                    && !(model.is_some()
+                        && matches!(&agent, AgentRef::Builtin(_))
+                        && info
+                            .agent_ref
+                            .as_deref()
+                            .is_some_and(|a| a.starts_with("builtin:"))))
+            {
                 return Err(CommandError::new(
                     "input.invalid",
                     "the conversation was with another agent",
@@ -841,6 +887,7 @@ pub async fn ai_start(
         }));
     }
 
+    let mut builtin = None;
     let mut agent_session = None;
     let (backend, mcp, started): (Arc<dyn AgentBackend>, _, AiStarted) = match agent {
         AgentRef::Builtin(provider_id) => {
@@ -850,19 +897,43 @@ pub async fn ai_start(
                 .iter()
                 .find(|provider| provider.id == provider_id)
                 .ok_or_else(|| CommandError::new("ai.no_agent", "no such provider"))?;
+            let mut provider = provider.clone();
+            let requested = model.as_deref().or_else(|| {
+                earlier
+                    .as_ref()
+                    .and_then(|(_, info, _, _)| info.agent_version.as_deref())
+            });
+            if let Some(model) = requested {
+                select_model(&mut provider, model)?;
+            }
+            let mut current_prefs = prefs.clone();
+            if let Some(active) = current_prefs
+                .ai
+                .providers
+                .iter_mut()
+                .find(|p| p.id == provider.id)
+            {
+                *active = provider.clone();
+            }
+            session.set_reviewer(reviewer_for(
+                state.inner(),
+                &current_prefs,
+                &agent_ref(&agent_text)?,
+            ));
+            let selection = Arc::new(std::sync::RwLock::new(provider.clone()));
             let key = state
                 .vault
                 .ai_key(&format!("builtin:{provider_id}"))?
                 .unwrap_or_default();
             let idle = Duration::from_secs(u64::from(prefs.ai.request_timeout_secs));
-            let client = Client::new(endpoint(provider), &key, idle)
+            let client = Client::new(endpoint(&provider), &key, idle)
                 .map_err(|error| CommandError::new("ai.model", error.to_string()))?
                 .with_cache_key(&id);
             let assistant = if matches!(context, AiContext::Fleet) {
                 let tools = crate::commands::fleet::FleetTools::new(
                     app.clone(),
                     id.clone(),
-                    provider.clone(),
+                    selection.clone(),
                     session.clone(),
                     None,
                 );
@@ -895,7 +966,26 @@ pub async fn ai_start(
                 config_options: assistant.config_options(),
                 resumed: earlier.is_some(),
             };
-            (Arc::new(assistant) as Arc<dyn AgentBackend>, None, started)
+            let active = Arc::new(InteractiveAssistant {
+                session: assistant.session().clone(),
+                assistant: tokio::sync::RwLock::new(assistant),
+                provider: selection,
+                info: std::sync::Mutex::new(SessionInfo {
+                    agent: started.agent.clone(),
+                    agent_version: started.agent_version.clone(),
+                    mode: serde_json::to_value(prefs.ai.mode)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_owned))
+                        .unwrap_or_default(),
+                    agent_ref: Some(agent_text.clone()),
+                    context: serde_json::to_value(&context).ok(),
+                    agent_session: None,
+                    resumed: earlier.is_some(),
+                    parent: None,
+                }),
+            });
+            builtin = Some(active.clone());
+            (active as Arc<dyn AgentBackend>, None, started)
         }
         AgentRef::Acp(_) if matches!(context, AiContext::Fleet) => {
             return Err(CommandError::new(
@@ -983,6 +1073,7 @@ pub async fn ai_start(
     state.ai.entries.lock().await.insert(
         id,
         Arc::new(Entry {
+            builtin,
             backend,
             auditor,
             mcp,
@@ -1097,6 +1188,7 @@ pub(crate) async fn start_external(
     state.ai.entries.lock().await.insert(
         id.clone(),
         Arc::new(Entry {
+            builtin: None,
             backend: Arc::new(ExternalBackend(session.clone())),
             auditor,
             mcp: None,
@@ -1175,7 +1267,16 @@ async fn start_subagent(
     let agent_ref = AgentRef::Builtin(provider.id.clone());
     // A scheduled run that may not change anything has no judge: every change is refused.
     if unattended != Some(false) {
-        session.set_reviewer(reviewer_for(state, &prefs, &agent_ref));
+        let mut reviewer_prefs = prefs.clone();
+        if let Some(p) = reviewer_prefs
+            .ai
+            .providers
+            .iter_mut()
+            .find(|p| p.id == provider.id)
+        {
+            p.model.clone_from(&provider.model);
+        }
+        session.set_reviewer(reviewer_for(state, &reviewer_prefs, &agent_ref));
     }
     let key = state
         .vault
@@ -1208,6 +1309,7 @@ async fn start_subagent(
     state.ai.entries.lock().await.insert(
         id.clone(),
         Arc::new(Entry {
+            builtin: None,
             backend: assistant.clone(),
             auditor,
             mcp: None,
@@ -1363,7 +1465,7 @@ pub(crate) async fn run_scheduled(
     let tools = crate::commands::fleet::FleetTools::new(
         app.clone(),
         id.clone(),
-        provider.clone(),
+        Arc::new(std::sync::RwLock::new(provider.clone())),
         session.clone(),
         Some(schedule.allow_changes),
     );
@@ -1391,6 +1493,7 @@ pub(crate) async fn run_scheduled(
     state.ai.entries.lock().await.insert(
         id.clone(),
         Arc::new(Entry {
+            builtin: None,
             backend: assistant.clone(),
             auditor: auditor.clone(),
             mcp: None,
@@ -1609,6 +1712,7 @@ pub(crate) fn deleted_conversations(
 /// A past AI session, from the journal.
 #[derive(Debug, Serialize)]
 pub struct AiSessionSummary {
+    pub model: Option<String>,
     pub id: String,
     /// The latest start, Unix milliseconds.
     pub started: i64,
@@ -1731,6 +1835,7 @@ pub async fn ai_sessions(
                     .map(str::to_owned)
             };
             Some(AiSessionSummary {
+                model: text("agent_version"),
                 title: titles.remove(&id),
                 started: record.ts,
                 host: text("host"),
@@ -1796,6 +1901,79 @@ pub async fn ai_rename(
     Ok(title)
 }
 
+fn select_model(provider: &mut ProviderPrefs, model: &str) -> Result<(), CommandError> {
+    if provider.model != model {
+        let index = provider
+            .models
+            .iter()
+            .position(|entry| entry == model)
+            .ok_or_else(|| {
+                CommandError::new("ai.model", "model not configured for this provider")
+            })?;
+        std::mem::swap(&mut provider.model, &mut provider.models[index]);
+    }
+    Ok(())
+}
+
+/// Changes the built-in model and the clients used for subsequent delegated work.
+#[tauri::command]
+pub async fn ai_select_model(
+    state: State<'_, AppState>,
+    id: String,
+    provider: String,
+    model: String,
+) -> Result<Vec<acp::ConfigOption>, CommandError> {
+    let entry = state.ai.get(&id).await?;
+    let active = entry
+        .builtin
+        .as_ref()
+        .ok_or_else(|| CommandError::new("ai.model", "not an interactive assistant"))?;
+    let mut prefs = state.vault.preferences()?;
+    let target = prefs
+        .ai
+        .providers
+        .iter_mut()
+        .find(|p| p.id == provider)
+        .ok_or_else(|| CommandError::new("ai.model", "unknown provider"))?;
+    select_model(target, &model)?;
+    let target = target.clone();
+    let key = state
+        .vault
+        .ai_key(&format!("builtin:{provider}"))?
+        .unwrap_or_default();
+    let client = Client::new(
+        endpoint(&target),
+        &key,
+        Duration::from_secs(prefs.ai.request_timeout_secs.into()),
+    )
+    .map_err(|e| CommandError::new("ai.model", e.to_string()))?
+    .with_cache_key(&id);
+    let reviewer = reviewer_for(&state, &prefs, &AgentRef::Builtin(provider.clone()));
+    let mut assistant = active
+        .assistant
+        .try_write()
+        .map_err(|_| backend_error(BackendError::Busy))?;
+    let mut selected = active.provider.write().unwrap_or_else(|e| e.into_inner());
+    let models = std::iter::once(model.clone())
+        .chain(target.models.iter().cloned())
+        .collect();
+    assistant.retarget(
+        client,
+        models,
+        target.contexts.clone(),
+        target.context_window,
+        selected.id != provider,
+    );
+    active.session.set_reviewer(reviewer);
+    let mut info = active.info.lock().unwrap_or_else(|e| e.into_inner());
+    info.agent_ref = Some(format!("builtin:{provider}"));
+    info.agent = Some(target.name.clone());
+    info.agent_version = Some(model);
+    entry.auditor.model_changed(&info);
+    *selected = target;
+    Ok(assistant.config_options())
+}
+
 /// Sets setting `option` of session `id` (such as `model`) to `value`; returns the settings as
 /// they now are.
 #[tauri::command]
@@ -1808,10 +1986,19 @@ pub async fn ai_set_option(
     if option.is_empty() || option.len() > 100 || value.is_empty() || value.len() > 500 {
         return Err(CommandError::new("input.invalid", "not a setting"));
     }
-    let options = state
-        .ai
-        .get(&id)
-        .await?
+    let entry = state.ai.get(&id).await?;
+    if option == "model"
+        && let Some(active) = &entry.builtin
+    {
+        let provider = active
+            .provider
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .id
+            .clone();
+        return ai_select_model(state, id, provider, value).await;
+    }
+    let options = entry
         .backend
         .set_config_option(&option, &value)
         .await

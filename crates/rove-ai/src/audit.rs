@@ -355,6 +355,16 @@ impl Auditor {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(info.clone());
     }
 
+    pub fn model_changed(&self, info: &SessionInfo) {
+        self.started(info);
+        if self.written.load(std::sync::atomic::Ordering::SeqCst) {
+            self.write(
+                "ai/model_changed",
+                json!({"provider":info.agent, "model":info.agent_version}),
+            );
+        }
+    }
+
     pub fn prompt(&self, text: &str) {
         self.flush();
         let (kept, clipped) = clip(text);

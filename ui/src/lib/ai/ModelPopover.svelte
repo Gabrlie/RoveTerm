@@ -138,8 +138,11 @@
           <span>{t('ai.model')}</span>
         </div>
         <div class="models" role="listbox" aria-label={t('ai.model')}>
-          {#each model.choices as choice (choice.value)}
+          {#each model.choices as choice, index (choice.value)}
             {@const current = choice.value === value(model)}
+            {#if choice.group && choice.group !== model.choices[index - 1]?.group}
+              <div class="list-head">{choice.group}</div>
+            {/if}
             <button type="button" role="option" aria-selected={current} class="choice" class:current onclick={() => pickModel(choice.value)}>
               <span class="choice-name">{label(model, choice)}{#if current}<Icon name="check" size={12} />{/if}</span>
               {#if choice.description}<span class="choice-detail">{choice.description}</span>{/if}

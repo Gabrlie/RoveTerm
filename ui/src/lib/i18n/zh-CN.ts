@@ -527,6 +527,7 @@ export const zhCN: Messages = {
   'ai.readOnlyHint': '每行一个程序名，这些程序不会改动任何东西',
   'ai.dangerousRules': '始终视为危险',
   'ai.dangerousHint': '命令中包含任意一行文字即视为危险（例如生产环境的主机名）',
+  'ai.audit.model_changed': '模型切换',
   'ai.remoteExitUnknown': '无法确认远端命令已停止',
   'error.schedule.claim_storage': '本机目录副本无法跨设备认领。请在选定设备上新建任务，或通过同一 WebDAV 空间或共享网络目录认领。',
   'error.schedule.claimed': '此任务已由其他设备认领',

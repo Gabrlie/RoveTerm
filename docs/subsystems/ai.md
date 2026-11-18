@@ -136,7 +136,7 @@ ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次
 
 会话设置与继续对话：
 
-- 会话设置采用 ACP 的 session config options（`configOptions`、`session/set_config_option`、`config_option_update` 通知），保留单选项（分组的选项展平）与开关项（`type: "boolean"`，如 Claude Code 的快速模式，设置时传布尔值）；类别为 `mode` 的项不交给界面，审批由 RoveTerm 的模式管理。只在较旧的 `models` 字段（`availableModels`、`currentModelId`）报告模型的智能体，合成一个 `model` 设置，改用 `session/set_model`。智能体对修改不回报设置列表时，按已接受的值更新。Codex 以此提供模型与推理强度。内置助手提供 `model`（服务商的默认模型加 `models`）与 `effort`（minimal、low、medium、high、xhigh、max，未设置时为 medium）两个设置，对话中修改从下一次请求起生效，历史保留。
+- 会话设置采用 ACP 的 session config options（`configOptions`、`session/set_config_option`、`config_option_update` 通知），保留单选项（分组的选项展平）与开关项（`type: "boolean"`，如 Claude Code 的快速模式，设置时传布尔值）；类别为 `mode` 的项不交给界面，审批由 RoveTerm 的模式管理。只在较旧的 `models` 字段（`availableModels`、`currentModelId`）报告模型的智能体，合成一个 `model` 设置，改用 `session/set_model`。智能体对修改不回报设置列表时，按已接受的值更新。Codex 以此提供模型与推理强度。内置助手和总管按服务商分组显示模型。空闲时切换会保留消息、工具结果与会话 ID；下一轮、新委派的助手及选择“对话所用的模型”的审阅器使用新选择。重新打开历史时恢复最后选择的模型。
 - 只启动 Agent、没有发过消息的会话不留记录：`Auditor::started` 暂存开始信息，随第一条记录（通常是第一条提示）写入，什么都没记录过的会话结束时也不写结束记录。
 - `ai/session_started` 记录 `SessionInfo`：Agent 名称与版本、审批模式、`agent_ref`、主机上下文、Agent 自己的会话 id、是否为继续。会话的第一条提示写一条自动的 `ai/renamed`（第一行，最多 60 个字符），用户改名再写一条，最新的为准；继续时已有标题则不再自动命名。
 - 继续 ACP 会话：Agent 声明 `loadSession` 能力时用 `session/load` 重开它自己的会话，期间 Agent 回放的旧对话不再上报（界面从 Journal 还原）；重开失败则开新会话。继续内置助手：用 `audit::transcript` 从记录还原提示与回复（执行过的操作以一行说明附在回复中，不含工具输出）作为历史。

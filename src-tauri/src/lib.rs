@@ -258,6 +258,7 @@ pub fn run() {
             commands::ai::ai_records,
             commands::ai::ai_rename,
             commands::ai::ai_set_option,
+            commands::ai::ai_select_model,
             commands::ai::ai_quota,
             commands::ai::ai_provider_models,
             commands::ai::ai_delete,

@@ -235,6 +235,28 @@ impl Assistant {
         }
     }
 
+    /// Changes the provider between turns. Tool results remain in the shared message format.
+    pub fn retarget(
+        &mut self,
+        client: Client,
+        models: Vec<String>,
+        contexts: std::collections::BTreeMap<String, u64>,
+        context_window: Option<u64>,
+        provider_changed: bool,
+    ) {
+        if provider_changed {
+            for message in self.history.get_mut() {
+                if let Message::Assistant { opaque, .. } = message {
+                    *opaque = None;
+                }
+            }
+        }
+        self.client = std::sync::RwLock::new(client);
+        self.models = models;
+        self.contexts = contexts;
+        self.context_window = context_window;
+    }
+
     fn model(&self) -> String {
         self.client
             .read()

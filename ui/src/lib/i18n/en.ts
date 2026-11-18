@@ -525,6 +525,7 @@ export const en = {
   'ai.readOnlyHint': 'Program names, one per line, that never change anything',
   'ai.dangerousRules': 'Always dangerous',
   'ai.dangerousHint': 'Any command containing one of these lines is dangerous (for example a production host name)',
+  'ai.audit.model_changed': 'Model changed',
   'ai.remoteExitUnknown': 'Could not confirm that the remote command stopped',
   'error.schedule.claim_storage': 'Local directory replicas cannot coordinate assignment. Recreate the task on the chosen device, or claim it using a shared WebDAV space or network folder.',
   'error.schedule.claimed': 'Another device has claimed this task',

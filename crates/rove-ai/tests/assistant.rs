@@ -236,3 +236,47 @@ async fn cancelling_stops_the_turn_and_keeps_the_conversation_valid() {
     assert_eq!(tool["tool_call_id"], "c1");
     assert_eq!(messages.last().unwrap()["content"], "never mind");
 }
+
+#[tokio::test]
+async fn switching_between_providers_with_the_same_model_keeps_tool_history() {
+    let (first, first_seen) = model(vec![
+        call("c1", "run_command", json!({"command":"echo first-result"})),
+        say("first reply"),
+    ])
+    .await;
+    let (next, next_seen) = model(vec![say("second reply")]).await;
+    let (mut assistant, _events) = assistant(&first, Answer::AllowOnce);
+    assistant.prompt("first question").await.unwrap();
+    let client = Client::new(
+        Endpoint {
+            format: Format::Chat,
+            base_url: next,
+            model: "m".into(),
+            effort: None,
+            max_tokens: None,
+        },
+        "other",
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    Arc::get_mut(&mut assistant).unwrap().retarget(
+        client,
+        vec!["m".into()],
+        Default::default(),
+        None,
+        true,
+    );
+    assistant.prompt("second question").await.unwrap();
+    assert_eq!(first_seen.lock().unwrap().len(), 2);
+    let seen = next_seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    let messages = seen[0]["messages"].to_string();
+    for text in [
+        "first question",
+        "first-result",
+        "first reply",
+        "second question",
+    ] {
+        assert!(messages.contains(text));
+    }
+}

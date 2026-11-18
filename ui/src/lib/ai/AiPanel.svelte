@@ -159,14 +159,16 @@
   /** The agent's settings: as it reports them, or, before the built-in assistant starts, its
    *  provider's models. */
   const settings = $derived.by((): ConfigOption[] => {
-    if (chat.options.length > 0) return chat.options;
-    if (!agentRef?.startsWith('builtin:')) return [];
+    if (!agentRef?.startsWith('builtin:')) return chat.options;
     const provider = prefs.value.ai.providers.find((entry) => `builtin:${entry.id}` === agentRef);
     if (!provider) return [];
-    const models = [provider.model, ...provider.models];
+    const modelChoices = prefs.value.ai.providers.flatMap((p) => [p.model, ...p.models].map((name) => ({
+      value: JSON.stringify([p.id, name]), name, description: null, group: p.name
+    })));
+    const current = chat.options.find((entry) => entry.id === 'model')?.current ?? chat.selectedModel ?? provider.model;
     return [
-      { id: 'model', name: t('ai.model'), category: 'model', kind: 'select', current: provider.model, choices: models.map((model) => ({ value: model, name: model, description: null })) },
-      { id: 'effort', name: t('ai.effort'), category: 'thought_level', kind: 'select', current: provider.effort, choices: EFFORT_LEVELS.map((level) => ({ value: level, name: level, description: null })) },
+      { id: 'model', name: t('ai.model'), category: 'model', kind: 'select', current: JSON.stringify([provider.id, current]), choices: modelChoices },
+      { id: 'effort', name: t('ai.effort'), category: 'thought_level', kind: 'select', current: chat.options.find((entry) => entry.id === 'effort')?.current ?? provider.effort, choices: EFFORT_LEVELS.map((level) => ({ value: level, name: level, description: null })) },
     ];
   });
   const split = $derived(splitOptions(settings));
@@ -257,7 +259,10 @@
 
   function chooseAgent(choice: AgentChoice): void {
     pickerOpen = false;
-    void ai.switchAgent(chat, choice.agent);
+    if (agentRef?.startsWith('builtin:') && choice.kind === 'builtin') {
+      const provider = prefs.value.ai.providers.find((p) => `builtin:${p.id}` === choice.agent);
+      if (provider && choice.agent !== agentRef) void chat.selectModel(provider.id, provider.model);
+    } else void ai.switchAgent(chat, choice.agent);
   }
 
   function verbIcon(operation: AiOperation): IconName {
@@ -662,9 +667,14 @@
           title={optionName}
           value={(option) => chat.optionValue(option)}
           label={entryName}
-          onset={(option, value) => void chat.setOption(option, value)}
+          onset={(option, value) => {
+            if (option === 'model' && agentRef?.startsWith('builtin:')) {
+              const [provider, model] = JSON.parse(value) as [string, string];
+              void chat.selectModel(provider, model);
+            } else void chat.setOption(option, value);
+          }}
           onopen={prepareAgent}
-          busy={chat.starting}
+          busy={chat.starting || chat.busy}
         />
         <div class="picker spread" bind:this={modePicker}>
           <button type="button" class="pick icon" onclick={() => (modeOpen = !modeOpen)} aria-expanded={modeOpen} title={`${t('ai.mode')}: ${t(`ai.mode.${chat.mode}`)}`} aria-label={`${t('ai.mode')}: ${t(`ai.mode.${chat.mode}`)}`}>
