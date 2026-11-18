@@ -8,7 +8,7 @@ use rusqlite::{Connection, params_from_iter, types::Value};
 use crate::{JournalError, JournalQuery, JournalRecord, JournalStore, NewRecord};
 
 /// Version of the on-disk schema, stored in `PRAGMA user_version`. Only ever increases.
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
 
 const DEFAULT_LIMIT: u32 = 1000;
 
@@ -52,6 +52,13 @@ impl SqliteJournal {
                  PRAGMA user_version = 1;
                  COMMIT;",
             )?;
+        }
+        if version < 2 {
+            conn.execute_batch("BEGIN;
+                CREATE TABLE audit_bodies(session TEXT NOT NULL, reference TEXT NOT NULL, sealed BLOB NOT NULL, PRIMARY KEY(session,reference));
+                CREATE TABLE sync_receipts(space TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE UNIQUE INDEX schedule_due ON events(json_extract(payload,'$.schedule'),json_extract(payload,'$.due')) WHERE kind='ai/schedule_claim';
+                PRAGMA user_version = 2; COMMIT;")?;
         }
         Ok(Self {
             conn: Mutex::new(conn),

@@ -34,9 +34,11 @@ pub trait JournalStore: Send + Sync {
 
 新增需要持久化的事实时，定义新的 `kind`，并在 `Recorder` 或所属插件中追加记录。
 
+SQLite 结构版本 2 在保留既有事件的同时增加本机审计正文表、同步回执表和定时任务到期时间唯一索引。
+
 ## 写入路径
 
-`Recorder` 订阅 Live 事件，把记录放进队列，由 `journal-writer` 线程依次追加。`flush()` 阻塞到此前排队的记录全部写入，删除会话前用它保证仍在队列中的记录也一并删除。表结构为单表 `events`，并对 `(session_id, seq)` 建了索引。
+`Recorder` 订阅 Live 事件，把记录放进队列，由 `journal-writer` 线程依次追加。`flush()` 阻塞到此前排队的记录全部写入，删除会话前用它保证仍在队列中的记录也一并删除。事件表为 `events`，并对 `(session_id, seq)` 建了索引。
 
 ## 工作区快照
 

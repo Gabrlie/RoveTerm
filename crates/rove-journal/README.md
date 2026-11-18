@@ -8,7 +8,7 @@
 - `delete_session(session_id, kind_prefix)` 移除某会话中指定前缀类型的记录（用普通前缀比较，不受 `LIKE` 通配符影响）。
 - `Recorder` 在专用写线程上追加记录，事件监听器不会等待磁盘 I/O；`flush()` 等到此前排队的记录写完。写线程在全部 `Recorder` 克隆和订阅都被 drop、队列清空后结束。
 - 追加失败时记录错误日志，不会让发出事件的一方失败。
-- 结构版本记录在 `PRAGMA user_version`，只增不减；打开更新版本写入的数据库时返回 `FutureSchema`。
+- 版本 2 的表和索引在同一事务内创建。结构版本记录在 `PRAGMA user_version`，只增不减；打开更新版本写入的数据库时返回 `FutureSchema`。
 
 ## 配置（`[plugin.journal]`）
 
