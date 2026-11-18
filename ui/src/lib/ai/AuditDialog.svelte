@@ -1,6 +1,5 @@
 <script lang="ts">
   // The audit trail of AI sessions: what each agent was asked, what it was allowed, what ran.
-  import { onMount } from 'svelte';
   import Dialog from '../ui/Dialog.svelte';
   import { errorText, t, type MessageKey } from '../i18n';
   import { aiRecords, aiRename, aiSessions, type AiRecord, type AiSessionSummary } from '../ipc';
@@ -10,13 +9,14 @@
   import { ask } from '../ui/confirm.svelte';
 
   interface Props {
+    role?: 'fleet' | 'assistant';
     initial?: string | null;
     onclose: () => void;
     /** Continues a conversation in the panel. */
     onresume?: (summary: AiSessionSummary, records: AiRecord[]) => void;
   }
 
-  let { initial = null, onclose, onresume }: Props = $props();
+  let { initial = null, role, onclose, onresume }: Props = $props();
   let records = $state<AiRecord[]>([]);
   /** The title being typed for the selected conversation. */
   let renaming = $state<string | null>(null);
@@ -38,12 +38,16 @@
   let selected = $state<string | null>(initial);
   let lines = $state<{ ts: number; line: AuditLine }[]>([]);
   let error = $state('');
-  const current = $derived(sessions.find((session) => session.id === selected) ?? null);
+  const parent = $derived(sessions.find((s) => s.id === selected || s.children.some((c) => c.id === selected)) ?? null);
+  const current = $derived(parent?.children.find((s) => s.id === selected) ?? parent);
 
   async function load(id: string): Promise<void> {
     selected = id;
+    records = [];
+    lines = [];
     try {
       const loaded = await aiRecords(id);
+      if (selected !== id) return;
       records = loaded;
       lines = loaded.flatMap((record) => {
         const line = auditLine(record);
@@ -68,6 +72,7 @@
       error = errorText(caught);
       return;
     }
+    for (const entry of sessions) entry.children = entry.children.filter((child) => child.id !== session.id);
     const at = sessions.findIndex((entry) => entry.id === session.id);
     sessions = sessions.filter((entry) => entry.id !== session.id);
     records = [];
@@ -95,25 +100,41 @@
     return text === key ? kind : text;
   }
 
-  onMount(() => {
-    aiSessions()
-      .then((found) => {
-        sessions = found;
-        const first = selected ?? found[0]?.id;
-        if (first) void load(first);
-      })
-      .catch((caught: unknown) => (error = errorText(caught)));
+  // svelte-ignore state_referenced_locally
+  let filter = $state<'fleet' | 'assistant' | 'all'>(role ?? 'all');
+  $effect(() => {
+    let active = true;
+    aiSessions(filter === 'all' ? null : filter).then((found) => {
+      if (!active) return;
+      sessions = found;
+      const first = found.find((entry) => entry.id === initial)?.id ?? found[0]?.id;
+      if (first) void load(first);
+      else { selected = null; records = []; lines = []; }
+    }).catch((caught: unknown) => { if (active) error = errorText(caught); });
+    return () => { active = false; };
   });
 </script>
 
 <Dialog title={t('ai.history')} {onclose} width={820}>
   <div class="audit">
     <nav aria-label={t('ai.history')}>
+      <select bind:value={filter} aria-label={t('ai.history')}>
+        <option value="all">{t('ai.role.all')}</option>
+        <option value="fleet">{t('ai.role.fleet')}</option>
+        <option value="assistant">{t('ai.role.assistant')}</option>
+      </select>
       {#each sessions as session (session.id)}
         <button type="button" class:active={session.id === selected} onclick={() => void load(session.id)}>
           <span class="host">{session.title ?? session.host ?? '–'}</span>
-          <small>{session.title && session.host ? `${session.host} · ` : ''}{time(session.started)}{session.agent ? ` · ${session.agent}` : ''}</small>
+          <small>{t(`ai.role.${session.role}`)} · {session.title && session.host ? `${session.host} · ` : ''}{time(session.started)}{session.agent ? ` · ${session.agent}` : ''}</small>
         </button>
+        {#if parent?.id === session.id}
+          {#each session.children as child (child.id)}
+            <button type="button" class="child" class:active={child.id === selected} onclick={() => void load(child.id)}>
+              <span>{child.title ?? child.host}</span><small>{t('ai.role.assistant')} · {child.host}</small>
+            </button>
+          {/each}
+        {/if}
       {:else}
         <p class="empty">{t('ai.historyEmpty')}</p>
       {/each}
@@ -125,13 +146,14 @@
             <!-- svelte-ignore a11y_autofocus -->
             <input class="field" bind:value={renaming} autofocus maxlength="120" aria-label={t('ai.rename')} onkeydown={(event) => (event.key === 'Enter' ? void rename() : event.key === 'Escape' ? (renaming = null) : undefined)} onblur={() => void rename()} />
           {:else}
+            <span>{t(`ai.role.${current.role}`)}{current.role === 'assistant' && current.host ? ` · ${current.host}` : ''}</span>
             <span class="head-title">{current.title ?? current.host ?? '–'}</span>
             <IconButton icon="edit" small label={t('ai.rename')} onclick={() => (renaming = current?.title ?? '')} />
           {/if}
           <span class="spacer"></span>
           <IconButton icon="remove" small label={t('ai.delete')} onclick={() => void remove()} />
-          {#if onresume}
-            <button type="button" class="secondary" disabled={!current.agent_ref || !current.context} title={current.agent_ref ? '' : t('ai.resumeUnavailable')} onclick={() => current && onresume?.(current, records)}>{t('ai.resume')}</button>
+          {#if onresume && current === parent}
+            <button type="button" class="secondary" disabled={!current.agent_ref || !current.context || !records.length} title={current.agent_ref ? '' : t('ai.resumeUnavailable')} onclick={() => current && onresume?.(current, records)}>{t('ai.resume')}</button>
           {/if}
         </div>
       {/if}
@@ -187,6 +209,7 @@
     font: inherit;
     text-align: left;
   }
+  nav button.child { margin-inline-start: var(--space-3); }
   nav button:hover:not(.active) {
     background: var(--fill-hover);
   }

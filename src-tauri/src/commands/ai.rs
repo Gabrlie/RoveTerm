@@ -1712,6 +1712,8 @@ pub(crate) fn deleted_conversations(
 /// A past AI session, from the journal.
 #[derive(Debug, Serialize)]
 pub struct AiSessionSummary {
+    pub role: &'static str,
+    pub children: Vec<AiSessionSummary>,
     pub model: Option<String>,
     pub id: String,
     /// The latest start, Unix milliseconds.
@@ -1797,9 +1799,20 @@ async fn newest(
 #[tauri::command]
 pub async fn ai_sessions(
     state: State<'_, AppState>,
+    role: Option<String>,
 ) -> Result<Vec<AiSessionSummary>, CommandError> {
-    let starts = newest(state.inner(), audit::KIND_STARTED, MAX_SESSIONS * 4).await?;
-    let names = newest(state.inner(), audit::KIND_RENAMED, MAX_SESSIONS * 20).await?;
+    let starts = newest(state.inner(), audit::KIND_STARTED, u32::MAX).await?;
+    let names = newest(state.inner(), audit::KIND_RENAMED, u32::MAX).await?;
+    Ok(history_summaries(starts, names, role.as_deref()))
+}
+
+fn history_summaries(
+    mut starts: Vec<rove_journal::JournalRecord>,
+    mut names: Vec<rove_journal::JournalRecord>,
+    role: Option<&str>,
+) -> Vec<AiSessionSummary> {
+    starts.sort_by_key(|row| std::cmp::Reverse((row.ts, row.seq)));
+    names.sort_by_key(|row| std::cmp::Reverse((row.ts, row.seq)));
     let mut titles: HashMap<String, String> = HashMap::new();
     for record in names {
         let (Some(id), Some(title)) = (
@@ -1812,18 +1825,11 @@ pub async fn ai_sessions(
         titles.entry(id).or_insert_with(|| title.to_owned());
     }
     let mut seen = std::collections::HashSet::new();
-    Ok(starts
+    let mut children: HashMap<String, Vec<AiSessionSummary>> = HashMap::new();
+    let mut sessions: Vec<_> = starts
         .into_iter()
         .filter_map(|record| {
             let id = record.session_id?;
-            // Sub-agents show inside their lead's conversation.
-            if record
-                .payload
-                .get("parent")
-                .is_some_and(|parent| !parent.is_null())
-            {
-                return None;
-            }
             if !seen.insert(id.clone()) {
                 return None;
             }
@@ -1834,7 +1840,18 @@ pub async fn ai_sessions(
                     .and_then(|value| value.as_str())
                     .map(str::to_owned)
             };
-            Some(AiSessionSummary {
+            let kind = match record
+                .payload
+                .pointer("/context/kind")
+                .and_then(|v| v.as_str())
+            {
+                Some("fleet") => "fleet",
+                Some("host" | "local" | "quick") => "assistant",
+                _ => "unknown",
+            };
+            let summary = AiSessionSummary {
+                children: Vec::new(),
+                role: kind,
                 model: text("agent_version"),
                 title: titles.remove(&id),
                 started: record.ts,
@@ -1847,15 +1864,19 @@ pub async fn ai_sessions(
                     .filter(|value| !value.is_null())
                     .cloned(),
                 id,
-            })
+            };
+            if let Some(parent) = record.payload["parent"].as_str() {
+                children.entry(parent.to_owned()).or_default().push(summary);
+                return None;
+            }
+            role.is_none_or(|r| r == kind).then_some(summary)
         })
-        .collect::<Vec<_>>())
-    .map(|mut sessions| {
-        // Synced conversations are appended late but keep their own time.
-        sessions.sort_by_key(|session| std::cmp::Reverse(session.started));
-        sessions.truncate(MAX_SESSIONS as usize);
-        sessions
-    })
+        .collect();
+    sessions.truncate(MAX_SESSIONS as usize);
+    for session in &mut sessions {
+        session.children = children.remove(&session.id).unwrap_or_default();
+    }
+    sessions
 }
 
 /// The audit records of AI session `id`, oldest first.
@@ -2140,4 +2161,45 @@ async fn claude_usage(
     }
     let text = report.lock().map(|text| text.clone()).unwrap_or_default();
     Ok(rove_ai::quota::claude_limits(&text))
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+    use rove_journal::JournalRecord;
+    use serde_json::json;
+
+    #[test]
+    fn roles_are_filtered_before_limit_and_children_follow_parent() {
+        let start = |id: &str, ts: i64, kind: Option<&str>, parent: Option<&str>, model: &str| {
+            JournalRecord {
+                seq: ts,
+                ts,
+                kind: audit::KIND_STARTED.into(),
+                session_id: Some(id.into()),
+                payload: json!({"context":kind.map(|kind|json!({"kind":kind})), "parent":parent, "agent_version":model,"agent_ref":"builtin:b"}),
+            }
+        };
+        let mut rows: Vec<_> = (0..120)
+            .map(|i| start(&format!("ai-{i}"), 10 + i, Some("local"), None, "a"))
+            .collect();
+        rows.extend([
+            start("ai-old", 0, None, None, ""),
+            start("ai-fleet", 1, Some("fleet"), None, "before"),
+            start("ai-fleet", 2, Some("fleet"), None, "after"),
+            start("ai-child", 3, Some("host"), Some("ai-fleet"), "after"),
+        ]);
+        let fleet = history_summaries(rows.clone(), vec![], Some("fleet"));
+        assert_eq!(fleet.len(), 1);
+        assert_eq!(fleet[0].model.as_deref(), Some("after"));
+        assert_eq!(fleet[0].children[0].id, "ai-child");
+        assert_eq!(
+            history_summaries(rows.clone(), vec![], Some("assistant")).len(),
+            100
+        );
+        assert_eq!(
+            history_summaries(rows, vec![], Some("unknown"))[0].id,
+            "ai-old"
+        );
+    }
 }

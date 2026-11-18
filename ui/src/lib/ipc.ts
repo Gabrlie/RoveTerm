@@ -1230,7 +1230,10 @@ export function onAiUpdate(handler: (id: string, event: AiEvent) => void): Promi
 }
 
 /** A past AI session. */
+export type HistoryRole = 'fleet' | 'assistant' | 'unknown';
 export interface AiSessionSummary {
+  role: HistoryRole;
+  children: AiSessionSummary[];
   model: string | null;
   id: string;
   /** Unix milliseconds. */
@@ -1252,8 +1255,8 @@ export interface AiRecord {
 }
 
 /** Recent AI sessions, newest first. */
-export function aiSessions(): Promise<AiSessionSummary[]> {
-  return invoke('ai_sessions');
+export function aiSessions(role: HistoryRole | null = null): Promise<AiSessionSummary[]> {
+  return invoke('ai_sessions', { role });
 }
 
 /** The audit records of AI session `id`, oldest first. */

@@ -707,7 +707,7 @@
 </div>
 
 {#if historyOpen}
-  <AuditDialog initial={chat.id ?? chat.resumeId} onclose={() => (historyOpen = false)} onresume={(summary, records) => void resume(summary, records)} />
+  <AuditDialog role={fleet ? 'fleet' : 'assistant'} initial={chat.id ?? chat.resumeId} onclose={() => (historyOpen = false)} onresume={(summary, records) => void resume(summary, records)} />
 {/if}
 
 <style>
