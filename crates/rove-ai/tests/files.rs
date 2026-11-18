@@ -91,3 +91,16 @@ async fn a_whole_write_does_not_overwrite_a_change_made_meanwhile() {
     assert_eq!(session.write_file(&name, "c\n").await, Ok(()));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "c\n");
 }
+
+#[tokio::test]
+async fn an_incomplete_or_unreadable_snapshot_cannot_authorize_a_whole_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let large = "a".repeat(rove_ai::host::Limits::default().file + 1);
+    let (path, name) = file(&dir, &large);
+    let session = session(|| {});
+    assert!(session.write_file(&name, "replacement").await.is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), large);
+    std::fs::write(&path, [0u8, 42]).unwrap();
+    assert!(session.write_file(&name, "replacement").await.is_err());
+    assert_eq!(std::fs::read(path).unwrap(), [0, 42]);
+}

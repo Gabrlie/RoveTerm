@@ -774,15 +774,25 @@ impl AiSession {
         }
     }
 
+    async fn write_snapshot(&self, path: &str) -> Result<Option<host::FileText>, ClientError> {
+        match host::read_text(self.host.as_ref(), path, &self.limits).await {
+            Ok(text) if !text.truncated => Ok(Some(text)),
+            Ok(_) => Err(failure(HostError::TooLarge(
+                path.to_owned(),
+                self.limits.file,
+            ))),
+            Err(HostError::Fs(rove_fs::FsError::NotFound(_))) => Ok(None),
+            Err(error) => Err(failure(error)),
+        }
+    }
+
     /// Writes a text file on the host after the policy allows it.
     pub async fn write_file(&self, path: &str, content: &str) -> Result<(), ClientError> {
         let operation = Operation::WriteFile {
             path: path.to_owned(),
         };
         // The contents the approval is about (none when the file does not exist yet).
-        let previous = host::read_text(self.host.as_ref(), path, &self.limits)
-            .await
-            .ok();
+        let previous = self.write_snapshot(path).await?;
         let assessment = self.assess(&operation).await;
         let (allowed, approved) = self.authorize(&operation, &assessment, false).await;
         if !allowed {
@@ -792,9 +802,7 @@ impl AiSession {
             ));
         }
         // Changed by someone else while the approval waited: their change is not overwritten.
-        let now = host::read_text(self.host.as_ref(), path, &self.limits)
-            .await
-            .ok();
+        let now = self.write_snapshot(path).await?;
         if now.as_ref().map(|text| &text.content) != previous.as_ref().map(|text| &text.content) {
             self.report(
                 operation,

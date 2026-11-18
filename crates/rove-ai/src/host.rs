@@ -119,8 +119,13 @@ pub async fn read_text(
     if bytes.iter().take(8192).any(|byte| *byte == 0) {
         return Err(HostError::Binary(path.to_owned()));
     }
-    // A cut in the middle of a character loses only that character.
-    let content = String::from_utf8_lossy(&bytes).into_owned();
+    let content = match std::str::from_utf8(&bytes) {
+        Ok(text) => text.to_owned(),
+        Err(error) if truncated && error.error_len().is_none() => {
+            String::from_utf8_lossy(&bytes[..error.valid_up_to()]).into_owned()
+        }
+        Err(_) => return Err(HostError::Binary(path.to_owned())),
+    };
     Ok(FileText { content, truncated })
 }
 
