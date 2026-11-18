@@ -980,6 +980,12 @@ fn assess_segment(
     let mut assessment = Assessment::new();
     for redirect in &segment.redirects {
         if !redirect.writes {
+            if is_secret_path(&redirect.target.text) {
+                assessment.raise(Risk::Modify, "read_secret", redirect.target.text.clone());
+            } else if redirect.target.dynamic {
+                assessment.opaque = true;
+                assessment.raise(Risk::Modify, "script", redirect.target.text.clone());
+            }
             continue;
         }
         let target = &redirect.target;
@@ -1043,12 +1049,11 @@ fn assess_segment(
                 .filter(|_| arg.text.starts_with('-'))
                 .map_or(arg.text.as_str(), |(_, value)| value)
         });
-        let read = segment
-            .redirects
-            .iter()
-            .filter(|redirect| !redirect.writes)
-            .map(|redirect| redirect.target.text.as_str());
-        if let Some(path) = named.chain(read).find(|path| is_secret_path(path)) {
+        if args.iter().any(|arg| arg.dynamic) {
+            assessment.opaque = true;
+            assessment.raise(Risk::Modify, "script", name.clone());
+        }
+        if let Some(path) = named.into_iter().find(|path| is_secret_path(path)) {
             assessment.raise(Risk::Modify, "read_secret", path.to_owned());
         }
     }

@@ -342,6 +342,7 @@ impl AiSession {
         agent_tool: bool,
     ) -> Result<(), Option<ReviewNote>> {
         if agent_tool
+            || assessment.reasons.iter().any(|r| r.code == "read_secret")
             || !matches!(
                 self.policy.lock().await.mode(),
                 Mode::Auto | Mode::Unattended

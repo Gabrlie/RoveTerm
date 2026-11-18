@@ -146,7 +146,9 @@ impl Operation {
             | Self::AgentTool {
                 command: Some(_), ..
             } => {
-                if assessment.programs.is_empty() {
+                if assessment.programs.is_empty()
+                    || assessment.reasons.iter().any(|r| r.code == "read_secret")
+                {
                     return None;
                 }
                 Some(
@@ -443,5 +445,17 @@ mod tests {
         assert_eq!(decide(&policy, &hidden), ASK_ONCE);
         let unknown: ToolKind = serde_json::from_str("\"something_new\"").unwrap();
         assert_eq!(unknown, ToolKind::Other);
+    }
+    #[test]
+    fn sensitive_shell_reads_do_not_inherit_program_grants() {
+        let mut policy = Policy::new(Mode::AskByRisk, Rules::default());
+        for line in ["cat ~/.ssh/id_rsa", "cat ~/.ssh/id_ed25519"] {
+            let op = Operation::Command {
+                command: line.into(),
+            };
+            let assessed = op.assess(policy.rules());
+            assert_eq!(policy.decide(&op, &assessed), ASK_ONCE);
+            policy.answer(&op, &assessed, Answer::AllowSession);
+        }
     }
 }
