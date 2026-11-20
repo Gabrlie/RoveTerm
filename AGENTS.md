@@ -59,6 +59,12 @@ node scripts/check-docs.mjs      # 文档字数上限与相对链接检查
 - 代码改动后只跑受影响 crate 的测试；纯文档改动不跑测试，只检查文档。
 - 缺少相关测试时补上针对性测试，不用全量测试代替。
 
+## 分支与交付
+
+- **先核对工作区**：修改前确认实际 worktree、Git 分支和已有差异；新分支遵循[项目分支规范](docs/development.md#分支规范)。
+- **开发包含提交**：每个原子任务验证后立即本地提交，再开始下一项；只读或明确要求暂不提交的任务按用户要求处理（[交付流程](docs/development.md#开发交付教程)）。
+- **提交后交付**：完成前核对本任务改动均已提交，报告分支、提交 hash 与验证结果；保留既有差异，阻塞时说明剩余改动（[交付流程](docs/development.md#开发交付教程)）。
+
 ## 提交
 
 - Conventional Commits：`type(scope): subject`，scope 用 crate 或模块名。

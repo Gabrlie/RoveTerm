@@ -40,6 +40,16 @@
 
 `mobile` profile 不启用本地终端；在接入 Android Keystore 之前，凭据库在 Android 上保持锁定，可以使用每次输入密码的方式连接主机。
 
+## 开发交付教程
+
+1. 在本任务的实际 worktree 中运行 `git status --short --branch`，确认目录、分支和已有差异，记录本任务的改动归属。
+2. 按[分支规范](#分支规范)创建或选择任务分支。使用 dsh 的 `enter_worktree` 时显式传入合规的 `name`，如 `feat/text-editor`；若工具已生成临时分支，在首次修改前用 `git branch -m <name>` 更正实际 Git 分支，worktree 目录可保持原名。
+3. 将任务拆为可独立验证、回退的行为单元，完成一个单元所需的代码、测试和文档，并运行受影响部分的检查。验证受阻时说明失败原因和剩余改动。
+4. 只暂存本单元的文件或差异块，审阅 `git diff --cached`，按[提交规范](../AGENTS.md#提交)完成本地提交，再开始下一单元。暂存区含其他任务的改动时，先将本任务放到独立 worktree 处理。
+5. 交付前在同一 worktree 核对 `git status --short --branch` 和本任务的提交记录，确认本任务改动均已提交、开工前已有的其他差异保留，报告分支、提交 hash 和验证结果。
+
+开发请求默认包含上述本地提交流程。只读研究任务没有开发提交；用户明确要求暂不提交时，报告验证结果和保留的改动。
+
 ## 贡献者参考
 
 ### 目录与依赖方向
@@ -50,9 +60,39 @@
 
 应用数据存放在系统的应用数据目录下（Linux 为 `~/.local/share/dev.roveterm.app`）。设置环境变量 `ROVETERM_DATA_DIR` 可以改用其他目录，便于并行运行多个开发实例。用户配置文件是应用配置目录下的 `roveterm.toml`（Linux 为 `~/.config/dev.roveterm.app/roveterm.toml`），可以覆盖任意插件的配置段。开发构建使用独立的钥匙串服务名 `dev.roveterm.app.dev`，不会读写正式版的设备主密钥。在没有系统钥匙串的环境（无头 X 服务器、CI）中，开发构建可以设置 `ROVETERM_DEV_MEMORY_KEYCACHE=1`，改用只存在于内存中的设备主密钥；重启后，之前保存的凭据将无法解密。release 构建忽略该变量。
 
-### 提交
+### 分支规范
+
+分支采用 [Conventional Branch 1.1.0](https://conventionalbranch.org/v1.1.0/spec.json) 的名称语法，项目任务分支使用下表的类型；现有主分支 `main` 保留。
+
+| 前缀 | 用途 | 示例 |
+|---|---|---|
+| `feat/` | 新功能 | `feat/text-editor` |
+| `fix/` | 常规错误修复 | `fix/sftp-save` |
+| `hotfix/` | 紧急修复 | `hotfix/credential-leak` |
+| `release/` | 发布准备 | `release/v0.1.0` |
+| `chore/` | 文档、工具、依赖维护及不改变行为的重构 | `chore/git-workflow` |
+
+任务分支名称为 `<type>/<description>`，只含一个 `/`。描述由小写英文字母或数字组成的片段构成，片段之间使用单个 `-` 或 `.`，首尾为字母或数字；例如 `feat/new--editor`、`fix/save_file`、`release/v0.1.0.` 均不合法。项目允许的前缀以此表为准。
+
+`pnpm check:branch` 检查当前 worktree 的 Git 分支；创建分支前可用 `pnpm check:branch <name>` 检查拟用名称。
+
+### 提交格式
 
 遵循根目录 [AGENTS.md](../AGENTS.md#提交) 的提交规范。
+
+提交消息的 `type` 使用小写标识，`scope` 为小写 crate 或模块标识，可含数字、点、下划线、连字符和斜杠，允许在 `)` 后添加 Conventional Commits 的 `!` 标记。body 存在时与标题空一行，每个非空行以 `- ` 开头并写在一行内。`pnpm check:commit <message-file>` 清除注释并截去 Git 剪切标记及其后的内容，只读校验剩余正文，并拒绝常见的署名 trailers；注释前缀遵循 `core.commentString` 或 `core.commentChar`。
+
+### Git 检查
+
+`pnpm install` 自动安装仓库内的 `.githooks`；已有依赖时可运行 `pnpm hooks:install`。安装器可重复执行，只配置当前仓库的 `core.hooksPath`；发现已有自定义 hooks 配置或有效钩子时报告冲突，保留原配置和钩子。
+
+| 钩子 | 检查 |
+|---|---|
+| `pre-commit` | 当前 worktree 的分支名称、暂存差异中的空白错误 |
+| `commit-msg` | 清理并校验提交消息，通过后写回已验证正文，使实际提交消息与校验结果一致 |
+| `pre-push` | 实际推送的分支引用名称，跳过标签和删除分支操作 |
+
+钩子执行快速 Git 规范检查；受影响模块的测试按[开发交付流程](#开发交付教程)运行。及时提交及提交的行为边界在该流程中核对。Git 检查脚本和安装器的逻辑测试通过 `pnpm test:workflow` 运行。
 
 ### TODO 标记
 

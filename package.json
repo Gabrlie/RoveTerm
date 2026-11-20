@@ -8,6 +8,11 @@
     "node": ">=24"
   },
   "scripts": {
+    "postinstall": "node scripts/install-git-hooks.mjs",
+    "hooks:install": "node scripts/install-git-hooks.mjs",
+    "check:branch": "node scripts/git-workflow.mjs branch",
+    "check:commit": "node scripts/git-workflow.mjs commit-msg",
+    "test:workflow": "node --test scripts/git-workflow.test.mjs",
     "dev:ui": "vite --config ui/vite.config.ts",
     "build:ui": "vite build --config ui/vite.config.ts",
     "check:ui": "svelte-check --workspace ui --tsconfig ./tsconfig.json",
