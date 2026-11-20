@@ -93,6 +93,7 @@
 
 - `SftpFs` 持有一个 channel 租约，和终端一样让连接保持打开；drop 时关闭 SFTP 会话并释放租约。
 - 服务器拒绝子系统时返回 `SshError::Sftp`。
+- `create_new_private` 为[文本编辑](fs.md#文本编辑)提供独占私有暂存文件，创建及权限失败的处理见 [crate 契约](../../crates/rove-ssh/README.md#契约)。
 - 读写使用 `russh-sftp` 的流水线请求（默认各 16 个并发请求），单个请求超时 10 秒。
 - SFTP 状态码映射为 `FsError`：`NoSuchFile` → `NotFound`，`PermissionDenied` → `PermissionDenied`，`OpUnsupported` → `Unsupported`，连接丢失 → `Closed`，其余 → `Io`。
 - `list` 过滤掉服务器返回的 `.` 和 `..`；`label()` 是 `SshTarget::location()`：`user@host:port`，经跳板机或代理时后面再接路线（如 `user@host:22 via admin@bastion:22`），所以不同路线到达的同地址服务器标签不同，传输队列据此区分目标。

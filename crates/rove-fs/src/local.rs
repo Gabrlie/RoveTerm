@@ -150,6 +150,18 @@ impl FileSystem for LocalFs {
         Ok(Box::new(file))
     }
 
+    async fn create_new_private(&self, path: &str) -> Result<FsWriter, FsError> {
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let file = options
+            .open(path)
+            .await
+            .map_err(|error| FsError::from_io(&error, path))?;
+        Ok(Box::new(file))
+    }
+
     fn join(&self, dir: &str, name: &str) -> String {
         Path::new(dir).join(name).to_string_lossy().into_owned()
     }

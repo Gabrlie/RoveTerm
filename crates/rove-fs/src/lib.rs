@@ -5,7 +5,9 @@
 //! between any two file systems. SFTP is provided by `rove-ssh`. See `docs/subsystems/fs.md`.
 
 mod local;
+mod replace;
 mod sessions;
+mod text;
 mod transfer;
 
 use std::sync::Arc;
@@ -17,6 +19,10 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 pub use local::LocalFs;
 pub use sessions::{FsId, FsSessions, FsSummary};
+pub use text::{
+    TEXT_FILE_LIMIT, TextEditError, TextFile, read_text_file, save_text_file, text_version,
+    validate_text,
+};
 pub use transfer::{
     Conflict, TransferConfig, TransferId, TransferQueue, TransferRequest, TransferState,
     TransferUpdate,
@@ -155,6 +161,15 @@ pub trait FileSystem: Send + Sync {
 
     /// Creates or truncates `path` for writing.
     async fn open_write(&self, path: &str) -> Result<FsWriter, FsError>;
+
+    /// Creates a new file for writing without replacing an existing entry, including a symlink.
+    /// On POSIX providers it starts with permissions no broader than `0600`. Callers must shut
+    /// down the returned stream before renaming the file. Unsupported providers fail closed.
+    async fn create_new_private(&self, path: &str) -> Result<FsWriter, FsError> {
+        Err(FsError::Unsupported(format!(
+            "exclusive private file creation: {path}"
+        )))
+    }
 
     /// Joins a directory and a single file name.
     fn join(&self, dir: &str, name: &str) -> String {

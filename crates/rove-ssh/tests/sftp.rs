@@ -6,8 +6,9 @@ use std::time::Duration;
 use common::Harness;
 use devsshd::DevConfig;
 use rove_fs::{
-    Conflict, EntryKind, FileSystem, FsError, LocalFs, TransferConfig, TransferQueue,
-    TransferRequest, TransferState, TransferUpdate, remove_all,
+    Conflict, EntryKind, FileSystem, FsError, LocalFs, TextEditError, TransferConfig,
+    TransferQueue, TransferRequest, TransferState, TransferUpdate, read_text_file, remove_all,
+    save_text_file, text_version,
 };
 
 fn rooted(root: &std::path::Path) -> DevConfig {
@@ -182,4 +183,62 @@ async fn uploads_and_downloads_through_the_transfer_queue() {
         .filter(|name| name.ends_with(".part"))
         .collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[tokio::test]
+async fn edits_utf8_text_with_version_checks_and_private_exclusive_staging() {
+    use tokio::io::AsyncWriteExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("settings.conf");
+    std::fs::write(&path, "\u{feff}old\r\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+    }
+    let harness = Harness::new(rooted(root.path())).await;
+    let connection = harness.connect().await;
+    let sftp = connection.open_sftp().await.unwrap();
+    let remote = sftp.join(&sftp.home().await.unwrap(), "settings.conf");
+    let file = read_text_file(&sftp, &remote).await.unwrap();
+    assert_eq!(file.text, "\u{feff}old\r\n");
+    let text = "\u{feff}中文\r\nnew\n";
+    let version = save_text_file(&sftp, &remote, &file.version, text)
+        .await
+        .unwrap();
+    assert_eq!(version, text_version(text.as_bytes()));
+    assert_eq!(std::fs::read(&path).unwrap(), text.as_bytes());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+    }
+    assert_eq!(
+        save_text_file(&sftp, &remote, &file.version, "stale").await,
+        Err(TextEditError::Conflict)
+    );
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+
+    let staging = sftp.join(&sftp.home().await.unwrap(), "stage");
+    let mut writer = sftp.create_new_private(&staging).await.unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(root.path().join("stage"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+    writer.write_all(b"keep").await.unwrap();
+    writer.shutdown().await.unwrap();
+    assert!(sftp.create_new_private(&staging).await.is_err());
+    assert_eq!(std::fs::read(root.path().join("stage")).unwrap(), b"keep");
 }

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use rove_fs::{DirEntry, EntryKind, FileSystem, FsError, FsReader, FsWriter, Metadata};
 use russh_sftp::client::SftpSession;
 use russh_sftp::client::error::Error as SftpError;
-use russh_sftp::protocol::{FileAttributes, StatusCode};
+use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
 
 use crate::connection::ChannelLease;
 
@@ -163,6 +163,32 @@ impl FileSystem for SftpFs {
             .create(path)
             .await
             .map_err(|error| fs_error(error, path))?;
+        Ok(Box::new(file))
+    }
+
+    async fn create_new_private(&self, path: &str) -> Result<FsWriter, FsError> {
+        let attributes = FileAttributes {
+            permissions: Some(0o600),
+            ..FileAttributes::empty()
+        };
+        let file = self
+            .session
+            .open_with_flags_and_attributes(
+                path,
+                OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE,
+                attributes.clone(),
+            )
+            .await
+            .map_err(|error| fs_error(error, path))?;
+        // Some servers ignore creation attributes. Require the private mode before returning a
+        // writable stream, so no contents are written with broader permissions.
+        if let Err(error) = self.session.set_metadata(path, attributes).await {
+            drop(file);
+            if let Err(cleanup) = self.session.remove_file(path).await {
+                tracing::warn!(%cleanup, path, "removing a private SFTP file failed");
+            }
+            return Err(fs_error(error, path));
+        }
         Ok(Box::new(file))
     }
 }

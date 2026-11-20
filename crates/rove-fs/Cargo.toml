@@ -11,6 +11,7 @@ async-trait.workspace = true
 parking_lot.workspace = true
 rove-kernel = { path = "../rove-kernel" }
 serde.workspace = true
+sha2 = "0.10"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "rt", "sync", "time"] }
 tokio-util.workspace = true

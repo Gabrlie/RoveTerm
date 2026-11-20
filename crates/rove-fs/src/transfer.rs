@@ -632,7 +632,7 @@ impl Runner {
             Err(error) => return Err(error),
         };
         let result = match self.copy(request, src, &temp, keep_mode).await {
-            Ok(()) => Self::replace(fs, &temp, dst, &format!("{temp}.old")).await,
+            Ok(()) => crate::replace::replace_file(fs, &temp, dst, &format!("{temp}.old")).await,
             Err(error) => Err(error),
         };
         if result.is_err()
@@ -642,39 +642,6 @@ impl Runner {
             tracing::debug!(%cleanup, temp, "removing temporary file failed");
         }
         result
-    }
-
-    /// Moves `temp` to `dst` without ever deleting `dst` while it is the only copy. When rename
-    /// refuses an existing target (SFTP version 3), `dst` is first moved aside to `backup`, then
-    /// `temp` takes its place and the backup is removed; if that fails the backup is moved back.
-    async fn replace(
-        fs: &dyn FileSystem,
-        temp: &str,
-        dst: &str,
-        backup: &str,
-    ) -> Result<(), FsError> {
-        let first = match fs.rename(temp, dst).await {
-            Ok(()) => return Ok(()),
-            Err(error) => error,
-        };
-        if !Self::exists(fs, dst).await? {
-            return Err(first);
-        }
-        fs.rename(dst, backup).await?;
-        match fs.rename(temp, dst).await {
-            Ok(()) => {
-                if let Err(error) = fs.remove_file(backup).await {
-                    tracing::warn!(%error, backup, "removing the replaced file failed");
-                }
-                Ok(())
-            }
-            Err(error) => {
-                if let Err(restore) = fs.rename(backup, dst).await {
-                    tracing::error!(%restore, backup, dst, "restoring the original file failed");
-                }
-                Err(error)
-            }
-        }
     }
 
     /// Copies `src` to `dst`. With `mode`, `dst` gets those permissions right after it is created,

@@ -49,3 +49,7 @@ enqueue(TransferRequest) → TransferId，状态 queued
 | `transfer_reveal(id)` | 在系统文件管理器中显示已完成的下载（macOS `open -R`、Windows `explorer /select,` 选中文件；Linux 用 `xdg-open` 打开所在文件夹）；路径取自传输本身，不接受调用方给的路径 |
 
 `TransferUpdate` 以 `transfer-update` 事件转发给 WebView。远程路径必须是绝对 POSIX 路径，本地路径必须是绝对路径，单次最多 1000 个路径；新文件名经 `validate_name` 校验。
+
+## 文本编辑
+
+`TextFile` 携带原始文本与内容版本；`read_text_file` / `save_text_file` 通过 `FileSystem` 完成快照读取和版本校验替换，读取限制与暂存写入规则见 [crate 契约](../../crates/rove-fs/README.md#契约)。

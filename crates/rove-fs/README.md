@@ -9,6 +9,7 @@
 - `set_permissions` 设置 POSIX 权限位；Windows 只能表达只读。
 - `remove_all` 递归删除目录；符号链接（包括指向目录的链接）只删除链接本身，从不进入其目标。
 - `open_write` 创建或截断文件；调用方必须 `shutdown` 写入流，才算写完并关闭文件。
+- `create_new_private` 只创建尚不存在的文件，包括不覆盖符号链接；POSIX Provider 的初始权限不宽于 `0600`。默认实现返回 `Unsupported`，调用方须关闭写入流后再重命名。
 - `FsSessions` 只持有引用：移除一个条目后，正在运行的传输仍然持有它，传输结束后 Provider 才关闭。
 - `TransferQueue` 同时运行的传输数不超过 `max_concurrent`，其余为 `queued`。`set_max_concurrent()` 在运行时修改上限（1–16）：调高时等待中的传输立即开始；调低时不打断正在运行的传输，等它们结束后生效。每个传输把一个文件或目录复制到目标目录下：
   - 先扫描源目录，得到总字节数和总文件数，再按父目录在前的顺序创建目录、复制文件。
@@ -20,6 +21,8 @@
   - 覆盖不会用文件替换目录或用目录替换文件：类型不同时传输失败，原有的目录或文件保持不变。
   - 顶层名称冲突按 `Conflict` 处理：`overwrite` 覆盖文件、合并目录；`rename` 改名为 `name (1).ext`；`skip` 不复制并标记 `skipped`。
 - 每次状态变化都发出 Live 事件 `TransferUpdate`；进度事件同一传输最多每 `progress_interval_ms` 一次。
+- `read_text_file` 只读取不超过 2 MiB 的常规 UTF-8 文件，拒绝 NUL、符号链接和非普通文件；返回原始文本与 SHA-256 版本，保留 BOM 和换行。
+- `save_text_file` 只替换版本仍匹配的常规文件；在同目录独占创建私有暂存文件，完整写入、关闭后再替换。保留 POSIX 权限位，不保证保留原所有者、ACL 或扩展属性。调用方应等待写操作结束；取消 future 可能遗留暂存文件。SFTP 不能原子比较并替换，最后一次版本检查与重命名之间仍存在并发窗口。
 
 ## 配置（`[plugin.fs]`）
 
