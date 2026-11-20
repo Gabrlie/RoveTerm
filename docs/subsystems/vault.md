@@ -91,6 +91,7 @@ pub trait KeyCache: Send + Sync {
 | `DevicePrefs.window_material` | 是 | |
 | `DevicePrefs.download_dir` | 空（系统下载目录） | 去除首尾空白，空或绝对路径，最多 1024 字节 |
 | `DevicePrefs.max_transfers` | 3 | 1–8 |
+| `DevicePrefs.external_editor` | `program`、`args` 均空（禁用） | 只属于本机；见[本机编辑器偏好](#本机编辑器偏好) |
 | `ai.mode` | `ask_by_risk` | `ask_by_risk` / `ask_all` / `auto`，新 AI 会话的默认审批模式 |
 | `ai.max_steps` | 40 | 1–200，内置助手一个回合内最多的模型请求次数 |
 | `ai.request_timeout_secs` | 180 | 30–1800，内置助手等待回复开始及两段之间的最长时间 |
@@ -105,6 +106,11 @@ pub trait KeyCache: Send + Sync {
 
 应用通过 `prefs_get` / `prefs_set` 和 `device_prefs_get` / `device_prefs_set` 命令读写偏好设置，后者同时把 `max_transfers` 应用到传输队列（启动时也会应用）；`fonts_monospace` 用 fontdb 列出本机已安装的等宽字体族（去重、按名称排序），供字体选择使用，移动端返回空列表。
 
+### 本机编辑器偏好
+
+`ExternalEditorPrefs { program, args }` 存在 `DevicePrefs.external_editor` 中，不参与同步。旧记录缺少对象或对象中的字段时用空默认值。`validate()` 去除 `program` 首尾空白，要求非空时为当前平台的绝对本机路径（最多 4096 字节），只检查语法，不查询文件是否存在或可执行。Windows 只接受 `.exe`（不区分大小写）；macOS 的 `.app` 路径只在 `args` 为空时接受，应用通过 `/usr/bin/open -a` 打开它。清空配置须同时清空程序与参数；空程序配非空参数返回 `VaultError::Invalid`。
+
+`args` 最多 32 项，每项最多 4096 字节，总共最多 32768 字节；路径和参数都拒绝控制字符。参数保留空字符串和首尾空格，应用逐项作为 argv 传入，不拼接 shell、不展开 shell 语法；`{file}` 的替换由启动编辑器的应用层完成，Vault 原样保存。
 
 ## 同步
 

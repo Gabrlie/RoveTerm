@@ -505,6 +505,88 @@ impl Default for StatusPrefs {
     }
 }
 
+/// An external editor on this device. Empty `program` and `args` disable it.
+///
+/// Validation checks native absolute-path syntax and sizes without accessing the filesystem.
+/// Callers must pass `args` as separate arguments, preserving their spaces; the application
+/// substitutes `{file}` when it launches the editor, without composing a shell command.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExternalEditorPrefs {
+    /// Absolute program path; on macOS an `.app` bundle is also accepted without arguments.
+    pub program: String,
+    /// Arguments passed directly to the program, with no trimming or shell expansion.
+    pub args: Vec<String>,
+}
+
+/// Longest external-editor path or individual argument, in UTF-8 bytes.
+const MAX_EDITOR_TEXT: usize = 4096;
+/// Most external-editor arguments.
+const MAX_EDITOR_ARGS: usize = 32;
+/// Most UTF-8 bytes in all external-editor arguments together.
+const MAX_EDITOR_ARGS_BYTES: usize = 32 * 1024;
+
+impl ExternalEditorPrefs {
+    /// Trims the program path and checks native absolute-path syntax, sizes and control
+    /// characters. Empty configuration disables the editor; arguments without a program fail.
+    /// Windows accepts only `.exe` programs. On macOS an `.app` bundle requires no arguments.
+    /// The path need not exist, and arguments are returned unchanged.
+    pub fn validate(mut self) -> Result<Self, VaultError> {
+        if self.program.len() > MAX_EDITOR_TEXT || self.program.chars().any(char::is_control) {
+            return Err(VaultError::Invalid(
+                "external editor program is too long or contains control characters".into(),
+            ));
+        }
+        self.program = self.program.trim().to_owned();
+        if self.args.len() > MAX_EDITOR_ARGS
+            || self
+                .args
+                .iter()
+                .any(|arg| arg.len() > MAX_EDITOR_TEXT || arg.chars().any(char::is_control))
+            || self.args.iter().map(String::len).sum::<usize>() > MAX_EDITOR_ARGS_BYTES
+        {
+            return Err(VaultError::Invalid(
+                "external editor arguments are too many, too long or contain control characters"
+                    .into(),
+            ));
+        }
+        if self.program.is_empty() {
+            if !self.args.is_empty() {
+                return Err(VaultError::Invalid(
+                    "external editor arguments require a program".into(),
+                ));
+            }
+            return Ok(self);
+        }
+        let path = std::path::Path::new(&self.program);
+        if !path.is_absolute() || path.file_name().is_none() {
+            return Err(VaultError::Invalid(
+                "external editor program must be an absolute path".into(),
+            ));
+        }
+        #[cfg(windows)]
+        if !path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        {
+            return Err(VaultError::Invalid(
+                "external editor program must be an .exe file on Windows".into(),
+            ));
+        }
+        #[cfg(target_os = "macos")]
+        if path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("app"))
+            && !self.args.is_empty()
+        {
+            return Err(VaultError::Invalid(
+                "external editor app bundles do not accept arguments".into(),
+            ));
+        }
+        Ok(self)
+    }
+}
+
 /// Preferences of this device only; never leave it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -515,6 +597,8 @@ pub struct DevicePrefs {
     pub download_dir: String,
     /// Transfers copying at the same time (1–8).
     pub max_transfers: u8,
+    /// External editor program and arguments on this device only.
+    pub external_editor: ExternalEditorPrefs,
     /// The older single agent setting; moved into `agents` when read, never written.
     #[serde(skip_serializing)]
     pub agent: AgentPrefs,
@@ -552,6 +636,7 @@ impl Default for DevicePrefs {
             window_material: true,
             download_dir: String::new(),
             max_transfers: 3,
+            external_editor: ExternalEditorPrefs::default(),
             agent: AgentPrefs::default(),
             agents: AgentsPrefs::default(),
             connection: ConnectionPrefs::default(),
@@ -882,8 +967,8 @@ impl DevicePrefs {
         self
     }
 
-    /// Trims the download directory and checks ranges. Returns the normalized preferences. The
-    /// directory must be absolute; whether it exists is checked when downloading.
+    /// Trims paths and checks ranges. Returns the normalized preferences. Paths must be
+    /// absolute; filesystem access is left to the operations that use them.
     pub fn validate(mut self) -> Result<Self, VaultError> {
         self.download_dir = self.download_dir.trim().to_owned();
         if !self.download_dir.is_empty() {
@@ -898,6 +983,7 @@ impl DevicePrefs {
             }
         }
         check_range("concurrent transfers", self.max_transfers, 1..=8)?;
+        self.external_editor = self.external_editor.validate()?;
         self.agents.validate()?;
         check_range(
             "connect timeout",
@@ -952,6 +1038,208 @@ mod tests {
         assert_eq!(parsed.terminal.line_height, 1.15);
         let empty: Preferences = serde_json::from_str("{}").unwrap();
         assert_eq!(empty, Preferences::default());
+    }
+
+    fn editor_prefs() -> ExternalEditorPrefs {
+        ExternalEditorPrefs {
+            program: if cfg!(windows) {
+                r"C:\Program Files\Rove Editor\editor.exe"
+            } else {
+                "/opt/Rove Editor/bin/editor"
+            }
+            .into(),
+            args: vec!["--wait".into(), "{file}".into()],
+        }
+    }
+
+    #[test]
+    fn external_editor_defaults_keep_older_device_records_readable() {
+        let old: DevicePrefs = serde_json::from_str(
+            r#"{"window_material":false,"download_dir":"","max_transfers":5}"#,
+        )
+        .unwrap();
+        assert!(!old.window_material);
+        assert_eq!(old.max_transfers, 5);
+        assert_eq!(old.external_editor, ExternalEditorPrefs::default());
+        assert!(old.validate().is_ok());
+
+        let empty: DevicePrefs = serde_json::from_str(r#"{"external_editor":{}}"#).unwrap();
+        assert_eq!(empty.external_editor, ExternalEditorPrefs::default());
+        let program_only: ExternalEditorPrefs =
+            serde_json::from_value(serde_json::json!({ "program": editor_prefs().program }))
+                .unwrap();
+        assert!(program_only.args.is_empty());
+        assert!(program_only.validate().is_ok());
+    }
+
+    #[test]
+    fn external_editor_requires_a_native_absolute_program_without_disk_access() {
+        let configured = editor_prefs();
+        assert!(configured.validate().is_ok());
+        for program in [
+            "editor",
+            "./editor",
+            "../bin/editor",
+            "~/bin/editor",
+            "file:///opt/editor",
+            "https://example.com/editor",
+            "/",
+            "\"/opt/editor\"",
+        ] {
+            let editor = ExternalEditorPrefs {
+                program: program.into(),
+                args: Vec::new(),
+            };
+            assert!(editor.validate().is_err(), "{program}");
+        }
+        let mut device = DevicePrefs::default();
+        device.external_editor.program = "editor".into();
+        assert!(matches!(device.validate(), Err(VaultError::Invalid(_))));
+    }
+
+    #[test]
+    fn external_editor_preserves_arguments_and_file_placeholders_as_data() {
+        let mut editor = editor_prefs();
+        editor.program = format!("  {}  ", editor.program);
+        editor.args = [
+            "--wait",
+            "  significant spaces  ",
+            "",
+            "{file}",
+            "--path={file}",
+            "$(touch /tmp/nope); & | > < `command` \"quoted\" 'single'",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let args = editor.args.clone();
+        let validated = editor.validate().unwrap();
+        assert_eq!(validated.program, editor_prefs().program);
+        assert_eq!(validated.args, args);
+        assert_eq!(
+            serde_json::from_str::<ExternalEditorPrefs>(
+                &serde_json::to_string(&validated).unwrap()
+            )
+            .unwrap(),
+            validated
+        );
+    }
+
+    #[test]
+    fn external_editor_can_be_cleared_but_arguments_need_a_program() {
+        assert_eq!(
+            ExternalEditorPrefs {
+                program: "   ".into(),
+                args: Vec::new(),
+            }
+            .validate()
+            .unwrap(),
+            ExternalEditorPrefs::default()
+        );
+        for args in [vec!["{file}".into()], vec![String::new()]] {
+            assert!(
+                ExternalEditorPrefs {
+                    program: String::new(),
+                    args,
+                }
+                .validate()
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn external_editor_rejects_control_characters_in_paths_and_arguments() {
+        for control in ['\0', '\n', '\r', '\t', '\u{7f}', '\u{85}'] {
+            let mut editor = editor_prefs();
+            editor.program.push(control);
+            assert!(editor.validate().is_err(), "program: {control:?}");
+            let mut editor = editor_prefs();
+            editor.args.push(format!("before{control}after"));
+            assert!(editor.validate().is_err(), "argument: {control:?}");
+        }
+    }
+
+    #[test]
+    fn external_editor_bounds_program_and_argument_sizes() {
+        let prefix = if cfg!(windows) { "C:\\" } else { "/" };
+        let program = format!(
+            "{prefix}{}.exe",
+            "e".repeat(MAX_EDITOR_TEXT - prefix.len() - 4)
+        );
+        let editor = ExternalEditorPrefs {
+            program: program.clone(),
+            args: vec!["a".repeat(MAX_EDITOR_TEXT); MAX_EDITOR_ARGS_BYTES / MAX_EDITOR_TEXT],
+        };
+        assert!(editor.clone().validate().is_ok());
+        let mut too_long = editor.clone();
+        too_long.program.insert_str(prefix.len(), "e");
+        assert!(too_long.validate().is_err());
+        let mut too_long = editor.clone();
+        too_long.args[0].push('a');
+        assert!(too_long.validate().is_err());
+        let mut too_many_bytes = editor;
+        too_many_bytes.args.push("a".into());
+        assert!(too_many_bytes.validate().is_err());
+        assert!(
+            ExternalEditorPrefs {
+                program: program.clone(),
+                args: vec![String::new(); MAX_EDITOR_ARGS],
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            ExternalEditorPrefs {
+                program,
+                args: vec![String::new(); MAX_EDITOR_ARGS + 1],
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn external_editor_windows_requires_exe_and_rejects_relative_drive_paths() {
+        for program in [
+            r"C:\Tools\editor.cmd",
+            r"C:\Tools\editor.bat",
+            r"C:\Tools\editor",
+            r"C:editor.exe",
+            r"\Tools\editor.exe",
+        ] {
+            let editor = ExternalEditorPrefs {
+                program: program.into(),
+                args: Vec::new(),
+            };
+            assert!(editor.validate().is_err(), "{program}");
+        }
+        assert!(
+            ExternalEditorPrefs {
+                program: r"C:\Tools\Editor.EXE".into(),
+                args: vec!["{file}".into()],
+            }
+            .validate()
+            .is_ok()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn external_editor_macos_app_bundles_require_no_arguments() {
+        let bundle = ExternalEditorPrefs {
+            program: "/Applications/Rove Editor.app".into(),
+            args: Vec::new(),
+        };
+        assert!(bundle.clone().validate().is_ok());
+        assert!(
+            ExternalEditorPrefs {
+                args: vec!["{file}".into()],
+                ..bundle
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]

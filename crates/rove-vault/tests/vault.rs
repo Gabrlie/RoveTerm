@@ -375,6 +375,7 @@ fn device_preferences_are_stored_apart_from_user_preferences() {
         let device = DevicePrefs {
             window_material: false,
             max_transfers: 5,
+            external_editor: editor_prefs(),
             ..DevicePrefs::default()
         };
         vault.set_device_preferences(device).unwrap();
@@ -391,7 +392,60 @@ fn device_preferences_are_stored_apart_from_user_preferences() {
     let device = vault.device_preferences().unwrap();
     assert!(!device.window_material);
     assert_eq!(device.max_transfers, 5);
+    assert_eq!(device.external_editor, editor_prefs());
     assert_eq!(vault.preferences().unwrap(), Preferences::default());
+}
+
+fn editor_prefs() -> ExternalEditorPrefs {
+    ExternalEditorPrefs {
+        program: if cfg!(windows) {
+            r"C:\Program Files\Rove Editor\editor.exe"
+        } else {
+            "/opt/Rove Editor/bin/editor"
+        }
+        .into(),
+        args: vec!["--wait".into(), "  {file}  ".into()],
+    }
+}
+
+#[test]
+fn external_editor_device_preferences_never_enter_sync_records() {
+    let source = unlocked();
+    let before = source.sync_records().unwrap();
+    let device = DevicePrefs {
+        external_editor: editor_prefs(),
+        ..DevicePrefs::default()
+    };
+    source.set_device_preferences(device.clone()).unwrap();
+    assert_eq!(source.sync_records().unwrap(), before);
+
+    let target = unlocked();
+    target
+        .set_device_preferences(DevicePrefs {
+            window_material: false,
+            ..DevicePrefs::default()
+        })
+        .unwrap();
+    target
+        .apply_sync(&as_changes(source.sync_records().unwrap()))
+        .unwrap();
+    assert_eq!(
+        target.device_preferences().unwrap().external_editor,
+        ExternalEditorPrefs::default()
+    );
+    source
+        .apply_sync(&as_changes(target.sync_records().unwrap()))
+        .unwrap();
+    assert_eq!(source.device_preferences().unwrap(), device);
+    assert!(!target.device_preferences().unwrap().window_material);
+
+    source
+        .set_device_preferences(DevicePrefs::default())
+        .unwrap();
+    assert_eq!(
+        source.device_preferences().unwrap().external_editor,
+        ExternalEditorPrefs::default()
+    );
 }
 
 #[test]

@@ -37,9 +37,9 @@ pub use model::{
 };
 pub use prefs::{
     Accent, AgentAuth, AgentPrefs, AgentsPrefs, AiMode, AiPrefs, AppearancePrefs, Bell,
-    ConflictChoice, ConnectionPrefs, CursorStyle, CustomAgent, DevicePrefs, FilePrefs, Language,
-    Preferences, ProviderFormat, ProviderPrefs, ReasoningEffort, Repeat, ReviewModel, ReviewerKind, Schedule,
-    RightClick, StatusPrefs, TerminalPrefs, Theme,
+    ConflictChoice, ConnectionPrefs, CursorStyle, CustomAgent, DevicePrefs, ExternalEditorPrefs,
+    FilePrefs, Language, Preferences, ProviderFormat, ProviderPrefs, ReasoningEffort, Repeat,
+    ReviewModel, ReviewerKind, RightClick, Schedule, StatusPrefs, TerminalPrefs, Theme,
 };
 pub use snippets::{Snippet, SnippetDraft, SnippetId};
 pub use store::{LockReason, LockState, MAX_JUMP_DEPTH, SCHEMA_VERSION, Vault};
