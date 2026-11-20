@@ -539,7 +539,10 @@ async fn concurrent_names_differing_in_case_do_not_collide_on_a_folding_volume()
     let (queue, mut rx) = queue(TransferConfig::default());
     let mut ids = Vec::new();
     for (name, content) in [("Report.bin", 1u8), ("report.bin", 2u8)] {
-        let file = src.path().join(name);
+        // Separate source directories also keep these files distinct on a case-folding host.
+        let source_dir = src.path().join(content.to_string());
+        std::fs::create_dir(&source_dir).unwrap();
+        let file = source_dir.join(name);
         std::fs::write(&file, vec![content; 2_000_000]).unwrap();
         let mut request = request(&file, dst.path(), Conflict::Rename);
         request.dst = folding.clone();
@@ -579,7 +582,11 @@ async fn peak_running(initial: usize, limit: usize) -> usize {
     let mut ids = Vec::new();
     for name in ["a.bin", "b.bin", "c.bin"] {
         std::fs::write(src.path().join(name), vec![7u8; 3_000_000]).unwrap();
-        ids.push(queue.enqueue(request(&src.path().join(name), dst.path(), Conflict::Rename)));
+        ids.push(queue.enqueue(request(
+            &src.path().join(name),
+            dst.path(),
+            Conflict::Rename,
+        )));
     }
     let mut running = std::collections::HashSet::new();
     let mut finished = 0;
