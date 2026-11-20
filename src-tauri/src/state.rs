@@ -1,6 +1,7 @@
 //! Services shared by every command.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use rove_fs::{FsSessions, LocalFs, TransferQueue};
 use rove_kernel::{Disposer, Runtime};
@@ -25,6 +26,10 @@ pub struct AppState {
     pub forwards: Arc<Forwards>,
     /// Open file systems (SFTP sessions).
     pub fs_sessions: Arc<FsSessions>,
+    /// Local copies and watchers for files opened in an external editor.
+    pub external_edits: crate::external_edit::ExternalEditManager,
+    /// Whether the UI has unsaved in-memory file drafts.
+    pub external_edit_dirty: AtomicBool,
     /// File transfer queue.
     pub transfers: Arc<TransferQueue>,
     /// This device's file system.
@@ -49,6 +54,7 @@ impl AppState {
     pub fn new(runtime: Runtime, data_dir: &std::path::Path) -> Result<Self, CommandError> {
         let ctx = runtime.context().clone();
         let journal = ctx.require::<dyn rove_journal::JournalStore>()?;
+        let external_edits = crate::external_edit::ExternalEditManager::new(data_dir);
         let ai = crate::commands::ai::AiSessions::new(data_dir, journal.clone())
             .map_err(|error| CommandError::new("app.io", error.to_string()))?;
         Ok(Self {
@@ -58,6 +64,8 @@ impl AppState {
             prompts: ctx.require::<HostKeyPrompts>()?,
             forwards: ctx.require::<Forwards>()?,
             fs_sessions: ctx.require::<FsSessions>()?,
+            external_edits,
+            external_edit_dirty: AtomicBool::new(false),
             transfers: ctx.require::<TransferQueue>()?,
             local_fs: ctx.require::<LocalFs>()?,
             journal,

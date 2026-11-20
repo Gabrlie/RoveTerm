@@ -55,6 +55,16 @@
   --term-bg: #ffffff;
   --term-fg: #1d1d1f;
 
+  /* Text editor: follow the current surface and system palette in either theme. */
+  --editor-gutter: var(--surface);
+  --editor-active-line: var(--accent-softer);
+  --editor-selection: color-mix(in srgb, var(--accent) 23%, transparent);
+  --editor-keyword: var(--sys-purple);
+  --editor-string: var(--success);
+  --editor-number: var(--sys-orange);
+  --editor-type: var(--sys-blue);
+  --editor-comment: var(--fg-muted);
+
   /* Elevation. */
   --shadow-sm: 0 0.5px 1px rgb(0 0 0 / 0.1), 0 1px 2px rgb(0 0 0 / 0.05);
   --shadow-md: 0 1px 3px rgb(0 0 0 / 0.07), 0 6px 16px rgb(0 0 0 / 0.07);

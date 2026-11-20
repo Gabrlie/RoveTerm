@@ -53,3 +53,7 @@ enqueue(TransferRequest) → TransferId，状态 queued
 ## 文本编辑
 
 `TextFile` 携带原始文本与内容版本；`read_text_file` / `save_text_file` 通过 `FileSystem` 完成快照读取和版本校验替换，读取限制与暂存写入规则见 [crate 契约](../../crates/rove-fs/README.md#契约)。
+
+`sftp_read_text` / `sftp_save_text` 将 [文本快照与版本校验写入](../../crates/rove-fs/README.md#契约) 暴露给内置编辑器；`sftp_retain` 为草稿取得同一 Provider 的独立句柄，关闭文件面板不影响草稿。
+
+桌面端 `external_edit_start` 创建本机副本并启动编辑器；每 500 ms 检查一次，内容变更稳定至少 1 秒才回传。同一会话的写回、重试和结束串行执行，状态以 `external-edit-update` 发出。冲突或失败暂停自动回传；重新打开原 SSH 目标（包括路线）的文件面板后可重试。选择覆盖时，保存只对确认前读取的远端版本有效。退出保留副本和版本，下次启动显示为待恢复，不会自动上传。

@@ -1,5 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { editors } from './lib/files/editors.svelte';
+  import DraftsHost from './lib/files/DraftsHost.svelte';
+  import ExternalEdits from './lib/files/ExternalEdits.svelte';
+  import { externalEdits } from './lib/files/external.svelte';
+  import { isMobile } from './lib/platform';
+  import Dialog from './lib/ui/Dialog.svelte';
+  import { ask } from './lib/ui/confirm.svelte';
+  import { externalEditSetDirty, externalEditShutdown, onExternalEditExitRequest } from './lib/ipc';
   import TitleBar from './lib/layout/TitleBar.svelte';
   import ActivityRail from './lib/layout/ActivityRail.svelte';
   import StatusBar from './lib/layout/StatusBar.svelte';
@@ -315,10 +323,21 @@
 
   function run(id: ActionId): void {
     switch (id) {
+      case 'editor.save':
+      case 'editor.find':
+      case 'editor.undo':
+      case 'editor.redo':
+      case 'editor.close':
+        editors.run(id);
+        break;
+      case 'editor.drafts':
+        editors.showDrafts = true;
+        break;
       case 'tab.newLocal':
         workspace.openTab({ kind: 'local' });
         break;
       case 'tab.close':
+        if (document.activeElement?.closest('.text-editor') && editors.run('editor.close')) break;
         workspace.closeFocused();
         break;
       case 'tab.next':
@@ -497,6 +516,39 @@
     );
   });
 
+  let allowingExit = false;
+  let decidingExit = false;
+  async function protectExit(): Promise<void> {
+    if (decidingExit) return;
+    decidingExit = true;
+    editors.exiting = true;
+    try {
+      if (!await editors.canClose(editors.drafts.map((draft) => draft.id))) return;
+      if (externalEdits.all.length && !await ask({ title: t('external.exitTitle'), message: t('external.exitConfirm'), confirmLabel: t('external.exit'), danger: true })) return;
+      allowingExit = true;
+      await externalEditShutdown();
+    } catch (error) { allowingExit = false; notify(errorText(error), 'error'); }
+    finally { decidingExit = false; if (!allowingExit) editors.exiting = false; }
+  }
+  function protectReload(event: BeforeUnloadEvent): void {
+    if (!allowingExit && (editors.pending || externalEdits.all.length)) { event.preventDefault(); event.returnValue = ''; }
+  }
+  let lastDirty: boolean | null = null;
+  $effect(() => {
+    const dirty = editors.pending;
+    if (lastDirty === dirty) return;
+    lastDirty = dirty;
+    void externalEditSetDirty(dirty).catch(() => { lastDirty = null; });
+  });
+  onMount(() => {
+    if (!isMobile) void externalEdits.start();
+    const exitListener = onExternalEditExitRequest(() => void protectExit());
+    return () => {
+      externalEdits.dispose();
+      void exitListener.then((stop) => stop()).catch(() => { /* The WebView may already have closed. */ });
+    };
+  });
+
   onMount(() => {
     workspaceLoad()
       .then((stored) => {
@@ -514,7 +566,7 @@
   });
 </script>
 
-<svelte:window onkeydowncapture={onKeydown} />
+<svelte:window onkeydowncapture={onKeydown} onbeforeunload={protectReload} />
 <svelte:document oncopy={onCopy} />
 
 <div class="app">
@@ -565,6 +617,15 @@
 </div>
 
 <Toaster />
+<DraftsHost />
+{#if externalEdits.dialog && !isMobile}
+  <Dialog title={t('external.title', { n: externalEdits.all.length })} width={600} onclose={() => (externalEdits.dialog = false)}>
+    <ExternalEdits />
+    {#snippet actions()}
+      <button type="button" class="secondary" onclick={() => (externalEdits.dialog = false)}>{t('common.close')}</button>
+    {/snippet}
+  </Dialog>
+{/if}
 
 {#if paletteOpen}
   <CommandPalette onrun={run} onclose={() => (paletteOpen = false)} />

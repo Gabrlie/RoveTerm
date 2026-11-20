@@ -4475,9 +4475,11 @@ name = "roveterm"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "devsshd",
  "fontdb",
  "jiff",
  "libc",
+ "parking_lot",
  "rove-ai",
  "rove-fs",
  "rove-journal",

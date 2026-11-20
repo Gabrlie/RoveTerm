@@ -18,6 +18,12 @@ export type ActionId =
   | 'host.new'
   | 'sidebar.toggle'
   | 'files.open'
+  | 'editor.save'
+  | 'editor.close'
+  | 'editor.find'
+  | 'editor.undo'
+  | 'editor.redo'
+  | 'editor.drafts'
   | 'forward.manage'
   | 'settings.open'
   | 'keys.manage'
@@ -46,6 +52,8 @@ export interface Action {
   hidden?: boolean;
   /** Left to the browser while a text field outside the terminal has focus, as copy and paste are. */
   yieldsToTextField?: boolean;
+  /** Editor shortcuts apply only while an inline editor has focus. */
+  scope?: 'editor';
 }
 
 export const isMac = /Mac|iPhone|iPad/.test(navigator.platform) || navigator.userAgent.includes('Mac OS');
@@ -56,6 +64,12 @@ export const actions: Action[] = [
   { id: 'host.new', label: 'action.host.new', keys: ['App+N'] },
   { id: 'sidebar.toggle', label: 'action.sidebar.toggle', keys: ['App+B'] },
   { id: 'files.open', label: 'action.files.open', keys: ['App+O'] },
+  { id: 'editor.save', label: 'action.editor.save', keys: ['App+S'], scope: 'editor' },
+  { id: 'editor.close', label: 'editor.close', keys: [], scope: 'editor' },
+  { id: 'editor.find', label: 'editor.find', keys: ['App+F'], scope: 'editor' },
+  { id: 'editor.undo', label: 'editor.undo', keys: [isMac ? 'Meta+Z' : 'Ctrl+Z'], scope: 'editor' },
+  { id: 'editor.redo', label: 'editor.redo', keys: isMac ? ['Meta+Shift+Z'] : ['Ctrl+Shift+Z', 'Ctrl+Y'], scope: 'editor' },
+  { id: 'editor.drafts', label: 'editor.drafts', keys: [] },
   { id: 'forward.manage', label: 'action.forward.manage', keys: [] },
   { id: 'tab.close', label: 'action.tab.close', keys: ['App+W'] },
   { id: 'tab.next', label: 'action.tab.next', keys: ['Ctrl+Tab'] },
@@ -156,6 +170,7 @@ export function isTextField(target: EventTarget | null): boolean {
 /** Returns the action bound to `event`, if any. */
 export function actionFor(event: KeyboardEvent): ActionId | undefined {
   const id = index.get(eventBinding(event));
+  if (id && byId.get(id)?.scope === 'editor' && (!(event.target instanceof Element) || !event.target.closest('.text-editor'))) return undefined;
   if (id && byId.get(id)?.yieldsToTextField && isTextField(event.target)) return undefined;
   return id;
 }

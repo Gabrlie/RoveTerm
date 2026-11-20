@@ -21,6 +21,7 @@
     transferUpload,
     type Conflict,
     type DirEntry,
+    type ExternalEditUpdate,
     type FsId,
     type RemoteSource,
     type TransferUpdate,
@@ -32,6 +33,10 @@
   import FilesSkeleton from './FilesSkeleton.svelte';
   import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
   import { editPrefs } from '../settings/edit.svelte';
+  import TextEditor from './TextEditor.svelte';
+  import { editors } from './editors.svelte';
+  import { externalEdits } from './external.svelte';
+  import { isMobile } from '../platform';
 
   interface Props {
     source: RemoteSource;
@@ -71,14 +76,34 @@
   let pending = $state<Pending | null>(null);
   let nameInput = $state('');
   let root: HTMLDivElement;
-  let list: HTMLDivElement;
+  let list = $state<HTMLDivElement>();
   let destroyed = false;
   let refreshTimer = 0;
   let unsubscribe: (() => void) | undefined;
+  let unlistenEdits: (() => void) | undefined;
   let unlistenDrop: UnlistenFn | undefined;
+  let unbindExternal: (() => void) | undefined;
+  let editingId = $state<string | null>(null);
+  let openingEditor = $state(false);
+  const draft = $derived(editingId ? editors.find(editingId) : undefined);
+
+  async function editFile(external = false): Promise<void> {
+    const entry = selection[0];
+    if (!fsId || selection.length !== 1 || entry?.kind !== 'file' || openingEditor) return;
+    const path = joinPath(cwd, entry.name);
+    openingEditor = true;
+    try {
+      if (external) { await externalEdits.open(fsId, path); return; }
+      const opened = await editors.open(fsId, label, source, path);
+      if (!destroyed) editingId = opened.id;
+      else editors.detached(opened.id);
+    } catch (error) { fail(error); }
+    finally { openingEditor = false; }
+  }
 
   const shown = $derived(sortEntries(showHidden ? entries : entries.filter((entry) => !entry.name.startsWith('.'))));
   const selection = $derived(shown.filter((entry) => selected.has(entry.name)));
+  const editable = $derived(selection.length === 1 && selection[0]?.kind === 'file');
 
   function toggleHidden(): void {
     void editPrefs((draft) => (draft.files.show_hidden = !draft.files.show_hidden));
@@ -98,7 +123,7 @@
     status = { error: false, text };
   }
 
-  async function navigate(path: string): Promise<void> {
+  async function navigate(path: string, focusList = true): Promise<void> {
     if (!fsId) return;
     loading = true;
     try {
@@ -116,7 +141,7 @@
       pathInput = cwd;
       loading = false;
       // Re-rendered rows drop focus; keep keyboard navigation on the list.
-      if (active && !pending) list?.focus({ preventScroll: true });
+      if (focusList && active && !pending && !draft) list?.focus({ preventScroll: true });
     }
   }
 
@@ -138,7 +163,7 @@
   function clickRow(event: MouseEvent, index: number): void {
     const entry = shown[index];
     if (!entry) return;
-    list.focus({ preventScroll: true });
+    list?.focus({ preventScroll: true });
     if (event.shiftKey && anchor >= 0) {
       const [from, to] = anchor < index ? [anchor, index] : [index, anchor];
       selected = new Set(shown.slice(from, to + 1).map((row) => row.name));
@@ -185,7 +210,7 @@
       selected = new Set([entry.name]);
       anchor = index;
     }
-    list.focus({ preventScroll: true });
+    list?.focus({ preventScroll: true });
     const names = selection.map((row) => row.name);
     const single = names.length === 1;
     const items: MenuItem[] = [];
@@ -196,6 +221,10 @@
       { label: t('files.download'), icon: 'download', onselect: () => void download(names, false) },
       { label: t('files.downloadTo'), icon: 'folderDownload', onselect: () => void download(names, true) },
     );
+    if (single && entry.kind === 'file') {
+      items.push({ label: t('files.editBuiltin'), icon: 'fileCode', separated: true, onselect: () => void editFile() });
+      if (!isMobile) items.push({ label: t('files.editExternal'), icon: 'externalEdit', onselect: () => void editFile(true) });
+    }
     if (single) items.push({ label: t('files.rename'), icon: 'edit', separated: true, onselect: askRename });
     items.push({ label: t('files.copyPath'), icon: 'copy', separated: !single, onselect: () => copyPath(entry.name) });
     items.push({ label: t('common.delete'), icon: 'remove', danger: true, separated: true, onselect: askDelete });
@@ -352,7 +381,7 @@
         if (entry) {
           selected = new Set([entry.name]);
           anchor = next;
-          list.querySelector<HTMLElement>(`[data-index="${next}"]`)?.scrollIntoView({ block: 'nearest' });
+          list?.querySelector<HTMLElement>(`[data-index="${next}"]`)?.scrollIntoView({ block: 'nearest' });
         }
         break;
       }
@@ -382,14 +411,25 @@
   function onTransfer(update: TransferUpdate): void {
     if (!isFinal(update) || update.dst_label !== label) return;
     if (update.state === 'failed') fail({ code: update.error?.kind ? `fs.${update.error.kind}` : 'fs.io', message: '' });
-    if (update.state === 'done' && update.dst_path && parentPath(update.dst_path) === cwd) {
-      clearTimeout(refreshTimer);
-      refreshTimer = window.setTimeout(() => void refresh(), 150);
+    if (update.state === 'done') refreshAfterSave(update.dst_path);
+  }
+
+  function onExternalEdit(update: ExternalEditUpdate): void {
+    if (update.label === label && (update.state === 'saved' || update.state === 'closed')) {
+      refreshAfterSave(update.path);
     }
   }
 
+  function refreshAfterSave(path: string): void {
+    if (!cwd || parentPath(path) !== cwd) return;
+    clearTimeout(refreshTimer);
+    refreshTimer = window.setTimeout(() => {
+      if (!loading && parentPath(path) === cwd) void navigate(cwd, false);
+    }, 150);
+  }
+
   function inside(position: { x: number; y: number }): boolean {
-    if (!visible || !root) return false;
+    if (!visible || !root || draft) return false;
     const scale = window.devicePixelRatio || 1;
     const x = position.x / scale;
     const y = position.y / scale;
@@ -412,6 +452,7 @@
 
   onMount(async () => {
     unsubscribe = transfers.subscribe(onTransfer);
+    if (!isMobile) unlistenEdits = externalEdits.listen(onExternalEdit);
     transfers.start().catch((error: unknown) => console.warn('transfer events unavailable', error));
     try {
       unlistenDrop = await getCurrentWebview().onDragDropEvent(onDragDrop);
@@ -426,6 +467,7 @@
       }
       fsId = opened.id;
       label = opened.label;
+      unbindExternal = externalEdits.bind(label, fsId);
       onopened?.();
       await navigate(opened.home);
     } catch (error) {
@@ -436,19 +478,25 @@
   });
 
   $effect(() => {
-    if (active && !pending) list?.focus({ preventScroll: true });
+    if (active && !pending && !draft) list?.focus({ preventScroll: true });
   });
 
   onDestroy(() => {
     destroyed = true;
     clearTimeout(refreshTimer);
     unsubscribe?.();
+    unlistenEdits?.();
     unlistenDrop?.();
+    unbindExternal?.();
+    if (editingId) editors.detached(editingId);
     if (fsId) sftpClose(fsId).catch((error: unknown) => console.warn('sftp close failed', error));
   });
 </script>
 
 <div class="browser" class:dropping bind:this={root}>
+  {#if draft}
+    {#key draft.id}<TextEditor {draft} onclose={() => { editingId = null; void refresh(); }} />{/key}
+  {:else}
   <div class="toolbar">
     <IconButton icon="up" label={t('files.up')} small disabled={!fsId || parentPath(cwd) === null} onclick={goUp} />
     <IconButton icon="refresh" label={t('files.refresh')} small disabled={!fsId} onclick={() => void refresh()} />
@@ -460,6 +508,12 @@
     <IconButton icon="folderUpload" label={t('files.uploadFolder')} small disabled={!fsId} onclick={() => void pickUpload(true)} />
     <IconButton icon="download" label={t('files.download')} small disabled={selection.length === 0} onclick={() => void download(selection.map((entry) => entry.name), false)} />
     <IconButton icon="folderDownload" label={t('files.downloadTo')} small disabled={selection.length === 0} onclick={() => void download(selection.map((entry) => entry.name), true)} />
+    <IconButton icon="fileCode" label={t('files.editBuiltin')} small disabled={!editable || openingEditor} onclick={() => void editFile()} />
+    {#if !isMobile}
+      <IconButton icon="externalEdit" label={t('files.editExternal')} small disabled={!editable} onclick={() => void editFile(true)} />
+      <IconButton icon="externalEdits" label={t('external.title', { n: externalEdits.all.length })} small active={externalEdits.all.length > 0} onclick={() => (externalEdits.dialog = true)} />
+    {/if}
+    <IconButton icon="drafts" label={t('editor.drafts')} small active={editors.dirty.length > 0} onclick={() => (editors.showDrafts = true)} />
     <IconButton icon="edit" label={t('files.rename')} small disabled={selection.length !== 1} onclick={askRename} />
     <IconButton icon="remove" label={t('common.delete')} small danger disabled={selection.length === 0} onclick={askDelete} />
     <IconButton icon={showHidden ? 'eye' : 'eyeOff'} label={t('files.showHidden')} small active={showHidden} onclick={toggleHidden} />
@@ -512,6 +566,7 @@
 
   {#if dropping}
     <div class="drop-hint"><Icon name="upload" size={20} />{t('files.dropHint', { path: cwd })}</div>
+  {/if}
   {/if}
 </div>
 
@@ -573,9 +628,11 @@
   .toolbar {
     display: flex;
     align-items: center;
-    gap: 2px;
-    height: 38px;
-    padding: 0 var(--space-2);
+    flex-wrap: wrap;
+    flex: none;
+    gap: var(--space-1);
+    min-height: 38px;
+    padding: var(--space-1) var(--space-2);
     background: var(--material-bar);
     box-shadow: inset 0 -1px 0 var(--separator);
   }

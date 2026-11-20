@@ -4,6 +4,7 @@ pub mod ai;
 pub mod app;
 pub mod autostart;
 pub mod external;
+pub mod external_edit;
 pub mod fleet;
 pub mod forward;
 pub mod host;

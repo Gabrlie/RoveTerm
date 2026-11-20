@@ -4,8 +4,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rove_fs::{
-    Conflict, DirEntry, FileSystem, FsError, FsId, TransferId, TransferRequest, TransferUpdate,
-    remove_all, validate_name,
+    Conflict, DirEntry, FileSystem, FsError, FsId, TextEditError, TextFile, TransferId,
+    TransferRequest, TransferUpdate, read_text_file, remove_all, save_text_file, validate_name,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -99,6 +99,43 @@ pub async fn sftp_list(
     Ok(fs.list(remote_path(&path)?).await?)
 }
 
+/// Reads a bounded UTF-8 text file and returns a version token for optimistic saves.
+#[tauri::command]
+pub async fn sftp_read_text(
+    state: State<'_, AppState>,
+    id: FsId,
+    path: String,
+) -> Result<TextFile, CommandError> {
+    let fs = state.fs_sessions.get(id)?;
+    Ok(read_text_file(fs.as_ref(), remote_path(&path)?)
+        .await
+        .map_err(text_edit_error)?)
+}
+
+/// Saves text only when the remote file still has the version that was read for editing.
+#[tauri::command]
+pub async fn sftp_save_text(
+    state: State<'_, AppState>,
+    id: FsId,
+    path: String,
+    version: String,
+    text: String,
+) -> Result<String, CommandError> {
+    let fs = state.fs_sessions.get(id)?;
+    Ok(
+        save_text_file(fs.as_ref(), remote_path(&path)?, &version, &text)
+            .await
+            .map_err(text_edit_error)?,
+    )
+}
+
+fn text_edit_error(error: TextEditError) -> CommandError {
+    CommandError::new(
+        crate::external_edit::text_error_code(&error),
+        error.to_string(),
+    )
+}
+
 /// Creates the directory `name` inside `dir` and returns its path.
 #[tauri::command]
 pub async fn sftp_mkdir(
@@ -155,7 +192,14 @@ pub async fn sftp_remove(
     Ok(())
 }
 
-/// Closes an SFTP session. Running transfers keep their own reference until they finish.
+/// Takes a separate handle to the same authenticated filesystem for an editor draft.
+#[tauri::command]
+pub fn sftp_retain(state: State<'_, AppState>, id: FsId) -> Result<FsId, CommandError> {
+    let fs = state.fs_sessions.get(id)?;
+    Ok(state.fs_sessions.insert(fs))
+}
+
+/// Releases this handle. Transfers and editor drafts keep their own references.
 #[tauri::command]
 pub fn sftp_close(state: State<'_, AppState>, id: String) -> Result<bool, CommandError> {
     Ok(state.fs_sessions.remove(fs_id(&id)?))

@@ -18,7 +18,7 @@ export const MENUS: Menu[] = [
   {
     id: 'file',
     label: 'menu.file',
-    items: ['tab.newLocal', 'host.new', 'host.quickConnect', 'host.import', '-', 'settings.open', '-', 'tab.close'],
+    items: ['tab.newLocal', 'host.new', 'host.quickConnect', 'host.import', '-', 'editor.save', 'editor.drafts', '-', 'settings.open', '-', 'tab.close'],
   },
   { id: 'edit', label: 'menu.edit', items: ['terminal.copy', 'terminal.paste'] },
   {
@@ -57,7 +57,7 @@ export function nativeMenus(): NativeMenu[] {
       if (entry === '-') return { kind: 'separator' as const };
       const action = actions.find((candidate) => candidate.id === entry);
       // Copy and paste belong to text fields as well; they stay with the system Edit menu.
-      const binding = action && !action.yieldsToTextField ? bindingsOf(action)[0] : undefined;
+      const binding = action && !action.yieldsToTextField && !action.scope ? bindingsOf(action)[0] : undefined;
       return { kind: 'action' as const, id: entry, label: action ? t(action.label) : entry, accelerator: binding ? menuAccelerator(binding) : null };
     }),
   }));

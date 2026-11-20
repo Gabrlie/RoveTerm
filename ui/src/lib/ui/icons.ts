@@ -68,7 +68,19 @@ import moon from 'lucide-static/icons/moon.svg?raw';
 import sunMoon from 'lucide-static/icons/sun-moon.svg?raw';
 import clock from 'lucide-static/icons/clock.svg?raw';
 import cloudCheck from 'lucide-static/icons/cloud-check.svg?raw';
+import fileCode from 'lucide-static/icons/file-code.svg?raw';
+import externalEdit from 'lucide-static/icons/square-arrow-out-up-right.svg?raw';
+import externalEdits from 'lucide-static/icons/folder-pen.svg?raw';
+import drafts from 'lucide-static/icons/files.svg?raw';
+import undo from 'lucide-static/icons/undo-2.svg?raw';
+import redo from 'lucide-static/icons/redo-2.svg?raw';
 export const icons = {
+  fileCode,
+  externalEdit,
+  externalEdits,
+  drafts,
+  undo,
+  redo,
   sun,
   moon,
   sunMoon,

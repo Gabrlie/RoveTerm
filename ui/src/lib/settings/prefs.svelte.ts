@@ -32,6 +32,7 @@ const DEVICE_DEFAULTS: DevicePrefs = {
   max_transfers: 3,
   agents: { disabled: [], custom: [], auth: 'auto', expose: false },
   connection: { connect_timeout_secs: 15, keepalive_secs: 30, keepalive_max: 3 },
+  external_editor: { program: '', args: [] },
 };
 
 /**

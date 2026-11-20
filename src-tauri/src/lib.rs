@@ -3,6 +3,7 @@
 mod commands;
 mod connect;
 mod error;
+mod external_edit;
 mod logs;
 mod profile;
 mod reveal;
@@ -29,7 +30,7 @@ const FORWARD_EVENT: &str = "forward-update";
 
 fn data_dir(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
     if let Some(dir) = std::env::var_os("ROVETERM_DATA_DIR") {
-        return Ok(PathBuf::from(dir));
+        return Ok(std::path::absolute(dir)?);
     }
     Ok(app.path().app_data_dir()?)
 }
@@ -117,8 +118,29 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn request_edit_exit_confirmation(app: &tauri::AppHandle) -> bool {
+    let Some(state) = app.try_state::<AppState>() else {
+        return false;
+    };
+    if !state.external_edits.needs_exit_confirmation()
+        && !state
+            .external_edit_dirty
+            .load(std::sync::atomic::Ordering::Acquire)
+    {
+        return false;
+    }
+    match app.emit_to("main", "external-edit-exit-request", ()) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(%error, "could not deliver the file edit exit request");
+            false
+        }
+    }
+}
+
 fn shutdown(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
+    tauri::async_runtime::block_on(state.external_edits.shutdown());
     state.transfers.cancel_all();
     state.forwards.stop_all();
     // The config file names a port that is about to close.
@@ -179,6 +201,14 @@ pub fn run() {
     ));
     let app = builder
         .setup(boot)
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && window.label() == "main"
+                && request_edit_exit_confirmation(window.app_handle())
+            {
+                api.prevent_close();
+            }
+        })
         .on_menu_event(commands::menu::on_event)
         .invoke_handler(tauri::generate_handler![
             commands::session::session_open_local,
@@ -195,6 +225,19 @@ pub fn run() {
             commands::sftp::sftp_rename,
             commands::sftp::sftp_remove,
             commands::sftp::sftp_close,
+            commands::sftp::sftp_read_text,
+            commands::sftp::sftp_save_text,
+            commands::sftp::sftp_retain,
+            commands::external_edit::external_edit_start,
+            commands::external_edit::external_edit_list,
+            commands::external_edit::external_edit_open_copy,
+            commands::external_edit::external_edit_remote_version,
+            commands::external_edit::external_edit_retry,
+            commands::external_edit::external_edit_finish,
+            commands::external_edit::external_edit_discard,
+            commands::external_edit::external_edit_reveal,
+            commands::external_edit::external_edit_set_dirty,
+            commands::external_edit::external_edit_shutdown,
             commands::sftp::transfer_upload,
             commands::sftp::transfer_download,
             commands::sftp::transfer_local_clashes,
@@ -282,10 +325,12 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the Tauri application");
-    app.run(|handle, event| {
-        if let RunEvent::Exit = event {
-            shutdown(handle);
+    app.run(|handle, event| match event {
+        RunEvent::ExitRequested { api, .. } if request_edit_exit_confirmation(handle) => {
+            api.prevent_exit();
         }
+        RunEvent::Exit => shutdown(handle),
+        _ => {}
     });
 }
 

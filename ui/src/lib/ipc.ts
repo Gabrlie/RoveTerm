@@ -417,6 +417,8 @@ export interface DevicePrefs {
   max_transfers: number;
   agents: AgentsPrefs;
   connection: ConnectionPrefs;
+  /** Device-private executable and argument vector; an empty program is unconfigured. */
+  external_editor: { program: string; args: string[] };
 }
 
 /** SSH connection timing on this device; applies to new connections. */
@@ -515,6 +517,56 @@ export function sftpRemove(id: FsId, paths: string[]): Promise<void> {
 
 export function sftpClose(id: FsId): Promise<boolean> {
   return invoke('sftp_close', { id });
+}
+
+/** Takes a new reference to the exact filesystem already used by the browser. */
+export function sftpRetain(id: FsId): Promise<FsId> {
+  return invoke('sftp_retain', { id });
+}
+
+export interface TextSnapshot { text: string; version: string }
+export function sftpReadText(id: FsId, path: string): Promise<TextSnapshot> {
+  return invoke('sftp_read_text', { id, path });
+}
+export function sftpSaveText(id: FsId, path: string, version: string, text: string): Promise<string> {
+  return invoke('sftp_save_text', { id, path, version, text });
+}
+
+export interface ExternalEditUpdate {
+  id: string;
+  label: string;
+  path: string;
+  local_path: string;
+  state: 'watching' | 'uploading' | 'saved' | 'conflict' | 'failed' | 'recovered' | 'closed';
+  error: CommandError | null;
+  revision: number;
+}
+export function externalEditStart(id: FsId, path: string): Promise<ExternalEditUpdate> {
+  return invoke('external_edit_start', { id, path });
+}
+export function externalEditList(): Promise<ExternalEditUpdate[]> { return invoke('external_edit_list'); }
+export function externalEditOpenCopy(editId: string): Promise<void> {
+  return invoke('external_edit_open_copy', { editId });
+}
+export function externalEditRemoteVersion(editId: string, fsId: FsId | null): Promise<string> {
+  return invoke('external_edit_remote_version', { editId, fsId });
+}
+export function externalEditRetry(editId: string, fsId: FsId | null, approvedVersion: string | null = null): Promise<void> {
+  return invoke('external_edit_retry', { editId, fsId, approvedVersion });
+}
+/** The backend permits and completes application exit after the UI protects drafts. */
+export function externalEditShutdown(): Promise<void> { return invoke('external_edit_shutdown'); }
+export function externalEditSetDirty(dirty: boolean): Promise<void> { return invoke('external_edit_set_dirty', { dirty }); }
+export function onExternalEditExitRequest(handler: () => void): Promise<UnlistenFn> {
+  return listen('external-edit-exit-request', handler);
+}
+export function externalEditFinish(editId: string, fsId: FsId | null): Promise<void> {
+  return invoke('external_edit_finish', { editId, fsId });
+}
+export function externalEditDiscard(editId: string): Promise<void> { return invoke('external_edit_discard', { editId }); }
+export function externalEditReveal(editId: string): Promise<void> { return invoke('external_edit_reveal', { editId }); }
+export function onExternalEditUpdate(handler: (update: ExternalEditUpdate) => void): Promise<UnlistenFn> {
+  return listen<ExternalEditUpdate>('external-edit-update', (event) => handler(event.payload));
 }
 
 export type Conflict = 'overwrite' | 'rename' | 'skip';

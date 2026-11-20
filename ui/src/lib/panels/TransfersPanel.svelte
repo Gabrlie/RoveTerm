@@ -5,13 +5,24 @@
   import TransferRow from '../files/TransferRow.svelte';
   import { transfers } from '../files/transfers.svelte';
   import { isFinal, newestFirst } from '../files/transferview';
+  import ExternalEdits from '../files/ExternalEdits.svelte';
+  import { externalEdits } from '../files/external.svelte';
+  import { editors } from '../files/editors.svelte';
+  import { isMobile } from '../platform';
 
   const going = $derived(newestFirst(transfers.all.filter((row) => !isFinal(row))));
   const done = $derived(newestFirst(transfers.all.filter(isFinal)));
 </script>
 
 <div class="center">
-  {#if going.length === 0 && done.length === 0}
+  {#if editors.drafts.length}
+    <div class="section-row"><p class="section">{t('editor.draftsCount', { n: editors.drafts.length })}</p><button class="plain" onclick={() => (editors.showDrafts = true)}>{t('files.open')}</button></div>
+  {/if}
+  {#if !isMobile && externalEdits.all.length}
+    <p class="section">{t('external.title', { n: externalEdits.all.length })}</p>
+    <ExternalEdits />
+  {/if}
+  {#if going.length === 0 && done.length === 0 && !editors.drafts.length && !externalEdits.all.length}
     <p class="empty">{t('transfer.empty')}</p>
   {/if}
   {#if going.length > 0}
