@@ -7,6 +7,7 @@
   import { notify } from '../../ui/toast.svelte';
   import AutostartRow from '../AutostartRow.svelte';
 
+  let { onopenlogs }: { onopenlogs?: () => void } = $props();
   let version = $state('');
 
   onMount(() => {
@@ -26,12 +27,22 @@
   <AutostartRow />
   <div class="form-row">
     <span class="form-label">{t('settings.logs')}<small>{t('settings.logsHint')}</small></span>
-    <button type="button" class="secondary" onclick={() => void logsReveal().catch((error: unknown) => notify(errorText(error), 'error'))}>{t('action.help.logs')}</button>
+    <div class="log-buttons">
+      {#if onopenlogs}
+        <button type="button" class="secondary" onclick={onopenlogs}>{t('settings.viewLogs')}</button>
+      {/if}
+      <button type="button" class="secondary" onclick={() => void logsReveal().catch((error: unknown) => notify(errorText(error), 'error'))}>{t('action.help.logs')}</button>
+    </div>
   </div>
 </div>
 <p class="form-note">{t('settings.aboutLicenses')}</p>
 
 <style>
+  .log-buttons {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
   .about {
     display: flex;
     flex-direction: column;

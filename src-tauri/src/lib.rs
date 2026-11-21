@@ -304,6 +304,8 @@ pub fn run() {
             commands::host::host_notes_get,
             commands::host::host_notes_set,
             commands::app::logs_reveal,
+            commands::app::logs_list,
+            commands::app::logs_read,
             commands::schedules::schedule_status,
             commands::schedules::schedule_claim,
             commands::schedules::schedule_device,

@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  export type SettingsSection = 'appearance' | 'terminal' | 'files' | 'status' | 'ai' | 'sync' | 'tailscale' | 'shortcuts' | 'about';
+  export type SettingsSection = 'appearance' | 'terminal' | 'files' | 'status' | 'ai' | 'sync' | 'tailscale' | 'shortcuts' | 'logs' | 'about';
 </script>
 
 <script lang="ts">
@@ -17,6 +17,7 @@
   import ShortcutsSettings from './sections/ShortcutsSettings.svelte';
   import SyncSettings from './sections/SyncSettings.svelte';
   import AiSettings from './sections/AiSettings.svelte';
+  import LogsSettings from './sections/LogsSettings.svelte';
   import AboutSettings from './sections/AboutSettings.svelte';
   import TailscaleSettings from './sections/TailscaleSettings.svelte';
   import { isMobile } from '../platform';
@@ -34,6 +35,7 @@
     { id: 'sync', label: 'settings.section.sync', icon: 'cloud', tint: 'teal' },
     ...(!isMobile ? [{ id: 'tailscale' as const, label: 'settings.section.tailscale' as const, icon: 'network' as const, tint: 'blue' }] : []),
     { id: 'shortcuts', label: 'settings.section.shortcuts', icon: 'keyboard', tint: 'orange' },
+    { id: 'logs', label: 'settings.section.logs', icon: 'snippets', tint: 'graphite' },
     { id: 'about', label: 'settings.section.about', icon: 'info', tint: 'purple' },
   ];
 
@@ -70,8 +72,10 @@
         <TailscaleSettings {onopentailscale} />
       {:else if section === 'shortcuts'}
         <ShortcutsSettings />
+      {:else if section === 'logs'}
+        <LogsSettings />
       {:else}
-        <AboutSettings />
+        <AboutSettings onopenlogs={() => (section = 'logs')} />
       {/if}
     </div>
   </div>

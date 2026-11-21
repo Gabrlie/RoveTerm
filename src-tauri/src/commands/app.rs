@@ -61,3 +61,30 @@ pub fn logs_reveal() -> Result<(), CommandError> {
         )
     })
 }
+
+/// Lists available daily log files in the application log directory, newest first.
+#[tauri::command]
+pub fn logs_list() -> Result<Vec<crate::logs::LogFileInfo>, CommandError> {
+    let dir = crate::logs::dir()
+        .ok_or_else(|| CommandError::new("app.io", "the log is not written to files"))?;
+    crate::logs::flush();
+    crate::logs::list_files_in(dir).map_err(|error| CommandError::new("app.io", error.to_string()))
+}
+
+/// Reads the trailing lines of a log file (or the newest one when `file` is omitted).
+#[tauri::command]
+pub fn logs_read(
+    file: Option<String>,
+    tail_lines: Option<usize>,
+) -> Result<crate::logs::LogReadResult, CommandError> {
+    let dir = crate::logs::dir()
+        .ok_or_else(|| CommandError::new("app.io", "the log is not written to files"))?;
+    crate::logs::flush();
+    crate::logs::read_tail_in(dir, file.as_deref(), tail_lines).map_err(|error| match error {
+        crate::logs::LogReadError::InvalidName => {
+            CommandError::new("input.invalid", "invalid log file name")
+        }
+        crate::logs::LogReadError::NotFound => CommandError::new("app.io", "log file not found"),
+        crate::logs::LogReadError::Io(io) => CommandError::new("app.io", io.to_string()),
+    })
+}

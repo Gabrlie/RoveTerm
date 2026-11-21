@@ -681,6 +681,29 @@ export function logsReveal(): Promise<void> {
   return invoke('logs_reveal');
 }
 
+export interface LogFileInfo {
+  name: string;
+  size_bytes: number;
+  modified_at: number;
+}
+
+export interface LogReadResult {
+  file: string;
+  content: string;
+  truncated: boolean;
+  total_bytes: number;
+}
+
+/** Lists available daily log files in the log directory, newest first. */
+export function logsList(): Promise<LogFileInfo[]> {
+  return invoke('logs_list');
+}
+
+/** Reads trailing lines of a log file (or the newest file when `file` is omitted). */
+export function logsRead(file: string | null = null, tailLines: number | null = null): Promise<LogReadResult> {
+  return invoke('logs_read', { file, tailLines });
+}
+
 /** Shows finished download `id` in the system file manager. */
 export function transferReveal(id: TransferId): Promise<void> {
   return invoke('transfer_reveal', { id });

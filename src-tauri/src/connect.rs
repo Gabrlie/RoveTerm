@@ -122,6 +122,15 @@ pub fn quick_target(address: &str) -> Result<SshTarget, CommandError> {
     })
 }
 
+fn route_kind(route: &HostRoute) -> &'static str {
+    match route {
+        HostRoute::Direct => "direct",
+        HostRoute::Jump { .. } => "jump",
+        HostRoute::Proxy { .. } => "proxy",
+        HostRoute::Tailscale { .. } => "tailscale",
+    }
+}
+
 /// Runs `op` on a connection for `source`, reporting connection steps to `progress`.
 ///
 /// A live shared connection is tried first without credentials; when it can no longer open
@@ -146,9 +155,21 @@ where
         } => {
             let host = state.vault.host(*host_id)?;
             let target = host_target(state, &host)?;
+            let route_name = route_kind(&host.route);
+            let started = std::time::Instant::now();
             let value = match try_live(state, &target, &op).await? {
-                Some(value) => value,
+                Some(value) => {
+                    tracing::debug!(host_id = %host.id, route = route_name, "reused live ssh connection");
+                    value
+                }
                 None => {
+                    tracing::info!(
+                        host_id = %host.id,
+                        host = %host.hostname,
+                        port = host.port,
+                        route = route_name,
+                        "opening ssh connection"
+                    );
                     let auth = match typed {
                         Some(Typed {
                             value,
@@ -159,8 +180,46 @@ where
                         }
                         None => host_auth(state, &host, None).await?,
                     };
-                    let via = route(state, &host, 0, progress.clone()).await?;
-                    let connection = state.ssh.shared_via(&target, &auth, &via, progress).await?;
+                    let via = match route(state, &host, 0, progress.clone()).await {
+                        Ok(via) => via,
+                        Err(error) => {
+                            tracing::warn!(
+                                host_id = %host.id,
+                                route = route_name,
+                                code = error.code,
+                                elapsed_ms = started.elapsed().as_millis() as u64,
+                                error = %error.message,
+                                "ssh route setup failed"
+                            );
+                            return Err(error);
+                        }
+                    };
+                    let connection = match state.ssh.shared_via(&target, &auth, &via, progress).await
+                    {
+                        Ok(connection) => connection,
+                        Err(error) => {
+                            let cmd_error = CommandError::from(error);
+                            tracing::warn!(
+                                host_id = %host.id,
+                                host = %host.hostname,
+                                port = host.port,
+                                route = route_name,
+                                code = cmd_error.code,
+                                elapsed_ms = started.elapsed().as_millis() as u64,
+                                error = %cmd_error.message,
+                                "ssh connection failed"
+                            );
+                            return Err(cmd_error);
+                        }
+                    };
+                    tracing::info!(
+                        host_id = %host.id,
+                        host = %host.hostname,
+                        port = host.port,
+                        route = route_name,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "ssh connection established"
+                    );
                     let value = op(connection).await?;
                     if *remember && let Some(typed) = typed {
                         remember_typed(state, &host, typed).await;
@@ -181,6 +240,8 @@ where
             {
                 return Ok(value);
             }
+            let started = std::time::Instant::now();
+            tracing::info!(host = %target.hostname, port = target.port, "opening quick ssh connection");
             let auth = match password {
                 Some(password) => AuthSpec::Password(password.clone()),
                 None => AuthSpec::Agent { passphrase: None },
@@ -197,8 +258,26 @@ where
                 {
                     return Err(SshError::CredentialsRequired.into());
                 }
-                result => result?,
+                Err(error) => {
+                    let cmd_error = CommandError::from(error);
+                    tracing::warn!(
+                        host = %target.hostname,
+                        port = target.port,
+                        code = cmd_error.code,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        error = %cmd_error.message,
+                        "quick ssh connection failed"
+                    );
+                    return Err(cmd_error);
+                }
+                Ok(connection) => connection,
             };
+            tracing::info!(
+                host = %target.hostname,
+                port = target.port,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "quick ssh connection established"
+            );
             Ok(op(connection).await?)
         }
     }
@@ -326,14 +405,38 @@ impl rove_ssh::TransportDialer for TailnetDialer {
         host: &str,
         port: u16,
     ) -> Result<Box<dyn rove_ssh::SshTransport>, SshError> {
+        let started = std::time::Instant::now();
+        tracing::info!(
+            host,
+            port,
+            peer_id = ?self.peer_id,
+            "dialing ssh tcp over embedded tailscale"
+        );
         let stream = self
             .service
             .dial_tcp(host, port, self.peer_id.as_deref())
             .await
-            .map_err(|error| match error {
-                rove_tailscale::TailscaleError::Timeout => SshError::Timeout,
-                other => SshError::Connect(other.to_string()),
+            .map_err(|error| {
+                tracing::warn!(
+                    host,
+                    port,
+                    peer_id = ?self.peer_id,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    %error,
+                    "embedded tailscale tcp dial failed"
+                );
+                match error {
+                    rove_tailscale::TailscaleError::Timeout => SshError::Timeout,
+                    other => SshError::Connect(other.to_string()),
+                }
             })?;
+        tracing::info!(
+            host,
+            port,
+            peer_id = ?self.peer_id,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "embedded tailscale tcp dial connected"
+        );
         Ok(Box::new(stream))
     }
 }
