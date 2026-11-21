@@ -1,17 +1,17 @@
 <script lang="ts">
   import { writeClipboard } from '../ui/clipboard';
-  // The key library, laid out like the settings: keys on the left, the selected key (or the
-  // generate / import form) on the right as grouped cards.
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
   import Dialog from '../ui/Dialog.svelte';
   import Select from '../ui/Select.svelte';
+  import Switch from '../ui/Switch.svelte';
   import Icon from '../ui/Icon.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import { ask } from '../ui/confirm.svelte';
   import {
     credentialKindOf,
+    hostUpdate,
     keyDelete,
     keyGenerate,
     keyImport,
@@ -20,6 +20,7 @@
     keyLoadFile,
     keyReveal,
     keyUpdate,
+    type HostEntry,
     type KeyType,
     type SshKey,
   } from '../ipc';
@@ -55,22 +56,56 @@
   let installHost = $state('');
   let installPassword = $state('');
   let installNeedsPassword = $state(false);
+  let switchAuth = $state(true);
+  let installFeedback = $state<{ kind: 'success' | 'warning' | 'error'; text: string } | null>(null);
+  type CopyField = 'fingerprint' | 'public' | 'private';
+  let copied = $state<CopyField | null>(null);
+  let copyTimer: number | undefined;
+  let copyRequest = 0;
 
   const selected = $derived(keys.items.find((key) => key.id === selectedId) ?? null);
   let query = $state('');
   const shown = $derived(keys.items.filter((key) => !query.trim() || `${key.name} ${key.algorithm}`.toLowerCase().includes(query.trim().toLowerCase())));
-  /** Hosts that log in with the selected key. */
-  const usedBy = $derived(selected ? hosts.items.filter((host) => host.auth.method === 'key' && host.auth.key === selected.id) : []);
+  const hostsByKey = $derived.by(() => {
+    const grouped = new Map<string, HostEntry[]>();
+    for (const host of hosts.items) {
+      if (host.auth.method !== 'key') continue;
+      const group = grouped.get(host.auth.key);
+      if (group) group.push(host);
+      else grouped.set(host.auth.key, [host]);
+    }
+    return grouped;
+  });
+  const usedBy = $derived(selected ? hostsByKey.get(selected.id) ?? [] : []);
+  const installableHosts = $derived(selected ? hosts.items.filter((host) => !(host.auth.method === 'key' && host.auth.key === selected.id)) : []);
+  const installOptions = $derived(installableHosts.map((host) => ({ value: host.id, label: `${host.name} (${host.username}@${host.hostname})` })));
+
+  $effect(() => {
+    if (!selected?.id || !installHost || !installableHosts.some((host) => host.id === installHost)) {
+      installHost = installableHosts[0]?.id ?? '';
+      clearInstallPassword();
+    }
+  });
 
   /** `ssh-ed25519` as `Ed25519`, for the list's tag. */
   function algorithmTag(algorithm: string): string {
     const lower = algorithm.toLowerCase();
-    if (lower.includes('ed25519')) return 'Ed25519';
-    if (lower.includes('ecdsa')) return 'ECDSA';
-    if (lower.includes('rsa')) return 'RSA';
+    if (lower.includes('ed25519')) return t('keys.algorithm.ed25519');
+    if (lower.includes('ecdsa')) return t('keys.algorithm.ecdsa');
+    if (lower.includes('rsa')) return t('keys.algorithm.rsa');
     return algorithm;
   }
-  const hostOptions = $derived(hosts.items.map((host) => ({ value: host.id, label: `${host.name} (${host.username}@${host.hostname})` })));
+
+  function clearInstallPassword(): void {
+    installPassword = '';
+    installNeedsPassword = false;
+  }
+
+  function clearCopyFeedback(): void {
+    copyRequest += 1;
+    window.clearTimeout(copyTimer);
+    copied = null;
+  }
 
   function reset(next: Mode): void {
     mode = next;
@@ -85,8 +120,10 @@
     needsPassphrase = false;
     revealed = null;
     renaming = false;
-    installPassword = '';
-    installNeedsPassword = false;
+    clearInstallPassword();
+    clearCopyFeedback();
+    switchAuth = true;
+    installFeedback = null;
   }
 
   function select(key: SshKey): void {
@@ -197,37 +234,78 @@
   }
 
   async function reveal(): Promise<void> {
-    if (!selected) return;
+    if (revealed) {
+      revealed = null;
+      clearCopyFeedback();
+      return;
+    }
+    if (!selected || busy) return;
+    busy = true;
+    error = '';
     try {
-      revealed = revealed ? null : await keyReveal(selected.id);
+      revealed = await keyReveal(selected.id);
     } catch (caught) {
       error = errorText(caught);
+    } finally {
+      busy = false;
     }
   }
 
-  async function copy(text: string): Promise<void> {
-    await writeClipboard(text).catch((caught: unknown) => console.warn('copy failed', caught));
-    notice = t('keys.copied');
+  async function copy(field: CopyField, text: string): Promise<void> {
+    clearCopyFeedback();
+    const request = copyRequest;
+    error = '';
+    try {
+      await writeClipboard(text);
+      if (request !== copyRequest) return;
+      copied = field;
+      copyTimer = window.setTimeout(() => (copied = null), 1600);
+    } catch (caught) {
+      if (request === copyRequest) error = errorText(caught);
+    }
   }
 
   async function install(event: SubmitEvent): Promise<void> {
     event.preventDefault();
-    if (!selected || !installHost) return;
+    const key = selected;
+    const host = installableHosts.find((item) => item.id === installHost);
+    if (busy || !key || !host) return;
+    const updateAuth = switchAuth;
     busy = true;
-    error = '';
-    notice = '';
+    installFeedback = null;
+    let installed = false;
+    let authUpdated = false;
     try {
       const typed = installNeedsPassword ? installPassword : null;
-      await keyInstall(selected.id, installHost, typed, typed === null ? 'natural' : 'password');
-      notice = t('keys.installed', { host: hosts.find(installHost)?.name ?? '' });
-      installNeedsPassword = false;
-      installPassword = '';
-    } catch (caught) {
-      // Installing a key usually happens before key login works: offer a password.
-      if (credentialKindOf(caught) || (typeof caught === 'object' && caught !== null && 'code' in caught && String(caught.code).startsWith('ssh.'))) {
-        installNeedsPassword = true;
+      await keyInstall(key.id, host.id, typed, typed === null ? 'natural' : 'password');
+      installed = true;
+      clearInstallPassword();
+      if (updateAuth) {
+        const { name, group, hostname, port, username, route, tags } = hosts.find(host.id) ?? host;
+        await hostUpdate(host.id, {
+          name, group, hostname, port, username, route, tags,
+          auth: { method: 'key', key: key.id },
+        }, null, false);
+        authUpdated = true;
+        await hosts.refresh();
       }
-      error = errorText(caught);
+      installFeedback = {
+        kind: 'success',
+        text: t(authUpdated ? 'keys.installedAndSwitched' : 'keys.installed', { host: host.name }),
+      };
+    } catch (caught) {
+      if (installed) {
+        installFeedback = {
+          kind: 'warning',
+          text: t(authUpdated ? 'keys.installRefreshFailed' : 'keys.installAuthFailed', { host: host.name, error: errorText(caught) }),
+        };
+      } else {
+        const sshError = typeof caught === 'object' && caught !== null && 'code' in caught && String(caught.code).startsWith('ssh.');
+        if (installHost === host.id && (credentialKindOf(caught) || sshError)) {
+          installNeedsPassword = true;
+        }
+        installFeedback = { kind: 'error', text: errorText(caught) };
+      }
     } finally {
       busy = false;
     }
@@ -244,8 +322,13 @@
     if (!confirmed) return;
     try {
       await keyDelete(selected.id);
-      selectedId = null;
       await keys.refresh();
+      const first = keys.items[0];
+      if (first) select(first);
+      else {
+        selectedId = null;
+        reset('generate');
+      }
     } catch (caught) {
       error = errorText(caught);
     }
@@ -253,12 +336,13 @@
 
   onMount(() => {
     void keys.refresh().then(() => {
-      const first = selectedId ? keys.find(selectedId) : keys.items[0];
+      const first = (selectedId ? keys.find(selectedId) : null) ?? keys.items[0];
       if (first) select(first);
       else reset('generate');
     });
-    if (hosts.items[0]) installHost = hosts.items[0].id;
   });
+
+  onDestroy(clearCopyFeedback);
 </script>
 
 <Dialog title={t('keys.title')} {onclose} width={800}>
@@ -270,12 +354,16 @@
       </div>
       <div class="list">
         {#each shown as key (key.id)}
-          <button type="button" class="item" class:active={mode === 'view' && key.id === selectedId} onclick={() => select(key)}>
+          {@const count = hostsByKey.get(key.id)?.length ?? 0}
+          <button type="button" class="item" class:active={mode === 'view' && key.id === selectedId} disabled={busy} onclick={() => select(key)}>
             <span class="glyph"><Icon name="key" size={12} /></span>
             <span class="text">
-              <span class="name">{key.name}</span>
+              <span class="name" title={key.name}>{key.name}</span>
               <span class="meta">
                 <span class="tag">{algorithmTag(key.algorithm)}</span>
+                {#if count > 0}
+                  <span class="tag count" title={t('keys.usageCount', { count })} aria-label={t('keys.usageCount', { count })}>{count}</span>
+                {/if}
                 {#if !key.has_private}<span class="warn">{t('keys.missingPrivate')}</span>{/if}
               </span>
             </span>
@@ -286,168 +374,204 @@
       </div>
       <!-- At the foot of the sidebar. -->
       <div class="add">
-        <button type="button" class:active={mode === 'generate'} onclick={() => reset('generate')}><Icon name="add" size={13} />{t('keys.generate')}</button>
-        <button type="button" class:active={mode === 'import'} onclick={() => reset('import')}><Icon name="importConfig" size={13} />{t('keys.import')}</button>
+        <button type="button" class:active={mode === 'generate'} disabled={busy} onclick={() => reset('generate')}><Icon name="add" size={13} />{t('keys.generate')}</button>
+        <button type="button" class:active={mode === 'import'} disabled={busy} onclick={() => reset('import')}><Icon name="importConfig" size={13} />{t('keys.import')}</button>
       </div>
     </nav>
 
     <div class="main">
-    <div class="pane">
-      {#if mode === 'view' && selected}
-        <div class="head">
-          {#if renaming}
-            <form class="rename" onsubmit={rename}>
-              <!-- svelte-ignore a11y_autofocus -->
-              <input class="field" bind:value={name} required autofocus aria-label={t('keys.name')} />
-              <button type="submit" class="primary">{t('common.save')}</button>
-              <button type="button" class="secondary" onclick={() => ((renaming = false), (name = selected?.name ?? ''))}>{t('common.cancel')}</button>
-            </form>
-          {:else}
-            <h2>{selected.name}</h2>
-            <IconButton icon="edit" label={t('keys.rename')} small onclick={() => (renaming = true)} />
-            <span class="spacer"></span>
-            <button type="button" class="secondary danger-text" onclick={() => void remove()}>{t('keys.delete')}</button>
-          {/if}
-        </div>
+      <div class="pane">
+        {#if mode === 'view' && selected}
+          <section class="card summary">
+            <div class="head">
+              {#if renaming}
+                <form class="rename" onsubmit={rename}>
+                  <!-- svelte-ignore a11y_autofocus -->
+                  <input class="field" bind:value={name} required autofocus aria-label={t('keys.name')} />
+                  <button type="submit" class="primary" disabled={busy}>{t('common.save')}</button>
+                  <button type="button" class="secondary" onclick={() => ((renaming = false), (name = selected?.name ?? ''))}>{t('common.cancel')}</button>
+                </form>
+              {:else}
+                <h2 title={selected.name}>{selected.name}</h2>
+                <IconButton icon="edit" label={t('keys.rename')} small disabled={busy} onclick={() => (renaming = true)} />
+                <span class="spacer"></span>
+                <button type="button" class="secondary danger-text" disabled={busy} onclick={() => void remove()}>{t('keys.delete')}</button>
+              {/if}
+            </div>
+            <div class="meta">
+              <span class="tag">{algorithmTag(selected.algorithm)}</span>
+              <span class="tag" class:stored={selected.has_private} class:missing={!selected.has_private}>
+                {t(selected.has_private ? 'keys.privateStored' : 'keys.missingPrivate')}
+              </span>
+            </div>
+            <div class="fingerprint">
+              <span class="fingerprint-label">{t('keys.fingerprint')}</span>
+              <code class="mono selectable">{selected.fingerprint}</code>
+              <div class="copy-action">
+                <IconButton icon={copied === 'fingerprint' ? 'check' : 'copy'} small active={copied === 'fingerprint'}
+                  label={t(copied === 'fingerprint' ? 'keys.copied' : 'keys.copyFingerprint')}
+                  onclick={() => selected && void copy('fingerprint', selected.fingerprint)} />
+              </div>
+            </div>
+          </section>
 
-        <div class="form-group">
-          <div class="form-row">
-            <span class="form-label">{t('keys.type')}</span>
-            <span class="value">{selected.algorithm}</span>
-          </div>
-          <div class="form-row">
-            <span class="form-label">{t('keys.fingerprint')}</span>
-            <span class="value mono selectable">{selected.fingerprint}</span>
-            <IconButton icon="copy" small label={t('edit.copy')} onclick={() => void copy(selected.fingerprint)} />
-          </div>
-          <div class="form-row">
-            <span class="form-label">{t('keys.usedBy')}</span>
-            <span class="value">{usedBy.length > 0 ? usedBy.map((host) => host.name).join(', ') : t('keys.unused')}</span>
-          </div>
-        </div>
+          <section class="card">
+            <div class="card-header">
+              <h3>{t('keys.usedBy')}</h3>
+              <span class="tag count">{usedBy.length}</span>
+            </div>
+            {#if usedBy.length}
+              <ul class="host-chips">
+                {#each usedBy as host (host.id)}
+                  <li class="tag" title={`${host.username}@${host.hostname}`}>{host.name}</li>
+                {/each}
+              </ul>
+            {:else}
+              <p class="hint">{t('keys.unused')}</p>
+            {/if}
+          </section>
 
-        <p class="section-label">{t('keys.publicKey')}</p>
-        <div class="form-group">
-          <div class="form-row stacked">
+          <section class="card">
+            <div class="card-header">
+              <h3>{t('keys.publicKey')}</h3>
+              {#if !editingPublic}
+                <div class="actions">
+                  {#if selected.has_private}<button type="button" class="secondary" onclick={startEditPublic}>{t('keys.editPublic')}</button>{/if}
+                  <button type="button" class="secondary" class:copied={copied === 'public'} onclick={() => selected && void copy('public', selected.public_key)}>
+                    <Icon name={copied === 'public' ? 'check' : 'copy'} size={13} />
+                    {t(copied === 'public' ? 'keys.copied' : 'keys.copyPublic')}
+                  </button>
+                </div>
+              {/if}
+            </div>
             {#if editingPublic}
               <textarea class="mono" rows="3" bind:value={publicKey} spellcheck="false" aria-label={t('keys.publicKey')}></textarea>
               <p class="hint">{t('keys.publicHint')}</p>
               <div class="actions">
                 <button type="button" class="secondary" onclick={() => (editingPublic = false)}>{t('common.cancel')}</button>
-                <button type="button" class="primary" onclick={() => void savePublic()}>{t('common.save')}</button>
+                <button type="button" class="primary" disabled={busy} onclick={() => void savePublic()}>{t('common.save')}</button>
               </div>
             {:else}
               <pre class="key selectable">{selected.public_key}</pre>
-              <div class="actions">
-                {#if selected.has_private}<button type="button" class="secondary" onclick={startEditPublic}>{t('keys.editPublic')}</button>{/if}
-                <button type="button" class="primary" onclick={() => void copy(selected.public_key)}>{t('keys.copyPublic')}</button>
-              </div>
             {/if}
-          </div>
-        </div>
+          </section>
 
-        <p class="section-label">{t('keys.privateKey')}</p>
-        <div class="form-group">
-          {#if selected.has_private}
-            {#if revealed}
-              <div class="form-row stacked">
-                <pre class="key selectable">{revealed.private_key}</pre>
+          <section class="card">
+            <div class="card-header">
+              <h3>{t('keys.privateKey')}</h3>
+              {#if revealed?.passphrase}<span class="tag">{t('keys.hasPassphrase')}</span>{/if}
+              {#if selected.has_private}
                 <div class="actions">
-                  {#if revealed.passphrase}<span class="hint grow">{t('keys.hasPassphrase')}</span>{/if}
-                  <button type="button" class="secondary" onclick={() => void reveal()}>{t('keys.hidePrivate')}</button>
-                  <button type="button" class="primary" onclick={() => revealed && void copy(revealed.private_key)}>{t('keys.copyPrivate')}</button>
+                  <button type="button" class="secondary" disabled={busy && !revealed} onclick={() => void reveal()}>{t(revealed ? 'keys.hidePrivate' : 'keys.showPrivate')}</button>
+                  {#if revealed}
+                    <button type="button" class="secondary" class:copied={copied === 'private'} onclick={() => revealed && void copy('private', revealed.private_key)}>
+                      <Icon name={copied === 'private' ? 'check' : 'copy'} size={13} />
+                      {t(copied === 'private' ? 'keys.copied' : 'keys.copyPrivate')}
+                    </button>
+                  {/if}
                 </div>
-              </div>
+              {/if}
+            </div>
+            {#if revealed}
+              <pre class="key selectable">{revealed.private_key}</pre>
             {:else}
-              <div class="form-row">
-                <span class="form-label">{t('keys.privateStored')}<small>{t('keys.privateStoredHint')}</small></span>
-                <button type="button" class="secondary" onclick={() => void reveal()}>{t('keys.showPrivate')}</button>
-              </div>
+              <p class="hint" class:warn={!selected.has_private}>{t(selected.has_private ? 'keys.privateStoredHint' : 'keys.missingPrivateHint')}</p>
             {/if}
-          {:else}
-            <div class="form-row"><span class="form-label"><small class="warn">{t('keys.missingPrivateHint')}</small></span></div>
-          {/if}
-        </div>
+          </section>
 
-        <p class="section-label">{t('keys.installTitle')}</p>
-        <form class="form-group" onsubmit={install}>
-          {#if hostOptions.length > 0}
-            <div class="form-row">
-              <span class="form-label">{t('keys.installHost')}<small>{t('keys.installHint')}</small></span>
-              <div class="control"><Select bind:value={installHost} options={hostOptions} /></div>
-            </div>
-            {#if installNeedsPassword}
-              <div class="form-row">
-                <span class="form-label">{t('host.password')}</span>
-                <input class="field" type="password" bind:value={installPassword} autocomplete="off" aria-label={t('host.password')} />
+          <form class="card" onsubmit={install}>
+            <div class="card-header"><h3>{t('keys.installTitle')}</h3></div>
+            {#if hosts.items.length === 0}
+              <p class="hint">{t('keys.noHosts')}</p>
+            {:else if installableHosts.length === 0}
+              <p class="hint">{t('keys.allHostsUsing')}</p>
+            {:else}
+              <p class="hint">{t('keys.installHint')}</p>
+              <div class="install-field">
+                <span>{t('keys.installHost')}</span>
+                <Select bind:value={installHost} label={t('keys.installHost')} options={installOptions} disabled={busy}
+                  onchange={() => { clearInstallPassword(); installFeedback = null; }} />
               </div>
+              <div class="install-field">
+                <span>{t('keys.switchHostAuth')}</span>
+                <Switch bind:checked={switchAuth} label={t('keys.switchHostAuth')} disabled={busy} />
+              </div>
+              {#if installNeedsPassword}
+                <label class="install-field">
+                  <span>{t('host.password')}</span>
+                  <input class="field" type="password" bind:value={installPassword} autocomplete="off" required disabled={busy} />
+                </label>
+              {/if}
             {/if}
-            <div class="form-row end">
-              <button type="submit" class="primary" disabled={busy}>{t('keys.install')}</button>
+            {#if installFeedback}
+              <p class="feedback selectable {installFeedback.kind}" role={installFeedback.kind === 'error' ? 'alert' : 'status'}>
+                <Icon name={installFeedback.kind === 'success' ? 'check' : 'warning'} size={14} />
+                <span>{installFeedback.text}</span>
+              </p>
+            {/if}
+            <div class="actions">
+              <button type="submit" class="primary" disabled={busy || !installHost || installableHosts.length === 0}>{t('keys.install')}</button>
             </div>
-          {:else}
-            <div class="form-row"><span class="form-label"><small>{t('keys.noHosts')}</small></span></div>
-          {/if}
-        </form>
-      {:else if mode === 'generate' || mode === 'import'}
-        <form id="key-form" onsubmit={submitNew}>
-          <div class="head"><h2>{mode === 'generate' ? t('keys.generate') : t('keys.import')}</h2></div>
-          <div class="form-group">
-            <div class="form-row">
-              <span class="form-label">{t('keys.name')}</span>
-              <input class="field" bind:value={name} required autocomplete="off" aria-label={t('keys.name')} />
-            </div>
-            {#if mode === 'generate'}
+          </form>
+        {:else if mode === 'generate' || mode === 'import'}
+          <form id="key-form" onsubmit={submitNew}>
+            <div class="head"><h2>{mode === 'generate' ? t('keys.generate') : t('keys.import')}</h2></div>
+            <div class="form-group">
               <div class="form-row">
-                <span class="form-label">{t('keys.type')}</span>
-                <div class="control">
-                  <Select
-                    bind:value={kind}
-                    options={[
-                      { value: 'ed25519', label: 'Ed25519' },
-                      { value: 'ecdsa_p256', label: 'ECDSA P-256' },
-                      { value: 'rsa3072', label: 'RSA 3072' },
-                    ]}
-                  />
+                <span class="form-label">{t('keys.name')}</span>
+                <input class="field" bind:value={name} required autocomplete="off" aria-label={t('keys.name')} />
+              </div>
+              {#if mode === 'generate'}
+                <div class="form-row">
+                  <span class="form-label">{t('keys.type')}</span>
+                  <div class="control">
+                    <Select
+                      bind:value={kind}
+                      options={[
+                        { value: 'ed25519', label: t('keys.algorithm.ed25519') },
+                        { value: 'ecdsa_p256', label: t('keys.algorithm.p256') },
+                        { value: 'rsa3072', label: t('keys.algorithm.rsa3072') },
+                      ]}
+                    />
+                  </div>
+                </div>
+                <div class="form-row">
+                  <span class="form-label">{t('keys.comment')}</span>
+                  <input class="field" bind:value={comment} placeholder={t('keys.commentExample')} autocomplete="off" aria-label={t('keys.comment')} />
+                </div>
+              {/if}
+              <div class="form-row">
+                <span class="form-label">{mode === 'generate' ? t('keys.newPassphrase') : t('host.passphrase')}</span>
+                <input class="field" type="password" bind:value={passphrase} autocomplete="new-password" class:attention={needsPassphrase} aria-label={t('host.passphrase')} />
+              </div>
+            </div>
+            {#if mode === 'import'}
+              <p class="section-label">{t('keys.privateKey')}</p>
+              <div class="form-group">
+                <div class="form-row stacked">
+                  <textarea class="mono" rows="7" bind:value={privateKey} required spellcheck="false" placeholder={t('keys.privateExample')} aria-label={t('keys.privateKey')}></textarea>
+                  <div class="actions"><button type="button" class="secondary" onclick={(event) => void loadKey(event)}>{t('keys.fromFile')}</button></div>
                 </div>
               </div>
-              <div class="form-row">
-                <span class="form-label">{t('keys.comment')}</span>
-                <input class="field" bind:value={comment} placeholder="me@laptop" autocomplete="off" aria-label={t('keys.comment')} />
+              <p class="section-label">{t('keys.publicKeyOptional')}</p>
+              <div class="form-group">
+                <div class="form-row stacked">
+                  <textarea class="mono" rows="2" bind:value={publicKey} spellcheck="false" placeholder={t('keys.publicExample')} aria-label={t('keys.publicKeyOptional')}></textarea>
+                  <p class="hint">{t('keys.publicHint')}</p>
+                </div>
               </div>
             {/if}
-            <div class="form-row">
-              <span class="form-label">{mode === 'generate' ? t('keys.newPassphrase') : t('host.passphrase')}</span>
-              <input class="field" type="password" bind:value={passphrase} autocomplete="new-password" class:attention={needsPassphrase} aria-label={t('host.passphrase')} />
+            <div class="submit">
+              <button type="submit" class="primary" disabled={busy}>{busy && mode === 'generate' ? t('keys.generating') : mode === 'generate' ? t('keys.generate') : t('keys.import')}</button>
             </div>
-          </div>
-          {#if mode === 'import'}
-            <p class="section-label">{t('keys.privateKey')}</p>
-            <div class="form-group">
-              <div class="form-row stacked">
-                <textarea class="mono" rows="7" bind:value={privateKey} required spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" aria-label={t('keys.privateKey')}></textarea>
-                <div class="actions"><button type="button" class="secondary" onclick={(event) => void loadKey(event)}>{t('keys.fromFile')}</button></div>
-              </div>
-            </div>
-            <p class="section-label">{t('keys.publicKeyOptional')}</p>
-            <div class="form-group">
-              <div class="form-row stacked">
-                <textarea class="mono" rows="2" bind:value={publicKey} spellcheck="false" placeholder="ssh-ed25519 AAAA… comment" aria-label={t('keys.publicKeyOptional')}></textarea>
-                <p class="hint">{t('keys.publicHint')}</p>
-              </div>
-            </div>
-          {/if}
-          <div class="submit">
-            <button type="submit" class="primary" disabled={busy}>{busy && mode === 'generate' ? t('keys.generating') : mode === 'generate' ? t('keys.generate') : t('keys.import')}</button>
-          </div>
-        </form>
-      {/if}
-      {#if error}<p class="message error">{error}</p>{/if}
-      {#if notice}<p class="message notice">{notice}</p>{/if}
-    </div>
-    <div class="foot">
-      <button type="button" class="primary" onclick={onclose}>{t('settings.done')}</button>
-    </div>
+          </form>
+        {/if}
+        {#if error}<p class="message error">{error}</p>{/if}
+        {#if notice}<p class="message notice">{notice}</p>{/if}
+      </div>
+      <div class="foot">
+        <button type="button" class="primary" onclick={onclose}>{t('settings.done')}</button>
+      </div>
     </div>
   </div>
 </Dialog>
@@ -466,7 +590,7 @@
   }
   /* A sidebar of its own, the full height of the dialog. */
   nav {
-    flex: 0 0 220px;
+    flex: 0 0 clamp(120px, 28%, 220px);
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
@@ -478,7 +602,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    height: 28px;
+    height: var(--control-height);
     padding: 0 var(--space-2);
     border-radius: var(--radius-sm);
     background: var(--fill);
@@ -501,14 +625,14 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-1);
     overflow-y: auto;
   }
   .item {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    padding: 5px var(--space-2);
+    padding: var(--space-2);
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;
@@ -521,19 +645,18 @@
     background: var(--fill-hover);
   }
   .item.active {
-    background: var(--accent);
-    color: var(--accent-fg);
+    background: var(--accent-soft);
+    color: var(--fg);
   }
   .glyph {
     display: grid;
     flex: none;
     place-items: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 6px;
-    background: linear-gradient(to bottom, color-mix(in srgb, var(--sys-orange, #ff9f0a) 80%, #fff), var(--sys-orange, #ff9f0a));
-    color: #fff;
-    box-shadow: 0 0.5px 1px rgb(0 0 0 / 0.15);
+    width: var(--space-6);
+    height: var(--space-6);
+    border-radius: var(--radius-sm);
+    background: var(--warning-soft);
+    color: var(--warning);
   }
   .text {
     display: flex;
@@ -549,23 +672,29 @@
     display: flex;
     gap: var(--space-1);
     align-items: center;
-    font-size: 11px;
+    flex-wrap: wrap;
+    font-size: var(--text-caption);
   }
   .tag {
-    padding: 0 5px;
+    padding: 0 var(--space-2);
     border-radius: var(--radius-pill);
     background: var(--fill);
     color: var(--fg-muted);
   }
-  .item.active .tag {
-    background: rgb(255 255 255 / 0.2);
-    color: inherit;
+  .count {
+    font-size: var(--text-caption);
+    font-variant-numeric: tabular-nums;
+  }
+  .stored {
+    background: var(--success-soft);
+    color: var(--success);
+  }
+  .missing {
+    background: var(--warning-soft);
+    color: var(--warning);
   }
   .warn {
     color: var(--warning);
-  }
-  .item.active .warn {
-    color: inherit;
   }
   .empty {
     margin: var(--space-3) var(--space-2);
@@ -575,7 +704,7 @@
   .add {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-1);
     padding-top: var(--space-2);
     box-shadow: inset 0 1px 0 var(--separator);
   }
@@ -583,7 +712,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    height: 28px;
+    height: var(--control-height);
     padding: 0 var(--space-2);
     border: none;
     border-radius: var(--radius-sm);
@@ -650,8 +779,7 @@
     font-weight: 700;
     letter-spacing: -0.01em;
   }
-  .spacer,
-  .grow {
+  .spacer {
     flex: 1;
   }
   .rename {
@@ -662,19 +790,106 @@
   .rename .field {
     flex: 1;
   }
-  .value {
-    min-width: 0;
-    max-width: 60%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  @media (max-width: 600px) {
+    .pane {
+      padding-inline: var(--space-2);
+    }
+    .item .glyph {
+      display: none;
+    }
+  }
+  .card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border: 1px solid var(--separator);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+  }
+  .summary {
+    gap: var(--space-3);
+  }
+  .card-header,
+  .fingerprint,
+  .install-field {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .card-header .actions {
+    margin-inline-start: auto;
+  }
+  .card-header h3 {
+    margin: 0;
+    font-size: var(--text-body);
+    font-weight: 650;
+  }
+  .fingerprint {
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--fill);
+  }
+  .fingerprint-label {
     color: var(--fg-muted);
+    font-size: var(--text-caption);
+  }
+  .fingerprint code {
+    flex: 1 1 15em;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .copy-action {
+    flex: none;
+    margin-inline-start: auto;
+  }
+  .host-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .host-chips li {
+    padding-block: var(--space-1);
+    color: var(--fg);
+    overflow-wrap: anywhere;
+  }
+  .install-field {
+    justify-content: space-between;
+  }
+  .install-field > span {
+    flex: 1 1 auto;
+  }
+  .feedback {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    margin: 0;
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
     font-size: var(--text-footnote);
-    text-align: right;
+    overflow-wrap: anywhere;
+  }
+  .feedback.success {
+    background: var(--success-soft);
+    color: var(--success);
+  }
+  .feedback.warning {
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+  .feedback.error {
+    background: var(--danger-soft);
+  }
+  .copied {
+    color: var(--success);
   }
   .mono {
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: var(--text-footnote);
   }
   .stacked {
     flex-direction: column;
@@ -689,7 +904,7 @@
     border-radius: var(--radius-sm);
     background: var(--fill);
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: var(--text-footnote);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
@@ -706,21 +921,25 @@
     display: flex;
     align-items: center;
     justify-content: flex-end;
+    flex-wrap: wrap;
     gap: var(--space-2);
-  }
-  .end {
-    justify-content: flex-end;
   }
   .hint {
     margin: 0;
     color: var(--fg-muted);
-    font-size: 11px;
+    font-size: var(--text-footnote);
+  }
+  .hint.warn {
+    color: var(--warning);
   }
   .field {
     width: 240px;
+    max-width: 100%;
+    min-width: 0;
   }
   .control {
     width: 260px;
+    max-width: 100%;
   }
   .submit {
     display: flex;
