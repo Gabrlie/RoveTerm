@@ -68,6 +68,8 @@
   let pathInput = $state('');
   let entries = $state<DirEntry[]>([]);
   let loading = $state(true);
+  let loadingPath = $state<string | null>(null);
+  let navSeq = 0;
   let status = $state<{ error: boolean; text: string } | null>(null);
   let selected = $state<Set<string>>(new Set());
   let anchor = -1;
@@ -124,10 +126,13 @@
   }
 
   async function navigate(path: string, focusList = true): Promise<void> {
-    if (!fsId) return;
+    if (!fsId || destroyed) return;
+    const seq = ++navSeq;
     loading = true;
+    loadingPath = path;
     try {
       const listing = await sftpList(fsId, path);
+      if (seq !== navSeq || destroyed) return;
       if (path !== cwd) {
         selected = new Set();
         anchor = -1;
@@ -136,12 +141,15 @@
       cwd = path;
       status = null;
     } catch (error) {
-      fail(error);
+      if (seq === navSeq && !destroyed) fail(error);
     } finally {
-      pathInput = cwd;
-      loading = false;
-      // Re-rendered rows drop focus; keep keyboard navigation on the list.
-      if (focusList && active && !pending && !draft) list?.focus({ preventScroll: true });
+      if (seq === navSeq && !destroyed) {
+        pathInput = cwd;
+        loadingPath = null;
+        loading = false;
+        // Re-rendered rows drop focus; keep keyboard navigation on the list.
+        if (focusList && active && !pending && !draft) list?.focus({ preventScroll: true });
+      }
     }
   }
 
@@ -471,6 +479,7 @@
       onopened?.();
       await navigate(opened.home);
     } catch (error) {
+      if (destroyed) return;
       loading = false;
       fail(error);
       onerror?.(error);
@@ -499,7 +508,9 @@
   {:else}
   <div class="toolbar">
     <IconButton icon="up" label={t('files.up')} small disabled={!fsId || parentPath(cwd) === null} onclick={goUp} />
-    <IconButton icon="refresh" label={t('files.refresh')} small disabled={!fsId} onclick={() => void refresh()} />
+    <span class:spinning={loading && entries.length > 0}>
+      <IconButton icon="refresh" label={t('files.refresh')} small disabled={!fsId} onclick={() => void refresh()} />
+    </span>
     <form class="path" onsubmit={submitPath}>
       <input class="bare" bind:value={pathInput} spellcheck="false" disabled={!fsId} aria-label={t('files.path')} />
     </form>
@@ -528,8 +539,11 @@
     <span class="size">{t('files.size')}</span>
     <span class="time">{t('files.modified')}</span>
     <span class="mode">{t('files.mode')}</span>
+    {#if loading && entries.length > 0}
+      <div class="loading-bar" aria-hidden="true"></div>
+    {/if}
   </div>
-  <div class="list" tabindex="0" role="listbox" aria-multiselectable="true" aria-label={label} bind:this={list} onkeydown={onListKeydown} oncontextmenu={listMenu} onclick={clickBlank}>
+  <div class="list" class:loading tabindex="0" role="listbox" aria-multiselectable="true" aria-busy={loading} aria-label={label} bind:this={list} onkeydown={onListKeydown} oncontextmenu={listMenu} onclick={clickBlank}>
     <!-- Connecting and the first listing both show the skeleton, so no empty list flashes in between. -->
     {#if loading && entries.length === 0}
       <FilesSkeleton />
@@ -560,8 +574,8 @@
     {/each}
   </div>
 
-  <div class="status" class:error={status?.error}>
-    {#if status}{status.text}{:else if fsId}{t('files.summary', { count: shown.length, selected: selection.length })}{/if}
+  <div class="status" class:error={!loading && status?.error} role="status">
+    {#if loading && fsId}{t('files.loadingDir', { path: loadingPath ?? cwd })}{:else if status}{status.text}{:else if fsId}{t('files.summary', { count: shown.length, selected: selection.length })}{/if}
   </div>
 
   {#if dropping}
@@ -642,6 +656,12 @@
     margin: 0 var(--space-1);
     background: var(--separator);
   }
+  .spinning :global(svg) {
+    animation: refresh-spin calc(4 * var(--dur-slow)) linear infinite;
+  }
+  @keyframes refresh-spin {
+    to { transform: rotate(1turn); }
+  }
   .path {
     flex: 1;
     min-width: 80px;
@@ -676,6 +696,7 @@
     border-radius: var(--radius-sm);
   }
   .header {
+    position: relative;
     height: 26px;
     margin: 0;
     padding: 0 calc(6px + var(--space-2));
@@ -684,6 +705,33 @@
     font-size: var(--text-caption);
     font-weight: 600;
     box-shadow: inset 0 -1px 0 var(--separator);
+  }
+  .loading-bar {
+    position: absolute;
+    inset: 100% 0 auto;
+    z-index: 1;
+    height: calc(var(--space-1) / 2);
+    overflow: hidden;
+    pointer-events: none;
+    background: var(--accent-soft);
+  }
+  .loading-bar::before {
+    content: '';
+    display: block;
+    width: 35%;
+    height: 100%;
+    background: var(--accent);
+    animation: list-progress calc(5 * var(--dur-slow)) ease-in-out infinite;
+  }
+  @keyframes list-progress {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(286%); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .loading-bar::before,
+    .spinning :global(svg) {
+      animation: none;
+    }
   }
   .list {
     flex: 1;
@@ -695,6 +743,10 @@
   .entry {
     cursor: default;
     user-select: none;
+    transition: opacity var(--dur) var(--ease);
+  }
+  .list.loading .entry {
+    opacity: 0.55;
   }
   /* Stripes only plain rows: `nth-child(… of …)` outranks the hover and selection rules. */
   .entry:nth-child(even of .entry):not(:hover, .selected) {

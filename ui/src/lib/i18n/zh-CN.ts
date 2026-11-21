@@ -1045,6 +1045,7 @@ export const zhCN: Messages = {
   'files.modified': '修改时间',
   'files.mode': '权限',
   'files.empty': '此文件夹为空',
+  'files.loadingDir': '正在加载 {path}…',
   'files.summary': '共 {count} 项，已选 {selected} 项',
   'files.downloading': '正在下载 {count} 项',
   'files.uploading': '正在上传 {count} 项',

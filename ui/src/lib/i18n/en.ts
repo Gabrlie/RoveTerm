@@ -954,6 +954,7 @@ export const en = {
   'files.modified': 'Modified',
   'files.mode': 'Permissions',
   'files.empty': 'This folder is empty',
+  'files.loadingDir': 'Loading {path}…',
   'files.summary': '{count} items, {selected} selected',
   'files.downloading': 'Downloading {count} item(s)',
   'files.uploading': 'Uploading {count} item(s)',
