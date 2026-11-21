@@ -4,6 +4,7 @@
 
 ## 契约
 
+- `install_crypto_provider()` 可在启动时重复调用，为使用进程默认值的 rustls 调用方安装 ring。
 - `client(timeout)` 返回带 RoveTerm user agent 的客户端；`timeout` 为整次请求的上限，`None` 不限（流式响应自行限时）。
 - `builder(timeout)` 返回同样设置的构造器，供需要额外设置（如重定向策略）的调用方使用。
 - 重新导出 `reqwest`，调用方不必单独声明版本。

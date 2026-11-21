@@ -130,12 +130,14 @@ impl kameo::Actor for Uniderp {
         _: WeakActorRef<Self>,
         _: ActorStopReason,
     ) -> Result<(), Self::Error> {
-        self.env
+        // Multiderp may have already stopped during shutdown.
+        let _ = self
+            .env
             .tell::<Multiderp, _>(
                 None,
                 SetRegionTransportId(self.runner_state.region_id, None),
             )
-            .await?;
+            .await;
 
         Ok(())
     }
@@ -227,6 +229,24 @@ struct Runner {
     keys: NodeKeyPair,
 }
 
+enum Activity {
+    Packet(DynEndpoint, Vec<PacketMut>),
+    HomeDerp,
+    Closed,
+}
+
+enum TransportExit {
+    Idle,
+    Closed,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Retry {
+    Reconnect,
+    Wait,
+    Closed,
+}
+
 impl Runner {
     const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -237,7 +257,11 @@ impl Runner {
         let mut reconnect = false;
         loop {
             if !reconnect {
-                pending = self.wait_for_activity().await;
+                pending = match self.wait_for_activity().await {
+                    Activity::Packet(ep, packets) => Some((ep, packets)),
+                    Activity::HomeDerp => None,
+                    Activity::Closed => break,
+                };
             }
             let result = match self.connect().await {
                 Ok(transport) => {
@@ -252,42 +276,83 @@ impl Runner {
             };
 
             match result {
-                Ok(()) => {
-                    retry = Duration::from_secs(1);
-                    reconnect = false;
-                }
+                Ok(TransportExit::Closed) => break,
+                Ok(TransportExit::Idle) => reconnect = false,
                 Err(error) => {
-                    reconnect = true;
-                    tracing::warn!(%error, retry_in_secs = retry.as_secs(), "DERP disconnected, retrying");
-                    tokio::time::sleep(retry).await;
-                    retry = (retry * 2).min(Duration::from_secs(15));
+                    let home = *self.home_derp_rx.borrow_and_update();
+                    if home {
+                        tracing::warn!(%error, retry_in_secs = retry.as_secs(), "DERP disconnected, retrying");
+                    } else {
+                        tracing::debug!(%error, "DERP disconnected, waiting for traffic");
+                    }
+                    match self.retry_after_error(home, retry).await {
+                        Retry::Reconnect => {
+                            reconnect = true;
+                            retry = (retry * 2).min(Duration::from_secs(15));
+                            continue;
+                        }
+                        Retry::Wait => reconnect = false,
+                        Retry::Closed => break,
+                    }
                 }
             }
+            retry = Duration::from_secs(1);
         }
     }
 
+    async fn retry_after_error(&mut self, home: bool, retry: Duration) -> Retry {
+        if self.home_derp_rx.has_changed().is_err()
+            || self.from_dataplane.lock().await.is_closed()
+            || self.to_dataplane.is_closed()
+        {
+            return Retry::Closed;
+        }
+        if home {
+            tokio::select! {
+                biased;
+                changed = self.home_derp_rx.changed() => {
+                    if changed.is_err() {
+                        return Retry::Closed;
+                    }
+                }
+                _ = self.to_dataplane.closed() => return Retry::Closed,
+                _ = tokio::time::sleep(retry) => return Retry::Reconnect,
+            }
+        }
+        Retry::Wait
+    }
+
     #[tracing::instrument(skip_all, level = "trace")]
-    async fn wait_for_activity(&mut self) -> Option<(DynEndpoint, Vec<PacketMut>)> {
+    async fn wait_for_activity(&mut self) -> Activity {
         tracing::trace!("waiting for packet activity or for this to become home derp");
 
         let mut from_dataplane = self.from_dataplane.lock().await;
 
-        while !*self.home_derp_rx.borrow_and_update() {
+        loop {
+            if self.home_derp_rx.has_changed().is_err()
+                || self.to_dataplane.is_closed()
+                || from_dataplane.is_closed()
+            {
+                return Activity::Closed;
+            }
+            if *self.home_derp_rx.borrow_and_update() {
+                return Activity::HomeDerp;
+            }
             tokio::select! {
                 changed = self.home_derp_rx.changed() => {
                     if changed.is_err() {
-                        return None;
+                        return Activity::Closed;
                     }
-                },
-
+                }
+                _ = self.to_dataplane.closed() => return Activity::Closed,
                 from_net = from_dataplane.recv() => {
-                    tracing::trace!("received packet to send");
-                    return from_net;
+                    return match from_net {
+                        Some((ep, packets)) => Activity::Packet(ep, packets),
+                        None => Activity::Closed,
+                    };
                 }
             }
         }
-
-        None
     }
 
     #[tracing::instrument(skip_all, level = "trace")]
@@ -325,7 +390,7 @@ impl Runner {
         &mut self,
         transport: DefaultClient,
         pending: Option<(DynEndpoint, Vec<PacketMut>)>,
-    ) -> Result<(), ts_derp::Error> {
+    ) -> Result<TransportExit, ts_derp::Error> {
         let is_home = u8::from(*self.home_derp_rx.borrow_and_update());
         transport.send_frame(&NotePreferred { is_home }).await?;
         if let Some(pending) = pending {
@@ -351,8 +416,7 @@ impl Runner {
                         tracing::trace!(parent: &span, ?ep, len = pkts.len(), "packets from derp server");
 
                         let Ok(()) = self.to_dataplane.send((self.transport_id, ep, pkts)) else {
-                            tracing::error!(parent: &span, "underlay receive channel closed");
-                            break;
+                            return Ok(TransportExit::Closed);
                         };
                     }
                 },
@@ -361,8 +425,7 @@ impl Runner {
                     last_activity = Instant::now();
 
                     let Some((ep, pkts)) = from_net else {
-                        tracing::warn!(parent: &span, "transport queue closed");
-                        return Ok(());
+                        return Ok(TransportExit::Closed);
                     };
 
                     tracing::trace!(parent: &span, ?ep, packets = pkts.len(), "packets to derp server");
@@ -373,13 +436,15 @@ impl Runner {
                 _ = option_timeout(inactivity_timeout) => {
                     if !*self.home_derp_rx.borrow() {
                         tracing::trace!(parent: &span, "timed out and not home derp, closing derp conn");
-                        return Ok(());
+                        return Ok(TransportExit::Idle);
                     }
                 },
 
+                _ = self.to_dataplane.closed() => return Ok(TransportExit::Closed),
+
                 changed = self.home_derp_rx.changed() => {
                     if changed.is_err() {
-                        return Ok(());
+                        return Ok(TransportExit::Closed);
                     }
                     let is_home = u8::from(*self.home_derp_rx.borrow_and_update());
                     transport.send_frame(&NotePreferred { is_home }).await?;
@@ -394,5 +459,93 @@ async fn option_timeout(duration: Option<Instant>) {
     match duration {
         Some(dur) => tokio::time::sleep_until(dur.into()).await,
         None => core::future::pending().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+
+    fn runner(
+        home: bool,
+    ) -> (
+        Runner,
+        watch::Sender<bool>,
+        Tx<ToUnderlay>,
+        Rx<FromUnderlay>,
+    ) {
+        let (home_tx, home_rx) = watch::channel(home);
+        let (from_tx, from_rx) = mpsc::unbounded_channel();
+        let (to_tx, to_rx) = mpsc::unbounded_channel();
+        let runner = Runner {
+            region_id: RegionId(std::num::NonZeroU32::MIN),
+            region: DerpRegion {
+                info: ts_derp::RegionInfo {
+                    name: "Test".into(),
+                    code: "test".into(),
+                    no_measure_no_home: false,
+                },
+                servers: Vec::new(),
+            },
+            transport_id: UnderlayTransportId(1),
+            home_derp_rx: home_rx,
+            to_dataplane: to_tx,
+            from_dataplane: Arc::new(Mutex::new(from_rx)),
+            peer_db: Arc::new(RwLock::new(None)),
+            keys: NodeKeyPair::random(),
+        };
+        (runner, home_tx, from_tx, to_rx)
+    }
+
+    #[tokio::test]
+    async fn exits_when_dataplane_queue_closes() {
+        for home in [false, true] {
+            let (mut runner, _home, from, _to) = runner(home);
+            tokio::time::timeout(Duration::from_secs(1), async {
+                tokio::join!(runner.run(), async { drop(from) });
+            })
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn non_home_failure_waits_for_new_activity() {
+        let (mut runner, home, from, _to) = runner(false);
+        assert!(runner.connect().await.is_err());
+        assert_eq!(
+            runner
+                .retry_after_error(false, Duration::from_secs(1))
+                .await,
+            Retry::Wait
+        );
+        tokio::select! {
+            biased;
+            _ = runner.wait_for_activity() => panic!("idle region has no new activity"),
+            _ = std::future::ready(()) => {}
+        }
+        from.send((
+            DynEndpoint::udp("127.0.0.1:12345".parse().unwrap()),
+            Vec::new(),
+        ))
+        .unwrap();
+        assert!(matches!(
+            runner.wait_for_activity().await,
+            Activity::Packet(..)
+        ));
+
+        home.send(true).unwrap();
+        assert!(matches!(
+            runner.wait_for_activity().await,
+            Activity::HomeDerp
+        ));
+        let (retry, ()) = tokio::join!(
+            runner.retry_after_error(true, Duration::from_secs(30)),
+            async { home.send(false).unwrap() },
+        );
+        assert_eq!(retry, Retry::Wait);
+        drop(home);
+        assert!(matches!(runner.wait_for_activity().await, Activity::Closed));
     }
 }

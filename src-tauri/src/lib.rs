@@ -232,6 +232,7 @@ pub fn mcp_bridge() -> i32 {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     logs::init();
+    rove_http::install_crypto_provider();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init());

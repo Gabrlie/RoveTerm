@@ -361,7 +361,10 @@ async fn tailnet_route(state: &AppState, peer_id: Option<String>) -> Result<Via,
     let deadline = state.ssh.timing().connect_timeout;
     let status = tokio::time::timeout(deadline, async {
         if initial.configured && initial.state == TailnetState::Disconnected {
-            crate::commands::tailscale::auto_connect_state(state).await?;
+            state.ensure_unlocked().await?;
+            if changes.borrow_and_update().state == TailnetState::Disconnected {
+                crate::commands::tailscale::auto_connect_state(state).await?;
+            }
         }
         loop {
             let state = changes.borrow_and_update().state;

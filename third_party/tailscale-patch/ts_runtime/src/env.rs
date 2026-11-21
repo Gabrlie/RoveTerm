@@ -177,14 +177,13 @@ impl Env {
 
             match result {
                 Ok(x) => return Ok(x),
-                Err(e) => match e.unwrap_err() {
-                    SendError::ActorNotRunning(m) if wait => {
-                        msg = m;
-                    }
-                    e => {
-                        return Err(e).with_actor_info(&self.registry);
-                    }
-                },
+                Err(SendError::HandlerError(SendError::ActorNotRunning(m))) if wait => {
+                    msg = m;
+                }
+                Err(SendError::HandlerError(inner)) => {
+                    return Err(inner).with_actor_info(&self.registry);
+                }
+                Err(outer) => return Err(outer).with_actor_info(&self.registry),
             }
 
             tracing::trace!("in ask: actor not available, wait until register");
@@ -258,3 +257,25 @@ impl Env {
 
 pub type RegForwarded<A, M> =
     ForwardedReply<Forward<A, M>, registry::RegistryForward<M, <A as Message<M>>::Reply>>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::control_runner::{ControlRunner, HomeDerp};
+
+    #[tokio::test]
+    async fn ask_returns_error_when_registry_has_stopped() {
+        let env = Env::new(ts_keys::NodeState::generate());
+        env.registry.stop_gracefully().await.unwrap();
+        env.registry.wait_for_shutdown().await;
+
+        for wait in [false, true] {
+            let error = env
+                .ask::<ControlRunner, _>(None, HomeDerp, wait)
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind, ErrorKind::ActorGone);
+            assert_eq!(error.target_actor, Some((&env.registry).into()));
+        }
+    }
+}

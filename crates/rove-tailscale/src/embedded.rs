@@ -150,6 +150,7 @@ impl TailnetService for EmbeddedTailnet {
     }
 
     async fn connect(&self, request: ConnectRequest) -> Result<TailnetStatus, TailscaleError> {
+        rove_http::install_crypto_provider();
         let (config, auth_key) = resolve(request)?;
         let mut live = self.live.lock().await;
         stop(&mut live).await;
@@ -219,28 +220,11 @@ impl TailnetService for EmbeddedTailnet {
             .await
             .map_err(|_| TailscaleError::Device)?;
         let (latency_ms, path, message) = match result {
-            ProbeResult::Reachable { latency, path } => {
-                let path = match path {
-                    ProbePath::Direct(endpoint) => TailnetPath::Direct {
-                        endpoint: endpoint.to_string(),
-                    },
-                    ProbePath::Relay(region) => {
-                        derp_region(region).map_or(TailnetPath::Unknown, |region| {
-                            TailnetPath::Relay {
-                                region_id: region.id,
-                                region_code: region.code,
-                                region_name: region.name,
-                            }
-                        })
-                    }
-                    ProbePath::Unknown => TailnetPath::Unknown,
-                };
-                (
-                    Some(latency.as_millis().try_into().unwrap_or(u64::MAX)),
-                    path,
-                    None,
-                )
-            }
+            ProbeResult::Reachable { latency, path } => (
+                Some(latency.as_millis().try_into().unwrap_or(u64::MAX)),
+                tailnet_path(path),
+                None,
+            ),
             ProbeResult::Unreachable(reason) => {
                 (None, TailnetPath::Unknown, Some(reason.to_owned()))
             }
@@ -252,6 +236,22 @@ impl TailnetService for EmbeddedTailnet {
             path,
             message,
         })
+    }
+
+    async fn peer_path(&self, host: &str, peer_id: Option<&str>) -> Option<TailnetPath> {
+        let device = self.running_device().ok()?;
+        let node;
+        let stable_id = if let Some(id) = peer_id {
+            id
+        } else {
+            node = if let Some(ip) = parse_host_ip(host) {
+                device.peer_by_tailnet_ip(ip).await.ok()??
+            } else {
+                resolve_peer(&device, host, None).await.ok()?
+            };
+            &node.stable_id.0
+        };
+        device.peer_path(stable_id).await.ok().map(tailnet_path)
     }
 
     async fn dial_tcp(
@@ -266,7 +266,7 @@ impl TailnetService for EmbeddedTailnet {
         let stream = timeout(self.connect_timeout, async {
             let ip = match parse_host_ip(host) {
                 Some(ip) => ip,
-                None => resolve_peer(&device, host, peer_id).await?,
+                None => peer_address(&resolve_peer(&device, host, peer_id).await?),
             };
             tracing::info!(%ip, port, "resolved Tailscale TCP destination");
             device
@@ -522,7 +522,7 @@ async fn resolve_peer(
     device: &Device,
     host: &str,
     peer_id: Option<&str>,
-) -> Result<IpAddr, TailscaleError> {
+) -> Result<NodeInfo, TailscaleError> {
     let query = host.trim().trim_end_matches('.');
     let named = if query.is_empty() {
         None
@@ -532,17 +532,36 @@ async fn resolve_peer(
             .await
             .map_err(|_| TailscaleError::Device)?
     };
-    let node = match named {
-        Some(node) if peer_id.is_none_or(|id| node.stable_id.0 == id) => node,
+    match named {
+        Some(node) if peer_id.is_none_or(|id| node.stable_id.0 == id) => Ok(node),
         _ => {
             let peers = device.peers().await.map_err(|_| TailscaleError::Device)?;
             select_peer(&peers, query, peer_id)
                 .cloned()
-                .ok_or(TailscaleError::PeerNotFound)?
+                .ok_or(TailscaleError::PeerNotFound)
         }
-    };
-    let [ipv4, ipv6] = addresses(&node);
-    Ok(if ipv4.is_unspecified() { ipv6 } else { ipv4 })
+    }
+}
+
+fn peer_address(node: &NodeInfo) -> IpAddr {
+    let [ipv4, ipv6] = addresses(node);
+    if ipv4.is_unspecified() { ipv6 } else { ipv4 }
+}
+
+fn tailnet_path(path: ProbePath) -> TailnetPath {
+    match path {
+        ProbePath::Direct(endpoint) => TailnetPath::Direct {
+            endpoint: endpoint.to_string(),
+        },
+        ProbePath::Relay(region) => {
+            derp_region(region).map_or(TailnetPath::Unknown, |region| TailnetPath::Relay {
+                region_id: region.id,
+                region_code: region.code,
+                region_name: region.name,
+            })
+        }
+        ProbePath::Unknown => TailnetPath::Unknown,
+    }
 }
 
 fn now_millis() -> i64 {
@@ -617,6 +636,30 @@ mod tests {
     }
 
     #[test]
+    fn maps_probe_paths_to_tailnet_paths() {
+        let endpoint = "[::1]:41641";
+        assert_eq!(
+            tailnet_path(ProbePath::Direct(endpoint.parse().unwrap())),
+            TailnetPath::Direct {
+                endpoint: endpoint.to_owned()
+            },
+        );
+        assert_eq!(
+            tailnet_path(ProbePath::Relay(tailscale::DerpRegion {
+                id: 1,
+                code: "nyc".into(),
+                name: "New York".into(),
+            })),
+            TailnetPath::Relay {
+                region_id: 1,
+                region_code: "nyc".into(),
+                region_name: "New York".into(),
+            },
+        );
+        assert_eq!(tailnet_path(ProbePath::Unknown), TailnetPath::Unknown);
+    }
+
+    #[test]
     fn parses_plain_and_bracketed_ips_and_resolves_peers_case_insensitively() {
         assert_eq!(
             parse_host_ip(" 100.64.0.1 "),
@@ -645,6 +688,17 @@ mod tests {
             Some("n1")
         );
         assert!(select_peer(&peers, "missing", None).is_none());
+        assert!(select_peer(&peers, "alpha", Some("missing")).is_none());
+        assert_eq!(
+            peer_address(&peers[0]),
+            "100.64.0.1".parse::<IpAddr>().unwrap()
+        );
+        let mut ipv6_only = peers[0].clone();
+        ipv6_only.tailnet_address.ipv4 = "0.0.0.0/32".parse().unwrap();
+        assert_eq!(
+            peer_address(&ipv6_only),
+            "fd7a:115c:a1e0::1".parse::<IpAddr>().unwrap()
+        );
     }
 
     #[tokio::test]

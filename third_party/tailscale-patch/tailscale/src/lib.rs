@@ -308,6 +308,16 @@ impl Device {
         Ok(probe.ping(stable_id, timeout).await?)
     }
 
+    /// Read the current path to a peer without sending probe packets.
+    pub async fn peer_path(&self, stable_id: &str) -> Result<ProbePath, Error> {
+        let (probe,) = self
+            .runtime
+            .ask(ts_runtime::PreparePeerProbe)
+            .await
+            .map_err(ts_runtime::Error::from)?;
+        Ok(probe.path(stable_id).await?)
+    }
+
     /// List all currently known peers. Before the first update the list is empty.
     pub async fn peers(&self) -> Result<Vec<NodeInfo>, Error> {
         self.runtime

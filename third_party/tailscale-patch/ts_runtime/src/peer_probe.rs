@@ -15,11 +15,12 @@ use ts_transport::{DynEndpoint, UnderlayTransportId};
 
 use crate::{
     Env, Error,
-    control_runner::{ControlRunner, ProbeConfig},
+    control_runner::{ControlRunner, HomeDerp, ProbeConfig},
     dataplane::IncomingDiscoMsg,
     disco::{Disco, SendDisco},
     multiderp::{Multiderp, ProbeTransportMap},
-    peer_tracker::{PeerByStableId, PeerTracker},
+    path_discoverer::{BestPathForPeer, PathDiscoverer},
+    peer_tracker::{PeerByStableId, PeerRouteByStableId, PeerTracker},
 };
 
 /// The ID and display names of a DERP region.
@@ -30,7 +31,7 @@ pub struct DerpRegion {
     pub name: String,
 }
 
-/// The path on which the peer replied.
+/// A direct or relayed path to a peer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbePath {
     Direct(SocketAddr),
@@ -49,6 +50,50 @@ pub enum ProbeResult {
 pub struct PeerProbe(pub(crate) Env);
 
 impl PeerProbe {
+    /// Read the current path from local routing state without sending probe packets.
+    pub async fn path(self, stable_id: &str) -> Result<ProbePath, Error> {
+        let env = self.0;
+        let Some((id, peer_derp)) = env
+            .ask::<PeerTracker, _>(
+                None,
+                PeerRouteByStableId {
+                    stable_id: StableNodeId(stable_id.to_owned()),
+                },
+                false,
+            )
+            .await?
+        else {
+            return Ok(ProbePath::Unknown);
+        };
+
+        let best = env
+            .ask::<PathDiscoverer, _>(None, BestPathForPeer(id), false)
+            .await?;
+        if let Some((_, endpoint)) = &best
+            && let Some(endpoint) = endpoint.as_udp()
+        {
+            return Ok(ProbePath::Direct(endpoint));
+        }
+
+        let (_, regions) = env
+            .ask::<ControlRunner, _>(None, ProbeConfig, false)
+            .await?;
+        let region = if let Some((transport, _)) = best {
+            let (transports,) = env
+                .ask::<Multiderp, _>(None, ProbeTransportMap, false)
+                .await?;
+            transports
+                .iter()
+                .find_map(|(region, id)| (*id == transport).then_some(region))
+                .and_then(|id| regions.get(id).cloned())
+        } else if let Some(region) = peer_derp.and_then(|id| regions.get(&id).cloned()) {
+            Some(region)
+        } else {
+            env.ask::<ControlRunner, _>(None, HomeDerp, false).await?
+        };
+        Ok(region.map_or(ProbePath::Unknown, ProbePath::Relay))
+    }
+
     pub async fn ping(self, stable_id: &str, timeout: Duration) -> Result<ProbeResult, Error> {
         let deadline = Instant::now() + timeout;
         timeout_at(

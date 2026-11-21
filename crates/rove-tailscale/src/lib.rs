@@ -162,6 +162,10 @@ pub trait TailnetService: Send + Sync {
         &self,
         peer_id: &TailscalePeerId,
     ) -> Result<TailnetPingResult, TailscaleError>;
+    /// Read the current path to a peer from local routing state, when available.
+    async fn peer_path(&self, _host: &str, _peer_id: Option<&str>) -> Option<TailnetPath> {
+        None
+    }
     async fn dial_tcp(
         &self,
         host: &str,

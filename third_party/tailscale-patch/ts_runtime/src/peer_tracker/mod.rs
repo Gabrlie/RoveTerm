@@ -83,6 +83,17 @@ mod msg_impl {
             self.peer_db.get(&stable_id).map(|(_, node)| node.clone())
         }
 
+        /// Look up a peer and its local routing ID by stable control-plane identity.
+        #[message]
+        pub(crate) fn peer_route_by_stable_id(
+            &self,
+            stable_id: ts_control::StableNodeId,
+        ) -> Option<(PeerId, Option<ts_derp::RegionId>)> {
+            self.peer_db
+                .get(&stable_id)
+                .map(|(id, node)| (id, node.derp_region))
+        }
+
         /// Lookup a peer by name.
         ///
         /// Waits until we've received at least one peer update from control.

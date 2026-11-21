@@ -99,12 +99,29 @@ impl kameo::Actor for PathDiscoverer {
     }
 }
 
+pub(crate) struct BestPathForPeer(pub PeerId);
+
+impl Message<BestPathForPeer> for PathDiscoverer {
+    type Reply = Option<(UnderlayTransportId, DynEndpoint)>;
+
+    async fn handle(
+        &mut self,
+        BestPathForPeer(peer): BestPathForPeer,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.best_paths.get(&peer).cloned()
+    }
+}
+
 impl PathDiscoverer {
     async fn publish_best_paths(&self) {
-        self.env
+        if let Err(error) = self
+            .env
             .publish(BestPaths(Arc::new(self.best_paths.clone())))
             .await
-            .unwrap();
+        {
+            tracing::debug!(%error, "could not publish best paths");
+        }
     }
 }
 
@@ -120,13 +137,15 @@ impl Message<ActivePeers> for PathDiscoverer {
                 .spawn()
                 .await;
 
-            aref.wait_for_startup_result().await.unwrap();
+            if let Err(error) = aref.wait_for_startup_result().await {
+                tracing::debug!(?error, "peer path discovery could not start");
+            }
         }
 
         let mut any_deleted = false;
         for to_delete in self.active_peers.difference(&msg) {
             // deletions are handled by the PeerPds themselves
-            any_deleted = any_deleted || self.best_paths.remove(to_delete).is_some();
+            any_deleted |= self.best_paths.remove(to_delete).is_some();
         }
 
         if any_deleted {
@@ -287,13 +306,16 @@ impl PeerPd {
                 .iter()
                 .min_by_key(|&(_, dur)| dur);
 
-            self.env
+            if let Err(error) = self
+                .env
                 .publish_noretain(PeerBestPath {
                     peer: self.peer_id,
                     ep: best.map(|((transport, ep), _latency)| (*transport, ep.clone())),
                 })
                 .await
-                .unwrap();
+            {
+                tracing::debug!(%error, "could not publish peer discovery update");
+            }
         }
 
         // Send `CallMeMaybe`s on all disco coordinator endpoints. Reminder: coord_endpoints_ctrl is
@@ -314,13 +336,16 @@ impl PeerPd {
                 },
             );
 
-            self.env
+            if let Err(error) = self
+                .env
                 .publish_noretain(SendDisco {
                     ep: ep.clone(),
                     buf: cmm_pkt,
                 })
                 .await
-                .unwrap();
+            {
+                tracing::debug!(%error, "could not publish peer discovery update");
+            }
 
             tracing::trace!(?ep, sent_eps = ?self.this_node_endpoints, "sent callmemaybe");
         }
@@ -380,12 +405,16 @@ impl PeerPd {
             },
         );
 
-        env.publish_noretain(SendDisco {
-            ep: ep.clone(),
-            buf: ping_buf,
-        })
-        .await
-        .unwrap();
+        if let Err(error) = env
+            .publish_noretain(SendDisco {
+                ep: ep.clone(),
+                buf: ping_buf,
+            })
+            .await
+        {
+            tracing::debug!(%error, "could not publish Disco ping");
+            return;
+        }
 
         probe_state.insert(
             ep.clone(),
@@ -580,5 +609,37 @@ impl Message<IncomingDiscoMsg> for PeerPd {
             latency: elapsed,
             transport: msg.transport,
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn queries_best_path_and_stops_after_bus_shutdown() {
+        let env = Env::new(ts_keys::NodeState::generate());
+        let actor = PathDiscoverer::spawn(env.clone());
+        actor.wait_for_startup_result().await.unwrap();
+
+        let peer = PeerId(1);
+        let endpoint = DynEndpoint::udp("127.0.0.1:12345".parse().unwrap());
+        let path = (UnderlayTransportId(2), endpoint);
+        assert_eq!(actor.ask(BestPathForPeer(peer)).await.unwrap(), None);
+        actor
+            .ask(PeerBestPath {
+                peer,
+                ep: Some(path.clone()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(actor.ask(BestPathForPeer(peer)).await.unwrap(), Some(path));
+
+        env.bus.stop_gracefully().await.unwrap();
+        env.bus.wait_for_shutdown().await;
+        actor.stop_gracefully().await.unwrap();
+        actor
+            .wait_for_shutdown_with_result(|result| assert!(result.is_ok()))
+            .await;
     }
 }

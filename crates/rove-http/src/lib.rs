@@ -12,6 +12,11 @@ pub use reqwest;
 #[error("could not set up HTTPS: {0}")]
 pub struct HttpError(String);
 
+/// Install ring as the process default for rustls if a provider is not already installed.
+pub fn install_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 /// A client sending RoveTerm's user agent. `timeout` bounds each whole request; `None` leaves
 /// requests unbounded (streams bound themselves).
 pub fn client(timeout: Option<Duration>) -> Result<reqwest::Client, HttpError> {
@@ -22,8 +27,7 @@ pub fn client(timeout: Option<Duration>) -> Result<reqwest::Client, HttpError> {
 
 /// The same settings as [`client`], for callers that add their own (such as a redirect policy).
 pub fn builder(timeout: Option<Duration>) -> Result<reqwest::ClientBuilder, HttpError> {
-    // reqwest is built without a default crypto provider; another caller may have installed it.
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    install_crypto_provider();
     let mut builder =
         reqwest::Client::builder().user_agent(concat!("RoveTerm/", env!("CARGO_PKG_VERSION")));
     if let Some(timeout) = timeout {
@@ -54,6 +58,17 @@ fn android_tls() -> Result<rustls::ClientConfig, HttpError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn installs_crypto_provider_idempotently() {
+        super::install_crypto_provider();
+        let provider = rustls::crypto::CryptoProvider::get_default().unwrap();
+        super::install_crypto_provider();
+        assert!(std::sync::Arc::ptr_eq(
+            provider,
+            rustls::crypto::CryptoProvider::get_default().unwrap()
+        ));
+    }
+
     #[test]
     fn builds_clients() {
         assert!(super::client(Some(std::time::Duration::from_secs(5))).is_ok());

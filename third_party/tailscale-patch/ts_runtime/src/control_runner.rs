@@ -2,13 +2,16 @@ use core::net::{Ipv4Addr, Ipv6Addr};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use http::{HeaderName, HeaderValue, StatusCode};
-use tokio::sync::watch;
+use tokio::{
+    sync::watch,
+    time::{sleep, timeout},
+};
 use ts_capabilityversion::CapabilityVersion;
 use ts_control_serde::{HostInfo, RegisterAuth, RegisterRequest};
 use ts_http_util::{ClientExt, ResponseExt};
 use zeroize::Zeroizing;
 
-use futures::StreamExt;
+use futures::{StreamExt, stream::BoxStream};
 use kameo::{
     actor::{ActorRef, Spawn, WeakActorRef},
     message::{Context, StreamMessage},
@@ -36,9 +39,9 @@ pub struct ControlRunner {
     state: RegState,
     auth_status: watch::Sender<AuthStatus>,
 
-    derp_latency_measurement: Option<DerpLatencyMeasurement>,
-
-    endpoints: Vec<Endpoint>,
+    map_request: MapRequestState,
+    reconnecting: bool,
+    reconnect_delay: Duration,
     derp_regions: BTreeMap<ts_derp::RegionId, crate::DerpRegion>,
 
     self_node: Option<Node>,
@@ -127,6 +130,28 @@ struct AuthRequired(Option<url::Url>);
 
 struct RegisterResult(Result<HttpConn, RegisterFailure>);
 
+type MapStream = BoxStream<'static, Arc<StateUpdate>>;
+
+struct ReconnectResult(Result<(HttpConn, MapStream, MapRequestState), RegisterFailure>);
+
+#[derive(Clone, Default, PartialEq, Eq)]
+struct MapRequestState {
+    endpoints: Vec<Endpoint>,
+    derp_latency_measurement: Option<DerpLatencyMeasurement>,
+}
+
+const INITIAL_RECONNECT_DELAY: Duration = Duration::from_secs(1);
+const MAP_REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+
+fn next_reconnect_delay(delay: Duration) -> Duration {
+    let doubled = delay * 2;
+    if delay < Duration::from_secs(15) {
+        doubled.min(Duration::from_secs(15))
+    } else {
+        doubled.min(Duration::from_secs(30))
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 enum RegisterFailure {
     #[error("control connection failed")]
@@ -139,6 +164,8 @@ enum RegisterFailure {
     Response,
     #[error("registration rejected")]
     Rejected,
+    #[error("control map request failed")]
+    MapStream,
 }
 
 impl RegisterFailure {
@@ -221,6 +248,8 @@ async fn register(
     let parsed: RegisterResponse = serde_json::from_slice(&body).map_err(|_| {
         if status.is_success() {
             RegisterFailure::Response
+        } else if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+            RegisterFailure::Rejected
         } else {
             RegisterFailure::Status(status)
         }
@@ -231,12 +260,12 @@ async fn register(
     tracing::info!(%status, attempt, machine_authorized, has_auth_url, has_error,
         node_key_expired = parsed.node_key_expired.unwrap_or(false), "control registration response");
     if !status.is_success() && !has_error {
-        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
-            && auth_key.is_some()
-        {
+        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) && !has_auth_url {
             return Err(RegisterFailure::Rejected);
         }
-        return Err(RegisterFailure::Status(status));
+        if !has_auth_url {
+            return Err(RegisterFailure::Status(status));
+        }
     }
     Ok(parsed)
 }
@@ -246,6 +275,7 @@ async fn register_until_authorized(
     env: Env,
     config: ts_control::Config,
     mut auth_key: Option<Arc<Zeroizing<String>>>,
+    startup: bool,
 ) -> Result<HttpConn, RegisterFailure> {
     let mut client = None;
     let mut followup = None;
@@ -290,7 +320,7 @@ async fn register_until_authorized(
 
         let response = match result {
             Ok(response) => response,
-            Err(error) if error.retryable() && (pending || retries < 2) => {
+            Err(error) if error.retryable() && (pending || (startup && retries < 2)) => {
                 client = None;
                 retries += 1;
                 let delay = Duration::from_secs(if pending {
@@ -364,7 +394,7 @@ impl kameo::Actor for ControlRunner {
 
                 async move {
                     let result =
-                        register_until_authorized(aref.clone(), env, config, auth_key).await;
+                        register_until_authorized(aref.clone(), env, config, auth_key, true).await;
                     if let Some(actor) = aref.upgrade() {
                         drop(actor.tell(RegisterResult(result)).await);
                     }
@@ -390,8 +420,9 @@ impl kameo::Actor for ControlRunner {
             },
             auth_status: watch::Sender::new(AuthStatus::Starting),
             params,
-            derp_latency_measurement: None,
-            endpoints: Default::default(),
+            map_request: MapRequestState::default(),
+            reconnecting: false,
+            reconnect_delay: INITIAL_RECONNECT_DELAY,
             derp_regions: BTreeMap::new(),
             self_node: None,
             pending_node_requests: Default::default(),
@@ -417,6 +448,7 @@ impl ControlRunner {
     #[message]
     pub fn home_derp(&self) -> Option<crate::DerpRegion> {
         let home = self
+            .map_request
             .derp_latency_measurement
             .as_ref()?
             .measurement
@@ -431,7 +463,10 @@ impl ControlRunner {
         Vec<Endpoint>,
         BTreeMap<ts_derp::RegionId, crate::DerpRegion>,
     ) {
-        (self.endpoints.clone(), self.derp_regions.clone())
+        (
+            self.map_request.endpoints.clone(),
+            self.derp_regions.clone(),
+        )
     }
 
     /// Fetch the IPv4 address for this tailscale device.
@@ -517,7 +552,7 @@ impl ControlRunner {
     }
 }
 
-impl ControlRunner {
+impl MapRequestState {
     /// Call `f` with a map request built from the current control actor state.
     ///
     /// `stream` dictates whether the request is built for a streaming netmap response or as a
@@ -526,10 +561,12 @@ impl ControlRunner {
     /// This takes a closure rather than returning the built request for lifetime reasons.
     async fn with_map_request<T>(
         &self,
+        config: &ts_control::Config,
+        keys: &ts_keys::NodeState,
         stream: bool,
         f: impl AsyncFnOnce(ts_control::MapRequest) -> T,
     ) -> T {
-        let mut mrb = ts_control::MapRequestBuilder::new(&self.params.env.keys);
+        let mut mrb = ts_control::MapRequestBuilder::new(keys);
 
         mrb = if stream {
             mrb.as_stream()
@@ -539,7 +576,7 @@ impl ControlRunner {
 
         mrb = mrb.endpoints(self.endpoints.clone());
 
-        if let Some(hostname) = self.params.config.hostname.as_deref() {
+        if let Some(hostname) = config.hostname.as_deref() {
             mrb = mrb.hostname(hostname);
         }
 
@@ -558,7 +595,7 @@ impl ControlRunner {
             mrb = mrb.derp_latencies(iter);
         }
 
-        let client_name = self.params.config.format_client_name();
+        let client_name = config.format_client_name();
 
         let mut request = mrb.build();
         let host_info = request.host_info.get_or_insert_default();
@@ -568,7 +605,101 @@ impl ControlRunner {
         f(request).await
     }
 
+    async fn open_stream(
+        &self,
+        config: &ts_control::Config,
+        keys: &ts_keys::NodeState,
+        conn: &HttpConn,
+    ) -> Result<MapStream, RegisterFailure> {
+        let map_url = config
+            .server_url
+            .join("machine/map")
+            .map_err(|_| RegisterFailure::Request)?;
+        let reader = timeout(
+            MAP_REQUEST_TIMEOUT,
+            self.with_map_request(config, keys, true, async |request| {
+                send_map_request(request, &map_url, conn).await
+            }),
+        )
+        .await
+        .map_err(|_| RegisterFailure::MapStream)?
+        .map_err(|_| RegisterFailure::MapStream)?;
+        Ok(map_stream(reader).map(Arc::new).boxed())
+    }
+}
+
+impl ControlRunner {
+    async fn reconnect(&mut self, actor: &ActorRef<Self>) {
+        if self.reconnecting {
+            return;
+        }
+        self.reconnecting = true;
+        let delay = self.reconnect_delay;
+        self.reconnect_delay = next_reconnect_delay(delay);
+        let env = self.params.env.clone();
+        let config = self.params.config.clone();
+        let map_request = self.map_request.clone();
+        let weak = actor.downgrade();
+
+        tracing::debug!(
+            retry_in_secs = delay.as_secs(),
+            "reconnecting control map stream"
+        );
+        Task::supervise_with(actor, move || {
+            let (env, config, map_request, weak) = (
+                env.clone(),
+                config.clone(),
+                map_request.clone(),
+                weak.clone(),
+            );
+            async move {
+                sleep(delay).await;
+                let result = async {
+                    let conn = register_until_authorized(
+                        weak.clone(),
+                        env.clone(),
+                        config.clone(),
+                        None,
+                        false,
+                    )
+                    .await?;
+                    let stream = map_request.open_stream(&config, &env.keys, &conn).await?;
+                    Ok((conn, stream, map_request))
+                }
+                .await;
+                if let Some(actor) = weak.upgrade() {
+                    // The parent may have stopped before reconnection finished.
+                    let _ = actor.tell(ReconnectResult(result)).await;
+                }
+            }
+        })
+        .restart_policy(RestartPolicy::Transient)
+        .spawn()
+        .await;
+    }
+
+    fn reject_registration(&mut self) {
+        tracing::warn!("control rejected registration");
+        self.state
+            .update(RegState::AuthKeyRejected, AuthResponse::KeyRejected);
+        self.auth_status.send_replace(AuthStatus::KeyRejected);
+    }
+
+    fn attach_map_stream(&mut self, actor: &ActorRef<Self>, conn: HttpConn, stream: MapStream) {
+        self.state
+            .update(RegState::Registered(conn), AuthResponse::Authorized);
+        self.auth_status.send_if_modified(|status| {
+            let changed = *status != AuthStatus::Authorized;
+            *status = AuthStatus::Authorized;
+            changed
+        });
+        actor.attach_stream(stream, (), ());
+    }
+
     async fn update_map_request(&self) {
+        if self.reconnecting {
+            return;
+        }
         let RegState::Registered(conn) = &self.state else {
             tracing::debug!("attempt to update map request while not registered");
             return;
@@ -578,13 +709,19 @@ impl ControlRunner {
             tracing::warn!("invalid control map URL");
             return;
         };
-        if self
-            .with_map_request(false, async |req| {
-                send_map_request(req, &map_url, conn).await
-            })
-            .await
-            .is_err()
-        {
+        if !matches!(
+            timeout(
+                MAP_REQUEST_TIMEOUT,
+                self.map_request.with_map_request(
+                    &self.params.config,
+                    &self.params.env.keys,
+                    false,
+                    async |req| { send_map_request(req, &map_url, conn).await }
+                ),
+            )
+            .await,
+            Ok(Ok(_))
+        ) {
             tracing::warn!("unable to update control map request");
         }
     }
@@ -598,10 +735,12 @@ impl Message<AuthRequired> for ControlRunner {
         AuthRequired(auth_url): AuthRequired,
         _ctx: &mut Context<Self, Self::Reply>,
     ) {
-        if !matches!(
-            self.state,
-            RegState::NotRegistered { .. } | RegState::AuthRequired(_)
-        ) {
+        if !self.reconnecting
+            && !matches!(
+                self.state,
+                RegState::NotRegistered { .. } | RegState::AuthRequired(_)
+            )
+        {
             return;
         }
         let next = if let Some(auth_url) = auth_url {
@@ -611,7 +750,7 @@ impl Message<AuthRequired> for ControlRunner {
             );
             AuthStatus::InteractiveAuthRequired(auth_url)
         } else {
-            if matches!(self.state, RegState::AuthRequired(_)) {
+            if !matches!(self.state, RegState::NotRegistered { .. }) {
                 self.state = RegState::NotRegistered {
                     pending_auth_requests: Vec::new(),
                 };
@@ -640,10 +779,7 @@ impl Message<RegisterResult> for ControlRunner {
         let conn = match msg.0 {
             Ok(conn) => conn,
             Err(RegisterFailure::Rejected) => {
-                tracing::warn!("control rejected registration");
-                self.state
-                    .update(RegState::AuthKeyRejected, AuthResponse::KeyRejected);
-                self.auth_status.send_replace(AuthStatus::KeyRejected);
+                self.reject_registration();
 
                 return;
             }
@@ -654,29 +790,45 @@ impl Message<RegisterResult> for ControlRunner {
             }
         };
 
-        self.state
-            .update(RegState::Registered(conn.clone()), AuthResponse::Authorized);
-        self.auth_status.send_replace(AuthStatus::Authorized);
+        match self
+            .map_request
+            .open_stream(&self.params.config, &self.params.env.keys, &conn)
+            .await
+        {
+            Ok(stream) => self.attach_map_stream(ctx.actor_ref(), conn, stream),
+            Err(error) => {
+                tracing::debug!(%error, "could not open initial control map stream");
+                self.state
+                    .update(RegState::Registered(conn), AuthResponse::Authorized);
+                self.auth_status.send_replace(AuthStatus::Authorized);
+                self.reconnect(ctx.actor_ref()).await;
+            }
+        }
+    }
+}
 
-        let Ok(map_url) = self.params.config.server_url.join("machine/map") else {
-            tracing::error!("invalid control map URL");
-            ctx.stop();
-            return;
-        };
-        let reader = self
-            .with_map_request(true, async |req| {
-                send_map_request(req, &map_url, &conn).await
-            })
-            .await;
-        let Ok(reader) = reader else {
-            tracing::error!("unable to subscribe to the control server map");
-            ctx.stop();
-            return;
-        };
+impl Message<ReconnectResult> for ControlRunner {
+    type Reply = ();
 
-        let stream = map_stream(reader).map(Arc::new);
-
-        ctx.actor_ref().attach_stream(stream.boxed(), (), ());
+    async fn handle(
+        &mut self,
+        ReconnectResult(result): ReconnectResult,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) {
+        self.reconnecting = false;
+        match result {
+            Ok((conn, stream, map_request)) => {
+                self.attach_map_stream(ctx.actor_ref(), conn, stream);
+                if self.map_request != map_request {
+                    self.update_map_request().await;
+                }
+            }
+            Err(RegisterFailure::Rejected) => self.reject_registration(),
+            Err(error) => {
+                tracing::debug!(%error, "could not reconnect control map stream");
+                self.reconnect(ctx.actor_ref()).await;
+            }
+        }
     }
 }
 
@@ -703,11 +855,13 @@ impl Message<StreamMessage<Arc<StateUpdate>, (), ()>> for ControlRunner {
             StreamMessage::Next(msg) => msg,
 
             StreamMessage::Finished(_) => {
-                tracing::error!("state update stream terminated");
-                ctx.stop();
+                tracing::debug!("state update stream terminated");
+                self.reconnect(ctx.actor_ref()).await;
                 return;
             }
         };
+
+        self.reconnect_delay = INITIAL_RECONNECT_DELAY;
 
         if let RegState::Registered(conn) = &self.state {
             let _ = handle_ping(&msg, &self.params.config.server_url, conn).await;
@@ -776,11 +930,11 @@ impl Message<direct::NewEndpoints> for ControlRunner {
     type Reply = ();
 
     async fn handle(&mut self, msg: direct::NewEndpoints, _ctx: &mut Context<Self, Self::Reply>) {
-        if self.endpoints == msg.0.as_ref() {
+        if self.map_request.endpoints == msg.0.as_ref() {
             return;
         }
 
-        self.endpoints = msg.0.to_vec();
+        self.map_request.endpoints = msg.0.to_vec();
         self.update_map_request().await;
     }
 }
@@ -789,11 +943,11 @@ impl Message<DerpLatencyMeasurement> for ControlRunner {
     type Reply = ();
 
     async fn handle(&mut self, msg: DerpLatencyMeasurement, _ctx: &mut Context<Self, Self::Reply>) {
-        if self.derp_latency_measurement.as_ref() == Some(&msg) {
+        if self.map_request.derp_latency_measurement.as_ref() == Some(&msg) {
             return;
         }
 
-        self.derp_latency_measurement = Some(msg);
+        self.map_request.derp_latency_measurement = Some(msg);
         self.update_map_request().await;
     }
 }
@@ -845,7 +999,16 @@ impl DialerActor {
 
 #[cfg(test)]
 mod tests {
-    use super::RegisterResponse;
+    use super::*;
+
+    #[test]
+    fn reconnect_backoff_doubles_and_caps() {
+        let mut delay = INITIAL_RECONNECT_DELAY;
+        for seconds in [1, 2, 4, 8, 15, 30, 30] {
+            assert_eq!(delay, Duration::from_secs(seconds));
+            delay = next_reconnect_delay(delay);
+        }
+    }
 
     #[test]
     fn registration_accepts_missing_and_null_fields() {
