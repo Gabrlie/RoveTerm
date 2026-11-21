@@ -31,9 +31,12 @@ pub enum SyncError {
     /// Sealed data did not open: the wrong key, or it was altered or moved.
     #[error("sync data was altered or sealed with another key")]
     Rejected,
-    /// The storage refused the credentials.
+    /// The storage refused the credentials (HTTP 401).
     #[error("the sync storage refused the user name or password")]
     Unauthorized,
+    /// The storage denied access to this path or operation (HTTP 403).
+    #[error("access denied: {0}")]
+    Forbidden(String),
     /// The sync password does not open the space.
     #[error("wrong sync password")]
     WrongPassword,

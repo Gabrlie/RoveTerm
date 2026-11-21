@@ -12,7 +12,7 @@
 - `SyncState` 不含秘密（指纹以同步密钥为键），由调用方在两轮之间保存。`defer_to_space(kinds)` 让下一轮从所有分段（含本设备的）恢复这些类型的记录，空间的版本胜出，本地缺少的不当作删除。
 - 后端路径由字母、数字、`.`、`_`、`-` 组成，不允许 `.`、`..`；单个文件最大 16 MiB。
 - 后端的 `put_new` 只在文件不存在时写入：`FolderBackend` 用硬链接（不支持时独占创建），`WebDavBackend` 发送 `If-None-Match: *`。
-- 后端：`FolderBackend`（本机目录）与 `WebDavBackend`（基本认证；必须是 https，回环地址可用 http；地址不能带凭据、查询或片段；凭据被拒绝时返回 `Unauthorized`；HTTP 客户端来自 `rove-http`）。
+- 后端：`FolderBackend`（本机目录）与 `WebDavBackend`（基本认证；必须是 https，回环地址可用 http；地址不能带凭据、查询或片段；HTTP 401 返回 `Unauthorized`，HTTP 403 返回 `Forbidden`，其余网络/TLS/HTTP 异常展开原因并附带方法与状态码返回 `Backend`；HTTP 客户端来自 `rove-http`）。
 
 ## 局限
 

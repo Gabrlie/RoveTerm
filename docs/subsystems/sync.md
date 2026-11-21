@@ -41,7 +41,7 @@
 
 `src-tauri/src/commands/sync.rs` 分两步设置同步：
 
-- `sync_connect(target, storage_password)` 连接存储：检查地址与 WebDAV 凭据（错误立即返回），把目标和密封后的 WebDAV 密码存入 vault（见 [vault](vault.md#同步)），返回该位置是否已有空间 `{ exists }`。重新连接本机已在同步的同一位置时沿用原有的设备 id、同步状态与密钥，避免本地记录被当成新变更覆盖其他设备更新的修改；换位置则生成新的 UUIDv7 设备 id。
+- `sync_connect(target, storage_password)` 连接存储：检查地址与 WebDAV 凭据（错误立即返回，失败时不改动既有配置），把目标和密封后的 WebDAV 密码存入 vault（见 [vault](vault.md#同步)），返回该位置是否已有空间 `{ exists }`。更新既有 WebDAV 配置时留空 `storage_password` 会复用当前已保存的 WebDAV 密码；重新连接本机已在同步的同一位置时沿用原有的设备 id、同步状态与密钥，避免本地记录被当成新变更覆盖其他设备更新的修改；换位置则生成新的 UUIDv7 设备 id。
 - `sync_probe()` 对已连接的存储再次查看是否已有空间。
 - `sync_setup(password)` 在已连接的存储上加入已有空间，没有空间时创建（密码至少 8 个字符，新空间从新的同步状态开始；其他设备恰好同时创建时改为加入），跑第一轮后存入同步密钥。
 - 每轮（`sync_setup` 与 `sync_now`）先 `verify_space`，结束后无论成败都保存同步状态；空间被替换（`sync.space_changed`）时清除本机的同步密钥。
@@ -49,4 +49,4 @@
 - 同步的记录除 vault 的各类外，还有 AI 对话（`ai_conversation`，`SyncStore` 组合 `VaultStore` 与 Journal 上的 `ConversationStore`）：最近开始的 100 段、90 天内的对话，内容为该会话的 `ai/*` 记录（`rove_ai::audit::conversation_body`：按时间排序，单个文本截到 2 KiB，整段不超过 64 KiB，超出时较早的记录让位，开始与标题记录始终保留）。收到时按时间与类型计数，把本机没有的记录以原时间导入 Journal（`missing_records`、`JournalStore::import`），因此两台设备都继续过的对话会合并。对话离开同步范围（超出 100 段或 90 天）表现为删除，不会删除其他设备上的对话；用户删除对话则以墓碑传递：内容为 `{"deleted": true}` 的同 id 记录（90 天内的 `ai/conversation_deleted` 记录生成），收到时删除本机该对话的记录并留下同样的标记，此后其他设备送来的旧内容不再导入。会话 id、记录类型和大小在边界校验。
 - `vault_reset_secrets` 重置凭据后调用 `after_secrets_reset`：同步状态对 `rove_vault::SYNC_SECRET_KINDS`（`host_secret`、`key`、`ai_key`）`defer_to_space`，并清除随设备密钥失效的同步密钥与存储密码；重新输入同步密码后的第一轮从空间恢复这些凭据，而不是把它们的缺失同步给其他设备。
 
-`SyncTarget` 为 `Folder { path }`（绝对路径）或 `WebDav { url, username }`，WebDAV 密码不进入目标的 JSON。`sync_status` 报告 `configured`（已选存储）、`connected`（文件夹，或本机有 WebDAV 密码）和 `ready`（还有同步密钥）。`sync_now` 运行一轮，`sync_disable` 清除本机的同步设置。各轮由 `AppState.sync_lock` 串行执行，需要 vault 已解锁；本机没有同步密钥时 `sync_now` 返回 `sync.needs_password`。错误码为 `sync.*`（`wrong_password`、`no_space`、`space_exists`、`space_changed`、`rejected`、`backend`、`format`、`crypto`、`unauthorized`、`store`、`not_configured`、`needs_password`、`weak_password`）。
+`SyncTarget` 为 `Folder { path }`（绝对路径）或 `WebDav { url, username }`，WebDAV 密码不进入目标的 JSON。`sync_status` 报告 `configured`（已选存储）、`connected`（文件夹，或本机有 WebDAV 密码）和 `ready`（还有同步密钥）。`sync_now` 运行一轮，`sync_disable` 清除本机的同步设置。各轮由 `AppState.sync_lock` 串行执行，需要 vault 已解锁；本机没有同步密钥时 `sync_now` 返回 `sync.needs_password`。错误码为 `sync.*`（`wrong_password`、`no_space`、`space_exists`、`space_changed`、`rejected`、`backend`、`format`、`crypto`、`unauthorized`、`forbidden`、`store`、`not_configured`、`needs_password`、`weak_password`），其中 WebDAV 将 HTTP 401 映射为 `unauthorized`、403 映射为 `forbidden`，其他网络/TLS/HTTP 状态码附带方法与原因写入 `backend` 并记入无密钥日志。

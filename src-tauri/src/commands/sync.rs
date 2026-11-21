@@ -95,9 +95,59 @@ fn sync_error(error: SyncError) -> CommandError {
         SyncError::SpaceChanged => "sync.space_changed",
         SyncError::Crypto(_) => "sync.crypto",
         SyncError::Unauthorized => "sync.unauthorized",
+        SyncError::Forbidden(_) => "sync.forbidden",
         SyncError::Store(_) => "sync.store",
     };
     CommandError::new(code, error.to_string())
+}
+
+fn target_kind(target: &SyncTarget) -> &'static str {
+    match target {
+        SyncTarget::Folder { .. } => "folder",
+        SyncTarget::WebDav { .. } => "webdav",
+    }
+}
+
+/// Safe target description for logs (omits credentials, queries and fragments).
+fn target_summary(target: &SyncTarget) -> String {
+    match target {
+        SyncTarget::Folder { path } => path.clone(),
+        SyncTarget::WebDav { url, username } => {
+            let trimmed = url.trim();
+            let without_query = trimmed.split(['?', '#']).next().unwrap_or("");
+            let safe_url = match without_query.split_once("://") {
+                Some((scheme, rest)) => {
+                    let (authority, path) = match rest.find('/') {
+                        Some(idx) => (&rest[..idx], &rest[idx..]),
+                        None => (rest, ""),
+                    };
+                    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+                    format!("{scheme}://{host}{path}")
+                }
+                None => "<invalid-url>".to_owned(),
+            };
+            format!("{username}@{safe_url}")
+        }
+    }
+}
+
+/// Picks the storage password for [`sync_connect`]: folders use none; WebDAV uses the newly
+/// entered password when non-empty, otherwise reuses the existing stored WebDAV password so the
+/// user can edit URL, folder or user name without retyping it.
+fn resolve_connect_secret(
+    target: &SyncTarget,
+    provided: Option<Zeroizing<String>>,
+    previous: Option<&Local>,
+) -> Option<Zeroizing<String>> {
+    match target {
+        SyncTarget::Folder { .. } => None,
+        SyncTarget::WebDav { .. } => provided.or_else(|| {
+            previous.and_then(|local| match local.target {
+                SyncTarget::WebDav { .. } => local.secret.clone(),
+                SyncTarget::Folder { .. } => None,
+            })
+        }),
+    }
 }
 
 /// Record kind of a synced AI conversation (its journal records).
@@ -609,17 +659,19 @@ pub fn sync_status(state: State<'_, AppState>) -> Result<SyncStatus, CommandErro
 
 /// Connects to the storage at `target` (checking the address and, for WebDAV,
 /// `storage_password`), stores both on this device (the password sealed) and reports whether a
-/// sync space exists there. Sync starts with [`sync_setup`].
+/// sync space exists there. Leaving `storage_password` empty while updating an existing WebDAV
+/// configuration reuses the currently saved WebDAV password. If the connection check fails, the
+/// previously saved configuration is left untouched. Sync starts with [`sync_setup`].
 #[tauri::command]
 pub async fn sync_connect(
     state: State<'_, AppState>,
     target: SyncTarget,
     storage_password: Option<String>,
 ) -> Result<SyncProbe, CommandError> {
-    let secret = storage_password
+    let provided = storage_password
         .filter(|value| !value.is_empty())
         .map(Zeroizing::new);
-    if secret
+    if provided
         .as_ref()
         .is_some_and(|value| value.len() > MAX_PASSWORD)
     {
@@ -629,10 +681,43 @@ pub async fn sync_connect(
         ));
     }
     state.ensure_unlocked().await?;
-    let backend = target.backend(secret.as_deref().map(String::as_str))?;
-    let exists = rove_sync::space_exists(backend.as_ref())
-        .await
-        .map_err(sync_error)?;
+    let previous = read_local(&state.vault)?;
+    let reused_secret = provided.is_none()
+        && matches!(target, SyncTarget::WebDav { .. })
+        && previous
+            .as_ref()
+            .is_some_and(|local| matches!(local.target, SyncTarget::WebDav { .. }) && local.secret.is_some());
+    let secret = resolve_connect_secret(&target, provided, previous.as_ref());
+    let kind = target_kind(&target);
+    let summary = target_summary(&target);
+    tracing::info!(kind, target = %summary, reused_secret, "testing sync storage connection");
+    let backend = match target.backend(secret.as_deref().map(String::as_str)) {
+        Ok(backend) => backend,
+        Err(error) => {
+            tracing::warn!(
+                kind,
+                target = %summary,
+                code = error.code,
+                error = %error.message,
+                "sync storage target invalid"
+            );
+            return Err(error);
+        }
+    };
+    let exists = match rove_sync::space_exists(backend.as_ref()).await {
+        Ok(exists) => exists,
+        Err(error) => {
+            let cmd_error = sync_error(error);
+            tracing::warn!(
+                kind,
+                target = %summary,
+                code = cmd_error.code,
+                error = %cmd_error.message,
+                "sync storage connection failed"
+            );
+            return Err(cmd_error);
+        }
+    };
     let _guard = state.sync_lock.lock().await;
     let (sync_state, key) = kept_state(read_local(&state.vault)?, &target);
     write_local(
@@ -642,6 +727,13 @@ pub async fn sync_connect(
         key.as_ref(),
         secret.as_ref(),
     )?;
+    tracing::info!(
+        kind,
+        target = %summary,
+        space_exists = exists,
+        kept_key = key.is_some(),
+        "sync storage connected"
+    );
     Ok(SyncProbe { exists })
 }
 
@@ -651,13 +743,28 @@ pub async fn sync_probe(state: State<'_, AppState>) -> Result<SyncProbe, Command
     state.ensure_unlocked().await?;
     let local = read_local(&state.vault)?
         .ok_or_else(|| CommandError::new("sync.not_configured", "sync is not set up"))?;
+    let kind = target_kind(&local.target);
+    let summary = target_summary(&local.target);
     let backend = local
         .target
         .backend(local.secret.as_deref().map(String::as_str))?;
-    let exists = rove_sync::space_exists(backend.as_ref())
-        .await
-        .map_err(sync_error)?;
-    Ok(SyncProbe { exists })
+    match rove_sync::space_exists(backend.as_ref()).await {
+        Ok(exists) => {
+            tracing::info!(kind, target = %summary, space_exists = exists, "sync storage probed");
+            Ok(SyncProbe { exists })
+        }
+        Err(error) => {
+            let cmd_error = sync_error(error);
+            tracing::warn!(
+                kind,
+                target = %summary,
+                code = cmd_error.code,
+                error = %cmd_error.message,
+                "sync storage probe failed"
+            );
+            Err(cmd_error)
+        }
+    }
 }
 
 /// Starts syncing with the connected storage: joins the space there with `password`, or creates
@@ -675,6 +782,8 @@ pub async fn sync_setup(
     let _guard = state.sync_lock.lock().await;
     let local = read_local(&state.vault)?
         .ok_or_else(|| CommandError::new("sync.not_configured", "sync is not set up"))?;
+    let kind = target_kind(&local.target);
+    let summary = target_summary(&local.target);
     let backend = local
         .target
         .backend(local.secret.as_deref().map(String::as_str))?;
@@ -687,15 +796,29 @@ pub async fn sync_setup(
             "the sync password must have at least 8 characters",
         ));
     }
+    tracing::info!(kind, target = %summary, create, "starting sync space setup");
     // Another device may create the space at the same moment: then this one joins it.
-    let (key, created) = if create {
+    let (key, created) = match if create {
         rove_sync::create_or_join_space(backend.as_ref(), &password, KdfParams::default()).await
     } else {
         rove_sync::join_space(backend.as_ref(), &password)
             .await
             .map(|key| (key, false))
-    }
-    .map_err(sync_error)?;
+    } {
+        Ok(pair) => pair,
+        Err(error) => {
+            let cmd_error = sync_error(error);
+            tracing::warn!(
+                kind,
+                target = %summary,
+                create,
+                code = cmd_error.code,
+                error = %cmd_error.message,
+                "sync space setup failed"
+            );
+            return Err(cmd_error);
+        }
+    };
     // A new space starts a new history.
     let sync_state = if created {
         SyncState::new(&uuid::Uuid::now_v7().to_string())
@@ -725,11 +848,21 @@ async fn round(
     secret: Option<&Zeroizing<String>>,
 ) -> Result<Report, CommandError> {
     let vault = &state.vault;
+    let kind = target_kind(target);
+    let summary = target_summary(target);
     if let Err(error) = rove_sync::verify_space(backend, key).await {
         if matches!(error, SyncError::SpaceChanged) {
             write_local(vault, target, &sync_state, None, secret)?;
         }
-        return Err(sync_error(error));
+        let cmd_error = sync_error(error);
+        tracing::warn!(
+            kind,
+            target = %summary,
+            code = cmd_error.code,
+            error = %cmd_error.message,
+            "sync space verification failed"
+        );
+        return Err(cmd_error);
     }
     let store = SyncStore {
         vault: VaultStore(vault.clone()),
@@ -737,7 +870,29 @@ async fn round(
     };
     let result = rove_sync::sync(backend, key, &mut sync_state, &store).await;
     write_local(vault, target, &sync_state, Some(key), secret)?;
-    result.map_err(sync_error)
+    match result {
+        Ok(report) => {
+            tracing::info!(
+                kind,
+                target = %summary,
+                applied = report.applied,
+                pushed = report.pushed,
+                "sync round completed"
+            );
+            Ok(report)
+        }
+        Err(error) => {
+            let cmd_error = sync_error(error);
+            tracing::warn!(
+                kind,
+                target = %summary,
+                code = cmd_error.code,
+                error = %cmd_error.message,
+                "sync round failed"
+            );
+            Err(cmd_error)
+        }
+    }
 }
 
 /// After the vault's secrets were reset: the sync state forgets them, so the next round
@@ -787,7 +942,9 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<Report, CommandError
 #[tauri::command]
 pub async fn sync_disable(state: State<'_, AppState>) -> Result<(), CommandError> {
     let _guard = state.sync_lock.lock().await;
-    Ok(state.vault.set_sync_local(None)?)
+    state.vault.set_sync_local(None)?;
+    tracing::info!("sync disabled on this device");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -801,6 +958,45 @@ mod tests {
             key: Some(SyncKey::from_bytes([7; 32])),
             secret: None,
         }
+    }
+
+    #[test]
+    fn reuses_stored_webdav_secret_when_editing_without_retyping_password() {
+        let dav = SyncTarget::WebDav {
+            url: "https://dav.example/RoveTerm".into(),
+            username: "me".into(),
+        };
+        let dav_edited = SyncTarget::WebDav {
+            url: "https://dav.example/RoveTerm2".into(),
+            username: "me".into(),
+        };
+        let mut previous = local(dav.clone(), "device-1");
+        previous.secret = Some(Zeroizing::new("stored-pass".into()));
+
+        let reused = resolve_connect_secret(&dav_edited, None, Some(&previous));
+        assert_eq!(reused.as_deref().map(String::as_str), Some("stored-pass"));
+
+        let replaced = resolve_connect_secret(
+            &dav_edited,
+            Some(Zeroizing::new("new-pass".into())),
+            Some(&previous),
+        );
+        assert_eq!(replaced.as_deref().map(String::as_str), Some("new-pass"));
+
+        let folder = SyncTarget::Folder {
+            path: "/sync".into(),
+        };
+        assert!(resolve_connect_secret(&folder, None, Some(&previous)).is_none());
+        assert!(resolve_connect_secret(&dav, None, None).is_none());
+    }
+
+    #[test]
+    fn maps_forbidden_and_unauthorized_to_distinct_codes() {
+        assert_eq!(sync_error(SyncError::Unauthorized).code, "sync.unauthorized");
+        assert_eq!(
+            sync_error(SyncError::Forbidden("HTTP 403".into())).code,
+            "sync.forbidden"
+        );
     }
 
     #[test]

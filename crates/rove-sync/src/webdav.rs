@@ -3,7 +3,9 @@
 //! for loopback addresses.
 
 use std::collections::HashSet;
+use std::error::Error as _;
 use std::sync::Mutex;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use rove_http::reqwest::{Client, Method, StatusCode, Url};
@@ -11,6 +13,72 @@ use zeroize::Zeroizing;
 
 use crate::backend::{MAX_FILE, check_path};
 use crate::{SyncBackend, SyncError};
+
+/// Formats a `Url` as `scheme://host[:port]/path`, omitting credentials, query and fragment.
+fn sanitized_target(url: &Url) -> String {
+    let host = url.host_str().unwrap_or("");
+    match url.port() {
+        Some(port) => format!("{}://{host}:{port}{}", url.scheme(), url.path()),
+        None => format!("{}://{host}{}", url.scheme(), url.path()),
+    }
+}
+
+/// Expands a reqwest error with its underlying `Error::source` chain (DNS, TLS, timeout, reset),
+/// stripping the URL so credentials or queries can never appear in logs or user messages.
+fn describe_reqwest_error(error: rove_http::reqwest::Error) -> String {
+    let error = error.without_url();
+    let is_timeout = error.is_timeout();
+    let mut parts = Vec::new();
+    let base = error.to_string();
+    if !base.is_empty() {
+        parts.push(base);
+    }
+    let mut current = error.source();
+    while let Some(source) = current {
+        let text = source.to_string();
+        if !text.is_empty() && !parts.iter().any(|existing| existing.contains(&text)) {
+            parts.push(text);
+        }
+        current = source.source();
+    }
+    let detail = parts.join(": ");
+    if is_timeout && !detail.to_ascii_lowercase().contains("timed out") {
+        format!("request timed out: {detail}")
+    } else if detail.is_empty() {
+        "network request failed".to_owned()
+    } else {
+        detail
+    }
+}
+
+/// Classifies auth/permission HTTP statuses into distinct [`SyncError`] variants.
+fn classify_auth_status(method: &str, path: &str, status: StatusCode) -> Option<SyncError> {
+    match status {
+        StatusCode::UNAUTHORIZED => Some(SyncError::Unauthorized),
+        StatusCode::FORBIDDEN => Some(SyncError::Forbidden(format!(
+            "HTTP 403 Forbidden ({method} {path})"
+        ))),
+        _ => None,
+    }
+}
+
+/// Formats an unexpected HTTP status with method, sanitized path and a short diagnostic hint.
+fn unexpected_status(method: &str, path: &str, status: StatusCode) -> SyncError {
+    let hint = match status.as_u16() {
+        404 => Some("not found — check the server URL or folder path"),
+        405 => Some("method not allowed — this URL may not be a WebDAV endpoint"),
+        409 => Some("conflict — parent folder may not exist on the server"),
+        413 => Some("payload too large"),
+        429 => Some("too many requests — server rate limit reached"),
+        500..=599 => Some("server error"),
+        _ => None,
+    };
+    let message = match hint {
+        Some(hint) => format!("HTTP {status} on {method} {path} ({hint})"),
+        None => format!("unexpected HTTP {status} on {method} {path}"),
+    };
+    SyncError::Backend(message)
+}
 
 const PROPFIND_BODY: &str = r#"<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>"#;
 
@@ -115,6 +183,11 @@ impl WebDavBackend {
         body: Option<Vec<u8>>,
         headers: &[(&str, &str)],
     ) -> Result<rove_http::reqwest::Response, SyncError> {
+        let method_name = method.as_str().to_owned();
+        let target = sanitized_target(&url);
+        let path = url.path().to_owned();
+        let started = Instant::now();
+        tracing::debug!(method = %method_name, target = %target, "webdav request");
         let mut request = self
             .client
             .request(method, url)
@@ -125,18 +198,54 @@ impl WebDavBackend {
         if let Some(body) = body {
             request = request.body(body);
         }
-        let response = request
-            .send()
-            .await
-            .map_err(|error| SyncError::Backend(error.without_url().to_string()))?;
-        match response.status() {
-            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(SyncError::Unauthorized),
-            _ => Ok(response),
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                let detail = describe_reqwest_error(error);
+                tracing::warn!(
+                    method = %method_name,
+                    target = %target,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    error = %detail,
+                    "webdav request failed"
+                );
+                return Err(SyncError::Backend(format!(
+                    "{method_name} {path}: {detail}"
+                )));
+            }
+        };
+        let status = response.status();
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        if let Some(error) = classify_auth_status(&method_name, &path, status) {
+            tracing::warn!(
+                method = %method_name,
+                target = %target,
+                status = status.as_u16(),
+                elapsed_ms,
+                "webdav access rejected"
+            );
+            return Err(error);
         }
+        tracing::debug!(
+            method = %method_name,
+            target = %target,
+            status = status.as_u16(),
+            elapsed_ms,
+            "webdav response"
+        );
+        Ok(response)
     }
 
-    fn unexpected(response: &rove_http::reqwest::Response) -> SyncError {
-        SyncError::Backend(format!("unexpected response {}", response.status()))
+    fn unexpected(method: &str, response: &rove_http::reqwest::Response) -> SyncError {
+        let status = response.status();
+        let path = response.url().path();
+        tracing::warn!(
+            method,
+            target = %sanitized_target(response.url()),
+            status = status.as_u16(),
+            "webdav unexpected status"
+        );
+        unexpected_status(method, path, status)
     }
 
     fn method(name: &[u8]) -> Result<Method, SyncError> {
@@ -179,10 +288,10 @@ impl WebDavBackend {
                 if !(response.status().is_success()
                     || response.status() == StatusCode::METHOD_NOT_ALLOWED)
                 {
-                    return Err(Self::unexpected(&response));
+                    return Err(Self::unexpected("MKCOL", &response));
                 }
             }
-            _ => return Err(Self::unexpected(&response)),
+            _ => return Err(Self::unexpected("PROPFIND", &response)),
         }
         self.mark_created("");
         Ok(())
@@ -214,7 +323,7 @@ impl WebDavBackend {
             if !(response.status().is_success()
                 || response.status() == StatusCode::METHOD_NOT_ALLOWED)
             {
-                return Err(Self::unexpected(&response));
+                return Err(Self::unexpected("MKCOL", &response));
             }
             self.mark_created(&prefix);
         }
@@ -298,12 +407,12 @@ impl SyncBackend for WebDavBackend {
             return Ok(Vec::new());
         }
         if response.status().as_u16() != 207 {
-            return Err(Self::unexpected(&response));
+            return Err(Self::unexpected("PROPFIND", &response));
         }
         let text = response
             .text()
             .await
-            .map_err(|error| SyncError::Backend(error.to_string()))?;
+            .map_err(|error| SyncError::Backend(describe_reqwest_error(error)))?;
         if text.len() > MAX_FILE {
             return Err(SyncError::Format("WebDAV listing too large".into()));
         }
@@ -318,7 +427,7 @@ impl SyncBackend for WebDavBackend {
             return Ok(None);
         }
         if !response.status().is_success() {
-            return Err(Self::unexpected(&response));
+            return Err(Self::unexpected("GET", &response));
         }
         if response
             .content_length()
@@ -329,7 +438,7 @@ impl SyncBackend for WebDavBackend {
         let bytes = response
             .bytes()
             .await
-            .map_err(|error| SyncError::Backend(error.to_string()))?;
+            .map_err(|error| SyncError::Backend(describe_reqwest_error(error)))?;
         if bytes.len() > MAX_FILE {
             return Err(SyncError::Format("sync file too large".into()));
         }
@@ -351,7 +460,7 @@ impl SyncBackend for WebDavBackend {
         if response.status().is_success() {
             Ok(())
         } else {
-            Err(Self::unexpected(&response))
+            Err(Self::unexpected("PUT", &response))
         }
     }
 
@@ -371,7 +480,7 @@ impl SyncBackend for WebDavBackend {
         match response.status() {
             status if status.is_success() => Ok(true),
             StatusCode::PRECONDITION_FAILED => Ok(false),
-            _ => Err(Self::unexpected(&response)),
+            _ => Err(Self::unexpected("PUT", &response)),
         }
     }
 
@@ -382,7 +491,7 @@ impl SyncBackend for WebDavBackend {
         if response.status().is_success() || response.status() == StatusCode::NOT_FOUND {
             Ok(())
         } else {
-            Err(Self::unexpected(&response))
+            Err(Self::unexpected("DELETE", &response))
         }
     }
 }
@@ -398,6 +507,49 @@ mod tests {
         assert!(WebDavBackend::new("ftp://example.com/", "u", "p").is_err());
         assert!(WebDavBackend::new("https://example.com/dav", "u", "p").is_ok());
         assert!(WebDavBackend::new("http://127.0.0.1:8080/dav", "u", "p").is_ok());
+    }
+
+    #[test]
+    fn classifies_401_vs_403_and_unexpected_statuses() {
+        assert!(matches!(
+            classify_auth_status("GET", "/dav/space.json", StatusCode::UNAUTHORIZED),
+            Some(SyncError::Unauthorized)
+        ));
+        match classify_auth_status("PROPFIND", "/dav/RoveTerm/", StatusCode::FORBIDDEN) {
+            Some(SyncError::Forbidden(detail)) => {
+                assert!(detail.contains("403"));
+                assert!(detail.contains("PROPFIND"));
+                assert!(detail.contains("/dav/RoveTerm/"));
+            }
+            other => panic!("expected Forbidden, got {other:?}"),
+        }
+        assert!(classify_auth_status("GET", "/dav/space.json", StatusCode::NOT_FOUND).is_none());
+
+        match unexpected_status("PROPFIND", "/dav/", StatusCode::METHOD_NOT_ALLOWED) {
+            SyncError::Backend(detail) => {
+                assert!(detail.contains("405"));
+                assert!(detail.contains("PROPFIND"));
+                assert!(detail.contains("WebDAV"));
+            }
+            other => panic!("expected Backend, got {other:?}"),
+        }
+        match unexpected_status("MKCOL", "/dav/RoveTerm/", StatusCode::CONFLICT) {
+            SyncError::Backend(detail) => {
+                assert!(detail.contains("409"));
+                assert!(detail.contains("MKCOL"));
+            }
+            other => panic!("expected Backend, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sanitizes_logged_target_without_credentials_or_query() {
+        let url = Url::parse("https://user:secret@dav.example.com:8443/dav/RoveTerm/?token=abc#f")
+            .unwrap();
+        let target = sanitized_target(&url);
+        assert_eq!(target, "https://dav.example.com:8443/dav/RoveTerm/");
+        assert!(!target.contains("secret"));
+        assert!(!target.contains("token"));
     }
 
     #[test]

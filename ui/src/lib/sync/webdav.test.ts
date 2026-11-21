@@ -1,13 +1,29 @@
-import { test } from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import { webdavUrl } from './webdav.ts';
+import { splitWebdavUrl, webdavUrl } from './webdav.ts';
 
-test('joins the server address and the folder', () => {
+test('joins server URL and folder path', () => {
   assert.equal(webdavUrl('https://dav.jianguoyun.com/dav/', 'RoveTerm'), 'https://dav.jianguoyun.com/dav/RoveTerm');
-  assert.equal(webdavUrl(' https://cloud.example/remote.php/dav/files/me ', ' /Apps/RoveTerm/ '), 'https://cloud.example/remote.php/dav/files/me/Apps/RoveTerm');
+  assert.equal(webdavUrl('https://dav.example.com/dav///', '/team/my sync/'), 'https://dav.example.com/dav/team/my%20sync');
 });
 
-test('encodes folder names and allows none', () => {
-  assert.equal(webdavUrl('https://dav.example//', '同步 数据'), 'https://dav.example/%E5%90%8C%E6%AD%A5%20%E6%95%B0%E6%8D%AE');
-  assert.equal(webdavUrl('https://dav.example/', ''), 'https://dav.example');
+test('splits stored WebDAV directory URLs for editing', () => {
+  assert.deepEqual(splitWebdavUrl('https://dav.jianguoyun.com/dav/RoveTerm'), {
+    server: 'https://dav.jianguoyun.com/dav/',
+    folder: 'RoveTerm',
+  });
+  assert.deepEqual(splitWebdavUrl('https://cloud.example.com/remote.php/dav/files/alice/My%20Rove/'), {
+    server: 'https://cloud.example.com/remote.php/dav/files/alice/',
+    folder: 'My Rove',
+  });
+  assert.deepEqual(splitWebdavUrl('https://dav.example.com/'), {
+    server: 'https://dav.example.com/',
+    folder: '',
+  });
+});
+
+test('round-trips typical WebDAV addresses', () => {
+  const original = 'https://dav.jianguoyun.com/dav/RoveTerm';
+  const { server, folder } = splitWebdavUrl(original);
+  assert.equal(webdavUrl(server, folder), original);
 });
