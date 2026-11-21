@@ -87,13 +87,17 @@
 
 <style>
   .fleet {
+    max-width: 1100px;
+    margin: 0 auto var(--space-5);
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
     padding: var(--space-3) var(--space-4);
-    border-radius: var(--radius-lg);
-    background: var(--surface);
-    box-shadow: 0 0 0 1px var(--separator);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow:
+      0 0 0 0.5px var(--separator),
+      var(--shadow-sm);
   }
   .head {
     display: flex;
