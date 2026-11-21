@@ -9,8 +9,8 @@
 
   import { keys } from '../keys/keys.svelte';
   import { isMobile } from '../platform';
-  import { findDuplicateHost } from '../tailscale/discovery';
-  import { matchTailscalePeer } from '../tailscale/matching';
+  import { findDuplicateHost, peerIpOptions, preferredAddress, SAVED_PEER_PREFIX } from '../tailscale/discovery';
+  import { matchTailscalePeer, normalizeHostAddress } from '../tailscale/matching';
   import { tailscale } from '../tailscale/tailscale.svelte';
 
   interface Props {
@@ -65,11 +65,45 @@
   let error = $state('');
   let saving = $state(false);
   let duplicate = $state<HostEntry | null>(null);
+  let lastAutoPeerName = '';
+  const useTailscaleSelect = $derived(!isMobile && routeKind === 'tailscale');
+  const savedTargetHostname = initial?.route.kind === 'tailscale' ? initial.hostname : (imported?.route?.kind === 'tailscale' ? imported.hostname : '');
+  const savedTargetPeerId = initial?.route.kind === 'tailscale' ? (initial.route.peer_id ?? null) : (imported?.route?.kind === 'tailscale' ? (imported.route.peer_id ?? null) : null);
+  const tsPeerOptions = $derived(
+    peerIpOptions(tailscale.peers, {
+      peerId: savedTargetPeerId,
+      hostname: savedTargetHostname,
+      formatSaved: (address) => t('tailscale.savedTarget', { address }),
+    }),
+  );
+  const selectedTsValue = $derived.by(() => {
+    const byId = tailscalePeerId
+      ? tsPeerOptions.find((option) => !option.value.startsWith(SAVED_PEER_PREFIX) && option.peerId === tailscalePeerId)
+      : undefined;
+    if (byId) return byId.value;
+    const normalized = normalizeHostAddress(hostname);
+    if (normalized) {
+      const byAddress = tsPeerOptions.find((option) => normalizeHostAddress(option.address) === normalized);
+      if (byAddress) return byAddress.value;
+    }
+    return '';
+  });
   const matchedPeer = $derived(!isMobile && routeKind === 'direct' && tailscale.peers.length > 0 ? matchTailscalePeer({ hostname, route: { kind: 'direct' } }, tailscale.peers) : null);
   const duplicateMatch = $derived(duplicate ? findDuplicateHost([duplicate], { hostname, port: Number(port), username, route: route() }) : undefined);
   /** Notes kept about the host, for the user and the AI agents; saved with the host. */
   let notes = $state('');
   let notesLoaded = '';
+
+  function selectTailscaleOption(value: string): void {
+    const option = tsPeerOptions.find((entry) => entry.value === value);
+    if (!option) return;
+    tailscalePeerId = option.peerId;
+    hostname = option.address;
+    if (option.deviceName && (!name.trim() || name === lastAutoPeerName)) {
+      name = option.deviceName;
+      lastAutoPeerName = option.deviceName;
+    }
+  }
 
   onMount(() => {
     if (!initial) return;
@@ -93,6 +127,29 @@
     if (routeKind === 'jump' && !jumpHost && jumpOptions[0]) jumpHost = jumpOptions[0].value;
   });
 
+  // Picking "tailscale" aligns the host address with a direct Tailscale peer IP from the dropdown.
+  $effect(() => {
+    if (!useTailscaleSelect || tsPeerOptions.length === 0) return;
+    if (selectedTsValue) {
+      const active = tsPeerOptions.find((option) => option.value === selectedTsValue);
+      if (active && !active.value.startsWith(SAVED_PEER_PREFIX)) {
+        if (tailscalePeerId !== active.peerId) tailscalePeerId = active.peerId;
+        if (hostname !== active.address) hostname = active.address;
+      }
+      return;
+    }
+    const peerByHost = hostname.trim() ? matchTailscalePeer({ hostname, route: { kind: 'direct' } }, tailscale.peers) : null;
+    if (peerByHost) {
+      const matchedOpt = tsPeerOptions.find((option) => option.peerId === peerByHost.id);
+      if (matchedOpt) {
+        selectTailscaleOption(matchedOpt.value);
+        return;
+      }
+    }
+    const first = tsPeerOptions[0];
+    if (first) selectTailscaleOption(first.value);
+  });
+
   function route(): HostRoute {
     switch (routeKind) {
       case 'jump':
@@ -100,13 +157,8 @@
       case 'http':
       case 'socks5':
         return { kind: 'proxy', protocol: routeKind, host: proxyHost.trim(), port: Number(proxyPort ?? 0) };
-      case 'tailscale': {
-        const initialHostname = (initial?.hostname ?? imported?.hostname ?? '').trim();
-        const peerId = hostname.trim() === initialHostname
-          ? tailscalePeerId
-          : (matchTailscalePeer({ hostname, route: { kind: 'direct' } }, tailscale.peers)?.id ?? null);
-        return { kind: 'tailscale', peer_id: peerId };
-      }
+      case 'tailscale':
+        return { kind: 'tailscale', peer_id: tailscalePeerId };
       default:
         return { kind: 'direct' };
     }
@@ -137,6 +189,10 @@
     }
     if (routeKind === 'jump' && !jumpHost) {
       error = t('host.jumpRequired');
+      return;
+    }
+    if (useTailscaleSelect && !hostname.trim()) {
+      error = t('tailscale.peerRequired');
       return;
     }
     const draft: HostDraft = {
@@ -178,9 +234,25 @@
 <Dialog title={initial ? t('host.edit') : t('host.new')} {onclose}>
   <form id="host-form" onsubmit={save}>
     <div class="row">
-      <label>{t('host.hostname')}<input bind:value={hostname} required autocomplete="off" spellcheck="false" /></label>
+      {#if useTailscaleSelect}
+        <label>
+          {t('tailscale.device')}
+          <Select
+            value={selectedTsValue}
+            options={tsPeerOptions.map((option) => ({ value: option.value, label: option.label }))}
+            disabled={tsPeerOptions.length === 0}
+            onchange={selectTailscaleOption}
+            label={t('tailscale.device')}
+          />
+        </label>
+      {:else}
+        <label>{t('host.hostname')}<input bind:value={hostname} required autocomplete="off" spellcheck="false" /></label>
+      {/if}
       <label class="port">{t('host.port')}<input type="number" min="1" max="65535" bind:value={port} required /></label>
     </div>
+    {#if useTailscaleSelect && tsPeerOptions.length === 0}
+      <p class="hint">{t('tailscale.noPeersForSelect')}</p>
+    {/if}
     <label>{t('host.username')}<input bind:value={username} required autocomplete="off" spellcheck="false" /></label>
     <div class="row">
       <label>{t('host.name')}<input bind:value={name} placeholder={hostname} autocomplete="off" /></label>
@@ -236,7 +308,7 @@
       />
     </label>
     {#if matchedPeer}
-      <p class="hint route-hint" role="status">{t('tailscale.inlineMatch', { name: matchedPeer.name || matchedPeer.dns_name })}<button type="button" class="link inline-link" onclick={() => { routeKind = 'tailscale'; tailscalePeerId = matchedPeer?.id ?? null; }}>{t('tailscale.switchRoute')}</button></p>
+      <p class="hint route-hint" role="status">{t('tailscale.inlineMatch', { name: matchedPeer.name || matchedPeer.dns_name })}<button type="button" class="link inline-link" onclick={() => { routeKind = 'tailscale'; tailscalePeerId = matchedPeer.id; hostname = preferredAddress(matchedPeer) || hostname; }}>{t('tailscale.switchRoute')}</button></p>
     {/if}
     {#if routeKind === 'jump'}
       {#if jumpOptions.length > 0}

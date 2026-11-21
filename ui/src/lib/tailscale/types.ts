@@ -9,12 +9,32 @@ export type TailscaleState =
   | 'running'
   | 'error';
 
+export interface TailscaleDerpRegion {
+  id: number;
+  code: string;
+  name: string;
+}
+
+export type TailscalePath =
+  | { kind: 'direct'; endpoint: string }
+  | { kind: 'relay'; region_id: number; region_code: string; region_name: string }
+  | { kind: 'unknown' };
+
+export interface TailscalePingResult {
+  peer_id: TailscalePeerId;
+  reachable: boolean;
+  latency_ms: number | null;
+  path: TailscalePath;
+  message?: string | null;
+}
+
 export interface TailscaleSelfNode {
   id: TailscalePeerId;
   name: string;
   dns_name: string;
   addresses: string[];
   tailnet: string | null;
+  home_derp?: TailscaleDerpRegion | null;
 }
 
 /** A discovery identity is independent of the peer's name and current public key. */

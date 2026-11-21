@@ -1,7 +1,7 @@
 // Typed wrappers around the Tauri commands. Components call these instead of `invoke` directly.
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { TailscaleSnapshot, TailscaleStatus } from './tailscale/types';
+import type { TailscalePingResult, TailscaleSnapshot, TailscaleStatus } from './tailscale/types';
 import type { OpsTask, PrivateRef } from './ops/types';
 
 export function opsTasks(conversation?: string): Promise<OpsTask[]> {
@@ -38,6 +38,9 @@ export function tailscaleLogout(): Promise<TailscaleStatus> {
 }
 export function tailscaleOpenAuthUrl(): Promise<void> {
   return invoke('tailscale_open_auth_url');
+}
+export function tailscalePingPeer(peerId: string): Promise<TailscalePingResult> {
+  return invoke('tailscale_ping_peer', { peerId });
 }
 export function onTailscaleStatus(handler: (status: TailscaleStatus) => void): Promise<UnlistenFn> {
   return listen<TailscaleStatus>('tailscale-status', (event) => handler(event.payload));

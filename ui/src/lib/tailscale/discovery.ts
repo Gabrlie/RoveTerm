@@ -54,9 +54,58 @@ export function selectedAddress(peer: TailscalePeer, selected?: string): string 
   return selected !== undefined && options.includes(selected) ? selected : preferredAddress(peer) || options[0] || '';
 }
 
-export function filterPeers(peers: TailscalePeer[], query: string): TailscalePeer[] {
+export type PresenceFilter = 'all' | 'online';
+
+export function filterPeers(peers: TailscalePeer[], query: string, presence: PresenceFilter = 'all'): TailscalePeer[] {
+  const base = presence === 'online' ? peers.filter((peer) => peer.online) : peers;
   const needle = query.trim().toLowerCase();
-  return needle ? peers.filter((peer) => [peer.name, peer.dns_name, peer.os ?? '', ...peer.addresses].join(' ').toLowerCase().includes(needle)) : peers;
+  return needle ? base.filter((peer) => [peer.name, peer.dns_name, peer.os ?? '', ...peer.addresses].join(' ').toLowerCase().includes(needle)) : base;
+}
+
+export interface PeerSelectOption {
+  value: string;
+  label: string;
+  peerId: string | null;
+  address: string;
+  deviceName: string;
+}
+
+export const SAVED_PEER_PREFIX = '__saved__:';
+
+/** Builds direct-IP select options for HostEditor when route is Tailscale. Preserves an existing
+ *  saved host target when the peer is absent or Tailscale is disconnected so editing stays lossless. */
+export function peerIpOptions(
+  peers: TailscalePeer[],
+  saved: { peerId: string | null; hostname: string; formatSaved: (address: string) => string },
+): PeerSelectOption[] {
+  const options: PeerSelectOption[] = [];
+  for (const peer of peers) {
+    const address = preferredAddress(peer);
+    if (!address) continue;
+    const deviceName = peer.name || peer.dns_name.replace(/\.$/, '') || address;
+    options.push({
+      value: peer.id,
+      label: `${deviceName} (${address})`,
+      peerId: peer.id,
+      address,
+      deviceName,
+    });
+  }
+  const savedHostname = saved.hostname.trim();
+  const matched = options.some((option) =>
+    (saved.peerId && option.peerId === saved.peerId)
+    || (savedHostname !== '' && hostnameKey(option.address) === hostnameKey(savedHostname)),
+  );
+  if (!matched && savedHostname) {
+    options.unshift({
+      value: `${SAVED_PEER_PREFIX}${savedHostname}`,
+      label: saved.formatSaved(savedHostname),
+      peerId: saved.peerId,
+      address: savedHostname,
+      deviceName: '',
+    });
+  }
+  return options;
 }
 
 function hostnameKey(hostname: string): string {

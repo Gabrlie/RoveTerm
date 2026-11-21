@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { beginRefresh, connectionAddresses, emptyDiscovery, failRefresh, filterPeers, findDuplicateHost, finishRefresh, preferredAddress, selectedAddress, RefreshGate } from './discovery.ts';
+import { beginRefresh, connectionAddresses, emptyDiscovery, failRefresh, filterPeers, findDuplicateHost, finishRefresh, peerIpOptions, preferredAddress, SAVED_PEER_PREFIX, selectedAddress, RefreshGate } from './discovery.ts';
 import type { HostEntry } from '../ipc';
 import type { TailscalePeer, TailscaleSnapshot } from './types';
 
@@ -110,4 +110,42 @@ test('duplicate detection keeps Tailscale routes distinct from direct routes', (
   const target = { hostname: tailscaleHost.hostname, username: tailscaleHost.username, port: tailscaleHost.port, route: tailscaleHost.route };
   assert.equal(findDuplicateHost([tailscaleHost], { ...target, route: { kind: 'direct' } }), undefined);
   assert.equal(findDuplicateHost([tailscaleHost], target), tailscaleHost);
+});
+
+test('filterPeers supports online-only filtering alongside search queries', () => {
+  const devices = [
+    { ...peer('p1', ['100.64.1.1'], 'alpha'), online: true },
+    { ...peer('p2', ['100.64.1.2'], 'beta'), online: false },
+    { ...peer('p3', ['100.64.1.3'], 'alpha-db'), online: true },
+  ];
+  assert.deepEqual(filterPeers(devices, '', 'online').map((d) => d.id), ['p1', 'p3']);
+  assert.deepEqual(filterPeers(devices, 'db', 'online').map((d) => d.id), ['p3']);
+  assert.deepEqual(filterPeers(devices, 'beta', 'online').map((d) => d.id), []);
+});
+
+test('peerIpOptions prefers direct IPv4/IPv6 addresses and preserves unmatched saved hosts', () => {
+  const devices = [
+    { ...peer('p1', ['fd7a::1', '100.64.1.10'], 'prod-api'), online: true },
+    { ...peer('p2', ['fd7a::2'], 'ipv6-only'), online: false },
+    { ...peer('p3', [], 'no-ip'), online: true },
+  ];
+  const matched = peerIpOptions(devices, {
+    peerId: 'p1',
+    hostname: '100.64.1.10',
+    formatSaved: (addr) => `Saved: ${addr}`,
+  });
+  assert.equal(matched.length, 2);
+  assert.equal(matched[0]?.address, '100.64.1.10');
+  assert.equal(matched[0]?.label, 'prod-api (100.64.1.10)');
+  assert.equal(matched[1]?.address, 'fd7a::2');
+
+  const preserved = peerIpOptions(devices, {
+    peerId: 'old-peer',
+    hostname: '100.64.9.9',
+    formatSaved: (addr) => `Saved: ${addr}`,
+  });
+  assert.equal(preserved.length, 3);
+  assert.equal(preserved[0]?.value, `${SAVED_PEER_PREFIX}100.64.9.9`);
+  assert.equal(preserved[0]?.label, 'Saved: 100.64.9.9');
+  assert.equal(preserved[0]?.peerId, 'old-peer');
 });

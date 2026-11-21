@@ -1,12 +1,13 @@
-import { hostUpdate, onTailscaleStatus, tailscaleConnect, tailscaleDisconnect, tailscaleLogout, tailscaleOpenAuthUrl, tailscaleSnapshot, tailscaleStatus, type HostEntry } from '../ipc';
+import { hostUpdate, onTailscaleStatus, tailscaleConnect, tailscaleDisconnect, tailscaleLogout, tailscaleOpenAuthUrl, tailscalePingPeer, tailscaleSnapshot, tailscaleStatus, type HostEntry } from '../ipc';
 import { errorText, t } from '../i18n';
 import { isMobile } from '../platform';
 import { hosts } from '../hosts/hosts.svelte';
 import { prefs } from '../settings/prefs.svelte';
-import { RefreshGate } from './discovery';
-import type { TailscalePeer, TailscaleState, TailscaleStatus } from './types';
+import { preferredAddress, RefreshGate } from './discovery';
+import type { TailscalePeer, TailscalePingResult, TailscaleState, TailscaleStatus } from './types';
 
 const DISMISSED_KEY = 'tailscale.dismissedMatches';
+const PING_CONCURRENCY = 4;
 
 function initialStatus(): TailscaleStatus {
   return { configured: false, state: 'unconfigured', self_node: null, auth_url: null, peer_count: 0, updated_at: 0 };
@@ -29,6 +30,9 @@ class TailscaleStore {
   refreshing = $state(false);
   error = $state('');
   dismissed = $state<Set<string>>(loadDismissed());
+  pings = $state<Record<string, TailscalePingResult>>(Object.create(null));
+  pinging = $state<Record<string, boolean>>(Object.create(null));
+  pingingAll = $state(false);
   private initialized = false;
   private statusLoaded = $state(false);
   private statusEventReceived = false;
@@ -38,6 +42,7 @@ class TailscaleStore {
   get connected(): boolean { return this.status.state === 'running'; }
   get connecting(): boolean { return this.status.state === 'starting'; }
   get needsLogin(): boolean { return this.status.state === 'needs_login'; }
+  get needsMachineAuth(): boolean { return this.status.state === 'needs_machine_auth'; }
   get active(): boolean {
     return this.status.state === 'running'
       || this.status.state === 'starting'
@@ -72,6 +77,8 @@ class TailscaleStore {
         this.peers = [];
         this.capturedAt = null;
         this.refreshing = false;
+        this.pings = Object.create(null);
+        this.pinging = Object.create(null);
       }
     }).then((unlisten) => {
       if (!this.initialized) unlisten();
@@ -130,6 +137,8 @@ class TailscaleStore {
       this.applyStatus(await tailscaleDisconnect());
       this.peers = [];
       this.capturedAt = null;
+      this.pings = Object.create(null);
+      this.pinging = Object.create(null);
     } catch (error) {
       this.error = errorText(error);
       throw error;
@@ -147,6 +156,8 @@ class TailscaleStore {
       this.applyStatus(await tailscaleLogout());
       this.peers = [];
       this.capturedAt = null;
+      this.pings = Object.create(null);
+      this.pinging = Object.create(null);
       await prefs.currentDevice();
     } catch (error) {
       this.error = errorText(error);
@@ -165,8 +176,55 @@ class TailscaleStore {
     }
   }
 
+  async pingPeer(peerId: string): Promise<TailscalePingResult | null> {
+    if (!this.connected || this.pinging[peerId]) return null;
+    this.pinging = { ...this.pinging, [peerId]: true };
+    try {
+      const result = await tailscalePingPeer(peerId);
+      if (this.connected) {
+        this.pings = { ...this.pings, [peerId]: result };
+      }
+      return result;
+    } catch (error) {
+      const fallback: TailscalePingResult = {
+        peer_id: peerId,
+        reachable: false,
+        latency_ms: null,
+        path: { kind: 'unknown' },
+        message: errorText(error),
+      };
+      if (this.connected) {
+        this.pings = { ...this.pings, [peerId]: fallback };
+      }
+      return fallback;
+    } finally {
+      const next = { ...this.pinging };
+      delete next[peerId];
+      this.pinging = next;
+    }
+  }
+
+  async pingAllPeers(peerIds: string[]): Promise<void> {
+    if (!this.connected || this.pingingAll || peerIds.length === 0) return;
+    this.pingingAll = true;
+    const queue = [...peerIds];
+    try {
+      const workers = Array.from({ length: Math.min(PING_CONCURRENCY, queue.length) }, async () => {
+        while (this.connected) {
+          const next = queue.shift();
+          if (!next) break;
+          await this.pingPeer(next);
+        }
+      });
+      await Promise.all(workers);
+    } finally {
+      this.pingingAll = false;
+    }
+  }
+
   async convertHost(host: HostEntry, peer: TailscalePeer): Promise<void> {
-    await hostUpdate(host.id, { name: host.name, group: host.group, hostname: host.hostname, port: host.port, username: host.username, auth: host.auth, route: { kind: 'tailscale', peer_id: peer.id }, tags: host.tags }, null, false);
+    const address = preferredAddress(peer) || host.hostname;
+    await hostUpdate(host.id, { name: host.name, group: host.group, hostname: address, port: host.port, username: host.username, auth: host.auth, route: { kind: 'tailscale', peer_id: peer.id }, tags: host.tags }, null, false);
     await hosts.refresh();
   }
 
