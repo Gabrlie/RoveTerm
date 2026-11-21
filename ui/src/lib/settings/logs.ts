@@ -7,9 +7,16 @@ export interface LogEntry {
   index: number;
   raw: string;
   level: LogSeverity;
+  timestamp: string | null;
+  shortTime: string | null;
+  target: string | null;
+  message: string;
+  continuation: boolean;
 }
 
-const LEVEL_RE = /^\s*(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\s+)?(ERROR|WARN|INFO|DEBUG|TRACE)\b/;
+const TIMESTAMP_RE = /^\s*(\d{4}-\d{2}-\d{2}[T ](\d{2}:\d{2}:\d{2})(?:[.,](\d+))?(?:Z|[+-]\d{2}(?::?\d{2})?)?)(?:\s+|$)/;
+const LEVEL_RE = /^\s*(ERROR|WARN|INFO|DEBUG|TRACE)\b[ \t]*/;
+const TARGET_RE = /^([\w.-]+(?:::[\w.-]+)*):(?:[ \t]+|$)/;
 
 /** Splits log text into indexed entries with detected severity; continuation lines keep the
  *  severity of the preceding log event so stack traces stay visible under level filters. */
@@ -21,13 +28,24 @@ export function parseLogLines(content: string): LogEntry[] {
   for (let i = 0; i < lines.length; i += 1) {
     const raw = lines[i] ?? '';
     if (i === lines.length - 1 && raw === '') continue;
-    const match = LEVEL_RE.exec(raw);
-    if (match) {
-      current = match[1] as LogSeverity;
-    } else if (!raw.trim()) {
-      current = 'OTHER';
-    }
-    entries.push({ index: i + 1, raw, level: current });
+    const time = TIMESTAMP_RE.exec(raw);
+    const body = time ? raw.slice(time[0].length) : raw;
+    const severity = LEVEL_RE.exec(body);
+    if (severity) current = severity[1] as LogSeverity;
+    else if (!raw.trim()) current = 'OTHER';
+
+    const detail = severity ? body.slice(severity[0].length) : raw;
+    const target = severity ? TARGET_RE.exec(detail) : null;
+    entries.push({
+      index: i + 1,
+      raw,
+      level: current,
+      timestamp: time?.[1] ?? null,
+      shortTime: time ? time[2] + '.' + (time[3] ?? '').padEnd(3, '0').slice(0, 3) : null,
+      target: target?.[1] ?? null,
+      message: target ? detail.slice(target[0].length) : detail,
+      continuation: !severity && current !== 'OTHER',
+    });
   }
   return entries;
 }

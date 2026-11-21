@@ -1,13 +1,14 @@
 <script lang="ts">
   // In-app viewer for RoveTerm's daily rolling log files (secret-free).
-  import { onMount, tick } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import Icon from '../../ui/Icon.svelte';
+  import IconButton from '../../ui/IconButton.svelte';
   import Select from '../../ui/Select.svelte';
   import { writeClipboard } from '../../ui/clipboard';
   import { notify } from '../../ui/toast.svelte';
   import { errorText, t } from '../../i18n';
   import { logsList, logsRead, logsReveal, type LogFileInfo } from '../../ipc';
-  import { filterLogEntries, formatLogSize, parseLogLines, type LogLevelFilter } from '../logs';
+  import { filterLogEntries, formatLogSize, parseLogLines, type LogEntry, type LogLevelFilter } from '../logs';
 
   const TAIL_LINES = 800;
   const AUTO_REFRESH_MS = 3000;
@@ -23,6 +24,9 @@
   let query = $state('');
   let autoRefresh = $state(false);
   let viewport = $state<HTMLDivElement>();
+  let copiedLine = $state<{ file: string; index: number; raw: string } | null>(null);
+  let copyTimer: number | undefined;
+  let copyRequest = 0;
 
   const fileOptions = $derived(
     files.map((file) => ({
@@ -93,6 +97,26 @@
     }
   }
 
+  function clearLineCopy(): void {
+    window.clearTimeout(copyTimer);
+    copiedLine = null;
+    copyRequest += 1;
+  }
+
+  async function copyLine(entry: LogEntry): Promise<void> {
+    clearLineCopy();
+    const request = copyRequest;
+    const file = selectedFile;
+    try {
+      await writeClipboard(entry.raw);
+      if (request !== copyRequest || file !== selectedFile) return;
+      copiedLine = { file, index: entry.index, raw: entry.raw };
+      copyTimer = window.setTimeout(clearLineCopy, 1600);
+    } catch (error) {
+      if (request === copyRequest) notify(errorText(error), 'error');
+    }
+  }
+
   function revealFolder(): void {
     void logsReveal().catch((error: unknown) => notify(errorText(error), 'error'));
   }
@@ -108,6 +132,8 @@
   onMount(() => {
     void refresh(false);
   });
+
+  onDestroy(clearLineCopy);
 </script>
 
 <div class="logs-section">
@@ -137,9 +163,7 @@
         <Icon name="copy" size={13} />
         {t('logs.copy')}
       </button>
-      <button type="button" class="secondary compact" onclick={revealFolder} title={t('action.help.logs')}>
-        <Icon name="folder" size={13} />
-      </button>
+      <IconButton icon="folder" label={t('action.help.logs')} onclick={revealFolder} />
     </div>
   </div>
 
@@ -181,7 +205,30 @@
     {:else if filtered.length === 0}
       <p class="placeholder">{t('logs.empty')}</p>
     {:else}
-      <pre class="log-lines">{#each filtered as entry (entry.index)}<span class="log-line level-{entry.level.toLowerCase()}">{entry.raw}</span>{/each}</pre>
+      <div class="log-list selectable">
+        {#each filtered as entry, i (entry.index)}
+          {@const grouped = entry.continuation && filtered[i - 1]?.index === entry.index - 1}
+          {@const copied = copiedLine?.file === selectedFile && copiedLine.index === entry.index && copiedLine.raw === entry.raw}
+          <div class="log-row level-{entry.level.toLowerCase()}" class:grouped class:continuation={entry.continuation}>
+            <div class="log-text selectable">
+              {#if !entry.continuation && entry.level !== 'OTHER'}
+                {#if entry.shortTime && entry.timestamp}
+                  <time datetime={entry.timestamp} title={entry.timestamp}>{entry.shortTime}</time>{' '}
+                {/if}
+                <span class="severity">{t(`logs.severity.${entry.level}`)}</span>{' '}
+                {#if entry.target}
+                  <span class="target">{entry.target}</span>{' '}
+                {/if}
+              {/if}
+              <span class="log-message selectable">{entry.message}</span>
+            </div>
+            <div class="line-copy" class:copied>
+              <IconButton icon={copied ? 'check' : 'copy'} label={t(copied ? 'logs.lineCopied' : 'logs.copyLine')} active={copied} small
+                onclick={() => void copyLine(entry)} />
+            </div>
+          </div>
+        {/each}
+      </div>
     {/if}
   </div>
 
@@ -212,7 +259,7 @@
   .toolbar-actions {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-1);
   }
   .compact {
     min-width: 0;
@@ -247,7 +294,7 @@
   }
   .truncated-badge {
     padding: 1px 6px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--fill);
     color: var(--fg-muted);
   }
@@ -268,10 +315,7 @@
     overflow: auto;
     border-radius: var(--radius-md);
     background: var(--surface);
-    box-shadow:
-      0 0 0 0.5px var(--separator),
-      inset 0 1px 2px rgb(0 0 0 / 0.06);
-    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--separator);
   }
   .placeholder {
     margin: var(--space-4) 0;
@@ -279,27 +323,97 @@
     color: var(--fg-muted);
     font-size: var(--text-footnote);
   }
-  .log-lines {
-    margin: 0;
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-break: break-all;
+  .log-list,
+  .log-text,
+  .log-message {
+    -webkit-user-select: text;
     user-select: text;
   }
-  .log-line {
-    display: block;
-    color: var(--fg);
+  .log-list {
+    font-family: var(--font-mono);
+    font-size: var(--text-footnote);
+    line-height: 1.55;
   }
-  .log-line.level-error {
+  .log-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-1);
+    padding: 5px var(--space-2);
+  }
+  .log-row + .log-row:not(.grouped) {
+    border-top: 1px solid color-mix(in srgb, var(--separator) 70%, transparent);
+  }
+  .continuation {
+    padding-inline-start: var(--space-4);
+  }
+  .log-text {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .log-message {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  time,
+  .target {
+    color: var(--fg-muted);
+  }
+  time {
+    font-variant-numeric: tabular-nums;
+  }
+  .target,
+  .severity {
+    padding-inline: var(--space-1);
+    border-radius: var(--radius-xs);
+    background: var(--fill);
+  }
+  .severity {
+    color: var(--fg-muted);
+    font-size: var(--text-caption);
+    font-weight: 700;
+  }
+  .level-error {
+    background: color-mix(in srgb, var(--danger) 5%, transparent);
+  }
+  .level-warn {
+    background: color-mix(in srgb, var(--sys-orange) 5%, transparent);
+  }
+  .level-error .severity {
+    background: var(--danger-soft);
     color: var(--danger);
   }
-  .log-line.level-warn {
-    color: var(--sys-orange);
+  .level-warn .severity {
+    background: var(--warning-soft);
+    color: var(--warning);
   }
-  .log-line.level-debug,
-  .log-line.level-trace {
-    color: var(--fg-muted);
+  .level-info .severity {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .line-copy,
+  .line-copy :global(button) {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .line-copy {
+    flex: none;
+    display: flex;
+    align-items: center;
+    height: 1.55em;
+  }
+  .line-copy :global(button) {
+    width: var(--space-5);
+    height: var(--space-5);
+  }
+  @media (hover: hover) {
+    .line-copy {
+      opacity: 0;
+    }
+    .log-row:hover .line-copy,
+    .line-copy:focus-within,
+    .line-copy.copied {
+      opacity: 1;
+    }
   }
 </style>
