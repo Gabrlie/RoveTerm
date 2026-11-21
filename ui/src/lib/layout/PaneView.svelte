@@ -2,12 +2,14 @@
   // One tab's content: a terminal or a file browser, with the connection failure banner. Stays
   // mounted while another tab of its group is shown (hidden, keeping its size).
   import TermView from '../terminal/TermView.svelte';
+  import TerminalStatusBar from '../terminal/TerminalStatusBar.svelte';
+  import { prefs } from '../settings/prefs.svelte';
   import AiPanel from '../ai/AiPanel.svelte';
   import FileBrowser from '../files/FileBrowser.svelte';
   import TextEditor from '../files/TextEditor.svelte';
   import { editors } from '../files/editors.svelte';
   import { terminals } from '../terminal/registry';
-  import { hostOf, workspace, type PaneState } from '../workspace/workspace.svelte';
+  import { hostOf, remoteSourceOf, workspace, type PaneState } from '../workspace/workspace.svelte';
   import { sessionOpenLocal, sessionOpenQuick, sessionOpenSsh, credentialKindOf, type CredentialKind, type OutputMessage, type TermSize } from '../ipc';
   import type { PaneId } from './layout';
   import { errorText, t } from '../i18n';
@@ -122,51 +124,58 @@
       {/key}
     {/if}
   {:else}
-    <TermView
-      bind:this={view}
-      open={opener(pane)}
-      active={focused}
-      onsession={(sessionId) => {
-        workspace.attached(pane.id, sessionId);
-        if (pane.target.kind === 'ssh') hosts.connected(pane.target.hostId).catch((error: unknown) => console.warn('host refresh failed', error));
-      }}
-      onexit={(status) => onExit(status.code)}
-      remote={pane.target.kind !== 'local'}
-      onrestart={() => workspace.reopen(pane.id, null, false)}
-      ontitle={(title) => workspace.retitle(pane.id, title)}
-      onerror={onOpenError}
-    />
-    {#if pane.exited && !pane.failure}
-      <div class="failure ended" role="status">
-        <Icon name="info" size={16} />
-        <span class="reason">{pane.target.kind === 'local' ? t('terminal.endedBar') : pane.exited.code === null && !pane.exited.signal ? t('terminal.disconnectedBar') : t('terminal.sessionEndedBar')}</span>
-        <div class="buttons">
-          <button type="button" class="primary" onclick={() => workspace.reopen(pane.id, null, false)}>{pane.target.kind === 'local' ? t('terminal.restart') : t('terminal.reconnect')}</button>
-          <button type="button" class="secondary" onclick={() => workspace.closePane(pane.id)}>{t('common.close')}</button>
-        </div>
+    <div class="terminal-shell">
+      <div class="terminal-stage">
+        <TermView
+          bind:this={view}
+          open={opener(pane)}
+          active={focused}
+          onsession={(sessionId) => {
+            workspace.attached(pane.id, sessionId);
+            if (pane.target.kind === 'ssh') hosts.connected(pane.target.hostId).catch((error: unknown) => console.warn('host refresh failed', error));
+          }}
+          onexit={(status) => onExit(status.code)}
+          remote={pane.target.kind !== 'local'}
+          onrestart={() => workspace.reopen(pane.id, null, false)}
+          ontitle={(title) => workspace.retitle(pane.id, title)}
+          onerror={onOpenError}
+        />
+        {#if pane.exited && !pane.failure}
+          <div class="failure ended" role="status">
+            <Icon name="info" size={16} />
+            <span class="reason">{pane.target.kind === 'local' ? t('terminal.endedBar') : pane.exited.code === null && !pane.exited.signal ? t('terminal.disconnectedBar') : t('terminal.sessionEndedBar')}</span>
+            <div class="buttons">
+              <button type="button" class="primary" onclick={() => workspace.reopen(pane.id, null, false)}>{pane.target.kind === 'local' ? t('terminal.restart') : t('terminal.reconnect')}</button>
+              <button type="button" class="secondary" onclick={() => workspace.closePane(pane.id)}>{t('common.close')}</button>
+            </div>
+          </div>
+        {/if}
+        {#if pane.failure}
+          {@const failure = pane.failure}
+          <div class="failure" role="alert">
+            <Icon name="warning" size={16} />
+            <span class="reason selectable">{t('connect.failed', { reason: errorText(failure) })}</span>
+            <div class="buttons">
+              <button type="button" class="primary" onclick={() => workspace.reopen(pane.id, null, false)}>{t('connect.retry')}</button>
+              {#if failure.code === 'ssh.passphrase_required'}
+                <button type="button" class="secondary" onclick={() => oncredentials(pane.id, 'passphrase')}>{t('connect.enterPassphrase')}</button>
+              {/if}
+              {#if pane.target.kind !== 'local' && failure.code !== 'ssh.connect' && failure.code !== 'ssh.timeout'}
+                <button type="button" class="secondary" onclick={() => oncredentials(pane.id, 'password', true)}>{t('connect.usePassword')}</button>
+              {/if}
+              {#if pane.target.kind === 'ssh'}
+                {@const hostId = pane.target.hostId}
+                <button type="button" class="secondary" onclick={() => onedithost(hostId)}>{t('connect.editHost')}</button>
+              {/if}
+              <button type="button" class="secondary" onclick={() => workspace.closePane(pane.id)}>{t('common.close')}</button>
+            </div>
+          </div>
+        {/if}
       </div>
-    {/if}
-    {#if pane.failure}
-      {@const failure = pane.failure}
-      <div class="failure" role="alert">
-        <Icon name="warning" size={16} />
-        <span class="reason selectable">{t('connect.failed', { reason: errorText(failure) })}</span>
-        <div class="buttons">
-          <button type="button" class="primary" onclick={() => workspace.reopen(pane.id, null, false)}>{t('connect.retry')}</button>
-          {#if failure.code === 'ssh.passphrase_required'}
-            <button type="button" class="secondary" onclick={() => oncredentials(pane.id, 'passphrase')}>{t('connect.enterPassphrase')}</button>
-          {/if}
-          {#if pane.target.kind !== 'local' && failure.code !== 'ssh.connect' && failure.code !== 'ssh.timeout'}
-            <button type="button" class="secondary" onclick={() => oncredentials(pane.id, 'password', true)}>{t('connect.usePassword')}</button>
-          {/if}
-          {#if pane.target.kind === 'ssh'}
-            {@const hostId = pane.target.hostId}
-            <button type="button" class="secondary" onclick={() => onedithost(hostId)}>{t('connect.editHost')}</button>
-          {/if}
-          <button type="button" class="secondary" onclick={() => workspace.closePane(pane.id)}>{t('common.close')}</button>
-        </div>
-      </div>
-    {/if}
+      {#if prefs.value.status.terminal_bar && (pane.target.kind === 'ssh' || pane.target.kind === 'quick') && pane.sessionId !== null && !pane.exited && !pane.failure}
+        <TerminalStatusBar source={remoteSourceOf(pane.target)!} session={pane.sessionId} visible={shown} />
+      {/if}
+    </div>
   {/if}
 </div>
 
@@ -175,6 +184,17 @@
     position: absolute;
     inset: 0;
     overflow: hidden;
+  }
+  .terminal-shell {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+  .terminal-stage {
+    flex: 1;
+    min-height: 0;
+    position: relative;
   }
   .pane-view.hidden {
     visibility: hidden;

@@ -1,127 +1,26 @@
-<script lang="ts" module>
-  import type { ServerStats as Stats } from '../ipc';
-
-  /** What a panel showed for one host, kept across remounts (switching panes, closing the panel)
-   *  so returning shows it at once while fresh samples arrive. Lives as long as the window. */
-  interface Snapshot {
-    stats: Stats;
-    previous: { stats: Stats; at: number };
-    cpu: number | null;
-    coreHistory: number[][];
-    rates: Record<string, { rx: number; tx: number }>;
-  }
-  const snapshots = new Map<string, Snapshot>();
-</script>
-
 <script lang="ts">
-  // Server status of the focused pane's remote, sampled every few seconds over its live
-  // connection, shown as cards: system, CPU, memory, network, disks. Usage and rates come from
-  // the difference between two samples.
-  import { onDestroy } from 'svelte';
   import Icon from '../ui/Icon.svelte';
   import CoreChart from './CoreChart.svelte';
-  import { isCommandError, serverStats, type CpuTimes, type RemoteSource, type ServerStats } from '../ipc';
+  import type { RemoteSource, SessionId } from '../ipc';
   import { errorText, t } from '../i18n';
   import { formatSize } from '../files/format';
   import { prefs } from '../settings/prefs.svelte';
-  import { sourceKey } from '../workspace/workspace.svelte';
+  import { describeTailscalePath, formatLatencyMs, formatNetworkRate, HISTORY, observeServerStats } from './serverStats.svelte';
 
-  /** With no `source` (nothing remote focused) the panel shows its skeleton and samples nothing. */
-  /** `session` is the focused terminal's session: when it connects, sampling starts at once. */
-  let { source, visible, session = null }: { source: RemoteSource | null; visible: boolean; session?: string | null } = $props();
+  let { source, visible, session = null }: { source: RemoteSource | null; visible: boolean; session?: SessionId | null } = $props();
 
-  /** Longest a sample may take before the panel stops waiting for it. */
-  const SAMPLE_LIMIT_MS = 20_000;
-
-  /** Samples kept per core: two minutes at the default interval. */
-  const HISTORY = 40;
-  /** Interfaces shown before the list collapses. */
   const INTERFACES_SHOWN = 6;
-
-  // The panel is keyed by source, so the key never changes for one instance.
-  // svelte-ignore state_referenced_locally
-  const key = source ? sourceKey(source) : null;
-  const cached = key ? snapshots.get(key) : undefined;
-  let stats = $state<ServerStats | null>(cached?.stats ?? null);
-  let previous: { stats: ServerStats; at: number } | null = cached?.previous ?? null;
-  let cpu = $state<number | null>(cached?.cpu ?? null);
-  /** Usage history of each core, oldest first. */
-  let coreHistory = $state<number[][]>(cached?.coreHistory ?? []);
-  let rates = $state<Record<string, { rx: number; tx: number }>>(cached?.rates ?? {});
+  const settings = $derived(prefs.value.status);
+  const showCards = $derived(settings.show_system || settings.show_cpu || settings.show_memory || settings.show_network || settings.show_disks);
+  const sampling = observeServerStats(() => visible && showCards ? source : null, () => session);
+  const { stats, cpu, coreHistory, rates } = $derived(sampling.state);
+  const problem = $derived(sampling.state.problem === 'monitor.unsupported'
+    ? t('status.unsupported')
+    : sampling.state.problem ? errorText(sampling.state.error) : null);
+  const badge = $derived(describeTailscalePath(stats?.tailscale_path));
+  const showCores = $derived(settings.cpu_display === 'per_core' ||
+    (settings.cpu_display === 'auto' && (stats?.cpus.length ?? 0) <= 8));
   let showAllInterfaces = $state(false);
-  let problem = $state<string | null>(null);
-  let timer = 0;
-  let stopped = false;
-
-  function usage(now: CpuTimes, before: CpuTimes | undefined): number | null {
-    if (!before) return null;
-    const total = now.total - before.total;
-    const idle = now.idle - before.idle;
-    return total > 0 ? Math.min(100, Math.max(0, ((total - idle) / total) * 100)) : null;
-  }
-
-  async function sample(): Promise<void> {
-    if (!source || !key) return;
-    try {
-      const next = await Promise.race([
-        serverStats(source),
-        new Promise<never>((_, reject) => setTimeout(() => reject({ code: 'ssh.not_connected', message: 'no answer' }), SAMPLE_LIMIT_MS)),
-      ]);
-      if (stopped) return;
-      const now = Date.now();
-      if (previous) {
-        const before = previous.stats;
-        cpu = usage(next.cpu, before.cpu);
-        coreHistory = next.cpus.map((core, index) => [
-          ...(coreHistory[index] ?? []).slice(1 - HISTORY),
-          usage(core, before.cpus[index]) ?? 0,
-        ]);
-        const seconds = (now - previous.at) / 1000;
-        const nextRates: Record<string, { rx: number; tx: number }> = {};
-        for (const net of next.interfaces) {
-          const old = before.interfaces.find((candidate) => candidate.name === net.name);
-          if (old && seconds > 0) {
-            nextRates[net.name] = { rx: Math.max(0, (net.rx - old.rx) / seconds), tx: Math.max(0, (net.tx - old.tx) / seconds) };
-          }
-        }
-        rates = nextRates;
-      }
-      previous = { stats: next, at: now };
-      stats = next;
-      snapshots.set(key, { stats: next, previous, cpu, coreHistory: $state.snapshot(coreHistory), rates: $state.snapshot(rates) });
-      problem = null;
-    } catch (error) {
-      if (stopped) return;
-      // Not connected yet: keep showing the skeleton until the connection is up.
-      if (isCommandError(error) && error.code === 'ssh.not_connected') return;
-      problem = isCommandError(error) && error.code === 'monitor.unsupported' ? t('status.unsupported') : errorText(error);
-    }
-  }
-
-  function schedule(): void {
-    clearTimeout(timer);
-    if (stopped || !visible || !source) return;
-    timer = window.setTimeout(async () => {
-      await sample();
-      schedule();
-    }, prefs.value.status.interval_secs * 1000);
-  }
-
-  // Sample immediately when shown or when the focused terminal connects, then on a timer while
-  // visible.
-  $effect(() => {
-    void session;
-    if (visible) {
-      void sample().then(schedule);
-    } else {
-      clearTimeout(timer);
-    }
-  });
-
-  onDestroy(() => {
-    stopped = true;
-    clearTimeout(timer);
-  });
 
   function percent(used: number, total: number): number {
     return total > 0 ? Math.min(100, (used / total) * 100) : 0;
@@ -134,18 +33,9 @@
     return days > 0 ? t('status.uptimeDays', { days, hours }) : t('status.uptimeHours', { hours, minutes });
   }
 
-  /** Names of the segments in the order of {@link latency}: one per jump host, then the target. */
+  /** Names of the segments in the order of the latency values: one per jump host, then the target. */
   function segmentNames(count: number): string {
     return [...Array<string>(count - 1).fill(t('status.segmentJump')), t('status.segmentTarget')].join(' + ');
-  }
-
-  /** Segment latencies as `12+85`: one decimal below 10 ms. */
-  function latency(segments: number[]): string {
-    return segments.map((us) => (us < 10_000 ? (us / 1000).toFixed(1) : Math.round(us / 1000).toString())).join('+');
-  }
-
-  function rate(bytes: number | undefined): string {
-    return bytes === undefined ? '…' : `${formatSize(Math.round(bytes))}/s`;
   }
 
   let coresWidth = $state(0);
@@ -168,125 +58,169 @@
 </script>
 
 <div class="status">
-  {#if problem && !stats}
+  {#if !showCards}
+    <p class="muted">{t('status.cardsHidden')}</p>
+  {:else if problem && !stats}
     <p class="muted">{problem}</p>
   {:else if !stats}
     <!-- Skeleton: the cards' layout with placeholders where values will appear. -->
     <div class="loading" aria-busy="true" aria-label={t('status.loading')}>
-      <section class="card">
-        <h4><Icon name="server" size={14} />{t('status.system')}</h4>
-        <dl class="facts">
-          {#each ['status.hostname', 'status.os', 'status.response', 'status.uptimeLabel'] as const as label (label)}
-            <div><dt>{t(label)}</dt><dd><span class="skeleton" style:width="70%"></span></dd></div>
+      {#if settings.show_system}
+        <section class="card">
+          <h4><Icon name="server" size={14} />{t('status.system')}</h4>
+          <dl class="facts">
+            {#each ['status.hostname', 'status.os', 'status.response', 'status.uptimeLabel'] as const as label (label)}
+              <div><dt>{t(label)}</dt><dd><span class="skeleton" style:width="70%"></span></dd></div>
+            {/each}
+            <div class="wide"><dt>{t('status.kernel')}</dt><dd><span class="skeleton" style:width="55%"></span></dd></div>
+          </dl>
+        </section>
+      {/if}
+      {#if settings.show_cpu}
+        <section class="card">
+          <h4><Icon name="terminal" size={14} />{t('status.cpu')}</h4>
+          <div class="headline"><span class="skeleton" style:width="64px" style:height="24px"></span></div>
+          {#if showCores}
+            <div class="cores skeleton-cores">
+              {#each [0, 1, 2, 3] as index (index)}<span class="skeleton"></span>{/each}
+            </div>
+          {/if}
+          <div class="row muted"><span>{t('status.load')}</span><span class="skeleton" style:width="90px"></span></div>
+        </section>
+      {/if}
+      {#if settings.show_memory}
+        <section class="card">
+          <h4><Icon name="transfer" size={14} />{t('status.memory')}</h4>
+          {#each ['status.physical', ...(settings.show_swap ? ['status.swap'] as const : [])] as const as label (label)}
+            <div class="row"><span>{t(label)}</span><span class="skeleton" style:width="32px"></span></div>
+            <div class="bar"></div>
+            <span class="skeleton" style:width="45%"></span>
           {/each}
-          <div class="wide"><dt>{t('status.kernel')}</dt><dd><span class="skeleton" style:width="55%"></span></dd></div>
-        </dl>
-      </section>
-      <section class="card">
-        <h4><Icon name="terminal" size={14} />CPU</h4>
-        <div class="headline"><span class="skeleton" style:width="64px" style:height="24px"></span></div>
-        <div class="cores skeleton-cores">
-          {#each [0, 1, 2, 3] as index (index)}<span class="skeleton"></span>{/each}
-        </div>
-        <div class="row muted"><span>{t('status.load')}</span><span class="skeleton" style:width="90px"></span></div>
-      </section>
-      <section class="card">
-        <h4><Icon name="transfer" size={14} />{t('status.memory')}</h4>
-        {#each ['status.physical', 'status.swap'] as const as label (label)}
-          <div class="row"><span>{t(label)}</span><span class="skeleton" style:width="32px"></span></div>
+        </section>
+      {/if}
+      {#if settings.show_network}
+        <section class="card">
+          <h4><Icon name="forwards" size={14} />{t('status.network')}</h4>
+          {#each [0, 1, 2] as index (index)}<span class="skeleton net-skeleton"></span>{/each}
+        </section>
+      {/if}
+      {#if settings.show_disks}
+        <section class="card">
+          <h4><Icon name="folder" size={14} />{t('status.disks')}</h4>
+          <div class="row"><span class="skeleton" style:width="30%"></span><span class="skeleton" style:width="32px"></span></div>
           <div class="bar"></div>
           <span class="skeleton" style:width="45%"></span>
-        {/each}
-      </section>
-      <section class="card">
-        <h4><Icon name="forwards" size={14} />{t('status.network')}</h4>
-        {#each [0, 1, 2] as index (index)}<span class="skeleton net-skeleton"></span>{/each}
-      </section>
-      <section class="card">
-        <h4><Icon name="folder" size={14} />{t('status.disks')}</h4>
-        <div class="row"><span class="skeleton" style:width="30%"></span><span class="skeleton" style:width="32px"></span></div>
-        <div class="bar"></div>
-        <span class="skeleton" style:width="45%"></span>
-      </section>
+        </section>
+      {/if}
     </div>
   {:else}
     {@const mem = stats.mem_total - stats.mem_available}
     {@const swap = stats.swap_total - stats.swap_free}
-    <section class="card">
-      <h4><Icon name="server" size={14} />{t('status.system')}</h4>
-      <dl class="facts">
-        <div><dt>{t('status.hostname')}</dt><dd>{stats.hostname}</dd></div>
-        <div><dt>{t('status.os')}</dt><dd>{stats.os || stats.kernel.split(' ')[0]}</dd></div>
-        <div title={stats.latency_us.length > 1 ? t('status.latencySegments') : undefined}><dt>{t('status.response')}{#if stats.latency_us.length > 1}<small class="parts">{t('status.segments', { names: segmentNames(stats.latency_us.length) })}</small>{/if}</dt><dd>{t('status.ms', { n: latency(stats.latency_us) })}</dd></div>
-        <div><dt>{t('status.uptimeLabel')}</dt><dd>{uptime(stats.uptime_secs)}</dd></div>
-        <div class="wide"><dt>{t('status.kernel')}</dt><dd>{stats.kernel}</dd></div>
-      </dl>
-    </section>
+    {#if settings.show_system}
+      <section class="card">
+        <h4><Icon name="server" size={14} />{t('status.system')}</h4>
+        <dl class="facts">
+          <div><dt>{t('status.hostname')}</dt><dd>{stats.hostname}</dd></div>
+          <div><dt>{t('status.os')}</dt><dd>{stats.os || stats.kernel.split(' ')[0]}</dd></div>
+          <div title={stats.latency_us.length > 1 ? t('status.latencySegments') : undefined}>
+            <dt>
+              {t('status.response')}
+              {#if stats.latency_us.length > 1}
+                <small class="parts">{t('status.segments', { names: segmentNames(stats.latency_us.length) })}</small>
+              {/if}
+            </dt>
+            <dd>
+              {t('status.ms', { n: formatLatencyMs(stats.latency_us) })}
+              {#if badge}
+                <span class="path-badge" class:relay={badge.kind === 'relay'} title={badge.title}>
+                  {badge.kind === 'direct' ? t('status.pathDirect') : badge.region ? t('status.pathRelayRegion', { region: badge.region }) : t('status.pathRelay')}
+                </span>
+              {/if}
+            </dd>
+          </div>
+          <div><dt>{t('status.uptimeLabel')}</dt><dd>{uptime(stats.uptime_secs)}</dd></div>
+          <div class="wide"><dt>{t('status.kernel')}</dt><dd>{stats.kernel}</dd></div>
+        </dl>
+      </section>
+    {/if}
 
-    <section class="card">
-      <h4><Icon name="terminal" size={14} />CPU <span class="aside">{t('status.cores', { n: stats.cores })}</span></h4>
-      <!-- Usage needs two samples, so it arrives one round after the rest: keep its skeleton
-           (the same shape as the panel skeleton) until then. -->
-      {#if cpu === null || coreHistory.length === 0}
-        <div class="headline"><span class="skeleton" style:width="64px" style:height="24px"></span></div>
-        <div class="cores skeleton-cores">
-          {#each [0, 1, 2, 3] as index (index)}<span class="skeleton"></span>{/each}
-        </div>
-      {:else}
-        <div class="headline">
-          <strong class:hot={cpu > 85}>{`${cpu.toFixed(0)}%`}</strong>
-          <span class="muted">{t('status.average')}</span>
-        </div>
-        <div class="cores" bind:clientWidth={coresWidth} style:grid-template-columns="repeat({coreColumns}, minmax(0, 1fr))" aria-label={t('status.perCore')}>
-          {#each coreHistory as points, index (index)}
-            <CoreChart label={`CPU ${index}`} {points} capacity={HISTORY} compact={coreMinWidth < 110} />
-          {/each}
-        </div>
-      {/if}
-      <div class="row muted"><span>{t('status.load')}</span><span class="mono">{stats.load.map((value) => value.toFixed(2)).join('  ')}</span></div>
-    </section>
+    {#if settings.show_cpu}
+      <section class="card">
+        <h4><Icon name="terminal" size={14} />{t('status.cpu')} <span class="aside">{t('status.cores', { n: stats.cores })}</span></h4>
+        {#if cpu === null}
+          <div class="headline"><span class="skeleton" style:width="64px" style:height="24px"></span></div>
+        {:else}
+          <div class="headline">
+            <strong class:hot={cpu > 85}>{`${cpu.toFixed(0)}%`}</strong>
+            <span class="muted">{t('status.average')}</span>
+          </div>
+        {/if}
+        {#if showCores}
+          {#if coreHistory.some((points) => points.length > 0)}
+            <div class="cores" bind:clientWidth={coresWidth} style:grid-template-columns="repeat({coreColumns}, minmax(0, 1fr))" aria-label={t('status.perCore')}>
+              {#each coreHistory as points, index (index)}
+                <CoreChart label={t('status.core', { n: index })} {points} capacity={HISTORY} compact={coreMinWidth < 110} />
+              {/each}
+            </div>
+          {:else}
+            <div class="cores skeleton-cores">
+              {#each [0, 1, 2, 3] as index (index)}<span class="skeleton"></span>{/each}
+            </div>
+          {/if}
+        {/if}
+        <div class="row muted"><span>{t('status.load')}</span><span class="mono">{stats.load.map((value) => value.toFixed(2)).join('  ')}</span></div>
+      </section>
+    {/if}
 
-    <section class="card">
-      <h4><Icon name="transfer" size={14} />{t('status.memory')}</h4>
-      <div class="row"><span>{t('status.physical')}</span><span class="value">{percent(mem, stats.mem_total).toFixed(0)}%</span></div>
-      <div class="bar"><div class="fill" class:hot={percent(mem, stats.mem_total) > 90} style:width="{percent(mem, stats.mem_total)}%"></div></div>
-      <div class="muted mono">{formatSize(mem)} / {formatSize(stats.mem_total)}</div>
-      <div class="row"><span>{t('status.swap')}</span><span class="value">{percent(swap, stats.swap_total).toFixed(0)}%</span></div>
-      <div class="bar"><div class="fill" style:width="{percent(swap, stats.swap_total)}%"></div></div>
-      <div class="muted mono">{formatSize(swap)} / {formatSize(stats.swap_total)}</div>
-    </section>
+    {#if settings.show_memory}
+      <section class="card">
+        <h4><Icon name="transfer" size={14} />{t('status.memory')}</h4>
+        <div class="row"><span>{t('status.physical')}</span><span class="value">{percent(mem, stats.mem_total).toFixed(0)}%</span></div>
+        <div class="bar"><div class="fill" class:hot={percent(mem, stats.mem_total) > 90} style:width="{percent(mem, stats.mem_total)}%"></div></div>
+        <div class="muted mono">{formatSize(mem)} / {formatSize(stats.mem_total)}</div>
+        {#if settings.show_swap}
+          <div class="row"><span>{t('status.swap')}</span><span class="value">{percent(swap, stats.swap_total).toFixed(0)}%</span></div>
+          <div class="bar"><div class="fill" style:width="{percent(swap, stats.swap_total)}%"></div></div>
+          <div class="muted mono">{formatSize(swap)} / {formatSize(stats.swap_total)}</div>
+        {/if}
+      </section>
+    {/if}
 
-    <section class="card">
-      <h4><Icon name="forwards" size={14} />{t('status.network')}</h4>
-      {#each showAllInterfaces ? interfaces : interfaces.slice(0, INTERFACES_SHOWN) as net (net.name)}
-        <div class="net">
-          <span class="name mono" title={net.name}>{net.name}</span>
-          <span class="up mono">↑ {rate(rates[net.name]?.tx)}</span>
-          <span class="down mono">↓ {rate(rates[net.name]?.rx)}</span>
-        </div>
-      {:else}
-        <p class="muted">{t('status.noInterfaces')}</p>
-      {/each}
-      {#if interfaces.length > INTERFACES_SHOWN}
-        <button type="button" class="more" onclick={() => (showAllInterfaces = !showAllInterfaces)}>
-          {showAllInterfaces ? t('status.showLess') : t('status.showAll', { n: interfaces.length })}
-        </button>
-      {/if}
-    </section>
+    {#if settings.show_network}
+      <section class="card">
+        <h4><Icon name="forwards" size={14} />{t('status.network')}</h4>
+        {#each showAllInterfaces ? interfaces : interfaces.slice(0, INTERFACES_SHOWN) as net (net.name)}
+          <div class="net">
+            <span class="name mono" title={net.name}>{net.name}</span>
+            <span class="up mono">↑ {formatNetworkRate(rates[net.name]?.tx, settings.network_unit)}</span>
+            <span class="down mono">↓ {formatNetworkRate(rates[net.name]?.rx, settings.network_unit)}</span>
+          </div>
+        {:else}
+          <p class="muted">{t('status.noInterfaces')}</p>
+        {/each}
+        {#if interfaces.length > INTERFACES_SHOWN}
+          <button type="button" class="more" onclick={() => (showAllInterfaces = !showAllInterfaces)}>
+            {showAllInterfaces ? t('status.showLess') : t('status.showAll', { n: interfaces.length })}
+          </button>
+        {/if}
+      </section>
+    {/if}
 
-    <section class="card">
-      <h4><Icon name="folder" size={14} />{t('status.disks')}</h4>
-      {#each stats.disks as disk (disk.filesystem)}
-        {@const used = percent(disk.used, disk.total)}
-        <div class="disk" title={disk.filesystem}>
-          <div class="row"><span class="mono name">{disk.mount}</span><span class="value" class:danger={used > 90}>{used.toFixed(0)}%</span></div>
-          <div class="bar"><div class="fill" class:hot={used > 90} style:width="{used}%"></div></div>
-          <div class="muted mono">{formatSize(disk.used)} / {formatSize(disk.total)}</div>
-        </div>
-      {:else}
-        <p class="muted">{t('status.noDisks')}</p>
-      {/each}
-    </section>
+    {#if settings.show_disks}
+      <section class="card">
+        <h4><Icon name="folder" size={14} />{t('status.disks')}</h4>
+        {#each stats.disks as disk (disk.filesystem)}
+          {@const used = percent(disk.used, disk.total)}
+          <div class="disk" title={disk.filesystem}>
+            <div class="row"><span class="mono name">{disk.mount}</span><span class="value" class:danger={used > 90}>{used.toFixed(0)}%</span></div>
+            <div class="bar"><div class="fill" class:hot={used > 90} style:width="{used}%"></div></div>
+            <div class="muted mono">{formatSize(disk.used)} / {formatSize(disk.total)}</div>
+          </div>
+        {:else}
+          <p class="muted">{t('status.noDisks')}</p>
+        {/each}
+      </section>
+    {/if}
     {#if problem}<p class="muted">{problem}</p>{/if}
   {/if}
 </div>
@@ -349,6 +283,20 @@
   .facts dd {
     margin: 0;
     overflow-wrap: anywhere;
+  }
+  .path-badge {
+    display: inline-block;
+    max-width: 100%;
+    padding: 0 var(--space-1);
+    border-radius: var(--radius-pill);
+    background: var(--success-soft);
+    color: var(--success);
+    font-size: var(--text-caption);
+    font-weight: 600;
+  }
+  .path-badge.relay {
+    background: var(--warning-soft);
+    color: var(--warning);
   }
   .headline {
     display: flex;

@@ -1,7 +1,7 @@
 // Typed wrappers around the Tauri commands. Components call these instead of `invoke` directly.
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { TailscalePingResult, TailscaleSnapshot, TailscaleStatus } from './tailscale/types';
+import type { TailscalePath as TailnetPath, TailscalePingResult, TailscaleSnapshot, TailscaleStatus } from './tailscale/types';
 import type { OpsTask, PrivateRef } from './ops/types';
 
 export function opsTasks(conversation?: string): Promise<OpsTask[]> {
@@ -299,8 +299,24 @@ export interface FilePrefs {
   confirm_delete: boolean;
 }
 
+export type CpuDisplay = 'auto' | 'per_core' | 'summary';
+export type NetworkUnit = 'bytes' | 'bits';
+
 export interface StatusPrefs {
   interval_secs: number;
+  show_system: boolean;
+  show_cpu: boolean;
+  show_memory: boolean;
+  show_swap: boolean;
+  show_network: boolean;
+  show_disks: boolean;
+  cpu_display: CpuDisplay;
+  network_unit: NetworkUnit;
+  terminal_bar: boolean;
+  terminal_bar_cpu: boolean;
+  terminal_bar_memory: boolean;
+  terminal_bar_network: boolean;
+  terminal_bar_latency: boolean;
 }
 
 /** Preferences that follow the user; see `Preferences` in rove-vault. */
@@ -897,6 +913,7 @@ export interface ServerStats {
   os: string;
   /** Latency of each path segment in microseconds: one per jump host plus the final hop. */
   latency_us: number[];
+  tailscale_path?: TailnetPath | null;
 }
 
 export function serverStats(source: RemoteSource): Promise<ServerStats> {

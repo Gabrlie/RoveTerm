@@ -22,7 +22,22 @@ const DEFAULTS: Preferences = {
     bell: 'visual',
   },
   files: { default_conflict: 'ask', show_hidden: false, confirm_delete: true },
-  status: { interval_secs: 3 },
+  status: {
+    interval_secs: 3,
+    show_system: true,
+    show_cpu: true,
+    show_memory: true,
+    show_swap: true,
+    show_network: true,
+    show_disks: true,
+    cpu_display: 'auto',
+    network_unit: 'bytes',
+    terminal_bar: true,
+    terminal_bar_cpu: true,
+    terminal_bar_memory: true,
+    terminal_bar_network: true,
+    terminal_bar_latency: true,
+  },
   ai: { mode: 'ask_by_risk', providers: [], default_agent: null, read_only: [], dangerous: [], max_steps: 40, request_timeout_secs: 180, reviewer: 'model', review_model: null, review_confidence: 80, schedules: [] },
 };
 
