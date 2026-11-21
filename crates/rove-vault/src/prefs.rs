@@ -491,17 +491,64 @@ impl Default for FilePrefs {
     }
 }
 
+/// How CPU usage is presented.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CpuDisplay {
+    #[default]
+    Auto,
+    PerCore,
+    Summary,
+}
+
+/// Unit used to display network throughput.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkUnit {
+    #[default]
+    Bytes,
+    Bits,
+}
+
 /// Server status panel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StatusPrefs {
     /// Seconds between samples (2–30).
     pub interval_secs: u16,
+    pub show_system: bool,
+    pub show_cpu: bool,
+    pub show_memory: bool,
+    pub show_swap: bool,
+    pub show_network: bool,
+    pub show_disks: bool,
+    pub cpu_display: CpuDisplay,
+    pub network_unit: NetworkUnit,
+    pub terminal_bar: bool,
+    pub terminal_bar_cpu: bool,
+    pub terminal_bar_memory: bool,
+    pub terminal_bar_network: bool,
+    pub terminal_bar_latency: bool,
 }
 
 impl Default for StatusPrefs {
     fn default() -> Self {
-        Self { interval_secs: 3 }
+        Self {
+            interval_secs: 3,
+            show_system: true,
+            show_cpu: true,
+            show_memory: true,
+            show_swap: true,
+            show_network: true,
+            show_disks: true,
+            cpu_display: CpuDisplay::Auto,
+            network_unit: NetworkUnit::Bytes,
+            terminal_bar: true,
+            terminal_bar_cpu: true,
+            terminal_bar_memory: true,
+            terminal_bar_network: true,
+            terminal_bar_latency: true,
+        }
     }
 }
 
@@ -1105,6 +1152,65 @@ mod tests {
         assert_eq!(parsed.terminal.line_height, 1.15);
         let empty: Preferences = serde_json::from_str("{}").unwrap();
         assert_eq!(empty, Preferences::default());
+    }
+
+    #[test]
+    fn legacy_status_preferences_fill_new_fields_with_defaults() {
+        let parsed: StatusPrefs = serde_json::from_str(r#"{"interval_secs": 5}"#).unwrap();
+        assert_eq!(
+            parsed,
+            StatusPrefs {
+                interval_secs: 5,
+                ..StatusPrefs::default()
+            }
+        );
+        let wire = serde_json::to_value(parsed).unwrap();
+        for field in [
+            "show_system",
+            "show_cpu",
+            "show_memory",
+            "show_swap",
+            "show_network",
+            "show_disks",
+            "terminal_bar",
+            "terminal_bar_cpu",
+            "terminal_bar_memory",
+            "terminal_bar_network",
+            "terminal_bar_latency",
+        ] {
+            assert_eq!(wire[field], true, "{field}");
+        }
+        assert_eq!(wire["cpu_display"], "auto");
+        assert_eq!(wire["network_unit"], "bytes");
+    }
+
+    #[test]
+    fn status_preferences_round_trip_all_fields() {
+        for (cpu_display, serialized_cpu_display) in [
+            (CpuDisplay::PerCore, "per_core"),
+            (CpuDisplay::Summary, "summary"),
+        ] {
+            let prefs = StatusPrefs {
+                interval_secs: 30,
+                show_system: false,
+                show_cpu: false,
+                show_memory: false,
+                show_swap: false,
+                show_network: false,
+                show_disks: false,
+                cpu_display,
+                network_unit: NetworkUnit::Bits,
+                terminal_bar: false,
+                terminal_bar_cpu: false,
+                terminal_bar_memory: false,
+                terminal_bar_network: false,
+                terminal_bar_latency: false,
+            };
+            let wire = serde_json::to_value(&prefs).unwrap();
+            assert_eq!(wire["cpu_display"], serialized_cpu_display);
+            assert_eq!(wire["network_unit"], "bits");
+            assert_eq!(serde_json::from_value::<StatusPrefs>(wire).unwrap(), prefs);
+        }
     }
 
     fn editor_prefs() -> ExternalEditorPrefs {
