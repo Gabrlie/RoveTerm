@@ -1241,8 +1241,8 @@ export function aiRename(id: string, title: string): Promise<string> {
 }
 
 /** Sends a prompt and resolves with the stop reason when the turn ends. */
-export function aiPrompt(id: string, text: string, requestId?: string, allowChanges = false): Promise<string> {
-  return invoke('ai_prompt', { id, text, requestId, allowChanges });
+export function aiPrompt(id: string, text: string, requestId?: string): Promise<string> {
+  return invoke('ai_prompt', { id, text, requestId });
 }
 
 export function aiCancel(id: string): Promise<void> {

@@ -1,12 +1,11 @@
 export interface PromptRequest {
   id: string;
   text: string;
-  allowChanges: boolean;
 }
 
-/** A retry retains the original request's identity, text and authorization. */
-export function requestForSend(previous: PromptRequest | null, text: string, again: boolean, allowChanges: boolean, newId: () => string): PromptRequest {
-  return again && previous ? previous : { id: newId(), text, allowChanges };
+/** A retry retains the original request's identity and text. */
+export function requestForSend(previous: PromptRequest | null, text: string, again: boolean, newId: () => string): PromptRequest {
+  return again && previous ? previous : { id: newId(), text };
 }
 
 /** An interrupted planner starts only after the user explicitly confirms recovery. */

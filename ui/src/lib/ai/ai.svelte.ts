@@ -60,7 +60,6 @@ export function contextKey(context: AiContext): string {
 
 export class Chat {
   private request: PromptRequest | null = null;
-  allowChanges = $state(false);
   recoveryRequired = $state(false);
   recoveryConfirmed = $state(false);
   /** An input rejected before planner recovery remains available for an explicit retry. */
@@ -332,10 +331,7 @@ export class Chat {
 
   async send(text: string, terminal: SessionId | null, again = false): Promise<void> {
     if (!this.canSend || !text.trim()) return;
-    const request = requestForSend(this.request, text, again, this.allowChanges, () => crypto.randomUUID());
-    if (request !== this.request) {
-      this.allowChanges = false;
-    }
+    const request = requestForSend(this.request, text, again, () => crypto.randomUUID());
     if (!again) this.items.push({ kind: 'user', text });
     await this.submit(request, terminal);
   }
@@ -350,7 +346,7 @@ export class Chat {
     if (!id) return;
     this.busy = true;
     try {
-      const reason = await aiPrompt(id, request.text, request.id, request.allowChanges);
+      const reason = await aiPrompt(id, request.text, request.id);
       if (this.recoveryRequest?.id === request.id) this.recoveryRequest = null;
       if (reason !== 'end_turn' && reason !== 'cancelled') {
         const key = `ai.stop.${reason}` as MessageKey;

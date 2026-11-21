@@ -1787,7 +1787,6 @@ pub async fn ai_prompt(
     id: String,
     text: String,
     request_id: Option<String>,
-    allow_changes: Option<bool>,
 ) -> Result<String, CommandError> {
     if text.trim().is_empty() || text.len() > MAX_PROMPT {
         return Err(CommandError::new(
@@ -1807,11 +1806,7 @@ pub async fn ai_prompt(
         .map_err(|e| CommandError::new("input.invalid", e.to_string()))?;
         Some(
             tools
-                .begin_request(
-                    request,
-                    rove_ops::TaskSource::User,
-                    allow_changes.unwrap_or(false),
-                )
+                .begin_request(request, rove_ops::TaskSource::User, true)
                 .map_err(|e| CommandError::new("ai.busy", e))?,
         )
     } else {

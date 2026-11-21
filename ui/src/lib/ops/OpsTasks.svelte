@@ -189,7 +189,13 @@
     <details class="task">
       <summary><span>{t('ops.task', { id: task.id.slice(0, 8) })}</span><span class="state {task.state}">{t(`ops.state.${task.state}` as MessageKey)}</span></summary>
       <div class="task-body">
-        <div class="metadata"><span>{t(`ops.source.${task.source.kind}` as MessageKey)}</span><span title={t('ops.scopeHint')}>{task.scope.can_modify ? t('ops.scope.modify') : t('ops.scope.read')}</span><span>{t('ops.updated', { time: new Date(task.updated_at).toLocaleString() })}</span></div>
+        <div class="metadata">
+          <span>{t(`ops.source.${task.source.kind}` as MessageKey)}</span>
+          {#if task.source.kind === 'schedule' || !task.scope.can_modify}
+            <span title={t('ops.scopeHint')}>{task.scope.can_modify ? t('ops.scope.modify') : t('ops.scope.read')}</span>
+          {/if}
+          <span>{t('ops.updated', { time: new Date(task.updated_at).toLocaleString() })}</span>
+        </div>
         <div class="evidence-links">
           {#if task.inputs[0]}<button class="link" type="button" onclick={() => task.inputs[0] && showEvidence(task, task.inputs[0], t('ops.request'))}>{t('ops.request')}</button>{/if}
           {#if task.acceptance}<button class="link" type="button" onclick={() => task.acceptance && showEvidence(task, task.acceptance, t('ops.acceptance'))}>{t('ops.acceptance')}</button>{/if}

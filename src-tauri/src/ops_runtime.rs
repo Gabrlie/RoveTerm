@@ -223,6 +223,13 @@ fn emit(app: &AppHandle, task: &OpsTask) {
     }
 }
 
+fn task_scope(targets: Vec<Target>, allow_changes: bool, unattended: Option<bool>) -> TaskScope {
+    TaskScope {
+        targets,
+        can_modify: allow_changes && unattended != Some(false),
+    }
+}
+
 pub async fn dispatch(
     app: &AppHandle,
     parent: &str,
@@ -298,10 +305,7 @@ pub async fn dispatch(
             conversation: parent.to_owned(),
             source,
             input,
-            scope: TaskScope {
-                targets,
-                can_modify: allow_changes && unattended != Some(false),
-            },
+            scope: task_scope(targets, allow_changes, unattended),
             acceptance: Some(acceptance),
         })
         .map_err(error)?;
@@ -871,6 +875,27 @@ mod tests {
         assert!(pending_modifies(&checkpoint("write_file", json!({}))));
         assert!(pending_modifies(&checkpoint("unknown_tool", json!({}))));
         assert!(pending_modifies(&checkpoint("run_command", Value::Null)));
+    }
+
+    #[test]
+    fn interactive_scope_allows_policy_governed_changes_and_schedules_keep_their_scope() {
+        let target = Target {
+            host_id: HostId::new(),
+            fingerprint: "host-fixture".into(),
+            input: None,
+        };
+        for (allow_changes, unattended, expected) in [
+            (true, None, true),
+            (false, None, false),
+            (false, Some(false), false),
+            (true, Some(false), false),
+            (false, Some(true), false),
+            (true, Some(true), true),
+        ] {
+            let scope = task_scope(vec![target.clone()], allow_changes, unattended);
+            assert_eq!(scope.targets, vec![target.clone()]);
+            assert_eq!(scope.can_modify, expected);
+        }
     }
 
     #[test]

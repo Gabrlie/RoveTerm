@@ -639,12 +639,6 @@
         </label>
         {/if}
       </div>
-      {#if fleet}
-        <div class="task-scope">
-          <label><input type="checkbox" bind:checked={chat.allowChanges} disabled={chat.starting || chat.busy} aria-describedby="ops-allow-changes-hint" />{t('ops.allowChanges')}</label>
-          <p id="ops-allow-changes-hint">{t('ops.allowChangesHint')}</p>
-        </div>
-      {/if}
       {#if slashOpen}
         <div class="menu slash" role="listbox" aria-label={t('ai.slash.title')}>
           {#if slashSetting}
@@ -1243,25 +1237,6 @@
   }
   .composer {
     padding: 0 var(--space-3) var(--space-3);
-  }
-  .task-scope {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-    padding: 0 var(--space-3) var(--space-2);
-  }
-  .task-scope label {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    color: var(--fg);
-    font-size: var(--text-footnote);
-  }
-  .task-scope p {
-    margin: 0;
-    color: var(--fg-muted);
-    font-size: var(--text-caption);
-    line-height: 1.4;
   }
   .status {
     margin: 0 0 var(--space-1);
