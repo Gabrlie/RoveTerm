@@ -17,6 +17,7 @@
 - 快捷指令（snippets）不含秘密，名称为空时取命令第一行。
 - `preferences()` 在没有记录时返回默认值；`set_preferences()` 校验后整体替换。`device_preferences()` / `set_device_preferences()` 读写只属于本机的 `DevicePrefs`，单独存放，不随同步离开设备。偏好设置不含秘密，锁定时可读写。
 - `DevicePrefs.external_editor` 是本机编辑器配置，旧记录缺字段时默认禁用；只校验绝对路径语法和参数边界，不查询磁盘。完整限制及参数传递契约见 [本机编辑器偏好](../../docs/subsystems/vault.md#本机编辑器偏好)。
+- Tailscale 主机路由随主机同步。设备连接设置和加密设备身份存于本机，使用 `tailscale_state` 系列方法访问身份。
 - 数据库结构版本记录在 `PRAGMA user_version` 中，只增不减，旧版本按顺序迁移；打开更新版本写入的数据库时返回 `FutureSchema`。
 
 ## 配置（`[plugin.vault]`）

@@ -26,7 +26,9 @@ use rove_vault::{AuthMethod, Host, Secret, Vault};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-pub use connection::{ConnectOptions, ExecOutput, SshConnection, Via};
+pub use connection::{
+    ConnectOptions, ExecOutput, SshConnection, SshTransport, TransportDialer, Via,
+};
 pub use forward::{ForwardState, ForwardStatus, Forwards};
 pub use hostkey::{
     HostKeyAnswer, HostKeyPrompt, HostKeyPrompts, HostKeyRejection, HostKeyVerifier, VaultVerifier,
@@ -105,6 +107,7 @@ impl SshTarget {
 pub fn route_key(route: &rove_vault::HostRoute, jumps: &[Host]) -> String {
     match route {
         rove_vault::HostRoute::Direct => String::new(),
+        rove_vault::HostRoute::Tailscale { .. } => "tailscale".to_owned(),
         rove_vault::HostRoute::Jump { host } => match jumps.split_first() {
             Some((jump, rest)) => {
                 let hop = format!(

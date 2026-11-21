@@ -1,19 +1,13 @@
-# tailscale
+# Tailscale
 
-`rove-tailscale` 将本机 Tailscale 客户端作为只读设备发现 Provider。设备选择后的终端、文件和 AI 操作继续使用 [SSH](ssh.md)、[文件系统](fs.md)及其审批与审计路径。
+`rove-tailscale` 在桌面进程内运行用户态尾网设备。应用通过 `TailnetService` 读取状态和节点，通过 `Via::Custom` 为 [SSH](ssh.md) 打开尾网 TCP 流。设备生命周期和插件配置见 [crate README](../../crates/rove-tailscale/README.md)。
 
-## 角色与服务
+## 连接与授权
 
-| 角色 | 实现 |
-|---|---|
-| Definition | `TailnetDiscovery`、`TailnetSnapshot`、`TailnetPeer`、`TailscalePeerId` |
-| Provider | `CliDiscovery`，调用本机客户端的 `status --json` |
-| Consumer | 桌面端设备列表、现有主机创建与连接表单 |
+应用连接时在 [vault](vault.md) 中读取或生成设备身份。断开会保留身份和连接设置，注销会删除本机身份。启用自动连接时，应用解锁 vault 后恢复这台设备的连接。
 
-`TailscalePlugin`（插件名 `tailscale`）注册 `dyn TailnetDiscovery`，返回可撤销的服务注册。可执行文件定位、进程与解析契约、配置范围见 [crate README](../../crates/rove-tailscale/README.md)。
+`tailscale_status` 返回连接状态，`tailscale_snapshot` 同时返回节点列表。应用通过 `tailscale-status` 推送状态变化。状态包括未配置、已断开、启动中、需要登录、等待设备批准、正在运行和错误。需要浏览器登录时，`tailscale_open_auth_url` 打开当前设备提供的登录地址。
 
-## 快照
+## SSH 路由
 
-快照包含客户端状态、设备数组、捕获时间和可选的静态诊断。设备摘要只包含稳定 ID、名称、MagicDNS、Tailscale IP、系统及控制面在线标志；账户与认证数据留在系统客户端。
-
-客户端状态分别表示未安装、无读取权限、服务不可用、尚无状态、需登录、待设备批准、已停止、启动中、运行中与未知状态。状态读取是一次性操作，页面负责显式刷新、请求顺序及过期结果标记。
+`HostRoute::Tailscale` 支持尾网 IP 和 MagicDNS。名称解析可以按已保存的稳定节点 ID 找回改名的设备。SSH 登录和 host key 校验继续由 SSH Provider 完成。节点的在线标志表示控制面在线。

@@ -71,6 +71,8 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     match state.vault.device_preferences() {
         Ok(device) => {
             commands::prefs::apply_connection(&state, &device.connection);
+            #[cfg(desktop)]
+            state.tailscale.set_configured(device.tailscale.configured);
             let transfers = state.transfers.clone();
             tauri::async_runtime::spawn(async move {
                 transfers.set_max_concurrent(usize::from(device.max_transfers));
@@ -103,15 +105,40 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         disposers.extend(host_services);
     }
 
+    #[cfg(desktop)]
+    let tailnet_events = {
+        let handle = app.handle().clone();
+        let mut status = state.tailscale.subscribe();
+        let task = tauri::async_runtime::spawn(async move {
+            while status.changed().await.is_ok() {
+                let status = status.borrow_and_update().clone();
+                if let Err(error) = handle.emit("tailscale-status", status) {
+                    tracing::warn!(%error, "emitting Tailscale status failed");
+                }
+            }
+        });
+        rove_kernel::Disposer::new(move || task.abort())
+    };
+
+    #[cfg(desktop)]
+    if let Some((_, disposers)) = state.lifetime.lock().expect("lifetime lock").as_mut() {
+        disposers.push(tailnet_events);
+    }
     let vault = state.vault.clone();
+    app.manage(state);
     let handle = app.handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let lock_state = vault.try_unlock();
-        if let Err(error) = handle.emit(VAULT_STATE_EVENT, lock_state) {
+        if let Err(error) = handle.emit(VAULT_STATE_EVENT, &lock_state) {
             tracing::error!(%error, "emitting vault state failed");
         }
+        #[cfg(desktop)]
+        if lock_state == rove_vault::LockState::Unlocked {
+            tauri::async_runtime::spawn(async move {
+                commands::tailscale::auto_connect(&handle).await;
+            });
+        }
     });
-    app.manage(state);
     let handle = app.handle().clone();
     tauri::async_runtime::spawn(async move {
         commands::external::restore(&handle).await;
@@ -156,6 +183,14 @@ fn shutdown(app: &tauri::AppHandle) {
         state.ai.stop_all().await;
         state.sessions.close_all().await;
         state.ssh.disconnect_all().await;
+        #[cfg(desktop)]
+        {
+            let _guard = state.tailscale_lock.lock().await;
+            let configured = state.tailscale.status().configured;
+            if let Err(error) = state.tailscale.disconnect(configured).await {
+                tracing::warn!(%error, "Tailscale shutdown failed");
+            }
+        }
     });
     let lifetime = state.lifetime.lock().map(|mut guard| guard.take());
     if let Ok(Some((runtime, disposers))) = lifetime {
@@ -218,7 +253,12 @@ pub fn run() {
         .on_menu_event(commands::menu::on_event)
         .invoke_handler(tauri::generate_handler![
             commands::session::session_open_local,
+            commands::tailscale::tailscale_status,
             commands::tailscale::tailscale_snapshot,
+            commands::tailscale::tailscale_connect,
+            commands::tailscale::tailscale_disconnect,
+            commands::tailscale::tailscale_logout,
+            commands::tailscale::tailscale_open_auth_url,
             commands::ops::ops_task_list,
             commands::ops::ops_task_get,
             commands::ops::ops_task_input,

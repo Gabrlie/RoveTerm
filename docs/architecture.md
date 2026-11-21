@@ -48,7 +48,7 @@ Profile 是一组启用的插件加一份 TOML 配置。随应用交付的 profi
 | [rove-sync](subsystems/sync.md) | 端到端加密的多设备同步 | `SyncBackend`、`RecordStore`、`sync` |
 | rove-http | 共享的 HTTPS 客户端构造（rustls + ring，Android 用内置根证书） | `client` |
 | [rove-ai](subsystems/ai.md) | AI Agent：命令风险分级、审批策略 | `Policy` |
-| [rove-tailscale](subsystems/tailscale.md) | 通过桌面客户端只读发现尾网设备 | `TailnetDiscovery` |
+| [rove-tailscale](subsystems/tailscale.md) | 内置尾网连接、设备发现与 TCP 流 | `TailnetService` |
 | [rove-ops](subsystems/ops.md) | 持久运维任务、主机范围与共享 worker 预算 | `TaskStore`、`OpsSupervisor` |
 
 <a id="events"></a>
@@ -93,7 +93,7 @@ src-tauri 的 OutputSink → ipc::Channel → TermView.write(Uint8Array)
 | `FileSystem` | rove-fs | 本地、SFTP | 传输队列、SFTP 面板、ACP `fs/*`、MCP 文件工具 |
 | `SyncBackend` | rove-sync | WebDAV、S3、Gist、自建服务 | 同步引擎 |
 | `Policy` | rove-ai | 规则策略、模型审阅 | `exec/pre`、`fs/pre`、`tool/pre` 拦截器 |
-| `TailnetDiscovery` | rove-tailscale | 已安装客户端的 CLI | 主机管理的设备发现界面 |
+| `TailnetService` | rove-tailscale | 内置 tailscale-rs 设备 | 桌面设备列表、SSH 自定义路由 |
 | `TaskStore` | rove-ops | 本机 Journal 任务事件 | `OpsSupervisor`、总管和定时调度 |
 
 终端和文件系统绑定在同一个**主机上下文**上：AI 的 `terminal/*` 和 `fs/*` 指向哪台主机，就整体在哪台主机上执行，Provider 不需要为此分叉实现。
@@ -124,5 +124,5 @@ src-tauri 的 OutputSink → ipc::Channel → TermView.write(Uint8Array)
 | 新增一种文件来源 | 实现 `FileSystem`，打开后放入 `FsSessions`；传输和文件面板无需改动（[fs](subsystems/fs.md)） |
 | 新增凭据缓存方式 | 实现 `KeyCache` 并在 profile 中替换 |
 | 新增一个插件 | 实现 `Plugin`，在 profile 中启用（[cookbook](cookbook/adding-a-plugin.md)） |
-| 发现尾网设备 | 在 `TailnetDiscovery` Provider 中取得快照，Consumer 复用普通 SSH 主机创建与连接流程 |
+| 发现尾网设备 | 从 `TailnetService` 获取节点快照，使用 SSH 自定义传输建立连接 |
 | 持续运维任务 | 经 `OpsSupervisor` 持久化并取得 worker 许可，执行仍复用主机工具及审批链 |

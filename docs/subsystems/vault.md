@@ -46,7 +46,7 @@ pub trait KeyCache: Send + Sync {
 | `HostOs` | `id`（os-release 的 `ID`，或由 `uname` 得出的 `macos`、`freebsd`）、`like`（`ID_LIKE`）、`name`（`PRETTY_NAME`）；只用于显示，`set_host_os` 写入前校验 id 为不超过 32 字符的小写短名，名称截到 100 个可打印字符 |
 | `HostDraft` | 新建或修改主机的输入，由 `validate()` 去除空白并检查长度和字符 |
 | `AuthMethod` | `Password`、`PrivateKey`（每台主机单独保存的私钥）、`Key { key }`（密钥库中的密钥）、`KeyFile { path }`、`Agent`、`Interactive` |
-| `HostRoute` | `Direct`（默认）、`Jump { host }`（经另一台已保存主机跳转）、`Proxy { protocol, host, port }`（`http` 或 `socks5`，无认证） |
+| `HostRoute` | `Direct`（默认）、`Jump { host }`（经另一台已保存主机跳转）、`Proxy { protocol, host, port }`（`http` 或 `socks5`，无认证）、`Tailscale { peer_id }`（可选稳定节点 ID） |
 | `Secret` | `Password`、`PrivateKey { key, passphrase }`、`Passphrase`；字段为 `Zeroizing<String>`，`Debug` 不输出内容 |
 | `HostKey` | 服务器公钥：算法、OpenSSH 单行格式、`SHA256:` 指纹 |
 | `KnownHostStatus` | `Trusted`、`Unknown`、`Mismatch { expected_algorithm, expected_fingerprint }` |
@@ -128,3 +128,5 @@ AI key 被删除时写日志（只记 id，不记 key）：用户在设置中移
 ## 表结构
 
 `meta`、`hosts`、`host_secrets`（外键级联删除）、`known_hosts`、`forwards`（外键级联删除）、`preferences`、`ssh_keys`、`snippets`。主机的路线和检测到的系统分别以 JSON 存在 `hosts.route`、`hosts.os` 列；`os` 无法解析时按未检测处理。编辑主机不会清除 `os`。结构版本记录在 `PRAGMA user_version`，当前版本为 8；打开旧版本数据库时按版本依次迁移。
+
+Tailscale 设备身份密封在本机 `preferences` 的 `tailscale_state` 记录，AAD 为 `rove/vault/tailscale-state/v1`。记录存在性在锁定时可读，读写密钥需要解锁。重置凭据会清除身份并将当前设备标记为未配置。

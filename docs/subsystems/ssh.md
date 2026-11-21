@@ -98,6 +98,8 @@
 - SFTP 状态码映射为 `FsError`：`NoSuchFile` → `NotFound`，`PermissionDenied` → `PermissionDenied`，`OpUnsupported` → `Unsupported`，连接丢失 → `Closed`，其余 → `Io`。
 - `list` 过滤掉服务器返回的 `.` 和 `..`；`label()` 是 `SshTarget::location()`：`user@host:port`，经跳板机或代理时后面再接路线（如 `user@host:22 via admin@bastion:22`），所以不同路线到达的同地址服务器标签不同，传输队列据此区分目标。
 
+尾网主机通过 `Via::Custom` 使用桌面应用提供的 TCP 流。连接池和 host key 校验按路由区分直连与尾网连接。见 [Tailscale](tailscale.md)。
+
 ## 端口转发
 
 `Forwards` 按转发规则 ID（`ForwardId`）运行转发，规则的内容 `ForwardSpec` 来自 [vault](vault.md)。`start(id, host_id, connection, spec)` 在给定的共享连接上启动：

@@ -606,6 +606,60 @@ pub struct DevicePrefs {
     pub agents: AgentsPrefs,
     /// SSH connection timing on this device's networks.
     pub connection: ConnectionPrefs,
+    /// Embedded tailnet configuration for this device.
+    #[serde(default)]
+    pub tailscale: TailscalePrefs,
+}
+
+/// Device-local tailnet connection settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TailscalePrefs {
+    pub configured: bool,
+    pub auto_connect: bool,
+    pub control_url: String,
+    pub hostname: String,
+}
+
+impl Default for TailscalePrefs {
+    fn default() -> Self {
+        Self {
+            configured: false,
+            auto_connect: true,
+            control_url: String::new(),
+            hostname: String::new(),
+        }
+    }
+}
+
+impl TailscalePrefs {
+    /// Normalizes optional overrides and validates the control URL and hostname.
+    pub fn validate(mut self) -> Result<Self, VaultError> {
+        let control_url = self.control_url.trim();
+        if self.control_url.chars().any(char::is_control)
+            || control_url.len() > 512
+            || (!control_url.is_empty()
+                && !url::Url::parse(control_url).is_ok_and(|url| {
+                    matches!(url.scheme(), "http" | "https")
+                        && url.host().is_some()
+                        && url.username().is_empty()
+                        && url.password().is_none()
+                }))
+        {
+            return Err(VaultError::Invalid("invalid Tailscale control URL".into()));
+        }
+        self.control_url = control_url.to_owned();
+
+        let hostname = self.hostname.trim();
+        if self.hostname.chars().any(char::is_control)
+            || hostname.chars().count() > 63
+            || hostname.chars().any(char::is_whitespace)
+        {
+            return Err(VaultError::Invalid("invalid Tailscale hostname".into()));
+        }
+        self.hostname = hostname.to_owned();
+        Ok(self)
+    }
 }
 
 /// SSH connection timing; applies to connections opened after a change.
@@ -640,6 +694,7 @@ impl Default for DevicePrefs {
             agent: AgentPrefs::default(),
             agents: AgentsPrefs::default(),
             connection: ConnectionPrefs::default(),
+            tailscale: TailscalePrefs::default(),
         }
     }
 }
@@ -984,6 +1039,7 @@ impl DevicePrefs {
         }
         check_range("concurrent transfers", self.max_transfers, 1..=8)?;
         self.external_editor = self.external_editor.validate()?;
+        self.tailscale = self.tailscale.validate()?;
         self.agents.validate()?;
         check_range(
             "connect timeout",

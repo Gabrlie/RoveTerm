@@ -243,6 +243,10 @@ fn route<'a>(
     Box::pin(async move {
         match &host.route {
             HostRoute::Direct => Ok(Via::Direct),
+            #[cfg(desktop)]
+            HostRoute::Tailscale { peer_id } => tailnet_route(state, peer_id.clone()).await,
+            #[cfg(mobile)]
+            HostRoute::Tailscale { .. } => Err(crate::commands::tailscale::unsupported()),
             HostRoute::Proxy {
                 protocol,
                 host: proxy,
@@ -267,6 +271,71 @@ fn route<'a>(
             }
         }
     })
+}
+
+#[cfg(desktop)]
+async fn tailnet_route(state: &AppState, peer_id: Option<String>) -> Result<Via, CommandError> {
+    use rove_tailscale::{TailnetState, TailscaleError};
+
+    let mut changes = state.tailscale.subscribe();
+    let initial = changes.borrow().clone();
+    let deadline = state.ssh.timing().connect_timeout;
+    let status = tokio::time::timeout(deadline, async {
+        if initial.configured && initial.state == TailnetState::Disconnected {
+            crate::commands::tailscale::auto_connect_state(state).await?;
+        }
+        loop {
+            let state = changes.borrow_and_update().state;
+            if state != TailnetState::Starting {
+                return Ok::<_, CommandError>(state);
+            }
+            changes
+                .changed()
+                .await
+                .map_err(|_| TailscaleError::NotConnected)?;
+        }
+    })
+    .await
+    .map_err(|_| TailscaleError::NotConnected)??;
+    match status {
+        TailnetState::Running => Ok(Via::Custom {
+            label: "Tailscale".into(),
+            dialer: Arc::new(TailnetDialer {
+                service: state.tailscale.clone(),
+                peer_id,
+            }),
+        }),
+        TailnetState::NeedsLogin | TailnetState::NeedsMachineAuth => {
+            Err(TailscaleError::NeedsLogin.into())
+        }
+        _ => Err(TailscaleError::NotConnected.into()),
+    }
+}
+
+#[cfg(desktop)]
+struct TailnetDialer {
+    service: Arc<dyn rove_tailscale::TailnetService>,
+    peer_id: Option<String>,
+}
+
+#[cfg(desktop)]
+#[async_trait::async_trait]
+impl rove_ssh::TransportDialer for TailnetDialer {
+    async fn dial(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Result<Box<dyn rove_ssh::SshTransport>, SshError> {
+        let stream = self
+            .service
+            .dial_tcp(host, port, self.peer_id.as_deref())
+            .await
+            .map_err(|error| match error {
+                rove_tailscale::TailscaleError::Timeout => SshError::Timeout,
+                other => SshError::Connect(other.to_string()),
+            })?;
+        Ok(Box::new(stream))
+    }
 }
 
 /// The shared connection to a jump host. Jump hosts authenticate without asking: a stored

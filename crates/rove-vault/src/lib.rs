@@ -16,6 +16,7 @@ mod prefs;
 mod snippets;
 mod store;
 mod sync;
+mod tailscale;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -39,7 +40,8 @@ pub use prefs::{
     Accent, AgentAuth, AgentPrefs, AgentsPrefs, AiMode, AiPrefs, AppearancePrefs, Bell,
     ConflictChoice, ConnectionPrefs, CursorStyle, CustomAgent, DevicePrefs, ExternalEditorPrefs,
     FilePrefs, Language, Preferences, ProviderFormat, ProviderPrefs, ReasoningEffort, Repeat,
-    ReviewModel, ReviewerKind, RightClick, Schedule, StatusPrefs, TerminalPrefs, Theme,
+    ReviewModel, ReviewerKind, RightClick, Schedule, StatusPrefs, TailscalePrefs, TerminalPrefs,
+    Theme,
 };
 pub use snippets::{Snippet, SnippetDraft, SnippetId};
 pub use store::{LockReason, LockState, MAX_JUMP_DEPTH, SCHEMA_VERSION, Vault};

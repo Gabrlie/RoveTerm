@@ -1,24 +1,18 @@
-//! Read-only discovery of devices reachable through the installed Tailscale client.
-//!
-//! [`TailnetDiscovery`] is the Definition, [`CliDiscovery`] the desktop Provider, and the
-//! application's device browser a Consumer. Discovery neither changes the network nor grants
-//! SSH access; selected addresses use the application's ordinary SSH and SFTP providers.
+//! Embedded Tailscale networking and peer discovery for desktop profiles.
 
-mod cli;
-mod status;
+mod embedded;
 
-use std::fmt;
-use std::net::IpAddr;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{fmt, net::IpAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use rove_kernel::{Context, Disposer, KernelError, Plugin, PluginConfig};
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
+use zeroize::Zeroizing;
 
-pub use cli::CliDiscovery;
+pub use embedded::{EmbeddedTailnet, generate_key_state};
 
-/// Stable Tailscale device identity, from `PeerStatus.ID`, independent of a node's public key.
+/// Stable Tailscale device identity, from the control plane, independent of a node's public key.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct TailscalePeerId(String);
@@ -60,117 +54,145 @@ impl From<TailscalePeerId> for String {
     }
 }
 
-/// Client or daemon state, not a statement that a peer's SSH service is reachable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TailnetState {
-    NotInstalled,
-    ServiceUnavailable,
-    PermissionDenied,
-    NoState,
+    Unconfigured,
+    Disconnected,
+    Starting,
     NeedsLogin,
     NeedsMachineAuth,
-    Stopped,
-    Starting,
     Running,
-    Unknown,
+    Error,
 }
 
-/// Fields needed to display and select a device. Account lists and authentication URLs are omitted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TailnetSelfNode {
+    pub id: TailscalePeerId,
+    pub name: String,
+    pub dns_name: String,
+    pub addresses: Vec<IpAddr>,
+    pub tailnet: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TailnetPeer {
     pub id: TailscalePeerId,
     pub name: String,
     pub dns_name: String,
-    /// Deduplicated addresses, with IPv4 before IPv6.
     pub addresses: Vec<IpAddr>,
     pub os: Option<String>,
-    /// Whether the device is connected to the Tailscale control plane.
     pub online: bool,
 }
 
-/// One read-only snapshot. `captured_at` is the local capture time in Unix milliseconds.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TailnetSnapshot {
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TailnetStatus {
+    pub configured: bool,
     pub state: TailnetState,
-    pub peers: Vec<TailnetPeer>,
-    pub captured_at: i64,
-    /// A static diagnostic without CLI output, account details or login URLs.
+    pub self_node: Option<TailnetSelfNode>,
+    pub auth_url: Option<String>,
+    pub peer_count: usize,
+    /// Unix milliseconds when the displayed status changed.
+    pub updated_at: i64,
     pub message: Option<String>,
 }
 
-/// Discovery failure. Errors never contain raw client output.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TailnetSnapshot {
+    pub status: TailnetStatus,
+    pub peers: Vec<TailnetPeer>,
+    /// Unix milliseconds when the snapshot was read.
+    pub captured_at: i64,
+}
+
+pub struct ConnectRequest {
+    pub key_state_json: Zeroizing<Vec<u8>>,
+    pub auth_key: Option<Zeroizing<String>>,
+    pub control_url: Option<String>,
+    pub hostname: Option<String>,
+}
+
+pub trait TailnetStream:
+    tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static
+{
+}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static> TailnetStream for T {}
+
+/// A local tailnet connection and its peer directory.
+#[async_trait]
+pub trait TailnetService: Send + Sync {
+    fn status(&self) -> TailnetStatus;
+    fn subscribe(&self) -> watch::Receiver<TailnetStatus>;
+    async fn snapshot(&self) -> Result<TailnetSnapshot, TailscaleError>;
+    async fn connect(&self, request: ConnectRequest) -> Result<TailnetStatus, TailscaleError>;
+    async fn disconnect(&self, configured: bool) -> Result<TailnetStatus, TailscaleError>;
+    async fn dial_tcp(
+        &self,
+        host: &str,
+        port: u16,
+        peer_id: Option<&str>,
+    ) -> Result<Box<dyn TailnetStream>, TailscaleError>;
+    fn set_configured(&self, configured: bool);
+}
+
+/// Errors are safe to relay to the WebView and logs.
 #[derive(Debug, thiserror::Error)]
 pub enum TailscaleError {
-    #[error("invalid Tailscale discovery configuration: {0}")]
+    #[error("invalid Tailscale configuration: {0}")]
     InvalidConfig(&'static str),
-    #[error("the Tailscale status command timed out")]
-    Timeout,
-    #[error("the Tailscale status command exceeded its output limit")]
-    OutputLimit,
-    #[error("the Tailscale client returned invalid JSON")]
-    InvalidJson,
-    #[error("the Tailscale client returned an invalid status: {0}")]
+    #[error("invalid Tailscale node data: {0}")]
     InvalidStatus(&'static str),
-    #[error("could not communicate with the Tailscale client: {0}")]
-    Io(#[source] std::io::Error),
-    #[error("the local clock cannot be represented as Unix milliseconds")]
-    Clock,
+    #[error("invalid Tailscale identity")]
+    InvalidKeyState,
+    #[error("Tailscale registration rejected the auth key")]
+    KeyRejected,
+    #[error("Tailscale needs browser login or machine approval")]
+    NeedsLogin,
+    #[error("Tailscale is disconnected")]
+    NotConnected,
+    #[error("Tailscale operation timed out")]
+    Timeout,
+    #[error("the embedded Tailscale device failed")]
+    Device,
+    #[error("Tailscale peer has no matching tailnet address")]
+    PeerNotFound,
 }
 
-/// Definition of local tailnet discovery. Each call starts a fresh bounded read.
-#[async_trait]
-pub trait TailnetDiscovery: Send + Sync {
-    async fn snapshot(&self) -> Result<TailnetSnapshot, TailscaleError>;
-}
-
-/// `[plugin.tailscale]` configuration. Missing client software is reported by discovery, not boot.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TailscaleConfig {
-    /// Absolute executable path, or automatic platform discovery.
-    pub program: Option<PathBuf>,
-    pub timeout_ms: u64,
-    /// Shared bound for stdout and stderr together.
-    pub max_output_bytes: usize,
+    pub connect_timeout_ms: u64,
+    pub peer_refresh_ms: u64,
 }
 
 impl Default for TailscaleConfig {
     fn default() -> Self {
         Self {
-            program: None,
-            timeout_ms: 5_000,
-            max_output_bytes: 8 * 1024 * 1024,
+            connect_timeout_ms: 15_000,
+            peer_refresh_ms: 2_000,
         }
     }
 }
 
 impl TailscaleConfig {
-    pub(crate) fn validate(self) -> Result<Self, TailscaleError> {
-        if let Some(program) = &self.program
-            && (!program.is_absolute()
-                || program.as_os_str().is_empty()
-                || program.to_string_lossy().chars().any(char::is_control))
-        {
+    fn resolve(self) -> Result<(Duration, Duration), TailscaleError> {
+        if !(100..=120_000).contains(&self.connect_timeout_ms) {
             return Err(TailscaleError::InvalidConfig(
-                "program must be an absolute path without control characters",
+                "connect_timeout_ms must be 100–120000",
             ));
         }
-        if !(100..=60_000).contains(&self.timeout_ms) {
+        if !(250..=60_000).contains(&self.peer_refresh_ms) {
             return Err(TailscaleError::InvalidConfig(
-                "timeout_ms must be between 100 and 60000",
+                "peer_refresh_ms must be 250–60000",
             ));
         }
-        if !(1024..=64 * 1024 * 1024).contains(&self.max_output_bytes) {
-            return Err(TailscaleError::InvalidConfig(
-                "max_output_bytes must be between 1024 and 67108864",
-            ));
-        }
-        Ok(self)
+        Ok((
+            Duration::from_millis(self.connect_timeout_ms),
+            Duration::from_millis(self.peer_refresh_ms),
+        ))
     }
 }
 
-/// Registers the CLI Provider as `dyn TailnetDiscovery`.
 pub struct TailscalePlugin;
 
 impl Plugin for TailscalePlugin {
@@ -179,11 +201,8 @@ impl Plugin for TailscalePlugin {
     }
 
     fn apply(&self, ctx: &Context, config: &PluginConfig) -> Result<Vec<Disposer>, KernelError> {
-        let config: TailscaleConfig = config.parse()?;
-        let provider =
-            CliDiscovery::new(config).map_err(|error| KernelError::plugin("tailscale", error))?;
-        Ok(vec![
-            ctx.provide::<dyn TailnetDiscovery>(Arc::new(provider))?,
-        ])
+        let provider = EmbeddedTailnet::new(config.parse()?)
+            .map_err(|error| KernelError::plugin("tailscale", error))?;
+        Ok(vec![ctx.provide::<dyn TailnetService>(Arc::new(provider))?])
     }
 }

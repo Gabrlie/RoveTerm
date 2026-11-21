@@ -38,3 +38,22 @@ pub fn reveal(path: &std::path::Path) -> std::io::Result<()> {
     std::thread::spawn(move || child.wait());
     Ok(())
 }
+
+/// Opens a validated HTTP or HTTPS URL in the desktop system browser.
+#[cfg(desktop)]
+pub fn open_url(url: &str) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("rundll32");
+        command.arg("url.dll,FileProtocolHandler");
+        command
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let mut command = std::process::Command::new("xdg-open");
+
+    let mut child = command.arg(url).spawn()?;
+    std::thread::spawn(move || child.wait());
+    Ok(())
+}

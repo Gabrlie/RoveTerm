@@ -1,0 +1,41 @@
+[package]
+name = "tailscale"
+version = "0.7.1"
+description = "A work-in-progress Tailscale implementation"
+categories = ["network-programming", "api-bindings", "authentication", "asynchronous"]
+keywords = ["tailscale", "networking"]
+
+repository = "https://github.com/tailscale/tailscale-rs"
+edition = "2024"
+license = "BSD-3-Clause"
+rust-version = "1.92.0"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+# Our crates.
+ts_runtime = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
+ts_control = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
+ts_netstack_smoltcp = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1", features = ["tokio"] }
+ts_keys = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
+
+axum = { version = "0.8", optional = true }
+bytes = { version = "1", optional = true }
+rand = "0.10"
+ratatui = { version = "0.30", optional = true }
+# exclude rsa to avoid https://rustsec.org/advisories/RUSTSEC-2023-0071
+russh = { version = "0.65", optional = true, default-features = false, features = ["flate2", "aws-lc-rs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = { version = "2", default-features = false }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "fs"] }
+tracing = { version = "0.1", default-features = false, features = ["attributes"] }
+zeroize = "1.8.2"
+url = { version = "2", default-features = false }
+
+[features]
+# Enable the `axum` module, which enables you to run an `axum` HTTP server on top of a tailscale TCP
+# listener.
+axum = ["dep:axum"]
+ssh = ["dep:russh", "dep:bytes", "dep:ratatui"]

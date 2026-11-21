@@ -30,7 +30,7 @@
 
 ## 运维与设备集成逻辑测试
 
-`rove-tailscale` 使用伪 CLI 验证固定参数、进程退出、超时和有界 JSON 输入；`rove-ops` 验证事件重建、授权、全局并发与恢复。`rove-ai` 的脚本模型验证检查点和只读约束，应用的 verifier 测试检查逐项证据。`cargo test -p rove-ops --test comparison -- --nocapture` 输出同一脚本工作负载的新旧调度调用数、固定 token 单位、并发和耗时；这些值描述该脚本工作负载。
+`rove-tailscale` 测试设备身份编解码、节点映射、生命周期状态和插件注册；`rove-ops` 验证事件重建、授权、全局并发与恢复。`rove-ai` 的脚本模型验证检查点和只读约束，应用的 verifier 测试检查逐项证据。`cargo test -p rove-ops --test comparison -- --nocapture` 输出同一脚本工作负载的新旧调度调用数、固定 token 单位、并发和耗时；这些值描述该脚本工作负载。
 
 ## 性能基线
 

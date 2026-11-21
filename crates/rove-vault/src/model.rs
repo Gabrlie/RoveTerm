@@ -92,6 +92,12 @@ pub enum HostRoute {
         /// Proxy port.
         port: u16,
     },
+    /// Connect through this device's embedded tailnet.
+    Tailscale {
+        /// Stable identity used to resolve the peer when its name has changed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        peer_id: Option<String>,
+    },
 }
 
 /// Protocol of a [`HostRoute::Proxy`].
@@ -274,6 +280,17 @@ impl HostDraft {
             }
             if *port == 0 {
                 return Err(VaultError::Invalid("proxy port must be 1-65535".into()));
+            }
+        }
+        if let HostRoute::Tailscale { peer_id: Some(id) } = &mut self.route {
+            *id = id.trim().to_owned();
+            if id.is_empty()
+                || id.len() > 256
+                || id.chars().any(|c| c.is_whitespace() || c.is_control())
+            {
+                return Err(VaultError::Invalid(
+                    "invalid Tailscale peer identity".into(),
+                ));
             }
         }
         Ok(self)

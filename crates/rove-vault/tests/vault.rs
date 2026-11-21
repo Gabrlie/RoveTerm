@@ -1311,3 +1311,63 @@ fn schedules_are_checked() {
     let old: Preferences = serde_json::from_value(serde_json::json!({ "ai": {} })).unwrap();
     assert!(old.ai.schedules.is_empty());
 }
+
+#[test]
+fn tailscale_route_validates_and_syncs() {
+    let mut host = draft("peer.example.ts.net", AuthMethod::Agent);
+    for id in ["", "two words", "a\u{7f}", &"x".repeat(257)] {
+        host.route = HostRoute::Tailscale {
+            peer_id: Some(id.into()),
+        };
+        assert!(host.clone().validate().is_err());
+    }
+    assert_eq!(
+        serde_json::from_str::<HostRoute>(r#"{"kind":"tailscale"}"#).unwrap(),
+        HostRoute::Tailscale { peer_id: None },
+    );
+    host.route = HostRoute::Tailscale {
+        peer_id: Some("  n1  ".into()),
+    };
+    let source = unlocked();
+    let target = unlocked();
+    let host = source.create_host(host).unwrap();
+    assert_eq!(
+        host.route,
+        HostRoute::Tailscale {
+            peer_id: Some("n1".into())
+        }
+    );
+    target
+        .apply_sync(&as_changes(source.sync_records().unwrap()))
+        .unwrap();
+    assert_eq!(target.host(host.id).unwrap().route, host.route);
+}
+
+#[test]
+fn tailscale_preferences_normalize_and_validate() {
+    let default: DevicePrefs = serde_json::from_str("{}").unwrap();
+    assert!(!default.tailscale.configured);
+    assert!(default.tailscale.auto_connect);
+
+    let mut prefs = default.clone();
+    prefs.tailscale.control_url = " https://control.example.net/ ".into();
+    prefs.tailscale.hostname = " rove-laptop ".into();
+    let valid = prefs.validate().unwrap().tailscale;
+    assert_eq!(valid.control_url, "https://control.example.net/");
+    assert_eq!(valid.hostname, "rove-laptop");
+    for url in [
+        "ftp://example.net",
+        "https://",
+        "https://example.net/\r",
+        &format!("https://example.net/{}", "x".repeat(512)),
+    ] {
+        let mut prefs = default.clone();
+        prefs.tailscale.control_url = url.into();
+        assert!(prefs.validate().is_err());
+    }
+    for hostname in ["two words", "host\u{7f}", &"x".repeat(64)] {
+        let mut prefs = default.clone();
+        prefs.tailscale.hostname = hostname.into();
+        assert!(prefs.validate().is_err());
+    }
+}

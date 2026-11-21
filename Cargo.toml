@@ -1,12 +1,13 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "src-tauri", "tools/*"]
+exclude = ["third_party"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-rust-version = "1.90"
+rust-version = "1.92"
 
 [workspace.dependencies]
 async-trait = "0.1"
@@ -24,6 +25,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 jiff = "0.2"
 uuid = { version = "1", features = ["v7", "serde"] }
+
+[patch."https://github.com/tailscale/tailscale-rs"]
+tailscale = { path = "third_party/tailscale-patch/tailscale" }
+ts_runtime = { path = "third_party/tailscale-patch/ts_runtime" }
 
 [profile.release]
 opt-level = "s"

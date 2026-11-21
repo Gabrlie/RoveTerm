@@ -1,0 +1,619 @@
+use std::{
+    net::{IpAddr, SocketAddr},
+    panic::AssertUnwindSafe,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use async_trait::async_trait;
+use futures::FutureExt;
+use tailscale::{AuthStatus, Device, NodeInfo, NodeStatus, keys::PersistState};
+use tokio::{
+    sync::{Mutex, oneshot, watch},
+    task::JoinHandle,
+    time::{MissedTickBehavior, interval, timeout},
+};
+use zeroize::Zeroizing;
+
+use crate::{
+    ConnectRequest, TailnetPeer, TailnetSelfNode, TailnetService, TailnetSnapshot, TailnetState,
+    TailnetStatus, TailnetStream, TailscaleConfig, TailscaleError, TailscalePeerId,
+};
+
+pub fn generate_key_state() -> Result<Zeroizing<Vec<u8>>, TailscaleError> {
+    let mut bytes = Zeroizing::new(Vec::new());
+    serde_json::to_writer(&mut *bytes, &PersistState::default())
+        .map_err(|_| TailscaleError::InvalidKeyState)?;
+    Ok(bytes)
+}
+
+struct Current {
+    status: watch::Sender<TailnetStatus>,
+    peers: Vec<TailnetPeer>,
+    device: Option<Arc<Device>>,
+}
+
+impl Current {
+    fn publish(
+        &mut self,
+        configured: bool,
+        state: TailnetState,
+        auth_url: Option<String>,
+        message: Option<String>,
+        self_node: Option<TailnetSelfNode>,
+        peers: Vec<TailnetPeer>,
+    ) {
+        let peers_changed = self.peers != peers;
+        self.peers = peers;
+        self.status.send_if_modified(|current| {
+            let mut next = TailnetStatus {
+                configured,
+                state,
+                self_node,
+                auth_url,
+                peer_count: self.peers.len(),
+                updated_at: current.updated_at,
+                message,
+            };
+            if !peers_changed && *current == next {
+                return false;
+            }
+            next.updated_at = now_millis();
+            *current = next;
+            true
+        });
+    }
+
+    fn idle(&mut self, configured: bool) {
+        let state = if configured {
+            TailnetState::Disconnected
+        } else {
+            TailnetState::Unconfigured
+        };
+        self.publish(configured, state, None, None, None, Vec::new());
+    }
+}
+
+type Shared = Arc<parking_lot::Mutex<Current>>;
+
+struct Live {
+    stop: Option<oneshot::Sender<()>>,
+    task: JoinHandle<()>,
+}
+
+pub struct EmbeddedTailnet {
+    current: Shared,
+    live: Mutex<Option<Live>>,
+    connect_timeout: Duration,
+    peer_refresh: Duration,
+}
+
+impl EmbeddedTailnet {
+    pub fn new(config: TailscaleConfig) -> Result<Self, TailscaleError> {
+        let (connect_timeout, peer_refresh) = config.resolve()?;
+        Ok(Self {
+            current: Arc::new(parking_lot::Mutex::new(Current {
+                status: watch::Sender::new(TailnetStatus {
+                    configured: false,
+                    state: TailnetState::Unconfigured,
+                    self_node: None,
+                    auth_url: None,
+                    peer_count: 0,
+                    updated_at: now_millis(),
+                    message: None,
+                }),
+                peers: Vec::new(),
+                device: None,
+            })),
+            live: Mutex::new(None),
+            connect_timeout,
+            peer_refresh,
+        })
+    }
+}
+
+async fn stop(live: &mut Option<Live>) {
+    if let Some(active) = live.as_mut() {
+        drop(active.stop.take());
+        // The task also exits when the command initiating shutdown is cancelled.
+        let _ = (&mut active.task).await;
+        live.take();
+    }
+}
+
+#[async_trait]
+impl TailnetService for EmbeddedTailnet {
+    fn status(&self) -> TailnetStatus {
+        self.current.lock().status.borrow().clone()
+    }
+
+    fn subscribe(&self) -> watch::Receiver<TailnetStatus> {
+        self.current.lock().status.subscribe()
+    }
+
+    async fn snapshot(&self) -> Result<TailnetSnapshot, TailscaleError> {
+        let current = self.current.lock();
+        Ok(TailnetSnapshot {
+            status: current.status.borrow().clone(),
+            peers: current.peers.clone(),
+            captured_at: now_millis(),
+        })
+    }
+
+    async fn connect(&self, request: ConnectRequest) -> Result<TailnetStatus, TailscaleError> {
+        let (config, auth_key) = resolve(request)?;
+        let mut live = self.live.lock().await;
+        stop(&mut live).await;
+        self.current
+            .lock()
+            .publish(true, TailnetState::Starting, None, None, None, Vec::new());
+
+        let (stop, mut cancelled) = oneshot::channel();
+        let current = self.current.clone();
+        let connect_timeout = self.connect_timeout;
+        let peer_refresh = self.peer_refresh;
+        let task = tokio::spawn(async move {
+            let result = tokio::select! {
+                biased;
+                _ = &mut cancelled => Ok(()),
+                result = AssertUnwindSafe(run(&current, config, auth_key, connect_timeout, peer_refresh)).catch_unwind() => {
+                    result.unwrap_or(Err(TailscaleError::Device))
+                }
+            };
+            let device = {
+                let mut current = current.lock();
+                let device = current.device.take();
+                if let Err(error) = result {
+                    current.publish(
+                        true,
+                        TailnetState::Error,
+                        None,
+                        Some(error.to_string()),
+                        None,
+                        Vec::new(),
+                    );
+                } else {
+                    current.idle(true);
+                }
+                device
+            };
+            if let Some(device) = device {
+                // The patched Device also stops its actors when dropped during unwinding.
+                let _ = AssertUnwindSafe(device.shutdown_ref(Some(connect_timeout)))
+                    .catch_unwind()
+                    .await;
+            }
+        });
+        *live = Some(Live {
+            stop: Some(stop),
+            task,
+        });
+        Ok(self.status())
+    }
+
+    async fn disconnect(&self, configured: bool) -> Result<TailnetStatus, TailscaleError> {
+        let mut live = self.live.lock().await;
+        stop(&mut live).await;
+        self.current.lock().idle(configured);
+        Ok(self.status())
+    }
+
+    async fn dial_tcp(
+        &self,
+        host: &str,
+        port: u16,
+        peer_id: Option<&str>,
+    ) -> Result<Box<dyn TailnetStream>, TailscaleError> {
+        let device = {
+            let current = self.current.lock();
+            match current.status.borrow().state {
+                TailnetState::Running => {
+                    current.device.clone().ok_or(TailscaleError::NotConnected)?
+                }
+                TailnetState::NeedsLogin | TailnetState::NeedsMachineAuth => {
+                    return Err(TailscaleError::NeedsLogin);
+                }
+                _ => return Err(TailscaleError::NotConnected),
+            }
+        };
+        let stream = timeout(self.connect_timeout, async {
+            let ip = match parse_host_ip(host) {
+                Some(ip) => ip,
+                None => resolve_peer(&device, host, peer_id).await?,
+            };
+            device
+                .tcp_connect(SocketAddr::new(ip, port))
+                .await
+                .map_err(|_| TailscaleError::Device)
+        })
+        .await
+        .map_err(|_| TailscaleError::Timeout)??;
+        Ok(Box::new(stream))
+    }
+
+    fn set_configured(&self, configured: bool) {
+        let mut current = self.current.lock();
+        let idle = matches!(
+            current.status.borrow().state,
+            TailnetState::Unconfigured | TailnetState::Disconnected
+        );
+        if idle {
+            current.idle(configured);
+        }
+    }
+}
+
+fn resolve(
+    request: ConnectRequest,
+) -> Result<(tailscale::Config, Option<Zeroizing<String>>), TailscaleError> {
+    let key_state: PersistState = serde_json::from_slice(&request.key_state_json)
+        .map_err(|_| TailscaleError::InvalidKeyState)?;
+    let mut config = tailscale::Config::from(key_state);
+    config.client_name = Some("RoveTerm".into());
+    if let Some(url) = request.control_url {
+        let parsed =
+            url::Url::parse(&url).map_err(|_| TailscaleError::InvalidConfig("control URL"))?;
+        if !is_web_url(&parsed) {
+            return Err(TailscaleError::InvalidConfig("control URL"));
+        }
+        config.control_server_url = parsed;
+    }
+    config.requested_hostname = request.hostname;
+    Ok((config, request.auth_key))
+}
+
+fn is_web_url(url: &url::Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && url.host().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+}
+
+async fn run(
+    current: &Shared,
+    config: tailscale::Config,
+    auth_key: Option<Zeroizing<String>>,
+    connect_timeout: Duration,
+    peer_refresh: Duration,
+) -> Result<(), TailscaleError> {
+    let used_key = auth_key.is_some();
+    let device = timeout(connect_timeout, Device::new_with_secret(&config, auth_key))
+        .await
+        .map_err(|_| TailscaleError::Timeout)?
+        .map_err(|_| TailscaleError::Device)?;
+    drop(config);
+    let device = Arc::new(device);
+    current.lock().device = Some(device.clone());
+
+    let mut auth = timeout(connect_timeout, device.subscribe_auth())
+        .await
+        .map_err(|_| TailscaleError::Timeout)?
+        .map_err(|_| TailscaleError::Device)?;
+    let mut refresh = interval(peer_refresh);
+    refresh.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        let status = auth.borrow_and_update().clone();
+        match status {
+            AuthStatus::Authorized => {
+                let (self_node, peers) = timeout(connect_timeout, read_nodes(&device))
+                    .await
+                    .map_err(|_| TailscaleError::Timeout)??;
+                current.lock().publish(
+                    true,
+                    TailnetState::Running,
+                    None,
+                    None,
+                    Some(self_node),
+                    peers,
+                );
+                tokio::select! {
+                    result = auth.changed() => result.map_err(|_| TailscaleError::Device)?,
+                    _ = refresh.tick() => {}
+                }
+            }
+            AuthStatus::Starting => {
+                current
+                    .lock()
+                    .publish(true, TailnetState::Starting, None, None, None, Vec::new());
+                timeout(connect_timeout, auth.changed())
+                    .await
+                    .map_err(|_| TailscaleError::Timeout)?
+                    .map_err(|_| TailscaleError::Device)?;
+            }
+            AuthStatus::InteractiveAuthRequired(url) => {
+                if !is_web_url(&url) {
+                    return Err(TailscaleError::InvalidStatus("invalid browser login URL"));
+                }
+                current.lock().publish(
+                    true,
+                    TailnetState::NeedsLogin,
+                    Some(url.into()),
+                    None,
+                    None,
+                    Vec::new(),
+                );
+                auth.changed().await.map_err(|_| TailscaleError::Device)?;
+            }
+            AuthStatus::KeyRejected if used_key => return Err(TailscaleError::KeyRejected),
+            AuthStatus::KeyRejected => {
+                current.lock().publish(
+                    true,
+                    TailnetState::NeedsMachineAuth,
+                    None,
+                    None,
+                    None,
+                    Vec::new(),
+                );
+                auth.changed().await.map_err(|_| TailscaleError::Device)?;
+            }
+        }
+    }
+}
+
+async fn read_nodes(
+    device: &Device,
+) -> Result<(TailnetSelfNode, Vec<TailnetPeer>), TailscaleError> {
+    let node = device
+        .self_node()
+        .await
+        .map_err(|_| TailscaleError::Device)?;
+    let peers = device.peers().await.map_err(|_| TailscaleError::Device)?;
+    let self_node = TailnetSelfNode {
+        dns_name: node.fqdn(false),
+        addresses: addresses(&node).to_vec(),
+        id: TailscalePeerId::new(node.stable_id.0)?,
+        name: node.hostname,
+        tailnet: node.tailnet,
+    };
+    Ok((self_node, sorted_peers(peers)))
+}
+
+fn sorted_peers(nodes: Vec<NodeInfo>) -> Vec<TailnetPeer> {
+    let mut peers: Vec<_> = nodes
+        .into_iter()
+        .filter_map(|node| {
+            let id = TailscalePeerId::new(node.stable_id.0.clone()).ok()?;
+            Some(TailnetPeer {
+                id,
+                dns_name: node.fqdn(false),
+                addresses: addresses(&node).to_vec(),
+                name: node.hostname,
+                os: None,
+                online: matches!(node.status, NodeStatus::Online),
+            })
+        })
+        .collect();
+    peers.sort_by_cached_key(|peer| (peer.name.to_lowercase(), peer.id.clone()));
+    peers
+}
+
+fn addresses(node: &NodeInfo) -> [IpAddr; 2] {
+    [
+        node.tailnet_address.ipv4.addr().into(),
+        node.tailnet_address.ipv6.addr().into(),
+    ]
+}
+
+fn parse_host_ip(host: &str) -> Option<IpAddr> {
+    let trimmed = host.trim();
+    let bare = trimmed
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(trimmed);
+    bare.parse().ok()
+}
+
+fn select_peer<'a>(
+    peers: &'a [NodeInfo],
+    query: &str,
+    peer_id: Option<&str>,
+) -> Option<&'a NodeInfo> {
+    if let Some(id) = peer_id {
+        return peers.iter().find(|node| node.stable_id.0 == id);
+    }
+    let normalized = query.trim().trim_end_matches('.');
+    if normalized.is_empty() {
+        return None;
+    }
+    peers
+        .iter()
+        .find(|node| {
+            let fqdn = node.fqdn(false);
+            !fqdn.is_empty() && fqdn.eq_ignore_ascii_case(normalized)
+        })
+        .or_else(|| {
+            peers
+                .iter()
+                .find(|node| node.hostname.eq_ignore_ascii_case(normalized))
+        })
+}
+
+async fn resolve_peer(
+    device: &Device,
+    host: &str,
+    peer_id: Option<&str>,
+) -> Result<IpAddr, TailscaleError> {
+    let query = host.trim().trim_end_matches('.');
+    let named = if query.is_empty() {
+        None
+    } else {
+        device
+            .peer_by_name(query)
+            .await
+            .map_err(|_| TailscaleError::Device)?
+    };
+    let node = match named {
+        Some(node) if peer_id.is_none_or(|id| node.stable_id.0 == id) => node,
+        _ => {
+            let peers = device.peers().await.map_err(|_| TailscaleError::Device)?;
+            select_peer(&peers, query, peer_id)
+                .cloned()
+                .ok_or(TailscaleError::PeerNotFound)?
+        }
+    };
+    let [ipv4, ipv6] = addresses(&node);
+    Ok(if ipv4.is_unspecified() { ipv6 } else { ipv4 })
+}
+
+fn now_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fresh_identity_round_trips_and_is_unique() {
+        let state = generate_key_state().unwrap();
+        let restored: PersistState = serde_json::from_slice(&state).unwrap();
+        let mut serialized = Zeroizing::new(Vec::new());
+        serde_json::to_writer(&mut *serialized, &restored).unwrap();
+        assert!(serialized.as_slice() == state.as_slice());
+        assert!(generate_key_state().unwrap().as_slice() != state.as_slice());
+    }
+
+    fn node(id: &str, name: &str, status: NodeStatus) -> NodeInfo {
+        NodeInfo {
+            id: 1,
+            stable_id: ts_control::StableNodeId(id.into()),
+            hostname: name.into(),
+            capability_version: ts_capabilityversion::CapabilityVersion::CURRENT,
+            status,
+            tailnet: Some("example.ts.net".into()),
+            node_capabilities: Default::default(),
+            tags: Vec::new(),
+            tailnet_address: ts_control::TailnetAddress {
+                ipv4: "100.64.0.1/32".parse().unwrap(),
+                ipv6: "fd7a:115c:a1e0::1/128".parse().unwrap(),
+            },
+            node_key: tailscale::keys::NodeKeyPair::random().public,
+            node_key_expiry: None,
+            machine_key: None,
+            disco_key: None,
+            tailnet_lock_key_signature: None,
+            accepted_routes: Vec::new(),
+            underlay_addresses: Vec::new(),
+            derp_region: None,
+        }
+    }
+
+    #[test]
+    fn maps_peers_and_sorts_case_insensitively_then_by_id() {
+        let peers = sorted_peers(vec![
+            node("n1", "Zulu", NodeStatus::Unknown),
+            node("n3", "alpha", NodeStatus::Unknown),
+            node("n2", "Alpha", NodeStatus::Online),
+            node("", "Ignored", NodeStatus::Unknown),
+        ]);
+        let ids: Vec<_> = peers.iter().map(|peer| peer.id.as_str()).collect();
+        assert_eq!(ids, ["n2", "n3", "n1"]);
+        assert_eq!(peers[0].name, "Alpha");
+        assert_eq!(peers[0].dns_name, "Alpha.example.ts.net");
+        assert_eq!(
+            peers[0].addresses,
+            [
+                "100.64.0.1".parse::<IpAddr>().unwrap(),
+                "fd7a:115c:a1e0::1".parse::<IpAddr>().unwrap(),
+            ]
+        );
+        assert!(peers[0].online);
+        assert!(!peers[1].online);
+        assert!(peers[0].os.is_none());
+    }
+
+    #[test]
+    fn parses_plain_and_bracketed_ips_and_resolves_peers_case_insensitively() {
+        assert_eq!(
+            parse_host_ip(" 100.64.0.1 "),
+            Some("100.64.0.1".parse().unwrap())
+        );
+        assert_eq!(
+            parse_host_ip("[fd7a:115c:a1e0::1]"),
+            Some("fd7a:115c:a1e0::1".parse().unwrap())
+        );
+        assert_eq!(parse_host_ip("Alpha.example.ts.net"), None);
+
+        let peers = vec![
+            node("n1", "Zulu", NodeStatus::Online),
+            node("n2", "Alpha", NodeStatus::Online),
+        ];
+        assert_eq!(
+            select_peer(&peers, "alpha", None).map(|n| n.stable_id.0.as_str()),
+            Some("n2")
+        );
+        assert_eq!(
+            select_peer(&peers, "ALPHA.EXAMPLE.TS.NET.", None).map(|n| n.stable_id.0.as_str()),
+            Some("n2")
+        );
+        assert_eq!(
+            select_peer(&peers, "renamed-host", Some("n1")).map(|n| n.stable_id.0.as_str()),
+            Some("n1")
+        );
+        assert!(select_peer(&peers, "missing", None).is_none());
+    }
+
+    #[tokio::test]
+    async fn publishes_lifecycle_changes_and_rejects_dials_until_running() {
+        let service = EmbeddedTailnet::new(TailscaleConfig {
+            connect_timeout_ms: 100,
+            ..TailscaleConfig::default()
+        })
+        .unwrap();
+        let mut statuses = service.subscribe();
+        assert_eq!(
+            statuses.borrow_and_update().state,
+            TailnetState::Unconfigured
+        );
+        assert!(matches!(
+            service.dial_tcp("100.64.0.1", 22, None).await,
+            Err(TailscaleError::NotConnected)
+        ));
+
+        service.set_configured(true);
+        assert!(statuses.has_changed().unwrap());
+        assert_eq!(
+            statuses.borrow_and_update().state,
+            TailnetState::Disconnected
+        );
+        assert!(matches!(
+            service.dial_tcp("100.64.0.1", 22, None).await,
+            Err(TailscaleError::NotConnected)
+        ));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let starting = service
+            .connect(ConnectRequest {
+                key_state_json: generate_key_state().unwrap(),
+                auth_key: None,
+                control_url: Some(format!("http://{}", listener.local_addr().unwrap())),
+                hostname: Some("rove-test".into()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(starting.state, TailnetState::Starting);
+        assert_eq!(statuses.borrow_and_update().state, TailnetState::Starting);
+
+        let failed = timeout(
+            Duration::from_secs(5),
+            statuses.wait_for(|status| status.state == TailnetState::Error),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .clone();
+        assert!(failed.configured);
+        assert!(failed.message.is_some());
+        assert!(failed.auth_url.is_none());
+
+        let disconnected = service.disconnect(true).await.unwrap();
+        assert_eq!(disconnected.state, TailnetState::Disconnected);
+        let logged_out = service.disconnect(false).await.unwrap();
+        assert_eq!(logged_out.state, TailnetState::Unconfigured);
+        assert!(service.snapshot().await.unwrap().peers.is_empty());
+    }
+}

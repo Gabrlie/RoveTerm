@@ -312,3 +312,45 @@ async fn closed_port_reports_connect_error() {
         result.err()
     );
 }
+
+#[tokio::test]
+async fn custom_route_authenticates_over_the_dialer_stream() {
+    struct LocalDialer(std::net::SocketAddr);
+
+    #[async_trait::async_trait]
+    impl TransportDialer for LocalDialer {
+        async fn dial(&self, host: &str, port: u16) -> Result<Box<dyn SshTransport>, SshError> {
+            assert_eq!((host, port), ("peer.invalid", 22));
+            let stream = tokio::net::TcpStream::connect(self.0)
+                .await
+                .map_err(|error| SshError::Connect(error.to_string()))?;
+            Ok(Box::new(stream))
+        }
+    }
+
+    let harness = Harness::new(DevConfig::demo()).await;
+    let (_answer, prompts) = harness.auto_answer(HostKeyAnswer::Trust);
+    let target = SshTarget {
+        hostname: "peer.invalid".into(),
+        port: 22,
+        route: route_key(
+            &rove_vault::HostRoute::Tailscale {
+                peer_id: Some("n1".into()),
+            },
+            &[],
+        ),
+        ..harness.target()
+    };
+    assert_eq!(target.route, "tailscale");
+    let via = Via::Custom {
+        label: "Tailscale".into(),
+        dialer: Arc::new(LocalDialer(harness.server.addr())),
+    };
+    let connection = harness
+        .connector
+        .shared_via(&target, &password("demo"), &via, None)
+        .await
+        .unwrap();
+    assert_eq!(connection.target(), &target);
+    assert_eq!(prompts.load(Ordering::SeqCst), 1);
+}

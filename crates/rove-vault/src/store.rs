@@ -255,19 +255,25 @@ impl Vault {
     /// [`LockReason::KeyLost`]. Hosts and known hosts are kept.
     pub fn reset_secrets(&self) -> Result<LockState, VaultError> {
         tracing::warn!(
-            "resetting the vault: stored passwords, private keys and AI keys are removed"
+            "resetting the vault: stored passwords, private keys, AI keys and Tailscale state are removed"
         );
         let key = MasterKey::generate()?;
         self.key_cache.store(&key)?;
-        {
-            let conn = self.conn.lock();
-            let tx = conn.unchecked_transaction()?;
-            tx.execute("DELETE FROM host_secrets", [])?;
-            tx.execute("UPDATE ssh_keys SET sealed = NULL", [])?;
-            tx.execute("DELETE FROM preferences WHERE key LIKE 'ai_key:%'", [])?;
-            tx.execute("DELETE FROM meta WHERE key = 'key_check'", [])?;
-            tx.commit()?;
+        let conn = self.conn.lock();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM host_secrets", [])?;
+        tx.execute("UPDATE ssh_keys SET sealed = NULL", [])?;
+        tx.execute(
+            "DELETE FROM preferences WHERE key LIKE 'ai_key:%' OR key = 'tailscale_state'",
+            [],
+        )?;
+        let mut device = self.device_preferences()?;
+        if device.tailscale.configured {
+            device.tailscale.configured = false;
+            self.set_device_preferences(device)?;
         }
+        tx.execute("DELETE FROM meta WHERE key = 'key_check'", [])?;
+        tx.commit()?;
         let cipher = self
             .adopt_key(&key)
             .map_err(|reason| VaultError::Locked(format!("{reason:?}")))?;

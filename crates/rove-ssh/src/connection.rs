@@ -54,10 +54,17 @@ pub enum Via {
     /// A `direct-tcpip` channel on an authenticated connection to a jump host. The new connection
     /// keeps the jump connection alive while it exists.
     Jump(Arc<SshConnection>),
+    /// A stream opened by a registered transport provider.
+    Custom {
+        /// Route label used in connection progress.
+        label: String,
+        /// Opens the transport to the SSH target.
+        dialer: Arc<dyn TransportDialer>,
+    },
 }
 
 impl Via {
-    /// Describes a proxy or jump host for progress reports; `None` when direct.
+    /// Describes the route for progress reports. Direct connections omit the label.
     fn describe(&self) -> Option<String> {
         match self {
             Self::Direct => None,
@@ -73,13 +80,23 @@ impl Via {
                 Some(format!("{scheme}://{host}:{port}"))
             }
             Self::Jump(jump) => Some(jump.target().address()),
+            Self::Custom { label, .. } => Some(label.clone()),
         }
     }
 }
 
 /// The byte stream an SSH session runs over.
-trait Transport: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
-impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> Transport for T {}
+pub trait SshTransport:
+    tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static
+{
+}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static> SshTransport for T {}
+
+/// Opens the byte stream for a custom SSH route.
+#[async_trait]
+pub trait TransportDialer: Send + Sync {
+    async fn dial(&self, host: &str, port: u16) -> Result<Box<dyn SshTransport>, SshError>;
+}
 
 async fn tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, SshError> {
     let stream = tokio::net::TcpStream::connect((host, port))
@@ -96,7 +113,7 @@ async fn tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, SshError> {
 async fn open_transport(
     target: &SshTarget,
     via: &Via,
-) -> Result<(Box<dyn Transport>, Option<ChannelLease>), SshError> {
+) -> Result<(Box<dyn SshTransport>, Option<ChannelLease>), SshError> {
     match via {
         Via::Direct => Ok((Box::new(tcp(&target.hostname, target.port).await?), None)),
         Via::Proxy {
@@ -115,6 +132,7 @@ async fn open_transport(
             }
             Ok((Box::new(stream), None))
         }
+        Via::Custom { dialer, .. } => Ok((dialer.dial(&target.hostname, target.port).await?, None)),
         Via::Jump(jump) => {
             let (channel, lease) = jump
                 .open_direct_tcpip(&target.hostname, target.port, "127.0.0.1", 0)
