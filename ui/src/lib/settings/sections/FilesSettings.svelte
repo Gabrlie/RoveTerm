@@ -5,10 +5,7 @@
   import { t } from '../../i18n';
   import type { FilePrefs } from '../../ipc';
   import { prefs } from '../prefs.svelte';
-  import { editDevice, editPrefs, settingsError } from '../edit.svelte';
-  import { isMobile } from '../../platform';
-  import { isMac } from '../../actions';
-  import { editorArgs, editorProgram } from '../externaleditor';
+  import { editDevice, editPrefs } from '../edit.svelte';
 
   const files = $derived(prefs.value.files);
   const conflicts = $derived<{ value: FilePrefs['default_conflict']; label: string }[]>([
@@ -18,26 +15,6 @@
     { value: 'skip', label: t('files.skip') },
   ]);
 
-  let program = $state(prefs.device.external_editor?.program ?? '');
-  let argv = $state((prefs.device.external_editor?.args ?? []).join('\n'));
-  const appBundle = $derived(isMac && /\.app\/?$/i.test(program.trim()));
-  let saveRevision = 0;
-  async function saveEditor(): Promise<void> {
-    const revision = ++saveRevision;
-    const next = editorProgram(program, editorArgs(argv));
-    await editDevice((draft) => (draft.external_editor = next));
-    if (revision !== saveRevision || settingsError.text) return;
-    program = prefs.device.external_editor.program;
-    argv = prefs.device.external_editor.args.join('\n');
-  }
-  async function chooseEditor(bundle = false): Promise<void> {
-    const picked = await openDialog({ directory: false, multiple: false,
-      ...(bundle ? { defaultPath: '/Applications', filters: [{ name: t('settings.externalChooseApp'), extensions: ['app'] }] }
-        : /Windows/.test(navigator.userAgent) ? { filters: [{ name: t('settings.externalExecutable'), extensions: ['exe'] }] } : {}) });
-    if (typeof picked !== 'string') return;
-    program = picked;
-    await saveEditor();
-  }
   async function chooseDownloadDir(): Promise<void> {
     const picked = await openDialog({ directory: true, multiple: false });
     if (typeof picked === 'string') await editDevice((draft) => (draft.download_dir = picked));
@@ -93,30 +70,7 @@
 </div>
 <p class="form-note">{t('settings.filesDeviceNote')}</p>
 
-{#if !isMobile}
-  <p class="section-label">{t('settings.externalEditor')}</p>
-  <div class="form-group">
-    <div class="form-row editor-row">
-      <label class="form-label" for="external-editor-program">{t('settings.externalProgram')}<small>{t('settings.externalDeviceHint')}</small></label>
-      <input id="external-editor-program" class="program" bind:value={program} onblur={() => void saveEditor()} placeholder={t('settings.externalUnconfigured')} spellcheck="false" />
-    </div>
-    <div class="form-row">
-      <span class="form-label">{t('settings.externalExecutable')}</span>
-      {#if isMac}<button class="secondary" onclick={() => void chooseEditor(true)}>{t('settings.externalChooseApp')}</button>{/if}
-      <button class="secondary" onclick={() => void chooseEditor()}>{t('settings.choose')}</button>
-    </div>
-    <div class="form-row editor-row">
-      <label class="form-label" for="external-editor-args">{t('settings.externalArgs')}<small>{t(appBundle ? 'settings.externalAppHint' : 'settings.externalArgsHint')}</small></label>
-      <textarea id="external-editor-args" bind:value={argv} disabled={appBundle} onblur={() => void saveEditor()} spellcheck="false" rows="4"></textarea>
-    </div>
-    {#if !appBundle}<div class="form-row"><span class="form-label">{t('settings.externalFileHint')}</span><button class="plain" onclick={() => { argv = [argv, '{file}'].filter(Boolean).join('\n'); void saveEditor(); }}>{t('settings.externalAddFile')}</button></div>{/if}
-  </div>
-{/if}
-
 <style>
-  .editor-row { flex-wrap: wrap; }
-  .program, textarea { flex: 1; min-width: 180px; font-family: var(--font-mono); font-size: var(--text-footnote); }
-  textarea { resize: vertical; }
   .control {
     width: 180px;
   }
