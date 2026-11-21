@@ -5079,6 +5079,7 @@ dependencies = [
  "tailscale",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
  "ts_capabilityversion",
  "ts_control",
  "url",
@@ -7296,7 +7297,6 @@ dependencies = [
 [[package]]
 name = "ts_dataplane"
 version = "0.7.1"
-source = "git+https://github.com/tailscale/tailscale-rs?rev=e88a60083ed2b9b2b8fd62733fe86ea887e72780#e88a60083ed2b9b2b8fd62733fe86ea887e72780"
 dependencies = [
  "bitrs",
  "bytes",
@@ -7541,11 +7541,14 @@ dependencies = [
  "bytes",
  "futures",
  "futures-util",
+ "http",
  "ipnet",
  "itertools",
  "kameo",
  "kameo_actors",
  "rand 0.10.3",
+ "serde",
+ "serde_json",
  "smallvec",
  "smol_str",
  "thiserror 2.0.21",
@@ -7555,10 +7558,13 @@ dependencies = [
  "tracing",
  "ts_bart",
  "ts_bart_packetfilter",
+ "ts_capabilityversion",
  "ts_control",
+ "ts_control_serde",
  "ts_dataplane",
  "ts_derp",
  "ts_disco_protocol",
+ "ts_http_util",
  "ts_keys",
  "ts_netcheck",
  "ts_netmon",

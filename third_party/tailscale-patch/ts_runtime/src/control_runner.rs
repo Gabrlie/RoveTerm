@@ -1,20 +1,23 @@
 use core::net::{Ipv4Addr, Ipv6Addr};
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
+use http::{HeaderName, HeaderValue, StatusCode};
 use tokio::sync::watch;
-use tracing::instrument::WithSubscriber;
+use ts_capabilityversion::CapabilityVersion;
+use ts_control_serde::{HostInfo, RegisterAuth, RegisterRequest};
+use ts_http_util::{ClientExt, ResponseExt};
 use zeroize::Zeroizing;
 
 use futures::StreamExt;
 use kameo::{
-    actor::{ActorRef, Spawn},
+    actor::{ActorRef, Spawn, WeakActorRef},
     message::{Context, StreamMessage},
     prelude::{Message, ReplySender},
     reply::DelegatedReply,
     supervision::RestartPolicy,
 };
 use ts_control::{
-    ControlDialer, DialPlan, Endpoint, Error as ControlError, Node, RegistrationError, StateUpdate,
+    ControlDialer, DialPlan, Endpoint, Error as ControlError, Node, StateUpdate,
     client::{HttpConn, handle_ping, map_stream, send_map_request},
 };
 
@@ -36,6 +39,7 @@ pub struct ControlRunner {
     derp_latency_measurement: Option<DerpLatencyMeasurement>,
 
     endpoints: Vec<Endpoint>,
+    derp_regions: BTreeMap<ts_derp::RegionId, crate::DerpRegion>,
 
     self_node: Option<Node>,
     pending_node_requests: Vec<PendingNodeRequest>,
@@ -61,6 +65,8 @@ pub enum AuthStatus {
     Starting,
     /// Browser login is required.
     InteractiveAuthRequired(url::Url),
+    /// A tailnet administrator must approve this machine.
+    NeedsMachineAuth,
     /// The control plane accepted registration.
     Authorized,
     /// The control plane rejected the key and did not offer a login URL.
@@ -117,9 +123,227 @@ pub enum ControlRunnerError {
 }
 
 #[derive(Clone)]
-struct AuthRequired(url::Url);
+struct AuthRequired(Option<url::Url>);
 
-struct RegisterResult(Result<HttpConn, RegistrationError>);
+struct RegisterResult(Result<HttpConn, RegisterFailure>);
+
+#[derive(Debug, thiserror::Error)]
+enum RegisterFailure {
+    #[error("control connection failed")]
+    Network,
+    #[error("control returned HTTP {0}")]
+    Status(StatusCode),
+    #[error("invalid registration request")]
+    Request,
+    #[error("invalid registration response")]
+    Response,
+    #[error("registration rejected")]
+    Rejected,
+}
+
+impl RegisterFailure {
+    fn retryable(&self) -> bool {
+        match self {
+            Self::Network => true,
+            Self::Status(status) => {
+                status.is_server_error()
+                    || matches!(
+                        *status,
+                        StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS
+                    )
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default, rename_all = "PascalCase")]
+struct RegisterResponse {
+    machine_authorized: Option<bool>,
+    node_key_expired: Option<bool>,
+    #[serde(rename = "AuthURL")]
+    auth_url: Option<String>,
+    error: Option<String>,
+}
+
+async fn register(
+    config: &ts_control::Config,
+    keys: &ts_keys::NodeState,
+    auth_key: Option<&str>,
+    followup: Option<url::Url>,
+    client: &HttpConn,
+    attempt: u64,
+) -> Result<RegisterResponse, RegisterFailure> {
+    let node_key = keys.node_keys.public;
+    let app = config.format_client_name();
+    let request = RegisterRequest {
+        version: CapabilityVersion::CURRENT,
+        node_key,
+        hostinfo: HostInfo {
+            hostname: config.hostname.as_deref(),
+            app: &app,
+            ipn_version: ts_control::PKG_VERSION,
+            ..Default::default()
+        },
+        nl_key: Some(keys.network_lock_keys.public),
+        auth: auth_key.map(RegisterAuth::from),
+        followup,
+        ephemeral: config.ephemeral,
+        ..Default::default()
+    };
+    let body = serde_json::to_vec(&request).map_err(|_| RegisterFailure::Request)?;
+    let url = config
+        .server_url
+        .join("machine/register")
+        .map_err(|_| RegisterFailure::Request)?;
+    let node_header =
+        HeaderValue::from_str(&node_key.to_string()).map_err(|_| RegisterFailure::Request)?;
+    let response = client
+        .post(
+            &url,
+            [(HeaderName::from_static("ts-lb"), node_header)],
+            bytes::Bytes::from(body).into(),
+        )
+        .await
+        .map_err(|_| RegisterFailure::Network)?;
+    let status = response.status();
+    if !status.is_success() {
+        tracing::warn!(%status, attempt, "control registration HTTP failure");
+        if RegisterFailure::Status(status).retryable() {
+            return Err(RegisterFailure::Status(status));
+        }
+    }
+    let body = response
+        .collect_bytes()
+        .await
+        .map_err(|_| RegisterFailure::Network)?;
+    let parsed: RegisterResponse = serde_json::from_slice(&body).map_err(|_| {
+        if status.is_success() {
+            RegisterFailure::Response
+        } else {
+            RegisterFailure::Status(status)
+        }
+    })?;
+    let machine_authorized = parsed.machine_authorized.unwrap_or(false);
+    let has_auth_url = parsed.auth_url.as_ref().is_some_and(|url| !url.is_empty());
+    let has_error = parsed.error.as_ref().is_some_and(|error| !error.is_empty());
+    tracing::info!(%status, attempt, machine_authorized, has_auth_url, has_error,
+        node_key_expired = parsed.node_key_expired.unwrap_or(false), "control registration response");
+    if !status.is_success() && !has_error {
+        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+            && auth_key.is_some()
+        {
+            return Err(RegisterFailure::Rejected);
+        }
+        return Err(RegisterFailure::Status(status));
+    }
+    Ok(parsed)
+}
+
+async fn register_until_authorized(
+    actor: WeakActorRef<ControlRunner>,
+    env: Env,
+    config: ts_control::Config,
+    mut auth_key: Option<Arc<Zeroizing<String>>>,
+) -> Result<HttpConn, RegisterFailure> {
+    let mut client = None;
+    let mut followup = None;
+    let mut pending = false;
+    let mut retries = 0;
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let request_timeout = Duration::from_secs(match (followup.is_some(), pending) {
+            (true, _) => 90,
+            (false, true) => 12,
+            (false, false) => 12,
+        });
+        let result = tokio::time::timeout(request_timeout, async {
+            if client.is_none() {
+                let conn = env
+                    .ask::<DialerActor, _>(
+                        None,
+                        DialNext {
+                            url: config.server_url.clone(),
+                            timeout: Duration::from_secs(8),
+                        },
+                        true,
+                    )
+                    .await
+                    .map_err(|_| RegisterFailure::Network)?;
+                client = Some(conn);
+            }
+            let conn = client.as_ref().ok_or(RegisterFailure::Network)?;
+            register(
+                &config,
+                &env.keys,
+                auth_key.as_ref().map(|key| key.as_str()),
+                followup.clone(),
+                conn,
+                attempt,
+            )
+            .await
+        })
+        .await
+        .unwrap_or(Err(RegisterFailure::Network));
+
+        let response = match result {
+            Ok(response) => response,
+            Err(error) if error.retryable() && (pending || retries < 2) => {
+                client = None;
+                retries += 1;
+                let delay = Duration::from_secs(if pending {
+                    (2 << (retries - 1).min(3)).min(10)
+                } else {
+                    retries
+                });
+                tracing::warn!(%error, attempt, retry_in_secs = delay.as_secs(), "retrying control registration");
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+
+        if response.machine_authorized == Some(true) {
+            return client.ok_or(RegisterFailure::Network);
+        }
+        if response
+            .error
+            .as_ref()
+            .is_some_and(|error| !error.is_empty())
+        {
+            return Err(RegisterFailure::Rejected);
+        }
+        let next = response
+            .auth_url
+            .filter(|url| !url.is_empty())
+            .map(|url| url::Url::parse(&url).map_err(|_| RegisterFailure::Response))
+            .transpose()?;
+
+        // Once the control server accepted the registration into browser-login or manual-approval
+        // state, stop re-sending a one-time auth key on subsequent status polls.
+        auth_key = None;
+
+        let delay = if next.is_none() {
+            Duration::from_secs(4)
+        } else if next == followup {
+            Duration::from_secs(2)
+        } else {
+            Duration::ZERO
+        };
+        actor
+            .upgrade()
+            .ok_or(RegisterFailure::Network)?
+            .tell(AuthRequired(next.clone()))
+            .await
+            .map_err(|_| RegisterFailure::Network)?;
+        followup = next;
+        retries = 0;
+        pending = true;
+        tokio::time::sleep(delay).await;
+    }
+}
 
 impl kameo::Actor for ControlRunner {
     type Args = Params;
@@ -130,73 +354,19 @@ impl kameo::Actor for ControlRunner {
             let aref = slf.downgrade();
             let env = params.env.clone();
             let config = params.config.clone();
-            let keys = params.env.keys.clone();
             let auth_key = params.auth_key.take();
 
             move || {
                 let aref = aref.clone();
                 let env = env.clone();
                 let config = config.clone();
-                let keys = keys.clone();
                 let auth_key = auth_key.clone();
 
                 async move {
-                    let client = env
-                        .ask::<DialerActor, _>(
-                            None,
-                            DialNext {
-                                url: config.server_url.clone(),
-                            },
-                            true,
-                        )
-                        .await;
-                    let Ok(client) = client else {
-                        if let Some(actor) = aref.upgrade() {
-                            drop(
-                                actor
-                                    .tell(RegisterResult(Err(RegistrationError::NetworkError)))
-                                    .await,
-                            );
-                        }
-                        return;
-                    };
-                    let mut followup = None;
-
-                    loop {
-                        let result = ts_control::register(
-                            &config,
-                            &config.server_url,
-                            auth_key.as_ref().map(|key| key.as_str()),
-                            followup,
-                            &keys,
-                            &client,
-                        )
-                        // Upstream registration traces include the auth key and browser URL.
-                        .with_subscriber(tracing::Dispatch::none())
-                        .await;
-
-                        if let Err(RegistrationError::MachineNotAuthorized(Some(u))) = result {
-                            followup = Some(u.clone());
-
-                            let Some(aref) = aref.upgrade() else {
-                                // if the control runner is dead, we should die shortly, no reason
-                                // to keep running.
-                                return;
-                            };
-
-                            if aref.tell(AuthRequired(u)).await.is_err() {
-                                return;
-                            }
-
-                            continue;
-                        }
-
-                        let Some(aref) = aref.upgrade() else {
-                            return;
-                        };
-                        drop(aref.tell(RegisterResult(result.map(|_| client))).await);
-
-                        break;
+                    let result =
+                        register_until_authorized(aref.clone(), env, config, auth_key).await;
+                    if let Some(actor) = aref.upgrade() {
+                        drop(actor.tell(RegisterResult(result)).await);
                     }
                 }
             }
@@ -222,6 +392,7 @@ impl kameo::Actor for ControlRunner {
             params,
             derp_latency_measurement: None,
             endpoints: Default::default(),
+            derp_regions: BTreeMap::new(),
             self_node: None,
             pending_node_requests: Default::default(),
         })
@@ -240,6 +411,27 @@ impl ControlRunner {
     #[message]
     pub fn subscribe_auth(&self) -> (watch::Receiver<AuthStatus>,) {
         (self.auth_status.subscribe(),)
+    }
+
+    /// Read the selected home DERP region.
+    #[message]
+    pub fn home_derp(&self) -> Option<crate::DerpRegion> {
+        let home = self
+            .derp_latency_measurement
+            .as_ref()?
+            .measurement
+            .first()?;
+        self.derp_regions.get(&home.id).cloned()
+    }
+
+    #[message]
+    pub(crate) fn probe_config(
+        &self,
+    ) -> (
+        Vec<Endpoint>,
+        BTreeMap<ts_derp::RegionId, crate::DerpRegion>,
+    ) {
+        (self.endpoints.clone(), self.derp_regions.clone())
     }
 
     /// Fetch the IPv4 address for this tailscale device.
@@ -382,16 +574,19 @@ impl ControlRunner {
             return;
         };
 
-        self.with_map_request(false, async |req| {
-            send_map_request(
-                req,
-                &self.params.config.server_url.join("machine/map").unwrap(),
-                conn,
-            )
+        let Ok(map_url) = self.params.config.server_url.join("machine/map") else {
+            tracing::warn!("invalid control map URL");
+            return;
+        };
+        if self
+            .with_map_request(false, async |req| {
+                send_map_request(req, &map_url, conn).await
+            })
             .await
-        })
-        .await
-        .unwrap();
+            .is_err()
+        {
+            tracing::warn!("unable to update control map request");
+        }
     }
 }
 
@@ -409,12 +604,21 @@ impl Message<AuthRequired> for ControlRunner {
         ) {
             return;
         }
-        self.state.update(
-            RegState::AuthRequired(auth_url.clone()),
-            AuthResponse::InteractiveAuthRequired(auth_url.clone()),
-        );
+        let next = if let Some(auth_url) = auth_url {
+            self.state.update(
+                RegState::AuthRequired(auth_url.clone()),
+                AuthResponse::InteractiveAuthRequired(auth_url.clone()),
+            );
+            AuthStatus::InteractiveAuthRequired(auth_url)
+        } else {
+            if matches!(self.state, RegState::AuthRequired(_)) {
+                self.state = RegState::NotRegistered {
+                    pending_auth_requests: Vec::new(),
+                };
+            }
+            AuthStatus::NeedsMachineAuth
+        };
         self.auth_status.send_if_modified(|status| {
-            let next = AuthStatus::InteractiveAuthRequired(auth_url);
             if *status == next {
                 return false;
             }
@@ -435,16 +639,16 @@ impl Message<RegisterResult> for ControlRunner {
 
         let conn = match msg.0 {
             Ok(conn) => conn,
-            Err(RegistrationError::MachineNotAuthorized(None)) => {
-                tracing::error!("auth key rejected");
+            Err(RegisterFailure::Rejected) => {
+                tracing::warn!("control rejected registration");
                 self.state
                     .update(RegState::AuthKeyRejected, AuthResponse::KeyRejected);
                 self.auth_status.send_replace(AuthStatus::KeyRejected);
 
                 return;
             }
-            Err(_) => {
-                tracing::error!("unable to register with control server");
+            Err(error) => {
+                tracing::error!(%error, "unable to register with control server");
                 ctx.stop();
                 return;
             }
@@ -454,9 +658,13 @@ impl Message<RegisterResult> for ControlRunner {
             .update(RegState::Registered(conn.clone()), AuthResponse::Authorized);
         self.auth_status.send_replace(AuthStatus::Authorized);
 
+        let Ok(map_url) = self.params.config.server_url.join("machine/map") else {
+            tracing::error!("invalid control map URL");
+            ctx.stop();
+            return;
+        };
         let reader = self
             .with_map_request(true, async |req| {
-                let map_url = self.params.config.server_url.join("machine/map").unwrap();
                 send_map_request(req, &map_url, &conn).await
             })
             .await;
@@ -517,13 +725,29 @@ impl Message<StreamMessage<Arc<StateUpdate>, (), ()>> for ControlRunner {
                     true,
                 )
                 .await
-                .unwrap()
+                .is_ok_and(|changed| changed)
         {
             tracing::trace!(new_dial_plan = ?dial_plan);
         }
 
         if let Some(node) = msg.node.as_ref() {
             self.self_node = Some(node.clone());
+        }
+
+        if let Some(map) = &msg.derp {
+            self.derp_regions = map
+                .iter()
+                .map(|(&id, region)| {
+                    (
+                        id,
+                        crate::DerpRegion {
+                            id: id.0.get(),
+                            code: region.info.code.clone(),
+                            name: region.info.name.clone(),
+                        },
+                    )
+                })
+                .collect();
         }
 
         if let Err(e) = self.params.env.publish(msg).await {
@@ -597,14 +821,61 @@ impl kameo::Actor for DialerActor {
 #[kameo::messages]
 impl DialerActor {
     #[message]
-    async fn dial_next(&mut self, url: url::Url) -> Result<HttpConn, ts_control::Error> {
-        self.dialer
-            .full_connect_next(&url, &self.env.keys.machine_keys)
-            .await
+    async fn dial_next(
+        &mut self,
+        url: url::Url,
+        timeout: Duration,
+    ) -> Result<HttpConn, ts_control::Error> {
+        tokio::time::timeout(
+            timeout,
+            self.dialer
+                .full_connect_next(&url, &self.env.keys.machine_keys),
+        )
+        .await
+        .unwrap_or(Err(ControlError::NetworkError(
+            ts_control::Operation::ConnectToControlServer,
+        )))
     }
 
     #[message]
     fn update_dial_plan(&mut self, dial_plan: DialPlan) -> bool {
         self.dialer.update_dial_plan(&dial_plan)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RegisterResponse;
+
+    #[test]
+    fn registration_accepts_missing_and_null_fields() {
+        for body in [
+            "{}",
+            r#"{"User":null,"Login":null,"MachineAuthorized":null,"NodeKeyExpired":null,"AuthURL":null,"Error":null}"#,
+            r#"{"MachineAuthorized":false,"AuthURL":"","Error":""}"#,
+        ] {
+            let result: RegisterResponse = serde_json::from_str(body).unwrap();
+            assert!(!result.machine_authorized.unwrap_or(false));
+            assert!(result.auth_url.unwrap_or_default().is_empty());
+            assert!(result.error.unwrap_or_default().is_empty());
+        }
+    }
+
+    #[test]
+    fn registration_preserves_status_fields() {
+        let pending: RegisterResponse = serde_json::from_str(
+            r#"{"AuthURL":"https://example.test/authorize","NodeKeyExpired":true}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            pending.auth_url.as_deref(),
+            Some("https://example.test/authorize")
+        );
+        assert_eq!(pending.node_key_expired, Some(true));
+        let rejected: RegisterResponse = serde_json::from_str(r#"{"Error":"rejected"}"#).unwrap();
+        assert_eq!(rejected.error.as_deref(), Some("rejected"));
+        let approved: RegisterResponse =
+            serde_json::from_str(r#"{"MachineAuthorized":true}"#).unwrap();
+        assert_eq!(approved.machine_authorized, Some(true));
     }
 }

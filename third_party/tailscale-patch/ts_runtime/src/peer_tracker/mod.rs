@@ -77,6 +77,12 @@ mod msg_impl {
             self.peer_db.peers().values().cloned().collect()
         }
 
+        /// Look up a peer by its stable control-plane identity.
+        #[message]
+        pub fn peer_by_stable_id(&self, stable_id: ts_control::StableNodeId) -> Option<Node> {
+            self.peer_db.get(&stable_id).map(|(_, node)| node.clone())
+        }
+
         /// Lookup a peer by name.
         ///
         /// Waits until we've received at least one peer update from control.

@@ -190,7 +190,14 @@ impl Message<Arc<ts_control::StateUpdate>> for RouteUpdater {
 
         tracing::debug!(accepted_routes = ?node.accepted_routes, "populating accepted routes");
 
-        for &accepted_route in &node.accepted_routes {
+        let addresses = [
+            node.tailnet_address.ipv4.into(),
+            node.tailnet_address.ipv6.into(),
+        ];
+        for accepted_route in addresses
+            .into_iter()
+            .chain(node.accepted_routes.iter().copied())
+        {
             out.insert(
                 accepted_route,
                 InboundRouteAction::ToOverlay(self.default_overlay_transport),

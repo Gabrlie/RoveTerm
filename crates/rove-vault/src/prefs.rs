@@ -627,7 +627,7 @@ impl Default for TailscalePrefs {
             configured: false,
             auto_connect: true,
             control_url: String::new(),
-            hostname: String::new(),
+            hostname: "RoveTerm".to_owned(),
         }
     }
 }
@@ -1059,6 +1059,17 @@ impl DevicePrefs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tailscale_hostname_defaults_to_roveterm_and_accepts_legacy_empty_value() {
+        let defaults = TailscalePrefs::default();
+        assert_eq!(defaults.hostname, "RoveTerm");
+        let legacy = TailscalePrefs {
+            hostname: String::new(),
+            ..defaults
+        };
+        assert!(legacy.validate().unwrap().hostname.is_empty());
+    }
 
     fn with(family: &str, size: u16, line_height: f32) -> Preferences {
         Preferences {

@@ -14,6 +14,9 @@ rust-version = "1.92.0"
 # Our crates.
 ts_bart = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
 ts_bart_packetfilter = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
+ts_capabilityversion = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
+ts_control_serde = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
+ts_http_util = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
 ts_control = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
 ts_dataplane = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
 ts_disco_protocol = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
@@ -35,6 +38,9 @@ futures-util = { version = "0.3", default-features = false }
 ipnet = { version = "2.12", default-features = false }
 kameo = "0.21"
 kameo_actors = "0.6"
+http = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = { version = "2", default-features = false }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros"] }
 tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
@@ -55,7 +61,6 @@ chrono = { version = "0.4", default-features = false }
 itertools = "0.14"
 proptest = "1"
 tokio-test = "0.4"
-ts_capabilityversion = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
 
 [features]
 console = ["kameo/console"]

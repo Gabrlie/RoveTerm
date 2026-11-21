@@ -67,12 +67,44 @@ pub enum TailnetState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TailnetDerpRegion {
+    pub id: u16,
+    pub code: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TailnetPath {
+    Direct {
+        endpoint: String,
+    },
+    Relay {
+        region_id: u16,
+        region_code: String,
+        region_name: String,
+    },
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TailnetPingResult {
+    pub peer_id: TailscalePeerId,
+    pub reachable: bool,
+    pub latency_ms: Option<u64>,
+    pub path: TailnetPath,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TailnetSelfNode {
     pub id: TailscalePeerId,
     pub name: String,
     pub dns_name: String,
     pub addresses: Vec<IpAddr>,
     pub tailnet: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_derp: Option<TailnetDerpRegion>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +158,10 @@ pub trait TailnetService: Send + Sync {
     async fn snapshot(&self) -> Result<TailnetSnapshot, TailscaleError>;
     async fn connect(&self, request: ConnectRequest) -> Result<TailnetStatus, TailscaleError>;
     async fn disconnect(&self, configured: bool) -> Result<TailnetStatus, TailscaleError>;
+    async fn ping_peer(
+        &self,
+        peer_id: &TailscalePeerId,
+    ) -> Result<TailnetPingResult, TailscaleError>;
     async fn dial_tcp(
         &self,
         host: &str,

@@ -25,6 +25,7 @@ mod netmon;
 mod netstack_actor;
 mod packetfilter;
 mod path_discoverer;
+mod peer_probe;
 pub mod peer_tracker;
 mod registry;
 mod retained_bus;
@@ -36,6 +37,7 @@ mod task;
 pub(crate) use env::Env;
 pub use error::{Error, ErrorKind};
 pub use kameo::actor::{ActorRef, Spawn};
+pub use peer_probe::{DerpRegion, PeerProbe, ProbePath, ProbeResult};
 pub use registry::Registry;
 pub use task::{ErasedTask, Task};
 
@@ -178,6 +180,7 @@ forward!(
     control_runner::Ipv4,
     control_runner::Ipv6,
     control_runner::SelfNode,
+    control_runner::HomeDerp,
     control_runner::AuthUrl,
     control_runner::QueryAuthStatus,
     control_runner::SubscribeAuth,
@@ -189,3 +192,12 @@ forward!(
     peer_tracker::PeerByTailnetIp,
     peer_tracker::PeerByAcceptedRoute
 );
+
+#[kameo::messages]
+impl Runtime {
+    /// Obtain a handle for running an on-demand peer probe.
+    #[message]
+    pub fn prepare_peer_probe(&self) -> (PeerProbe,) {
+        (PeerProbe(self.env.clone()),)
+    }
+}

@@ -134,7 +134,7 @@ pub use error::{Error, InternalErrorKind};
 #[doc(inline)]
 pub use ts_control::{Node as NodeInfo, NodeStatus};
 use ts_netstack_smoltcp::{CreateSocket, netcore::Channel};
-pub use ts_runtime::control_runner::AuthStatus;
+pub use ts_runtime::{DerpRegion, ProbePath, ProbeResult, control_runner::AuthStatus};
 use ts_runtime::{Spawn, control_runner::AuthResponse};
 
 #[cfg(feature = "axum")]
@@ -283,6 +283,29 @@ impl Device {
             .await
             .map_err(ts_runtime::Error::from)?;
         Ok(receiver)
+    }
+
+    /// Report the currently selected home DERP region, once measured.
+    pub async fn home_derp(&self) -> Result<Option<DerpRegion>, Error> {
+        self.runtime
+            .ask(ts_runtime::HomeDerp)
+            .await
+            .map_err(ts_runtime::Error::from)
+            .map_err(Into::into)
+    }
+
+    /// Measure Disco round-trip latency and prefer a direct response over DERP.
+    pub async fn ping_peer(
+        &self,
+        stable_id: &str,
+        timeout: Duration,
+    ) -> Result<ProbeResult, Error> {
+        let (probe,) = self
+            .runtime
+            .ask(ts_runtime::PreparePeerProbe)
+            .await
+            .map_err(ts_runtime::Error::from)?;
+        Ok(probe.ping(stable_id, timeout).await?)
     }
 
     /// List all currently known peers. Before the first update the list is empty.

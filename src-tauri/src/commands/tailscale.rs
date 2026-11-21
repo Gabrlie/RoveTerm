@@ -6,8 +6,8 @@ use crate::error::CommandError;
 use {
     crate::state::AppState,
     rove_tailscale::{
-        ConnectRequest, TailnetSnapshot, TailnetState, TailnetStatus, TailscaleError,
-        generate_key_state,
+        ConnectRequest, TailnetPingResult, TailnetSnapshot, TailnetState, TailnetStatus,
+        TailscaleError, TailscalePeerId, generate_key_state,
     },
     rove_vault::{LockState, TailscalePrefs},
     tauri::{Manager, State},
@@ -42,6 +42,17 @@ pub async fn tailscale_snapshot(
     state: State<'_, AppState>,
 ) -> Result<TailnetSnapshot, CommandError> {
     Ok(state.tailscale.snapshot().await?)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn tailscale_ping_peer(
+    state: State<'_, AppState>,
+    peer_id: String,
+) -> Result<TailnetPingResult, CommandError> {
+    let peer_id = TailscalePeerId::new(peer_id)
+        .map_err(|error| CommandError::new("input.invalid", error.to_string()))?;
+    Ok(state.tailscale.ping_peer(&peer_id).await?)
 }
 
 #[cfg(desktop)]
@@ -217,6 +228,7 @@ macro_rules! unsupported_command {
 unsupported_command!(
     tailscale_status,
     tailscale_snapshot,
+    tailscale_ping_peer,
     tailscale_connect,
     tailscale_disconnect,
     tailscale_logout,

@@ -182,6 +182,9 @@ where
             tracing::error!(error = %e);
         }
 
+        state
+            .recipients
+            .retain(|_, registered| registered.is_alive());
         state.recipients.insert(recip.id(), recip)
     }
 }

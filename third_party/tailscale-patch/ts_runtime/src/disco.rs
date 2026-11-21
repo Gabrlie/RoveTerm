@@ -9,7 +9,10 @@ use ts_transport::DynEndpoint;
 use ts_util::fmt::IterFmt;
 use zerocopy::{Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
-use crate::{dataplane::IncomingDiscoMsg, env::Env};
+use crate::{
+    dataplane::{DataplaneActor, IncomingDiscoMsg, SendUnderlay},
+    env::Env,
+};
 
 pub struct Disco {
     env: Env,
@@ -47,7 +50,9 @@ impl Message<IncomingDiscoMsg> for Disco {
                     return;
                 };
 
-                let cmm = pkt.as_msg::<ts_disco_protocol::CallMeMaybe>().unwrap();
+                let Some(cmm) = pkt.as_msg::<ts_disco_protocol::CallMeMaybe>() else {
+                    return;
+                };
 
                 for ep in &cmm.endpoints {
                     let addr = ep.socket_addr();
@@ -82,11 +87,16 @@ impl Message<IncomingDiscoMsg> for Disco {
                 }
             }
             Some(MessageType::Ping) => {
-                let ping = pkt.as_msg::<Ping>().unwrap();
-                tracing::debug!(?ping, "got ping");
-
-                let Some(sender) = msg.sender.as_udp() else {
-                    tracing::warn!(?ping, "ping is from non-udp peer, bail");
+                let Some(ping) = pkt.as_msg::<Ping>() else {
+                    return;
+                };
+                let relayed = msg.sender.as_derp().is_some();
+                let sender = if let Some(sender) = msg.sender.as_udp() {
+                    sender
+                } else if relayed {
+                    // A relay does not expose the peer's UDP source address.
+                    std::net::SocketAddr::from(([0, 0, 0, 0], 0))
+                } else {
                     return;
                 };
 
@@ -100,13 +110,32 @@ impl Message<IncomingDiscoMsg> for Disco {
                     },
                 );
 
-                self.env
+                if relayed {
+                    if let Err(error) = self
+                        .env
+                        .ask::<DataplaneActor, _>(
+                            None,
+                            SendUnderlay {
+                                underlay_id: msg.transport,
+                                endpoint: msg.sender,
+                                bufs: vec![buf.to_vec().into()],
+                            },
+                            true,
+                        )
+                        .await
+                    {
+                        tracing::debug!(%error, "could not send DERP disco pong");
+                    }
+                } else if let Err(error) = self
+                    .env
                     .publish_noretain(SendDisco {
                         buf,
                         ep: msg.sender,
                     })
                     .await
-                    .unwrap();
+                {
+                    tracing::debug!(%error, "could not send UDP disco pong");
+                }
             }
             Some(MessageType::Pong) => {
                 // ignore, handled by path discovery

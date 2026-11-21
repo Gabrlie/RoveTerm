@@ -2,12 +2,14 @@ use std::{
     net::{IpAddr, SocketAddr},
     panic::AssertUnwindSafe,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
 use futures::FutureExt;
-use tailscale::{AuthStatus, Device, NodeInfo, NodeStatus, keys::PersistState};
+use tailscale::{
+    AuthStatus, Device, NodeInfo, NodeStatus, ProbePath, ProbeResult, keys::PersistState,
+};
 use tokio::{
     sync::{Mutex, oneshot, watch},
     task::JoinHandle,
@@ -16,8 +18,9 @@ use tokio::{
 use zeroize::Zeroizing;
 
 use crate::{
-    ConnectRequest, TailnetPeer, TailnetSelfNode, TailnetService, TailnetSnapshot, TailnetState,
-    TailnetStatus, TailnetStream, TailscaleConfig, TailscaleError, TailscalePeerId,
+    ConnectRequest, TailnetDerpRegion, TailnetPath, TailnetPeer, TailnetPingResult,
+    TailnetSelfNode, TailnetService, TailnetSnapshot, TailnetState, TailnetStatus, TailnetStream,
+    TailscaleConfig, TailscaleError, TailscalePeerId,
 };
 
 pub fn generate_key_state() -> Result<Zeroizing<Vec<u8>>, TailscaleError> {
@@ -57,6 +60,12 @@ impl Current {
             };
             if !peers_changed && *current == next {
                 return false;
+            }
+            if current.state != state {
+                tracing::info!(from = ?current.state, to = ?state, "Tailscale state changed");
+            }
+            if current.peer_count != next.peer_count {
+                tracing::info!(peer_count = next.peer_count, "updated Tailscale peer count");
             }
             next.updated_at = now_millis();
             *current = next;
@@ -164,6 +173,7 @@ impl TailnetService for EmbeddedTailnet {
                 let mut current = current.lock();
                 let device = current.device.take();
                 if let Err(error) = result {
+                    tracing::warn!(%error, "Tailscale connection ended");
                     current.publish(
                         true,
                         TailnetState::Error,
@@ -198,37 +208,86 @@ impl TailnetService for EmbeddedTailnet {
         Ok(self.status())
     }
 
+    async fn ping_peer(
+        &self,
+        peer_id: &TailscalePeerId,
+    ) -> Result<TailnetPingResult, TailscaleError> {
+        const PROBE_TIMEOUT: Duration = Duration::from_secs(4);
+        let device = self.running_device()?;
+        let result = device
+            .ping_peer(peer_id.as_str(), PROBE_TIMEOUT)
+            .await
+            .map_err(|_| TailscaleError::Device)?;
+        let (latency_ms, path, message) = match result {
+            ProbeResult::Reachable { latency, path } => {
+                let path = match path {
+                    ProbePath::Direct(endpoint) => TailnetPath::Direct {
+                        endpoint: endpoint.to_string(),
+                    },
+                    ProbePath::Relay(region) => {
+                        derp_region(region).map_or(TailnetPath::Unknown, |region| {
+                            TailnetPath::Relay {
+                                region_id: region.id,
+                                region_code: region.code,
+                                region_name: region.name,
+                            }
+                        })
+                    }
+                    ProbePath::Unknown => TailnetPath::Unknown,
+                };
+                (
+                    Some(latency.as_millis().try_into().unwrap_or(u64::MAX)),
+                    path,
+                    None,
+                )
+            }
+            ProbeResult::Unreachable(reason) => {
+                (None, TailnetPath::Unknown, Some(reason.to_owned()))
+            }
+        };
+        Ok(TailnetPingResult {
+            peer_id: peer_id.clone(),
+            reachable: latency_ms.is_some(),
+            latency_ms,
+            path,
+            message,
+        })
+    }
+
     async fn dial_tcp(
         &self,
         host: &str,
         port: u16,
         peer_id: Option<&str>,
     ) -> Result<Box<dyn TailnetStream>, TailscaleError> {
-        let device = {
-            let current = self.current.lock();
-            match current.status.borrow().state {
-                TailnetState::Running => {
-                    current.device.clone().ok_or(TailscaleError::NotConnected)?
-                }
-                TailnetState::NeedsLogin | TailnetState::NeedsMachineAuth => {
-                    return Err(TailscaleError::NeedsLogin);
-                }
-                _ => return Err(TailscaleError::NotConnected),
-            }
-        };
+        let device = self.running_device()?;
+        let started = Instant::now();
+        tracing::info!(port, "starting Tailscale TCP dial");
         let stream = timeout(self.connect_timeout, async {
             let ip = match parse_host_ip(host) {
                 Some(ip) => ip,
                 None => resolve_peer(&device, host, peer_id).await?,
             };
+            tracing::info!(%ip, port, "resolved Tailscale TCP destination");
             device
                 .tcp_connect(SocketAddr::new(ip, port))
                 .await
                 .map_err(|_| TailscaleError::Device)
         })
         .await
-        .map_err(|_| TailscaleError::Timeout)??;
-        Ok(Box::new(stream))
+        .map_err(|_| TailscaleError::Timeout)
+        .and_then(|result| result);
+        let elapsed_ms = started.elapsed().as_millis();
+        match stream {
+            Ok(stream) => {
+                tracing::info!(elapsed_ms, "Tailscale TCP connected");
+                Ok(Box::new(stream))
+            }
+            Err(error) => {
+                tracing::warn!(elapsed_ms, %error, "Tailscale TCP dial failed");
+                Err(error)
+            }
+        }
     }
 
     fn set_configured(&self, configured: bool) {
@@ -241,6 +300,27 @@ impl TailnetService for EmbeddedTailnet {
             current.idle(configured);
         }
     }
+}
+
+impl EmbeddedTailnet {
+    fn running_device(&self) -> Result<Arc<Device>, TailscaleError> {
+        let current = self.current.lock();
+        match current.status.borrow().state {
+            TailnetState::Running => current.device.clone().ok_or(TailscaleError::NotConnected),
+            TailnetState::NeedsLogin | TailnetState::NeedsMachineAuth => {
+                Err(TailscaleError::NeedsLogin)
+            }
+            _ => Err(TailscaleError::NotConnected),
+        }
+    }
+}
+
+fn derp_region(region: tailscale::DerpRegion) -> Option<TailnetDerpRegion> {
+    Some(TailnetDerpRegion {
+        id: region.id.try_into().ok()?,
+        code: region.code,
+        name: region.name,
+    })
 }
 
 fn resolve(
@@ -258,7 +338,12 @@ fn resolve(
         }
         config.control_server_url = parsed;
     }
-    config.requested_hostname = request.hostname;
+    config.requested_hostname = Some(
+        request
+            .hostname
+            .filter(|hostname| !hostname.is_empty())
+            .unwrap_or_else(|| "RoveTerm".into()),
+    );
     Ok((config, request.auth_key))
 }
 
@@ -276,7 +361,6 @@ async fn run(
     connect_timeout: Duration,
     peer_refresh: Duration,
 ) -> Result<(), TailscaleError> {
-    let used_key = auth_key.is_some();
     let device = timeout(connect_timeout, Device::new_with_secret(&config, auth_key))
         .await
         .map_err(|_| TailscaleError::Timeout)?
@@ -334,8 +418,8 @@ async fn run(
                 );
                 auth.changed().await.map_err(|_| TailscaleError::Device)?;
             }
-            AuthStatus::KeyRejected if used_key => return Err(TailscaleError::KeyRejected),
-            AuthStatus::KeyRejected => {
+            AuthStatus::KeyRejected => return Err(TailscaleError::KeyRejected),
+            AuthStatus::NeedsMachineAuth => {
                 current.lock().publish(
                     true,
                     TailnetState::NeedsMachineAuth,
@@ -358,7 +442,13 @@ async fn read_nodes(
         .await
         .map_err(|_| TailscaleError::Device)?;
     let peers = device.peers().await.map_err(|_| TailscaleError::Device)?;
+    let home_derp = device
+        .home_derp()
+        .await
+        .map_err(|_| TailscaleError::Device)?
+        .and_then(derp_region);
     let self_node = TailnetSelfNode {
+        home_derp,
         dns_name: node.fqdn(false),
         addresses: addresses(&node).to_vec(),
         id: TailscalePeerId::new(node.stable_id.0)?,

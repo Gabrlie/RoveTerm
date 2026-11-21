@@ -69,6 +69,14 @@ impl kameo::Actor for Multiderp {
     }
 }
 
+#[kameo::messages]
+impl Multiderp {
+    #[message]
+    pub(crate) fn probe_transport_map(&self) -> (HashMap<RegionId, UnderlayTransportId>,) {
+        (self.region_map.clone(),)
+    }
+}
+
 impl Multiderp {
     #[tracing::instrument(skip_all, fields(region_id = %id))]
     async fn ensure_region(&mut self, slf: &ActorRef<Self>, id: RegionId, region: &DerpRegion) {

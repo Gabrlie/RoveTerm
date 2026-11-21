@@ -29,6 +29,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 [patch."https://github.com/tailscale/tailscale-rs"]
 tailscale = { path = "third_party/tailscale-patch/tailscale" }
 ts_runtime = { path = "third_party/tailscale-patch/ts_runtime" }
+ts_dataplane = { path = "third_party/tailscale-patch/ts_dataplane" }
 
 [profile.release]
 opt-level = "s"

@@ -255,6 +255,7 @@ pub fn run() {
             commands::session::session_open_local,
             commands::tailscale::tailscale_status,
             commands::tailscale::tailscale_snapshot,
+            commands::tailscale::tailscale_ping_peer,
             commands::tailscale::tailscale_connect,
             commands::tailscale::tailscale_disconnect,
             commands::tailscale::tailscale_logout,

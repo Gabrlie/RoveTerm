@@ -1,0 +1,35 @@
+[package]
+name = "ts_dataplane"
+version = "0.7.1"
+description = "tailscale packet processing data plane"
+categories = ["network-programming"]
+keywords = ["tailscale", "dataplane", "network", "packet", "router"]
+
+repository = "https://github.com/tailscale/tailscale-rs"
+edition = "2024"
+license = "BSD-3-Clause"
+rust-version = "1.92.0"
+
+[features]
+default = ["async_tokio"]
+async_tokio = ["dep:tokio"]
+
+[dependencies]
+# Our crates.
+ts_packet = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
+ts_packetfilter = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
+ts_time = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
+ts_transport = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
+ts_tunnel = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
+ts_bart = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
+ts_disco_protocol = { git = "https://github.com/tailscale/tailscale-rs", rev = "e88a60083ed2b9b2b8fd62733fe86ea887e72780", version = "0.7.1" }
+
+# Unconditionally required dependencies.
+bytes = "1"
+etherparse = "0.19"
+tracing = { version = "0.1", default-features = false, features = ["attributes"] }
+bitrs = "0.11"
+itertools = "0.14"
+
+# Required dependencies for the async_tokio feature.
+tokio = { version = "1", default-features = false, optional = true, features = ["time", "sync"] }

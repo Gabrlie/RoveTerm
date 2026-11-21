@@ -13,7 +13,8 @@ use smol_str::SmolStr;
 use tokio::sync::{Mutex, watch};
 use ts_control::DerpRegion;
 use ts_dataplane::async_tokio::{FromUnderlay, Rx, ToUnderlay, Tx};
-use ts_derp::RegionId;
+use ts_derp::{DefaultClient, RegionId, frame::NotePreferred};
+use ts_http_util::Client as _;
 use ts_keys::NodeKeyPair;
 use ts_packet::PacketMut;
 use ts_transport::{BatchRecvIter, DynEndpoint, UnderlayTransport, UnderlayTransportId};
@@ -69,9 +70,7 @@ impl Uniderp {
 }
 
 async fn start_runner(mut runner: Runner) {
-    if let Err(e) = runner.run().await {
-        tracing::error!(error = %e, region_id = %runner.region_id, "running derp client");
-    }
+    runner.run().await;
 }
 
 impl kameo::Actor for Uniderp {
@@ -171,7 +170,7 @@ impl Message<Arc<ts_control::StateUpdate>> for Uniderp {
         self.runner_state.region = region.clone();
 
         self.task.unlink(ctx.actor_ref()).await;
-        self.task.stop_gracefully().await.unwrap();
+        self.task.kill();
         self.task
             .wait_for_shutdown_with_result(|e| {
                 if let Err(e) = e {
@@ -232,11 +231,38 @@ impl Runner {
     const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(10);
 
     #[tracing::instrument(skip_all, fields(region_id = %self.region_id))]
-    async fn run(&mut self) -> Result<(), ts_derp::Error> {
+    async fn run(&mut self) {
+        let mut retry = Duration::from_secs(1);
+        let mut pending = None;
+        let mut reconnect = false;
         loop {
-            let pending = self.wait_for_activity().await;
-            let transport = self.connect(pending).await?;
-            self.run_transport(transport).await?;
+            if !reconnect {
+                pending = self.wait_for_activity().await;
+            }
+            let result = match self.connect().await {
+                Ok(transport) => {
+                    let connected = Instant::now();
+                    let result = self.run_transport(transport, pending.take()).await;
+                    if connected.elapsed() >= Self::INACTIVITY_TIMEOUT {
+                        retry = Duration::from_secs(1);
+                    }
+                    result
+                }
+                Err(error) => Err(error),
+            };
+
+            match result {
+                Ok(()) => {
+                    retry = Duration::from_secs(1);
+                    reconnect = false;
+                }
+                Err(error) => {
+                    reconnect = true;
+                    tracing::warn!(%error, retry_in_secs = retry.as_secs(), "DERP disconnected, retrying");
+                    tokio::time::sleep(retry).await;
+                    retry = (retry * 2).min(Duration::from_secs(15));
+                }
+            }
         }
     }
 
@@ -248,8 +274,10 @@ impl Runner {
 
         while !*self.home_derp_rx.borrow_and_update() {
             tokio::select! {
-                _ = self.home_derp_rx.changed() => {
-                    tracing::trace!(is_home_derp = *self.home_derp_rx.borrow());
+                changed = self.home_derp_rx.changed() => {
+                    if changed.is_err() {
+                        return None;
+                    }
                 },
 
                 from_net = from_dataplane.recv() => {
@@ -263,27 +291,46 @@ impl Runner {
     }
 
     #[tracing::instrument(skip_all, level = "trace")]
-    async fn connect(
-        &self,
-        pending: Option<(DynEndpoint, Vec<PacketMut>)>,
-    ) -> Result<impl UnderlayTransport<Error = ts_derp::Error> + 'static, ts_derp::Error> {
-        tracing::trace!("establishing derp connection");
-
-        let transport = ts_derp::DefaultClient::connect(&self.region.servers, &self.keys).await?;
-
-        if let Some((info, pending)) = pending {
-            tracing::trace!("sending queued packet");
-            transport.send([(info, pending)]).await?;
-        }
-
-        Ok(transport)
+    async fn connect(&self) -> Result<DefaultClient, ts_derp::Error> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            // Use the fallible TLS dial directly because ts_derp::client::connect unwraps it.
+            let Some((conn, _, addr)) = ts_derp::dial::dial_region_tls(&self.region.servers)
+                .await
+                .map_err(std::io::Error::other)?
+            else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotConnected,
+                    "no reachable DERP server",
+                )
+                .into());
+            };
+            let url = url::Url::parse(&format!("https://{addr}/derp"))?;
+            let client = ts_http_util::http1::connect(conn).await?;
+            let response = client
+                .send(ts_http_util::make_upgrade_req(&url, "DERP", None)?)
+                .await?;
+            let upgraded = ts_http_util::do_upgrade(response)
+                .await
+                .map_err(std::io::Error::other)?;
+            DefaultClient::handshake(upgraded, &self.keys).await
+        })
+        .await
+        .map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "DERP connection timed out")
+        })?
     }
 
     #[tracing::instrument(skip_all, fields(transport_id = ?self.transport_id), level = "trace")]
     async fn run_transport(
         &mut self,
-        transport: impl UnderlayTransport<Error = ts_derp::Error>,
+        transport: DefaultClient,
+        pending: Option<(DynEndpoint, Vec<PacketMut>)>,
     ) -> Result<(), ts_derp::Error> {
+        let is_home = u8::from(*self.home_derp_rx.borrow_and_update());
+        transport.send_frame(&NotePreferred { is_home }).await?;
+        if let Some(pending) = pending {
+            transport.send([pending]).await?;
+        }
         let mut last_activity = Instant::now();
         let mut from_dataplane = self.from_dataplane.lock().await;
 
@@ -324,14 +371,19 @@ impl Runner {
                 },
 
                 _ = option_timeout(inactivity_timeout) => {
-                    if !*self.home_derp_rx.borrow_and_update() {
+                    if !*self.home_derp_rx.borrow() {
                         tracing::trace!(parent: &span, "timed out and not home derp, closing derp conn");
                         return Ok(());
                     }
                 },
 
-                _ = self.home_derp_rx.changed() => {
-                    tracing::trace!(is_home_derp = *self.home_derp_rx.borrow());
+                changed = self.home_derp_rx.changed() => {
+                    if changed.is_err() {
+                        return Ok(());
+                    }
+                    let is_home = u8::from(*self.home_derp_rx.borrow_and_update());
+                    transport.send_frame(&NotePreferred { is_home }).await?;
+                    tracing::trace!(is_home, "updated DERP preference");
                 },
             }
         }
