@@ -27,6 +27,7 @@ import {
   siOpensuse,
   siOpenwrt,
   siPopos,
+  siProxmox,
   siRaspberrypi,
   siRedhat,
   siRockylinux,
@@ -47,9 +48,18 @@ export interface OsIcon {
   light: boolean;
 }
 
+const FNOS = {
+  hex: '1677ff',
+  path: 'M4 3h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm2 3v2h8V6Zm11 0v2h2V6ZM4 13h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2Zm2 3v2h8v-2Zm11 0v2h2v-2Z',
+};
+
 const BY_ID: Record<string, { path: string; hex: string }> = {
   ubuntu: siUbuntu,
   debian: siDebian,
+  proxmox: siProxmox,
+  pve: siProxmox,
+  fnos: FNOS,
+  trim: FNOS,
   centos: siCentos,
   fedora: siFedora,
   rhel: siRedhat,
@@ -98,6 +108,7 @@ function isLight(hex: string): boolean {
 export function osIcon(os: HostOs | null): OsIcon | null {
   if (!os) return null;
   for (const id of [os.id, ...os.like]) {
+    if (!Object.hasOwn(BY_ID, id)) continue;
     const icon = BY_ID[id];
     if (icon) return { path: icon.path, color: `#${icon.hex}`, light: isLight(icon.hex) };
   }
