@@ -5,10 +5,10 @@
 use std::collections::HashSet;
 use std::error::Error as _;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use rove_http::reqwest::{Client, Method, StatusCode, Url};
+use rove_http::reqwest::{Client, Method, Response, StatusCode, Url, header, redirect};
 use zeroize::Zeroizing;
 
 use crate::backend::{MAX_FILE, check_path};
@@ -80,6 +80,8 @@ fn unexpected_status(method: &str, path: &str, status: StatusCode) -> SyncError 
     SyncError::Backend(message)
 }
 
+const MAX_REDIRECTS: usize = 5;
+
 const PROPFIND_BODY: &str = r#"<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>"#;
 
 /// A directory on a WebDAV server.
@@ -91,13 +93,14 @@ pub struct WebDavBackend {
     password: Zeroizing<String>,
     /// Directories known to exist, so writes do not repeat `MKCOL`.
     created: Mutex<HashSet<String>>,
+    #[cfg(test)]
+    referer_override: Option<(&'static str, &'static str)>,
 }
 
 impl std::fmt::Debug for WebDavBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WebDavBackend")
-            .field("base", &self.base.as_str())
-            .field("user", &self.user)
+            .field("base", &sanitized_target(&self.base))
             .finish_non_exhaustive()
     }
 }
@@ -112,6 +115,72 @@ fn is_loopback(url: &Url) -> bool {
     }
 }
 
+fn secure_transport(url: &Url) -> bool {
+    url.scheme() == "https" || (url.scheme() == "http" && is_loopback(url))
+}
+
+fn same_origin(a: &Url, b: &Url) -> bool {
+    a.scheme() == b.scheme()
+        && a.host_str()
+            .zip(b.host_str())
+            .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
+fn cdn_referer_for_host(host: &str) -> Option<&'static str> {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let matches = |domain: &str| {
+        host == domain
+            || host
+                .strip_suffix(domain)
+                .is_some_and(|prefix| prefix.ends_with('.'))
+    };
+    if ["aliyundrive.net", "aliyundrive.com", "alipan.com"]
+        .into_iter()
+        .any(matches)
+    {
+        Some("https://www.alipan.com/")
+    } else if matches("baidupcs.com") {
+        Some("https://pan.baidu.com/")
+    } else if matches("quark.cn") {
+        Some("https://pan.quark.cn/")
+    } else if matches("115cdn.net") || matches("115.com") {
+        Some("https://115.com/")
+    } else {
+        None
+    }
+}
+
+fn redirect_location(response: &Response) -> Option<&header::HeaderValue> {
+    match response.status() {
+        StatusCode::MOVED_PERMANENTLY
+        | StatusCode::FOUND
+        | StatusCode::SEE_OTHER
+        | StatusCode::TEMPORARY_REDIRECT
+        | StatusCode::PERMANENT_REDIRECT => response.headers().get(header::LOCATION),
+        _ => None,
+    }
+}
+
+fn resolve_redirect(url: &Url, location: &header::HeaderValue) -> Result<Url, SyncError> {
+    let target = location
+        .to_str()
+        .ok()
+        .and_then(|location| url.join(location).ok())
+        .ok_or_else(|| SyncError::Backend("invalid WebDAV redirect Location".into()))?;
+    if !secure_transport(&target) {
+        return Err(SyncError::Backend(
+            "WebDAV redirect must use HTTPS or loopback HTTP".into(),
+        ));
+    }
+    if !target.username().is_empty() || target.password().is_some() {
+        return Err(SyncError::Backend(
+            "WebDAV redirect URL must not contain credentials".into(),
+        ));
+    }
+    Ok(target)
+}
+
 impl WebDavBackend {
     /// Uses the directory at `url` with basic authentication. Fails with
     /// [`SyncError::Format`] for a URL that is not `https` (or `http` on a loopback address) or
@@ -119,8 +188,7 @@ impl WebDavBackend {
     pub fn new(url: &str, user: &str, password: &str) -> Result<Self, SyncError> {
         let mut base = Url::parse(url.trim())
             .map_err(|error| SyncError::Format(format!("invalid WebDAV address: {error}")))?;
-        let secure = base.scheme() == "https" || (base.scheme() == "http" && is_loopback(&base));
-        if !secure || base.cannot_be_a_base() {
+        if !secure_transport(&base) || base.cannot_be_a_base() {
             return Err(SyncError::Format(
                 "the WebDAV address must use https".into(),
             ));
@@ -137,7 +205,10 @@ impl WebDavBackend {
         if !base.path().ends_with('/') {
             base.set_path(&format!("{}/", base.path()));
         }
-        let client = rove_http::client(Some(std::time::Duration::from_secs(60)))
+        let client = rove_http::builder(Some(Duration::from_secs(60)))
+            .map_err(|error| SyncError::Backend(error.to_string()))?
+            .redirect(redirect::Policy::none())
+            .build()
             .map_err(|error| SyncError::Backend(error.to_string()))?;
         Ok(Self {
             client,
@@ -145,6 +216,8 @@ impl WebDavBackend {
             user: user.to_owned(),
             password: Zeroizing::new(password.to_owned()),
             created: Mutex::new(HashSet::new()),
+            #[cfg(test)]
+            referer_override: None,
         })
     }
 
@@ -165,7 +238,7 @@ impl WebDavBackend {
         url: Url,
         body: Option<Vec<u8>>,
         depth: Option<&str>,
-    ) -> Result<rove_http::reqwest::Response, SyncError> {
+    ) -> Result<Response, SyncError> {
         let headers: &[(&str, &str)] = match depth {
             Some(depth) => &[
                 ("Depth", depth),
@@ -178,65 +251,107 @@ impl WebDavBackend {
 
     async fn send_with(
         &self,
-        method: Method,
-        url: Url,
-        body: Option<Vec<u8>>,
+        mut method: Method,
+        mut url: Url,
+        mut body: Option<Vec<u8>>,
         headers: &[(&str, &str)],
-    ) -> Result<rove_http::reqwest::Response, SyncError> {
-        let method_name = method.as_str().to_owned();
-        let target = sanitized_target(&url);
-        let path = url.path().to_owned();
-        let started = Instant::now();
-        tracing::debug!(method = %method_name, target = %target, "webdav request");
-        let mut request = self
-            .client
-            .request(method, url)
-            .basic_auth(&self.user, Some(self.password.as_str()));
-        for (name, value) in headers {
-            request = request.header(*name, *value);
-        }
-        if let Some(body) = body {
-            request = request.body(body);
-        }
-        let response = match request.send().await {
-            Ok(response) => response,
-            Err(error) => {
+    ) -> Result<Response, SyncError> {
+        let mut hops = 0;
+        let mut referer = None;
+        let mut retried = false;
+        loop {
+            let same_origin = same_origin(&self.base, &url);
+            let target = sanitized_target(&url);
+            let started = Instant::now();
+            tracing::debug!(%method, %target, "webdav request");
+
+            let mut request = self.client.request(method.clone(), url.clone());
+            if same_origin {
+                request = request.basic_auth(&self.user, Some(self.password.as_str()));
+                for (name, value) in headers {
+                    request = request.header(*name, *value);
+                }
+            } else if let Some(referer) = referer {
+                request = request.header(header::REFERER, referer);
+            }
+            if let Some(body) = &body {
+                request = request.body(body.clone());
+            }
+            let response = request.send().await.map_err(|error| {
                 let detail = describe_reqwest_error(error);
                 tracing::warn!(
-                    method = %method_name,
-                    target = %target,
+                    %method, %target,
                     elapsed_ms = started.elapsed().as_millis() as u64,
                     error = %detail,
                     "webdav request failed"
                 );
-                return Err(SyncError::Backend(format!(
-                    "{method_name} {path}: {detail}"
+                SyncError::Backend(format!("{method} {}: {detail}", url.path()))
+            })?;
+            let status = response.status();
+            let elapsed_ms = started.elapsed().as_millis() as u64;
+
+            if let Some(location) = redirect_location(&response) {
+                if hops == MAX_REDIRECTS {
+                    return Err(SyncError::Backend(format!(
+                        "too many redirects on {method} {target}"
+                    )));
+                }
+                let next = resolve_redirect(&url, location)?;
+                tracing::debug!(
+                    %method, %target, redirected_to = %sanitized_target(&next),
+                    status = status.as_u16(),
+                    "webdav redirect"
+                );
+                if status == StatusCode::SEE_OTHER
+                    || (matches!(status, StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND)
+                        && method != Method::GET
+                        && method != Method::HEAD)
+                {
+                    method = Method::GET;
+                    body = None;
+                }
+                url = next;
+                hops += 1;
+                referer = None;
+                continue;
+            }
+
+            if !same_origin && status == StatusCode::FORBIDDEN {
+                let host = url.host_str().unwrap_or_default();
+                if method == Method::GET
+                    && !retried
+                    && let Some(cdn_referer) = self.cdn_referer(host)
+                {
+                    tracing::debug!(%target, "retrying WebDAV redirect with CDN Referer");
+                    referer = Some(cdn_referer);
+                    retried = true;
+                    continue;
+                }
+                tracing::warn!(%host, elapsed_ms, "webdav redirect returned HTTP 403");
+                return Err(SyncError::Forbidden(format!(
+                    "HTTP 403 Forbidden from redirected host {host}. Try switching the OpenList/AList WebDAV policy to Native Proxy (本地代理)."
                 )));
             }
-        };
-        let status = response.status();
-        let elapsed_ms = started.elapsed().as_millis() as u64;
-        if let Some(error) = classify_auth_status(&method_name, &path, status) {
-            tracing::warn!(
-                method = %method_name,
-                target = %target,
-                status = status.as_u16(),
-                elapsed_ms,
-                "webdav access rejected"
-            );
-            return Err(error);
+            if let Some(error) = classify_auth_status(method.as_str(), url.path(), status) {
+                tracing::warn!(%method, %target, status = status.as_u16(), elapsed_ms, "webdav access rejected");
+                return Err(error);
+            }
+            tracing::debug!(%method, %target, status = status.as_u16(), elapsed_ms, "webdav response");
+            return Ok(response);
         }
-        tracing::debug!(
-            method = %method_name,
-            target = %target,
-            status = status.as_u16(),
-            elapsed_ms,
-            "webdav response"
-        );
-        Ok(response)
     }
 
-    fn unexpected(method: &str, response: &rove_http::reqwest::Response) -> SyncError {
+    fn cdn_referer(&self, host: &str) -> Option<&'static str> {
+        #[cfg(test)]
+        if let Some((test_host, referer)) = self.referer_override
+            && host == test_host
+        {
+            return Some(referer);
+        }
+        cdn_referer_for_host(host)
+    }
+
+    fn unexpected(method: &str, response: &Response) -> SyncError {
         let status = response.status();
         let path = response.url().path();
         tracing::warn!(
@@ -499,6 +614,255 @@ impl SyncBackend for WebDavBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpListener;
+
+    async fn mock_listener() -> (TcpListener, u16) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        (listener, port)
+    }
+
+    async fn exchange(listener: &TcpListener, response: &str) -> (String, Vec<u8>) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut request = String::new();
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                assert_ne!(stream.read_line(&mut line).await.unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+                let line = line.to_ascii_lowercase();
+                if let Some(value) = line.strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap();
+                }
+                request.push_str(&line);
+            }
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).await.unwrap();
+            stream
+                .get_mut()
+                .write_all(response.as_bytes())
+                .await
+                .unwrap();
+            (request, body)
+        })
+        .await
+        .unwrap()
+    }
+
+    const OK: &str = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndata";
+    const FORBIDDEN: &str =
+        "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+
+    fn redirect_to(status: &str, location: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+    }
+
+    fn mock_backend(port: u16) -> WebDavBackend {
+        let mut backend =
+            WebDavBackend::new(&format!("http://127.0.0.1:{port}/dav/"), "", "").unwrap();
+        backend.client = rove_http::builder(Some(Duration::from_secs(5)))
+            .unwrap()
+            .redirect(redirect::Policy::none())
+            .no_proxy()
+            .build()
+            .unwrap();
+        backend
+    }
+
+    #[tokio::test]
+    async fn same_origin_redirect_preserves_basic_auth_and_reads_body() {
+        let (listener, port) = mock_listener().await;
+        let server = tokio::spawn(async move {
+            let (initial, _) = exchange(&listener, &redirect_to("302 Found", "redirected")).await;
+            let (redirected, _) = exchange(&listener, OK).await;
+            assert!(initial.starts_with("get /dav/space.json "));
+            assert!(redirected.starts_with("get /dav/redirected "));
+            for request in [initial, redirected] {
+                assert!(request.contains("\r\nauthorization: basic "));
+            }
+        });
+        assert_eq!(
+            mock_backend(port)
+                .get("space.json")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(&b"data"[..])
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cross_origin_redirect_strips_basic_auth_and_webdav_headers() {
+        let (listener, port) = mock_listener().await;
+        let server = tokio::spawn(async move {
+            let location = format!("http://localhost:{port}/redirected");
+            let (initial, _) = exchange(&listener, &redirect_to("302 Found", &location)).await;
+            let (redirected, _) = exchange(&listener, OK).await;
+            assert!(initial.contains("\r\nauthorization: basic "));
+            assert!(initial.contains("\r\ndepth: 1\r\n"));
+            assert!(redirected.starts_with("get /redirected "));
+            assert!(!redirected.contains("\r\nauthorization:"));
+            assert!(!redirected.contains("\r\ndepth:"));
+        });
+        let backend = mock_backend(port);
+        let response = backend
+            .send_with(
+                Method::GET,
+                backend.url("space.json", false).unwrap(),
+                None,
+                &[("Depth", "1")],
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.text().await.unwrap(), "data");
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn matches_only_supported_cdn_domains_and_their_subdomains() {
+        for (domain, referer) in [
+            ("aliyundrive.net", "https://www.alipan.com/"),
+            ("aliyundrive.com", "https://www.alipan.com/"),
+            ("alipan.com", "https://www.alipan.com/"),
+            ("baidupcs.com", "https://pan.baidu.com/"),
+            ("quark.cn", "https://pan.quark.cn/"),
+            ("115cdn.net", "https://115.com/"),
+            ("115.com", "https://115.com/"),
+        ] {
+            assert_eq!(cdn_referer_for_host(domain), Some(referer));
+            assert_eq!(
+                cdn_referer_for_host(&format!("cdn.{domain}")),
+                Some(referer)
+            );
+            assert_eq!(cdn_referer_for_host(&format!("other{domain}")), None);
+            assert_eq!(cdn_referer_for_host(&format!("{domain}.example.org")), None);
+        }
+    }
+
+    #[tokio::test]
+    async fn cross_origin_cdn_403_retries_once_with_referer() {
+        for (response, expected) in [(OK, Some(&b"data"[..])), (FORBIDDEN, None)] {
+            let (listener, port) = mock_listener().await;
+            let server = tokio::spawn(async move {
+                let location = format!("http://localhost:{port}/redirected?test=fixture");
+                exchange(&listener, &redirect_to("302 Found", &location)).await;
+                let (initial, _) = exchange(&listener, FORBIDDEN).await;
+                let (retry, _) = exchange(&listener, response).await;
+                assert!(!initial.contains("\r\nreferer:"));
+                assert!(retry.contains("\r\nreferer: https://www.alipan.com/\r\n"));
+                for request in [initial, retry] {
+                    assert!(request.starts_with("get /redirected?test=fixture "));
+                    assert!(!request.contains("\r\nauthorization:"));
+                }
+            });
+            let mut backend = mock_backend(port);
+            backend.referer_override = Some(("localhost", "https://www.alipan.com/"));
+            let result = backend.get("space.json").await;
+            if let Some(expected) = expected {
+                assert_eq!(result.unwrap().as_deref(), Some(expected));
+            } else {
+                let Err(SyncError::Forbidden(detail)) = result else {
+                    panic!("expected Forbidden, got {result:?}");
+                };
+                assert!(detail.contains("localhost"));
+                assert!(detail.contains("Native Proxy (本地代理)"));
+                assert!(!detail.contains("fixture"));
+            }
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn cross_origin_403_on_other_host_suggests_native_proxy() {
+        let (listener, port) = mock_listener().await;
+        let server = tokio::spawn(async move {
+            let location = format!("http://localhost:{port}/redirected?test=fixture");
+            exchange(&listener, &redirect_to("302 Found", &location)).await;
+            exchange(&listener, FORBIDDEN).await;
+        });
+        let result = mock_backend(port).get("space.json").await;
+        let Err(SyncError::Forbidden(detail)) = result else {
+            panic!("expected Forbidden, got {result:?}");
+        };
+        assert!(detail.contains("localhost"));
+        assert!(detail.contains("Native Proxy (本地代理)"));
+        assert!(!detail.contains("fixture"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn redirects_handle_method_and_body_according_to_status() {
+        for (status, preserve) in [
+            ("301 Moved Permanently", false),
+            ("302 Found", false),
+            ("303 See Other", false),
+            ("307 Temporary Redirect", true),
+            ("308 Permanent Redirect", true),
+        ] {
+            let (listener, port) = mock_listener().await;
+            let server = tokio::spawn(async move {
+                let (initial, body) =
+                    exchange(&listener, &redirect_to(status, "/redirected")).await;
+                assert!(initial.starts_with("put /dav/space.json "));
+                assert_eq!(body, b"data");
+                let (redirected, body) = exchange(&listener, OK).await;
+                if preserve {
+                    assert!(redirected.starts_with("put /redirected "));
+                    assert_eq!(body, b"data");
+                } else {
+                    assert!(redirected.starts_with("get /redirected "));
+                    assert!(body.is_empty());
+                }
+            });
+            let backend = mock_backend(port);
+            backend
+                .send(
+                    Method::PUT,
+                    backend.url("space.json", false).unwrap(),
+                    Some(b"data".to_vec()),
+                    None,
+                )
+                .await
+                .unwrap();
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn caps_redirects_at_five_hops() {
+        let (listener, port) = mock_listener().await;
+        let server = tokio::spawn(async move {
+            for _ in 0..=MAX_REDIRECTS {
+                exchange(&listener, &redirect_to("302 Found", "/redirected")).await;
+            }
+        });
+        let result = mock_backend(port).get("space.json").await;
+        assert!(
+            matches!(result, Err(SyncError::Backend(detail)) if detail.contains("too many redirects"))
+        );
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn rejects_insecure_or_credential_bearing_redirects() {
+        let base = Url::parse("https://dav.example/dav/space.json").unwrap();
+        for location in [
+            "http://example.com/file",
+            "ftp://example.com/file",
+            "https://user@example.com/file",
+        ] {
+            assert!(resolve_redirect(&base, &header::HeaderValue::from_static(location)).is_err());
+        }
+    }
 
     #[test]
     fn requires_https_except_on_loopback() {

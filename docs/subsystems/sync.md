@@ -24,6 +24,8 @@
 | `SyncBackend` | `list` / `get` / `put` / `delete` 整个文件；`FolderBackend` 用本机目录实现，写入先写临时文件再改名 |
 | `WebDavBackend` | WebDAV 服务器上的目录：`PROPFIND`（Depth 1）列目录，`GET` / `PUT` / `DELETE` 读写删除，写入前用 `MKCOL` 逐级创建目录（405 视为已存在）；配置的目录本身先用 `PROPFIND`（Depth 0）确认，不存在时才创建，避免对服务器根目录发出被拒绝的 `MKCOL`；基本认证；要求 https（回环地址可用 http），HTTP 客户端由 `rove-http` 构造（rustls + ring 与系统证书，Android 上用内置根证书） |
 
+WebDAV 跟随最多五次重定向，仅向配置的源站发送认证和 WebDAV 请求头。已知网盘 CDN 拒绝下载时会附加对应的 `Referer` 重试一次。OpenList/AList 若仍返回跨源 HTTP 403，可将 WebDAV 策略切换为「本地代理」。
+
 ## 一轮同步
 
 1. **检测本地变更**：先从 Vault 和 Journal 各自已提交的导入记录恢复远端版本，再对 `store.records()` 的每条记录计算指纹，与 `known` 不同（或新出现）的记为修改；`known` 中有而当前没有的记为删除。这些变更都用当前时刻打上时间戳。
