@@ -1,7 +1,7 @@
 // Typed wrappers around the Tauri commands. Components call these instead of `invoke` directly.
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { TailscaleSnapshot } from './tailscale/types';
+import type { TailscaleSnapshot, TailscaleStatus } from './tailscale/types';
 import type { OpsTask, PrivateRef } from './ops/types';
 
 export function opsTasks(conversation?: string): Promise<OpsTask[]> {
@@ -18,6 +18,29 @@ export function opsTaskEvidence(id: string, reference: PrivateRef): Promise<unkn
 
 export function tailscaleSnapshot(): Promise<TailscaleSnapshot> {
   return invoke('tailscale_snapshot');
+}
+
+export function tailscaleStatus(): Promise<TailscaleStatus> {
+  return invoke('tailscale_status');
+}
+export function tailscaleConnect(params: { authKey?: string | null; controlUrl?: string | null; hostname?: string | null } = {}): Promise<TailscaleStatus> {
+  return invoke('tailscale_connect', {
+    authKey: params.authKey ?? null,
+    controlUrl: params.controlUrl ?? null,
+    hostname: params.hostname ?? null,
+  });
+}
+export function tailscaleDisconnect(): Promise<TailscaleStatus> {
+  return invoke('tailscale_disconnect');
+}
+export function tailscaleLogout(): Promise<TailscaleStatus> {
+  return invoke('tailscale_logout');
+}
+export function tailscaleOpenAuthUrl(): Promise<void> {
+  return invoke('tailscale_open_auth_url');
+}
+export function onTailscaleStatus(handler: (status: TailscaleStatus) => void): Promise<UnlistenFn> {
+  return listen<TailscaleStatus>('tailscale-status', (event) => handler(event.payload));
 }
 
 export type SessionId = string;
@@ -136,7 +159,8 @@ export type ProxyProtocol = 'http' | 'socks5';
 export type HostRoute =
   | { kind: 'direct' }
   | { kind: 'jump'; host: HostId }
-  | { kind: 'proxy'; protocol: ProxyProtocol; host: string; port: number };
+  | { kind: 'proxy'; protocol: ProxyProtocol; host: string; port: number }
+  | { kind: 'tailscale'; peer_id?: string | null };
 
 export interface HostDraft {
   name: string;
@@ -437,6 +461,14 @@ export interface DevicePrefs {
   connection: ConnectionPrefs;
   /** Device-private executable and argument vector; an empty program is unconfigured. */
   external_editor: { program: string; args: string[] };
+  tailscale: TailscalePrefs;
+}
+
+export interface TailscalePrefs {
+  configured: boolean;
+  auto_connect: boolean;
+  control_url: string;
+  hostname: string;
 }
 
 /** SSH connection timing on this device; applies to new connections. */

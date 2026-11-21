@@ -31,11 +31,13 @@
   import { keys } from './lib/keys/keys.svelte';
   import QuickConnect from './lib/hosts/QuickConnect.svelte';
   import HostKeyDialog from './lib/hosts/HostKeyDialog.svelte';
+  import TailscaleDialog from './lib/tailscale/TailscaleDialog.svelte';
   import ForwardsDialog from './lib/forwards/ForwardsDialog.svelte';
   import { forwardStatuses } from './lib/forwards/forwards.svelte';
   import { hosts, needsPassword } from './lib/hosts/hosts.svelte';
   import { vault } from './lib/vault/vault.svelte';
   import { sync } from './lib/sync/sync.svelte';
+  import { tailscale } from './lib/tailscale/tailscale.svelte';
   import { actionFor, isMac, isTextField, type ActionId } from './lib/actions';
   import { terminalCopies, terminalPastes, type ClipboardContext } from './lib/terminal/claims';
   import { isActionId, nativeMenuLabels, nativeMenus } from './lib/menu';
@@ -177,6 +179,7 @@
   let hostKeyPrompts = $state<HostKeyPrompt[]>([]);
   let forwardsHost = $state<HostEntry | null>(null);
   let settingsOpen = $state(false);
+  let tailscaleOpen = $state(false);
   /** Section the settings dialog opens on; the first one when unset. */
   let settingsSection = $state<SettingsSection | undefined>(undefined);
 
@@ -561,6 +564,7 @@
     hosts.refresh().catch((error: unknown) => showNotice(errorText(error), 'error'));
     keys.refresh().catch((error: unknown) => console.warn('key library unavailable', error));
     forwardStatuses.start().catch((error: unknown) => console.warn('forward events unavailable', error));
+    if (!isMobile) void tailscale.init();
     const unlisten = onHostKeyPrompt((prompt) => (hostKeyPrompts = [...hostKeyPrompts, prompt]));
     return () => void unlisten.then((stop) => stop());
   });
@@ -573,7 +577,7 @@
   <TitleBar {sidebarOpen} rightOpen={rightPage !== null} {bottomOpen} onaction={run} />
   <div class="body">
   {#if sidebarOpen}
-    <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onnotice={(message) => showNotice(message, 'error')} onsettings={() => (settingsOpen = true)} onkeys={() => (keysOpen = true)} />
+    <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onnotice={(message) => showNotice(message, 'error')} onsettings={() => (settingsOpen = true)} ontailscale={() => (tailscaleOpen = true)} onkeys={() => (keysOpen = true)} />
   {/if}
   <div class="main">
     <div class="workarea">
@@ -670,7 +674,11 @@
 <EditMenu />
 
 {#if settingsOpen}
-  <SettingsDialog initial={settingsSection} onclose={() => (settingsOpen = false)} />
+  <SettingsDialog initial={settingsSection} onclose={() => (settingsOpen = false)} onopentailscale={() => { settingsOpen = false; tailscaleOpen = true; }} />
+{/if}
+
+{#if tailscaleOpen}
+  <TailscaleDialog onclose={() => (tailscaleOpen = false)} onconnect={connect} onmanagekeys={() => (keysOpen = true)} onsettings={() => { tailscaleOpen = false; openSettings('tailscale'); }} />
 {/if}
 
 {#if forwardsHost}

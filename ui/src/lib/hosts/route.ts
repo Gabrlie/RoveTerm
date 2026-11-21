@@ -7,6 +7,7 @@ import { hosts } from './hosts.svelte';
 /** `SSH`, `via bastion` or `SOCKS5 proxy`. */
 export function routeLabel(host: HostEntry): string {
   const { route } = host;
+  if (route.kind === 'tailscale') return t('host.route.tailscale');
   if (route.kind === 'jump') return t('host.via', { name: hosts.find(route.host)?.name ?? '?' });
   if (route.kind === 'proxy') return t('host.viaProxy', { protocol: route.protocol.toUpperCase() });
   return 'SSH';

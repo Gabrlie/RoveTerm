@@ -11,8 +11,9 @@
   import type { HostEntry } from '../ipc';
   import { hostMenuItems } from './hostMenu';
   import { hostAddress, hostSubtitle } from './route';
-  import TailscaleDialog from '../tailscale/TailscaleDialog.svelte';
   import { isMobile } from '../platform';
+  import { tailscale } from '../tailscale/tailscale.svelte';
+  import type { MessageKey } from '../i18n';
 
   interface Props {
     onconnect: (host: HostEntry) => void;
@@ -21,14 +22,15 @@
     onedit: (host: HostEntry | null) => void;
     onnotice: (message: string) => void;
     onsettings: () => void;
+    ontailscale: () => void;
     /** Opens the key library. */
     onkeys: () => void;
   }
 
-  let { onconnect, onfiles, onforwards, onedit, onnotice, onsettings, onkeys }: Props = $props();
+  let { onconnect, onfiles, onforwards, onedit, onnotice, onsettings, ontailscale, onkeys }: Props = $props();
 
   let menu = $state<{ x: number; y: number; host: HostEntry } | null>(null);
-  let tailscaleOpen = $state(false);
+  const tailscaleStatusLabel = $derived(t(tailscale.stateLabelKey() as MessageKey));
 
   function openMenu(event: MouseEvent, host: HostEntry): void {
     event.preventDefault();
@@ -58,8 +60,14 @@
     <Icon name="search" size={14} />
     <input class="bare" bind:value={hosts.query} placeholder={t('host.search')} spellcheck="false" />
   </div>
-  {#if !isMobile}
-    <div class="integration"><button type="button" class="footer-button" onclick={() => tailscaleOpen = true}><Icon name="cloud" size={14} />{t('tailscale.title')}</button></div>
+  {#if !isMobile && tailscale.configured}
+    <div class="integration">
+      <button type="button" class="footer-button tailscale-btn" onclick={ontailscale} title={tailscaleStatusLabel}>
+        <Icon name="network" size={14} />
+        <span>{t('tailscale.title')}</span>
+        <span class="ts-dot" class:connected={tailscale.connected} class:connecting={tailscale.connecting} aria-label={tailscaleStatusLabel}></span>
+      </button>
+    </div>
   {/if}
   <div class="list">
     {#each hosts.grouped as [group, entries] (group ?? '')}
@@ -131,10 +139,6 @@
   </footer>
 </aside>
 
-{#if tailscaleOpen}
-  <TailscaleDialog onclose={() => tailscaleOpen = false} {onconnect} onmanagekeys={onkeys} />
-{/if}
-
 <style>
   .sidebar {
     width: 248px;
@@ -179,6 +183,12 @@
   }
   .integration { padding: 0 var(--space-3) var(--space-2); }
   .integration .footer-button { width: 100%; }
+  .tailscale-btn { width: 100%; }
+  .ts-dot { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--danger); }
+  .ts-dot.connected { background: var(--success); box-shadow: 0 0 0 2px var(--success-soft); }
+  .ts-dot.connecting { animation: ts-pulse 1.2s ease-in-out infinite; }
+  @keyframes ts-pulse { 50% { opacity: 0.35; } }
+  @media (prefers-reduced-motion: reduce) { .ts-dot.connecting { animation: none; } }
   .group {
     padding: var(--space-3) var(--space-2) var(--space-1);
   }

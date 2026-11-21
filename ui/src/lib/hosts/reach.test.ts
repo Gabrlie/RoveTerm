@@ -19,6 +19,8 @@ test('the key changes with the address, the route and a jump host', () => {
   assert.notEqual(reachKey('a', find), before);
   hosts.set('a', host('a', 'a.example'));
   assert.equal(reachKey('a', find), 'a=root@a.example:22');
+  hosts.set('a', host('a', 'a.example', { kind: 'tailscale', peer_id: 'peer-1' }));
+  assert.equal(reachKey('a', find), 'a=root@a.example:22 via tailscale');
   assert.equal(reachKey('gone', find), 'gone');
 });
 

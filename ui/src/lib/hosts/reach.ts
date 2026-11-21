@@ -12,5 +12,6 @@ export function reachKey(id: string, find: (id: string) => HostEntry | undefined
   let via = '';
   if (route.kind === 'proxy') via = ` via ${route.protocol}://${route.host}:${route.port}`;
   if (route.kind === 'jump') via = hops < MAX_HOPS ? ` via [${reachKey(route.host, find, hops + 1)}]` : ` via ${route.host}`;
+  if (route.kind === 'tailscale') via = ' via tailscale';
   return `${id}=${host.username}@${host.hostname}:${host.port}${via}`;
 }

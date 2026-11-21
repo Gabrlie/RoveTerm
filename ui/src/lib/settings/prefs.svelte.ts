@@ -33,6 +33,7 @@ const DEVICE_DEFAULTS: DevicePrefs = {
   agents: { disabled: [], custom: [], auth: 'auto', expose: false },
   connection: { connect_timeout_secs: 15, keepalive_secs: 30, keepalive_max: 3 },
   external_editor: { program: '', args: [] },
+  tailscale: { configured: false, auto_connect: true, control_url: '', hostname: '' },
 };
 
 /**

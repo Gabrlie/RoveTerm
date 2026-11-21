@@ -5,7 +5,8 @@ import type { HostEntry } from '../ipc';
 import type { TailscalePeer, TailscaleSnapshot } from './types';
 
 const peer = (id: string, addresses: string[], name = 'web'): TailscalePeer => ({ id, name, addresses, dns_name: 'web.tail.example.', online: false, os: 'linux' });
-const snapshot: TailscaleSnapshot = { state: 'running', peers: [peer('stable-1', ['100.64.1.2'])], captured_at: 1000 };
+const status = (state: TailscaleSnapshot['status']['state']): TailscaleSnapshot['status'] => ({ configured: state !== 'unconfigured', state, self_node: null, auth_url: null, peer_count: 0, updated_at: 1000 });
+const snapshot: TailscaleSnapshot = { status: status('running'), peers: [peer('stable-1', ['100.64.1.2'])], captured_at: 1000 };
 
 test('connection addresses prefer IPv4 and retain IPv6 and normalized MagicDNS choices', () => {
   const device = peer('one', ['fd7a:115c:a1e0::1', '100.64.1.2', '100.64.1.2']);
@@ -45,28 +46,26 @@ test('late refresh results and results after destruction cannot replace the late
   assert.equal(gate.accepts(gate.begin()), false);
 });
 
-test('CLI read-failure states retain the last peers and capture time while displaying the current failure', () => {
-  for (const state of ['not_installed', 'service_unavailable', 'permission_denied'] as const) {
-    const failure: TailscaleSnapshot = { state, peers: [], captured_at: 2000, message: 'unavailable' };
-    const initial = finishRefresh(failure, emptyDiscovery());
-    assert.equal(initial.snapshot, failure);
-    assert.equal(initial.stale, false);
-    const previous = finishRefresh(snapshot);
-    const failed = finishRefresh(failure, beginRefresh(previous));
-    assert.equal(failed.snapshot?.state, state);
-    assert.equal(failed.snapshot?.message, 'unavailable');
-    assert.equal(failed.snapshot?.peers, snapshot.peers);
-    assert.equal(failed.snapshot?.captured_at, 1000);
-    assert.equal(failed.stale, true);
-    const recovered = finishRefresh({ ...snapshot, captured_at: 3000 }, failed);
-    assert.equal(recovered.snapshot?.captured_at, 3000);
-    assert.equal(recovered.stale, false);
-  }
+test('error status retains the last peers and capture time while displaying the current failure', () => {
+  const failure: TailscaleSnapshot = { status: { ...status('error'), message: 'unavailable' }, peers: [], captured_at: 2000 };
+  const initial = finishRefresh(failure, emptyDiscovery());
+  assert.equal(initial.snapshot, failure);
+  assert.equal(initial.stale, false);
+  const previous = finishRefresh(snapshot);
+  const failed = finishRefresh(failure, beginRefresh(previous));
+  assert.equal(failed.snapshot?.status.state, 'error');
+  assert.equal(failed.snapshot?.status.message, 'unavailable');
+  assert.equal(failed.snapshot?.peers, snapshot.peers);
+  assert.equal(failed.snapshot?.captured_at, 1000);
+  assert.equal(failed.stale, true);
+  const recovered = finishRefresh({ ...snapshot, captured_at: 3000 }, failed);
+  assert.equal(recovered.snapshot?.captured_at, 3000);
+  assert.equal(recovered.stale, false);
 });
 
 test('valid CLI states replace previous devices rather than retaining stale discovery data', () => {
-  for (const state of ['needs_login', 'needs_machine_auth', 'stopped'] as const) {
-    const current: TailscaleSnapshot = { state, peers: [], captured_at: 2000 };
+  for (const state of ['needs_login', 'needs_machine_auth', 'disconnected'] as const) {
+    const current: TailscaleSnapshot = { status: status(state), peers: [], captured_at: 2000 };
     const result = finishRefresh(current, finishRefresh(snapshot));
     assert.equal(result.snapshot, current);
     assert.equal(result.stale, false);
@@ -104,4 +103,11 @@ test('duplicate detection distinguishes proxy and jump routes and normalizes IPv
   assert.equal(findDuplicateHost([existing], { ...existing, route: { kind: 'proxy', protocol: 'http', host: 'proxy.example', port: 1080 } }), undefined);
   const jump = host('jump', { route: { kind: 'jump', host: 'bastion' } });
   assert.equal(findDuplicateHost([jump], { ...jump, route: { kind: 'jump', host: 'other' } }), undefined);
+});
+
+test('duplicate detection keeps Tailscale routes distinct from direct routes', () => {
+  const tailscaleHost = host('tailscale', { route: { kind: 'tailscale', peer_id: 'peer-1' } });
+  const target = { hostname: tailscaleHost.hostname, username: tailscaleHost.username, port: tailscaleHost.port, route: tailscaleHost.route };
+  assert.equal(findDuplicateHost([tailscaleHost], { ...target, route: { kind: 'direct' } }), undefined);
+  assert.equal(findDuplicateHost([tailscaleHost], target), tailscaleHost);
 });

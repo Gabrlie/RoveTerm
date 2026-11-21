@@ -5,6 +5,9 @@ import { errorText, t } from '../i18n';
 import { hostCreate, type HostEntry } from '../ipc';
 import { hosts } from './hosts.svelte';
 import { workspace } from '../workspace/workspace.svelte';
+import { matchTailscalePeer } from '../tailscale/matching';
+import { tailscale } from '../tailscale/tailscale.svelte';
+import { notify } from '../ui/toast.svelte';
 
 export interface HostMenuHandlers {
   onconnect: (host: HostEntry) => void;
@@ -42,7 +45,8 @@ async function remove(host: HostEntry, onnotice: (message: string) => void): Pro
 }
 
 export function hostMenuItems(host: HostEntry, handlers: HostMenuHandlers): MenuItem[] {
-  return [
+  const peer = matchTailscalePeer(host, tailscale.peers);
+  const items: MenuItem[] = [
     { label: t('host.connect'), icon: 'terminal', onselect: () => handlers.onconnect(host) },
     { label: t('host.openFiles'), icon: 'files', onselect: () => handlers.onfiles(host) },
     { label: t('host.forwards'), icon: 'forwards', onselect: () => handlers.onforwards(host) },
@@ -50,4 +54,11 @@ export function hostMenuItems(host: HostEntry, handlers: HostMenuHandlers): Menu
     { label: t('host.duplicate'), icon: 'copy', onselect: () => void duplicate(host, handlers.onnotice) },
     { label: t('common.delete'), icon: 'remove', danger: true, separated: true, onselect: () => void remove(host, handlers.onnotice) },
   ];
+  if (peer) items.splice(4, 0, {
+    label: t('tailscale.convertHost'), icon: 'network', separated: true,
+    onselect: () => void tailscale.convertHost(host, peer)
+      .then(() => notify(t('tailscale.converted', { name: host.name }), 'success'))
+      .catch((error: unknown) => handlers.onnotice(errorText(error))),
+  });
+  return items;
 }

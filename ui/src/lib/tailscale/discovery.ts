@@ -17,8 +17,8 @@ export function beginRefresh(view: DiscoveryView): DiscoveryView {
 }
 
 export function finishRefresh(snapshot: TailscaleSnapshot, previous?: DiscoveryView): DiscoveryView {
-  if (previous?.snapshot && ['not_installed', 'service_unavailable', 'permission_denied'].includes(snapshot.state)) {
-    return { snapshot: { ...snapshot, peers: previous.snapshot.peers, captured_at: previous.snapshot.captured_at }, refreshing: false, stale: true, error: '' };
+  if (previous?.snapshot && snapshot.status.state === 'error') {
+    return { snapshot: { ...snapshot, peers: previous.snapshot.peers, captured_at: previous.snapshot.captured_at }, refreshing: false, stale: true, error: snapshot.status.message ?? '' };
   }
   return { snapshot, refreshing: false, stale: false, error: '' };
 }
@@ -73,6 +73,7 @@ function routeKey(route: HostRoute): string {
     case 'jump': return JSON.stringify(['jump', route.host]);
     case 'proxy': return JSON.stringify(['proxy', route.protocol, hostnameKey(route.host), route.port]);
     case 'direct': return 'direct';
+    case 'tailscale': return 'tailscale';
   }
 }
 

@@ -8,14 +8,17 @@
   import { hosts } from './hosts.svelte';
 
   import { keys } from '../keys/keys.svelte';
+  import { isMobile } from '../platform';
   import { findDuplicateHost } from '../tailscale/discovery';
+  import { matchTailscalePeer } from '../tailscale/matching';
+  import { tailscale } from '../tailscale/tailscale.svelte';
 
   interface Props {
     host: HostEntry | null;
     onclose: () => void;
     /** Opens the key library above the editor. */
     onmanagekeys: () => void;
-    prefill?: { name: string; hostname: string; username?: string };
+    prefill?: { name: string; hostname: string; username?: string; route?: HostRoute };
     reuseExisting?: boolean;
     onreuse?: (host: HostEntry) => void;
     onsaved?: (host: HostEntry) => void;
@@ -25,7 +28,7 @@
   let { host, onclose, onmanagekeys, prefill, reuseExisting = false, onreuse, onsaved, submitLabel }: Props = $props();
 
   type Method = AuthMethod['method'];
-  type RouteKind = 'direct' | 'jump' | 'http' | 'socks5';
+  type RouteKind = 'direct' | 'jump' | 'http' | 'socks5' | 'tailscale';
 
   // svelte-ignore state_referenced_locally
   const initial = host;
@@ -49,8 +52,9 @@
   let password = $state('');
   let privateKey = $state('');
   let passphrase = $state('');
-  const initialRoute = initial?.route ?? { kind: 'direct' };
+  const initialRoute = initial?.route ?? imported?.route ?? { kind: 'direct' };
   let routeKind = $state<RouteKind>(initialRoute.kind === 'proxy' ? initialRoute.protocol : initialRoute.kind);
+  let tailscalePeerId = $state<string | null>(initialRoute.kind === 'tailscale' ? (initialRoute.peer_id ?? null) : null);
   let jumpHost = $state(initialRoute.kind === 'jump' ? initialRoute.host : '');
   let proxyHost = $state(initialRoute.kind === 'proxy' ? initialRoute.host : '127.0.0.1');
   let proxyPort = $state<number | null>(initialRoute.kind === 'proxy' ? initialRoute.port : null);
@@ -61,6 +65,7 @@
   let error = $state('');
   let saving = $state(false);
   let duplicate = $state<HostEntry | null>(null);
+  const matchedPeer = $derived(!isMobile && routeKind === 'direct' && tailscale.peers.length > 0 ? matchTailscalePeer({ hostname, route: { kind: 'direct' } }, tailscale.peers) : null);
   const duplicateMatch = $derived(duplicate ? findDuplicateHost([duplicate], { hostname, port: Number(port), username, route: route() }) : undefined);
   /** Notes kept about the host, for the user and the AI agents; saved with the host. */
   let notes = $state('');
@@ -95,6 +100,13 @@
       case 'http':
       case 'socks5':
         return { kind: 'proxy', protocol: routeKind, host: proxyHost.trim(), port: Number(proxyPort ?? 0) };
+      case 'tailscale': {
+        const initialHostname = (initial?.hostname ?? imported?.hostname ?? '').trim();
+        const peerId = hostname.trim() === initialHostname
+          ? tailscalePeerId
+          : (matchTailscalePeer({ hostname, route: { kind: 'direct' } }, tailscale.peers)?.id ?? null);
+        return { kind: 'tailscale', peer_id: peerId };
+      }
       default:
         return { kind: 'direct' };
     }
@@ -219,9 +231,13 @@
           { value: 'jump', label: t('host.route.jump') },
           { value: 'http', label: t('host.route.http') },
           { value: 'socks5', label: t('host.route.socks5') },
+          ...(!isMobile || routeKind === 'tailscale' ? [{ value: 'tailscale' as const, label: t('host.route.tailscale') }] : []),
         ]}
       />
     </label>
+    {#if matchedPeer}
+      <p class="hint route-hint" role="status">{t('tailscale.inlineMatch', { name: matchedPeer.name || matchedPeer.dns_name })}<button type="button" class="link inline-link" onclick={() => { routeKind = 'tailscale'; tailscalePeerId = matchedPeer?.id ?? null; }}>{t('tailscale.switchRoute')}</button></p>
+    {/if}
     {#if routeKind === 'jump'}
       {#if jumpOptions.length > 0}
         <label>{t('host.jumpHost')}<Select bind:value={jumpHost} options={jumpOptions} /></label>
@@ -229,7 +245,7 @@
       {:else}
         <p class="hint">{t('host.jumpNone')}</p>
       {/if}
-    {:else if routeKind !== 'direct'}
+    {:else if routeKind === 'http' || routeKind === 'socks5'}
       <div class="row">
         <label>{t('host.proxyHost')}<input bind:value={proxyHost} required spellcheck="false" autocomplete="off" /></label>
         <label class="port">{t('host.port')}<input type="number" min="1" max="65535" bind:value={proxyPort} required /></label>
@@ -268,6 +284,10 @@
     font: inherit;
     font-size: var(--text-footnote);
     cursor: pointer;
+  }
+  .inline-link {
+    margin-top: 0;
+    margin-left: var(--space-2);
   }
   .hint {
     margin: calc(-1 * var(--space-2)) 0 0;

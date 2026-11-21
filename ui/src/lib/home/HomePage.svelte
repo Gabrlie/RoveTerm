@@ -13,6 +13,11 @@
   import { hostMenuItems } from '../hosts/hostMenu';
   import { hostAddress, hostSubtitle } from '../hosts/route';
   import { actions, type ActionId } from '../actions';
+  import { isMobile } from '../platform';
+  import { tailscale } from '../tailscale/tailscale.svelte';
+  import { findConversionCandidates } from '../tailscale/matching';
+  import { notify } from '../ui/toast.svelte';
+  import { errorText } from '../i18n';
 
   interface Props {
     onconnect: (host: HostEntry) => void;
@@ -36,6 +41,34 @@
 
   /** Actions offered when right-clicking empty space. */
   const PAGE_ACTIONS: ActionId[] = ['host.new', 'host.quickConnect', 'host.import', 'tab.newLocal'];
+  const conversionCandidates = $derived(!isMobile && tailscale.connected ? findConversionCandidates(hosts.items, tailscale.peers, tailscale.dismissed) : []);
+  const firstConversionCandidate = $derived(conversionCandidates[0] ?? null);
+
+  async function convert(candidate: (typeof conversionCandidates)[number]): Promise<void> {
+    try {
+      await tailscale.convertHost(candidate.host, candidate.peer);
+      notify(t('tailscale.converted', { name: candidate.host.name }), 'success');
+    } catch (error) {
+      onnotice(errorText(error));
+    }
+  }
+
+  async function convertAll(): Promise<void> {
+    let converted = 0;
+    for (const candidate of conversionCandidates) {
+      try {
+        await tailscale.convertHost(candidate.host, candidate.peer);
+        converted += 1;
+      } catch (error) {
+        onnotice(errorText(error));
+      }
+    }
+    if (converted) notify(t('tailscale.convertedCount', { count: converted }), 'success');
+  }
+
+  function dismissAll(): void {
+    for (const candidate of conversionCandidates) tailscale.dismissCandidate(candidate.host.id, candidate.peer.id);
+  }
 
   function hostMenu(event: MouseEvent, host: HostEntry): void {
     event.preventDefault();
@@ -97,6 +130,41 @@
       <button type="button" class="primary" onclick={() => onedit(null)}>{t('host.new')}</button>
     </div>
   {:else}
+    {#if conversionCandidates.length > 0}
+      <section class="conversion-banner" aria-label={t('tailscale.matches')}>
+        <div class="conversion-heading">
+          <div class="conversion-copy">
+            <strong>{t('tailscale.conversionTitle')}</strong>
+            {#if conversionCandidates.length === 1}
+              {@const candidate = firstConversionCandidate!}
+              <span>{t('tailscale.conversionSingle', { host: candidate.host.name, hostname: candidate.host.hostname, peer: candidate.peer.name || candidate.peer.dns_name })}</span>
+            {:else}
+              <span>{t('tailscale.conversionCount', { count: conversionCandidates.length, names: conversionCandidates.slice(0, 3).map(({ host }) => host.name).join(', ') })}</span>
+            {/if}
+          </div>
+          {#if conversionCandidates.length === 1}
+            {@const candidate = firstConversionCandidate!}
+            <button type="button" class="primary" onclick={() => void convert(candidate)}>{t('tailscale.convertHost')}</button>
+            <button type="button" class="secondary" onclick={() => tailscale.dismissCandidate(candidate.host.id, candidate.peer.id)}>{t('tailscale.ignore')}</button>
+          {:else}
+            <button type="button" class="primary" onclick={() => void convertAll()}>{t('tailscale.convertAll')}</button>
+            <button type="button" class="secondary" onclick={dismissAll}>{t('tailscale.dismissAll')}</button>
+          {/if}
+        </div>
+        {#if conversionCandidates.length > 1}
+          <details class="conversion-details">
+            <summary>{t('tailscale.matches')} · {conversionCandidates.length}</summary>
+            {#each conversionCandidates as candidate (candidate.host.id)}
+              <div class="conversion-row">
+                <span>{candidate.host.name} · {candidate.host.hostname} → {candidate.peer.name || candidate.peer.dns_name}</span>
+                <button type="button" class="secondary" onclick={() => void convert(candidate)}>{t('tailscale.convert')}</button>
+                <button type="button" class="secondary" onclick={() => tailscale.dismissCandidate(candidate.host.id, candidate.peer.id)}>{t('tailscale.ignore')}</button>
+              </div>
+            {/each}
+          </details>
+        {/if}
+      </section>
+    {/if}
     <h2 class="section-label">{t('home.hosts')}</h2>
     <div class="grid">
       {#each sorted as host (host.id)}
@@ -202,6 +270,21 @@
     max-width: 1100px;
     margin: 0 auto var(--space-3);
   }
+  .conversion-banner {
+    max-width: 1100px;
+    margin: 0 auto var(--space-4);
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--accent-soft);
+    box-shadow: 0 0 0 0.5px var(--separator);
+  }
+  .conversion-heading { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+  .conversion-copy { display: flex; flex: 1 1 280px; flex-direction: column; gap: var(--space-1); min-width: 0; }
+  .conversion-copy span, .conversion-row span { color: var(--fg-muted); font-size: var(--text-footnote); overflow-wrap: anywhere; }
+  .conversion-details { margin-top: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--separator); }
+  .conversion-details summary { color: var(--fg-muted); font-size: var(--text-footnote); cursor: pointer; }
+  .conversion-row { display: flex; align-items: center; gap: var(--space-2); padding-top: var(--space-2); }
+  .conversion-row span { flex: 1; min-width: 0; }
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));

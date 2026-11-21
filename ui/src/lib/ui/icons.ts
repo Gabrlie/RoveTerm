@@ -55,6 +55,7 @@ import minimize from 'lucide-static/icons/minus.svg?raw';
 import maximize from 'lucide-static/icons/square.svg?raw';
 import restore from 'lucide-static/icons/copy.svg?raw';
 import winClose from 'lucide-static/icons/x.svg?raw';
+import network from 'lucide-static/icons/network.svg?raw';
 
 import history from 'lucide-static/icons/history.svg?raw';
 import bot from 'lucide-static/icons/bot-message-square.svg?raw';
@@ -148,6 +149,7 @@ export const icons = {
   maximize,
   restore,
   winClose,
+  network,
 } as const;
 
 export type IconName = keyof typeof icons;
