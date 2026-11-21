@@ -33,12 +33,18 @@ class Editors {
   private protecting = false;
   closing = $state<{ ids: string[]; resolve: (choice: CloseChoice) => void } | null>(null);
   private opening = new Map<string, Promise<EditDraft>>();
+  private savedListeners = new Set<(draft: EditDraft) => void>();
   private focusedCommand: ((command: EditorCommand) => void) | null = null;
   focused: string | null = null;
 
   get dirty(): EditDraft[] { return this.drafts.filter((draft) => draft.text !== draft.original); }
   get pending(): boolean { return this.drafts.some((draft) => draft.busy || draft.text !== draft.original); }
   find(id: string): EditDraft | undefined { return this.drafts.find((draft) => draft.id === id); }
+
+  onSaved(listener: (draft: EditDraft) => void): () => void {
+    this.savedListeners.add(listener);
+    return () => this.savedListeners.delete(listener);
+  }
 
   async open(fs: FsId, label: string, source: RemoteSource, path: string): Promise<EditDraft> {
     const identity = JSON.stringify([label, path]);
@@ -48,7 +54,7 @@ class Editors {
       const retained = await sftpRetain(fs);
       const existing = this.drafts.find((draft) => draft.key === identity);
       if (existing) {
-        if (existing.busy) {
+        if (existing.busy || this.closingIds.includes(existing.id)) {
           await this.release(retained);
         } else {
           const previous = existing.fs;
@@ -82,6 +88,7 @@ class Editors {
       draft.version = saved;
       draft.original = text;
       draft.conflict = false;
+      for (const listener of this.savedListeners) listener(draft);
       return true;
     } catch (error) {
       draft.conflict = isCommandError(error) && error.code === 'fs.edit_conflict';
@@ -158,12 +165,17 @@ class Editors {
   }
 
   async close(id: string): Promise<boolean> {
-    if (!await this.canClose([id])) return false;
-    const draft = this.find(id);
-    this.drafts = this.drafts.filter((entry) => entry.id !== id);
-    if (this.selected === id) this.selected = null;
-    if (this.focused === id) { this.focusedCommand = null; this.focused = null; }
-    if (draft) await sftpClose(draft.fs).catch(() => {});
+    return this.closeMany([id]);
+  }
+
+  async closeMany(ids: string[]): Promise<boolean> {
+    if (!await this.canClose(ids)) return false;
+    const closing = new Set(ids);
+    const drafts = this.drafts.filter((draft) => closing.has(draft.id));
+    this.drafts = this.drafts.filter((draft) => !closing.has(draft.id));
+    if (this.selected && closing.has(this.selected)) this.selected = null;
+    if (this.focused && closing.has(this.focused)) { this.focusedCommand = null; this.focused = null; }
+    await Promise.all(drafts.map((draft) => this.release(draft.fs)));
     return true;
   }
 

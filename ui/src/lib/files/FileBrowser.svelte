@@ -27,16 +27,17 @@
     type TransferUpdate,
   } from '../ipc';
   import { errorText, t } from '../i18n';
-  import { baseName, formatMode, formatSize, formatTime, joinPath, normalizePath, parentPath, sortEntries } from './format';
+  import { baseName, formatMode, formatSize, formatTime, isEditableTextFile, joinPath, normalizePath, parentPath, sortEntries } from './format';
   import { isFinal, transfers } from './transfers.svelte';
   import { prefs } from '../settings/prefs.svelte';
   import FilesSkeleton from './FilesSkeleton.svelte';
   import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
   import { editPrefs } from '../settings/edit.svelte';
-  import TextEditor from './TextEditor.svelte';
   import { editors } from './editors.svelte';
+  import { workspace } from '../workspace/workspace.svelte';
   import { externalEdits } from './external.svelte';
   import { isMobile } from '../platform';
+  import { notify } from '../ui/toast.svelte';
 
   interface Props {
     source: RemoteSource;
@@ -83,23 +84,25 @@
   let refreshTimer = 0;
   let unsubscribe: (() => void) | undefined;
   let unlistenEdits: (() => void) | undefined;
+  let unlistenSaves: (() => void) | undefined;
   let unlistenDrop: UnlistenFn | undefined;
   let unbindExternal: (() => void) | undefined;
-  let editingId = $state<string | null>(null);
   let openingEditor = $state(false);
-  const draft = $derived(editingId ? editors.find(editingId) : undefined);
 
-  async function editFile(external = false): Promise<void> {
-    const entry = selection[0];
-    if (!fsId || selection.length !== 1 || entry?.kind !== 'file' || openingEditor) return;
+  async function editFile(external = false, targetEntry?: DirEntry): Promise<void> {
+    const entry = targetEntry ?? (selection.length === 1 ? selection[0] : undefined);
+    if (!fsId || entry?.kind !== 'file' || openingEditor) return;
     const path = joinPath(cwd, entry.name);
     openingEditor = true;
     try {
       if (external) { await externalEdits.open(fsId, path); return; }
       const opened = await editors.open(fsId, label, source, path);
-      if (!destroyed) editingId = opened.id;
+      if (!destroyed && editors.find(opened.id)) workspace.openEditor(opened);
       else editors.detached(opened.id);
-    } catch (error) { fail(error); }
+    } catch (error) {
+      if (!destroyed) fail(error);
+      notify(errorText(error), 'error');
+    }
     finally { openingEditor = false; }
   }
 
@@ -148,7 +151,7 @@
         loadingPath = null;
         loading = false;
         // Re-rendered rows drop focus; keep keyboard navigation on the list.
-        if (focusList && active && !pending && !draft) list?.focus({ preventScroll: true });
+        if (focusList && active && !pending) list?.focus({ preventScroll: true });
       }
     }
   }
@@ -267,6 +270,7 @@
 
   function openEntry(entry: DirEntry): void {
     if (entry.kind === 'dir' || entry.kind === 'symlink') void navigate(joinPath(cwd, entry.name));
+    else if (isEditableTextFile(entry)) void editFile(false, entry);
     else void download([entry.name], false);
   }
 
@@ -437,7 +441,7 @@
   }
 
   function inside(position: { x: number; y: number }): boolean {
-    if (!visible || !root || draft) return false;
+    if (!visible || !root) return false;
     const scale = window.devicePixelRatio || 1;
     const x = position.x / scale;
     const y = position.y / scale;
@@ -460,6 +464,9 @@
 
   onMount(async () => {
     unsubscribe = transfers.subscribe(onTransfer);
+    unlistenSaves = editors.onSaved((draft) => {
+      if (draft.label === label) refreshAfterSave(draft.path);
+    });
     if (!isMobile) unlistenEdits = externalEdits.listen(onExternalEdit);
     transfers.start().catch((error: unknown) => console.warn('transfer events unavailable', error));
     try {
@@ -487,7 +494,7 @@
   });
 
   $effect(() => {
-    if (active && !pending && !draft) list?.focus({ preventScroll: true });
+    if (active && !pending) list?.focus({ preventScroll: true });
   });
 
   onDestroy(() => {
@@ -495,17 +502,14 @@
     clearTimeout(refreshTimer);
     unsubscribe?.();
     unlistenEdits?.();
+    unlistenSaves?.();
     unlistenDrop?.();
     unbindExternal?.();
-    if (editingId) editors.detached(editingId);
     if (fsId) sftpClose(fsId).catch((error: unknown) => console.warn('sftp close failed', error));
   });
 </script>
 
 <div class="browser" class:dropping bind:this={root}>
-  {#if draft}
-    {#key draft.id}<TextEditor {draft} onclose={() => { editingId = null; void refresh(); }} />{/key}
-  {:else}
   <div class="toolbar">
     <IconButton icon="up" label={t('files.up')} small disabled={!fsId || parentPath(cwd) === null} onclick={goUp} />
     <span class:spinning={loading && entries.length > 0}>
@@ -580,7 +584,6 @@
 
   {#if dropping}
     <div class="drop-hint"><Icon name="upload" size={20} />{t('files.dropHint', { path: cwd })}</div>
-  {/if}
   {/if}
 </div>
 

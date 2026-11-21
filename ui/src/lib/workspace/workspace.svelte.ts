@@ -4,15 +4,18 @@ import { sessionClose, type CommandError, type ExitStatus, type HostId, type Pas
 import { hosts } from '../hosts/hosts.svelte';
 import { reachKey } from '../hosts/reach';
 import { terminals } from '../terminal/registry';
-import { SNAPSHOT_VERSION, type Snapshot, type SnapshotNode } from './snapshot';
+import { editors } from '../files/editors.svelte';
+import { baseName } from '../files/format';
+import { SNAPSHOT_VERSION, snapshotGroup, type Snapshot, type SnapshotNode } from './snapshot';
 import { computeLayout, pane, paneIds, removePane, setRatio, splitPane, type LayoutNode, type PaneId, type Path, type SplitDir } from '../layout/layout';
 
-/** What a pane opens. Splitting a group opens its current tab's target again. */
+/** What a pane opens. An editor target refers to an in-memory draft. */
 export type PaneTarget =
   | { kind: 'local' }
   | { kind: 'ssh'; hostId: HostId; title: string }
   | { kind: 'quick'; address: string }
   | { kind: 'sftp'; source: RemoteSource; title: string }
+  | { kind: 'editor'; draftId: string; title: string; path: string; source: RemoteSource }
   /** The fleet lead's conversation on all saved hosts. */
   | { kind: 'fleet' };
 
@@ -60,6 +63,7 @@ function initialTitle(target: PaneTarget): string {
     case 'quick':
       return target.address;
     case 'sftp':
+    case 'editor':
       return target.title;
     case 'fleet':
       return 'Fleet lead';
@@ -69,7 +73,7 @@ function initialTitle(target: PaneTarget): string {
 /** The saved host a tab belongs to, or null for local terminals and ad-hoc connections. */
 export function hostOf(target: PaneTarget): HostId | null {
   if (target.kind === 'ssh') return target.hostId;
-  if (target.kind === 'sftp' && 'hostId' in target.source) return target.source.hostId;
+  if ((target.kind === 'sftp' || target.kind === 'editor') && 'hostId' in target.source) return target.source.hostId;
   return null;
 }
 
@@ -86,6 +90,11 @@ export function filesTargetFor(target: PaneTarget): PaneTarget | null {
       return { kind: 'sftp', source: { address: target.address }, title: target.address };
     case 'sftp':
       return target;
+    case 'editor': {
+      const source = target.source;
+      const title = 'hostId' in source ? hosts.find(source.hostId)?.name ?? source.hostId : source.address;
+      return { kind: 'sftp', source, title };
+    }
   }
 }
 
@@ -100,6 +109,7 @@ export function remoteSourceOf(target: PaneTarget): RemoteSource | null {
     case 'quick':
       return { address: target.address };
     case 'sftp':
+    case 'editor':
       return target.source;
   }
 }
@@ -167,6 +177,17 @@ class Workspace {
     this.openTab({ kind: 'fleet' });
   }
 
+  /** Shows the draft in exactly one workspace tab. */
+  openEditor(draft: { id: string; path: string; source: RemoteSource }): void {
+    const existing = Object.values(this.panes).find(({ target }) => target.kind === 'editor' && target.draftId === draft.id);
+    if (existing?.target.kind === 'editor') {
+      existing.target.source = draft.source;
+      this.reveal(existing.id);
+      return;
+    }
+    this.openTab({ kind: 'editor', draftId: draft.id, title: baseName(draft.path) || draft.path, path: draft.path, source: draft.source });
+  }
+
   /** Opens `target` as a new tab of the focused group and shows it. */
   openTab(target: PaneTarget, password: string | null = null, remember = false): void {
     const group = this.focusedGroup;
@@ -190,7 +211,7 @@ class Workspace {
   splitTab(paneId: PaneId, dir: SplitDir): void {
     const group = this.groupOf(paneId);
     const source = this.panes[paneId];
-    if (!group || !source) return;
+    if (!group || !source || source.target.kind === 'editor') return;
     const added = this.createGroup([this.createPane(source.target)]);
     this.root = splitPane(this.root, group.id, dir, added.id);
     this.focusedGroupId = added.id;
@@ -242,14 +263,15 @@ class Workspace {
     group.tabs.splice(target, 0, paneId);
   }
 
-  /** Closes the other tabs of `paneId`'s group (`'others'`) or those to its right (`'right'`). */
-  closeTabsBeside(paneId: PaneId, which: 'others' | 'right'): void {
+  /** Closes the other tabs in the group or those to the right after resolving unsaved drafts. */
+  async requestCloseTabsBeside(paneId: PaneId, which: 'others' | 'right'): Promise<void> {
     const group = this.groupOf(paneId);
     if (!group) return;
     const index = group.tabs.indexOf(paneId);
     const closing = group.tabs.filter((id, at) => id !== paneId && (which === 'others' || at > index));
+    if (!await this.closeDraftsFor(closing)) return;
     for (const id of closing) this.closePane(id);
-    group.active = paneId;
+    if (group.tabs.includes(paneId)) group.active = paneId;
   }
 
   /**
@@ -275,18 +297,35 @@ class Workspace {
     terminals.delete(paneId);
   }
 
-  /**
-   * Closes a tab and its session. The group then shows its neighbouring tab; a group left without
-   * tabs is removed when other groups remain, and otherwise shows the home page.
-   */
-  /** Tabs (terminals and files) of saved host `hostId`. */
+  /** Tabs of saved host `hostId`. */
   tabsOfHost(hostId: HostId): PaneId[] {
     return Object.values(this.panes)
       .filter((pane) => hostOf(pane.target) === hostId)
       .map((pane) => pane.id);
   }
 
+  /** Closes a tab after any associated draft has been resolved. */
+  async requestClosePane(paneId: PaneId): Promise<void> {
+    const target = this.panes[paneId]?.target;
+    if (target?.kind === 'editor' && !await editors.close(target.draftId)) return;
+    this.closePane(paneId);
+  }
+
+  private closeDraftsFor(paneIds: PaneId[]): Promise<boolean> {
+    const draftIds = paneIds.flatMap((id) => {
+      const target = this.panes[id]?.target;
+      return target?.kind === 'editor' ? [target.draftId] : [];
+    });
+    return draftIds.length ? editors.closeMany(draftIds) : Promise.resolve(true);
+  }
+
+  /** Removes a tab and its session, prompting first if the tab still owns a draft. */
   closePane(paneId: PaneId): void {
+    const target = this.panes[paneId]?.target;
+    if (target?.kind === 'editor' && editors.find(target.draftId)) {
+      void this.requestClosePane(paneId);
+      return;
+    }
     const group = this.groupOf(paneId);
     if (!group) return;
     this.dropPane(paneId);
@@ -296,13 +335,13 @@ class Workspace {
     if (group.tabs.length === 0) this.closeGroup(group.id);
   }
 
-  /** Closes group `groupId` with all its tabs and sessions, unless it is the last group. */
-  closeGroupWithTabs(groupId: GroupId): void {
+  /** Closes all tabs in the group after resolving unsaved drafts, unless it is the last group. */
+  async requestCloseGroupWithTabs(groupId: GroupId): Promise<void> {
     const group = this.groups[groupId];
     if (!group || this.groupIds.length <= 1) return;
-    for (const paneId of group.tabs) this.dropPane(paneId);
-    group.tabs = [];
-    group.active = null;
+    const closing = [...group.tabs];
+    if (!await this.closeDraftsFor(closing)) return;
+    for (const paneId of closing) this.closePane(paneId);
     this.closeGroup(groupId);
   }
 
@@ -326,7 +365,7 @@ class Workspace {
   closeFocused(): void {
     const group = this.focusedGroup;
     if (!group) return;
-    if (group.active) this.closePane(group.active);
+    if (group.active) void this.requestClosePane(group.active);
     else this.closeGroup(group.id);
   }
 
@@ -444,12 +483,9 @@ class Workspace {
       if (current.kind === 'pane') {
         const group = this.groups[current.id];
         if (!group) return null;
-        const tabs = group.tabs.flatMap((id) => {
-          const state = this.panes[id];
-          return state ? [state.target] : [];
-        });
-        const active = group.active ? group.tabs.filter((id) => this.panes[id]).indexOf(group.active) : -1;
-        return { group: { tabs, active } };
+        const targets = group.tabs.map((id) => this.panes[id]?.target);
+        const activeIndex = group.active ? group.tabs.indexOf(group.active) : -1;
+        return { group: snapshotGroup(targets, activeIndex) };
       }
       const a = node(current.a);
       const b = node(current.b);

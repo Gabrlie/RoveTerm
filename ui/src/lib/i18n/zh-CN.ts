@@ -35,6 +35,7 @@ export const zhCN: Messages = {
   'editor.reconnect': '重新连接文件会话',
   'editor.loadError': '无法加载编辑器，草稿仍可从“文件草稿”中打开。',
   'editor.drafts': '文件草稿',
+  'editor.openTab': '在工作区打开',
   'editor.draftsCount': '文件草稿（{n}）',
   'editor.noDrafts': '没有打开的文件草稿。',
   'editor.selectDraft': '选择一份文件草稿。',

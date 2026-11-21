@@ -1045,6 +1045,7 @@ export const en = {
   'editor.reconnect': 'Reconnect file session',
   'editor.loadError': 'The editor could not load. Your draft is still available in Open file drafts.',
   'editor.drafts': 'Open file drafts',
+  'editor.openTab': 'Open in workspace',
   'editor.draftsCount': 'File drafts ({n})',
   'editor.noDrafts': 'No file drafts are open.',
   'editor.selectDraft': 'Select a file draft.',

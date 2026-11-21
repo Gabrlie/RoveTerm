@@ -6,7 +6,7 @@
   import { editors, type EditDraft, type EditorCommand } from './editors.svelte';
   import type { EditorController } from './codemirror';
 
-  let { draft, onclose }: { draft: EditDraft; onclose: () => void } = $props();
+  let { draft, active = true, onclose }: { draft: EditDraft; active?: boolean; onclose: () => void } = $props();
   let host: HTMLDivElement;
   let controller = $state<EditorController | null>(null);
   let loadError = $state(false);
@@ -36,12 +36,13 @@
         'close': t('common.close'), 'No matches found': t('editor.noMatches'),
       }, (text) => { draft.text = text; });
       if (disposed) created.destroy();
-      else { controller = created; created.focus(); editors.focus(draft.id, command); }
+      else controller = created;
     }).catch(() => { loadError = true; });
     return () => { disposed = true; controller?.destroy(); unregister(); };
   });
   $effect(() => { controller?.sync(draft.text); });
   $effect(() => { controller?.setEditable(!locked); });
+  $effect(() => { if (active) controller?.focus(); });
 </script>
 
 <section class="text-editor" onfocusin={() => editors.focus(draft.id, command)}>
@@ -79,7 +80,7 @@
   .identity span { color: var(--fg-muted); font-size: var(--text-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dot { width: 7px; height: 7px; border-radius: var(--radius-pill); background: var(--accent); flex: none; }
   .location { padding: var(--space-1) var(--space-3); font: var(--text-caption) var(--font-mono); color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-shadow: inset 0 -1px 0 var(--separator); }
-  .code { flex: 1; min-height: 0; overflow: hidden; text-align: left; user-select: text; }
+  .code { flex: 1; min-height: 0; overflow: hidden; text-align: left; -webkit-user-select: text; user-select: text; }
   .notice { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); padding: var(--space-2) var(--space-3); font-size: var(--text-footnote); }
   .notice span { flex: 1; min-width: 100px; }
   .conflict { background: var(--warning-soft); color: var(--warning); }

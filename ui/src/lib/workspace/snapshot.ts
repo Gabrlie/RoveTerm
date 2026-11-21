@@ -7,8 +7,10 @@ import type { PaneTarget } from './workspace.svelte';
 
 export const SNAPSHOT_VERSION = 2;
 
+type SnapshotTarget = Exclude<PaneTarget, { kind: 'editor' }>;
+
 export interface SnapshotGroup {
-  tabs: PaneTarget[];
+  tabs: SnapshotTarget[];
   /** Index of the shown tab, or -1 for the home page. */
   active: number;
 }
@@ -31,7 +33,19 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function parseTarget(value: unknown): PaneTarget | null {
+/** Captures restorable tabs in order and maps the active index to the retained tabs. */
+export function snapshotGroup(targets: (PaneTarget | undefined)[], activeIndex: number): SnapshotGroup {
+  const tabs: SnapshotTarget[] = [];
+  let active = -1;
+  targets.forEach((target, index) => {
+    if (!target || target.kind === 'editor') return;
+    if (index === activeIndex) active = tabs.length;
+    tabs.push(target);
+  });
+  return { tabs, active };
+}
+
+function parseTarget(value: unknown): SnapshotTarget | null {
   if (!isObject(value)) return null;
   const text = (key: string) => (typeof value[key] === 'string' ? (value[key] as string) : null);
   switch (value.kind) {
@@ -55,6 +69,7 @@ function parseTarget(value: unknown): PaneTarget | null {
       if (typeof source.address === 'string') return { kind: 'sftp', source: { address: source.address }, title };
       return null;
     }
+    case 'editor':
     default:
       return null;
   }
@@ -78,15 +93,17 @@ function parseV2(value: Record<string, unknown>, budget: { tabs: number }): Snap
   const root = parseTree(value.root, 0, (node) => {
     if (!isObject(node.group)) return null;
     const raw = Array.isArray(node.group.tabs) ? node.group.tabs : [];
-    const tabs: PaneTarget[] = [];
-    for (const item of raw) {
+    const tabs: SnapshotTarget[] = [];
+    let active = -1;
+    const activeIndex = node.group.active;
+    raw.forEach((item, index) => {
       const target = parseTarget(item);
       if (target && budget.tabs > 0) {
+        if (index === activeIndex) active = tabs.length;
         tabs.push(target);
         budget.tabs -= 1;
       }
-    }
-    const active = typeof node.group.active === 'number' && node.group.active < tabs.length ? node.group.active : -1;
+    });
     return { group: { tabs, active } };
   });
   if (!root) return null;
@@ -99,11 +116,11 @@ function parseV2(value: Record<string, unknown>, budget: { tabs: number }): Snap
  */
 function parseV1(value: Record<string, unknown>, budget: { tabs: number }): Snapshot | null {
   if (!Array.isArray(value.tabs)) return null;
-  const tabs: PaneTarget[] = [];
+  const tabs: SnapshotTarget[] = [];
   let active = -1;
   value.tabs.forEach((tab, index) => {
     if (!isObject(tab)) return;
-    const targets: PaneTarget[] = [];
+    const targets: SnapshotTarget[] = [];
     const collect = (node: unknown, depth: number): void => {
       if (!isObject(node) || depth > 16) return;
       if ('pane' in node) {

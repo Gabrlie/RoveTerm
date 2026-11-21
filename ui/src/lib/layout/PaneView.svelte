@@ -4,6 +4,8 @@
   import TermView from '../terminal/TermView.svelte';
   import AiPanel from '../ai/AiPanel.svelte';
   import FileBrowser from '../files/FileBrowser.svelte';
+  import TextEditor from '../files/TextEditor.svelte';
+  import { editors } from '../files/editors.svelte';
   import { terminals } from '../terminal/registry';
   import { hostOf, workspace, type PaneState } from '../workspace/workspace.svelte';
   import { sessionOpenLocal, sessionOpenQuick, sessionOpenSsh, credentialKindOf, type CredentialKind, type OutputMessage, type TermSize } from '../ipc';
@@ -32,10 +34,12 @@
 
   let { pane, shown, focused, oncredentials, onedithost, onaisettings, onschedules }: Props = $props();
   let view = $state<TermView>();
+  const editorDraft = $derived(pane.target.kind === 'editor' ? editors.find(pane.target.draftId) : undefined);
 
   /** The saved host was deleted (here or on another device) and the tab holds no live session:
    *  it can never connect again, so it says so instead of failing with a lookup error. */
   const orphaned = $derived.by(() => {
+    if (pane.target.kind === 'editor') return false;
     const hostId = hostOf(pane.target);
     return hostId !== null && hosts.loaded && !hosts.find(hostId) && !pane.sessionId;
   });
@@ -59,6 +63,7 @@
           return sessionOpenQuick(target.address, state.password, size, onOutput);
         case 'sftp':
         case 'fleet':
+        case 'editor':
           return Promise.reject(new Error('this tab has no terminal'));
       }
     };
@@ -77,6 +82,10 @@
 
   $effect(() => {
     if (view) terminals.set(pane.id, view);
+  });
+
+  $effect(() => {
+    if (pane.target.kind === 'editor' && !editorDraft) workspace.closePane(pane.id);
   });
 </script>
 
@@ -106,6 +115,12 @@
     <div class="fleet">
       <AiPanel fleet onsettings={onaisettings} {onschedules} />
     </div>
+  {:else if pane.target.kind === 'editor'}
+    {#if editorDraft}
+      {#key editorDraft.id}
+        <TextEditor draft={editorDraft} active={focused} onclose={() => workspace.closePane(pane.id)} />
+      {/key}
+    {/if}
   {:else}
     <TermView
       bind:this={view}

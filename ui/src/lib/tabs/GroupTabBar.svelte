@@ -8,6 +8,7 @@
   import { t } from '../i18n';
   import type { IconName } from '../ui/icons';
   import { hosts } from '../hosts/hosts.svelte';
+  import { editors } from '../files/editors.svelte';
   import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
   import { justDragged, pressTab, tabDrag } from './tabDrag.svelte';
 
@@ -23,26 +24,38 @@
 
   function tabIcon(paneId: PaneId): IconName {
     const kind = workspace.panes[paneId]?.target.kind;
+    if (kind === 'editor') return 'fileCode';
     return kind === 'local' ? 'terminal' : kind === 'sftp' ? 'files' : kind === 'fleet' ? 'bot' : 'server';
   }
 
-  /** A saved host's tab is named after the host (following renames), so tabs of different
-   *  servers stay apart; the title the shell sets (`user@host: dir`) is only the tooltip. Other
-   *  tabs show the shell's title. */
+  /** Editor tabs use filenames. Saved terminal and file browser tabs follow host renames. */
   function tabTitle(paneId: PaneId): string {
     const pane = workspace.panes[paneId];
     if (!pane) return '';
     const target = pane.target;
     if (target.kind === 'fleet') return t('fleet.title');
+    if (target.kind === 'editor') return target.title;
     const hostId = hostOf(target);
     if (hostId && target.kind !== 'local' && target.kind !== 'quick') return hosts.find(hostId)?.name || target.title;
     return pane.title;
   }
 
-  /** Connection state of a tab, shown as a dot. */
-  function tabState(paneId: PaneId): 'live' | 'connecting' | 'failed' | 'ended' {
+  function tabTooltip(paneId: PaneId): string | undefined {
+    const pane = workspace.panes[paneId];
+    if (pane?.target.kind !== 'editor') return pane?.title;
+    const { draftId, path } = pane.target;
+    const label = editors.find(draftId)?.label;
+    return label ? `${label} — ${path}` : path;
+  }
+
+  /** The status dot tracks unsaved changes in editor tabs and connectivity in remote tabs. */
+  function tabState(paneId: PaneId): 'live' | 'connecting' | 'failed' | 'ended' | 'dirty' | null {
     const pane = workspace.panes[paneId];
     if (!pane) return 'ended';
+    if (pane.target.kind === 'editor') {
+      const draft = editors.find(pane.target.draftId);
+      return draft && draft.text !== draft.original ? 'dirty' : null;
+    }
     if (pane.failure) return 'failed';
     if (pane.exited) return 'ended';
     return pane.sessionId || pane.target.kind === 'sftp' || pane.target.kind === 'fleet' ? 'live' : 'connecting';
@@ -57,12 +70,16 @@
     const groups = workspace.groupIds;
     const next = groups[(groups.indexOf(group.id) + 1) % groups.length];
     const items: MenuItem[] = [
-      { label: t('common.close'), icon: 'close', onselect: () => workspace.closePane(paneId) },
-      { label: t('tab.closeOthers'), onselect: () => workspace.closeTabsBeside(paneId, 'others') },
-      { label: t('tab.closeRight'), onselect: () => workspace.closeTabsBeside(paneId, 'right') },
-      { label: t('action.pane.splitRight'), icon: 'splitRight', separated: true, onselect: () => workspace.splitTab(paneId, 'row') },
-      { label: t('action.pane.splitDown'), icon: 'splitDown', onselect: () => workspace.splitTab(paneId, 'column') },
+      { label: t('common.close'), icon: 'close', onselect: () => void workspace.requestClosePane(paneId) },
+      { label: t('tab.closeOthers'), onselect: () => void workspace.requestCloseTabsBeside(paneId, 'others') },
+      { label: t('tab.closeRight'), onselect: () => void workspace.requestCloseTabsBeside(paneId, 'right') },
     ];
+    if (workspace.panes[paneId]?.target.kind !== 'editor') {
+      items.push(
+        { label: t('action.pane.splitRight'), icon: 'splitRight', separated: true, onselect: () => workspace.splitTab(paneId, 'row') },
+        { label: t('action.pane.splitDown'), icon: 'splitDown', onselect: () => workspace.splitTab(paneId, 'column') },
+      );
+    }
     if (!alone) {
       items.push(
         { label: t('tab.moveRightGroup'), separated: true, onselect: () => workspace.moveTabToNewGroup(paneId, 'row') },
@@ -87,7 +104,7 @@
   const dropIndex = $derived(tabDrag.target?.kind === 'tabs' && tabDrag.target.groupId === group.id ? tabDrag.target.index : null);
 
   function onAuxClick(event: MouseEvent, paneId: PaneId): void {
-    if (event.button === 1) workspace.closePane(paneId);
+    if (event.button === 1) void workspace.requestClosePane(paneId);
   }
 
 </script>
@@ -106,6 +123,7 @@
     <Icon name="home" size={14} />
   </div>
   {#each group.tabs as paneId, index (paneId)}
+    {@const state = tabState(paneId)}
     <div
       class="tab"
       class:active={paneId === group.active}
@@ -121,21 +139,23 @@
       onclick={() => !justDragged() && workspace.activate(group.id, paneId)}
       onkeydown={(event) => event.key === 'Enter' && workspace.activate(group.id, paneId)}
       onauxclick={(event) => onAuxClick(event, paneId)}
-      title={workspace.panes[paneId]?.title}
+      title={tabTooltip(paneId)}
     >
       <span class="glyph">
         <Icon name={tabIcon(paneId)} size={14} />
-        <span class="dot {tabState(paneId)}"></span>
+        {#if state}
+          <span class="dot {state}" aria-label={state === 'dirty' ? t('editor.unsaved') : undefined}></span>
+        {/if}
       </span>
       <span class="title">{tabTitle(paneId)}</span>
-      <IconButton icon="close" label={t('action.tab.close')} small onclick={(event) => { event.stopPropagation(); workspace.closePane(paneId); }} />
+      <IconButton icon="close" label={t('action.tab.close')} small onclick={(event) => { event.stopPropagation(); void workspace.requestClosePane(paneId); }} />
     </div>
   {/each}
   <IconButton icon="add" label={t('tab.new')} onclick={() => workspace.activate(group.id, null)} />
   <span class="spacer"></span>
   <IconButton icon="splitRight" label={t('action.pane.splitRight')} small onclick={() => { workspace.focusGroup(group.id); workspace.splitFocused('row'); }} />
   {#if closable}
-    <IconButton icon="close" label={t('tab.closeGroup')} small onclick={() => workspace.closeGroupWithTabs(group.id)} />
+    <IconButton icon="close" label={t('tab.closeGroup')} small onclick={() => void workspace.requestCloseGroupWithTabs(group.id)} />
   {/if}
 </div>
 {#if menu}
@@ -255,6 +275,9 @@
   }
   .dot.failed {
     background: var(--danger);
+  }
+  .dot.dirty {
+    background: var(--accent);
   }
   .dot.ended {
     background: var(--fg-subtle);

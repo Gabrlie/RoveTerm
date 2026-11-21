@@ -4,9 +4,15 @@
   import Dialog from '../ui/Dialog.svelte';
   import Icon from '../ui/Icon.svelte';
   import { t } from '../i18n';
+  import { workspace } from '../workspace/workspace.svelte';
 
   const selected = $derived(editors.selected ? editors.find(editors.selected) : undefined);
   function answer(choice: CloseChoice): void { editors.closing?.resolve(choice); }
+  function openTab(): void {
+    if (!selected) return;
+    editors.showDrafts = false;
+    workspace.openEditor(selected);
+  }
 </script>
 
 {#if editors.showDrafts}
@@ -30,6 +36,9 @@
     <p class="note">{t('editor.memoryNote')}</p>
     {#snippet actions()}
       <button type="button" class="secondary" onclick={() => (editors.showDrafts = false)}>{t('common.close')}</button>
+      {#if selected}
+        <button type="button" class="primary" onclick={openTab}>{t('editor.openTab')}</button>
+      {/if}
     {/snippet}
   </Dialog>
 {/if}
