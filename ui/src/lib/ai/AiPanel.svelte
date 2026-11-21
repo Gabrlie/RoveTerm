@@ -23,6 +23,7 @@
   import { EFFORT_LEVELS } from '../settings/providers';
   import { notify } from '../ui/toast.svelte';
   import type { IconName } from '../ui/icons';
+  import OpsTasks from '../ops/OpsTasks.svelte';
 
   /** `fleet`: the fleet lead's conversation on all saved hosts, shown as a page of its own
    *  (a tab), with RoveTerm's assistant only. */
@@ -48,6 +49,7 @@
   /** The outside agent's conversation being looked at, instead of the user's own. */
   let viewing = $state<Chat | null>(null);
   const chat = $derived(viewing && externals.includes(viewing) ? viewing : own);
+  const opsConversation = $derived(chat.id ?? chat.resumeId);
   // Another host shows its own conversation.
   $effect(() => {
     void contextKey(context);
@@ -109,7 +111,7 @@
 
   function send(): void {
     const text = draft.trim();
-    if (!text || chat.busy || chat.starting) return;
+    if (!text || !chat.canSend) return;
     draft = '';
     following = true;
     void chat.send(text, terminalPane?.sessionId ?? null);
@@ -583,6 +585,8 @@
     </details>
   {/if}
 
+  {#if fleet && opsConversation}<OpsTasks conversation={opsConversation} />{/if}
+
   <div class="list" bind:this={list} onscroll={onScroll}>
     {#if chat.items.length === 0}
       <div class="empty">
@@ -609,6 +613,17 @@
     <p class="external-note">{chat.ended ? t('ai.externalEndedNote', { agent: chat.external }) : t('ai.externalNote', { agent: chat.external })}</p>
   {:else}
   <div class="composer">
+    {#if fleet && chat.recoveryRequired}
+      <div class="recovery" role="status">
+        <p>{t('ops.recoveryHint')}</p>
+        <button type="button" class="secondary" disabled={chat.starting || chat.busy} onclick={() => void chat.confirmRecovery(terminalPane?.sessionId ?? null)}>{t('ops.confirmRecovery')}</button>
+      </div>
+    {:else if fleet && chat.recoveryRequest}
+      <div class="recovery" role="status">
+        <p>{t('ops.recoveryReady')}</p>
+        <button type="button" class="secondary" disabled={!chat.canSend} onclick={() => void chat.retryRecovery(terminalPane?.sessionId ?? null)}>{t('ops.retryRecoveryInput')}</button>
+      </div>
+    {/if}
     {#if chat.starting || chat.busy}
       <p class="status" class:attention={waiting > 0}>
         {#if waiting > 0}{t('ai.waitingApproval', { n: waiting })}{:else if chat.starting}{t('ai.starting')}{:else}<span class="dots">{t('ai.working')}</span>{/if}
@@ -624,6 +639,12 @@
         </label>
         {/if}
       </div>
+      {#if fleet}
+        <div class="task-scope">
+          <label><input type="checkbox" bind:checked={chat.allowChanges} disabled={chat.starting || chat.busy} aria-describedby="ops-allow-changes-hint" />{t('ops.allowChanges')}</label>
+          <p id="ops-allow-changes-hint">{t('ops.allowChangesHint')}</p>
+        </div>
+      {/if}
       {#if slashOpen}
         <div class="menu slash" role="listbox" aria-label={t('ai.slash.title')}>
           {#if slashSetting}
@@ -698,7 +719,7 @@
         {#if chat.busy}
           <button type="button" class="send stop" title={t('ai.stop')} aria-label={t('ai.stop')} onclick={() => void chat.cancel()}><Icon name="stop" size={12} /></button>
         {:else}
-          <button type="button" class="send" title={t('ai.send')} aria-label={t('ai.send')} disabled={!draft.trim() || chat.starting || !agent} onclick={send}><Icon name="up" size={14} /></button>
+          <button type="button" class="send" title={t('ai.send')} aria-label={t('ai.send')} disabled={!draft.trim() || !chat.canSend || !agent} onclick={send}><Icon name="up" size={14} /></button>
         {/if}
       </div>
     </div>
@@ -711,6 +732,8 @@
 {/if}
 
 <style>
+  .recovery { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); margin-bottom: var(--space-2); font-size: var(--text-footnote); }
+  .recovery p { margin: 0; color: var(--fg-muted); }
   .ai {
     height: 100%;
     display: flex;
@@ -1220,6 +1243,25 @@
   }
   .composer {
     padding: 0 var(--space-3) var(--space-3);
+  }
+  .task-scope {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: 0 var(--space-3) var(--space-2);
+  }
+  .task-scope label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--fg);
+    font-size: var(--text-footnote);
+  }
+  .task-scope p {
+    margin: 0;
+    color: var(--fg-muted);
+    font-size: var(--text-caption);
+    line-height: 1.4;
   }
   .status {
     margin: 0 0 var(--space-1);

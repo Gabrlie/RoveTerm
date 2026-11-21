@@ -19,6 +19,9 @@ pub fn catalog() -> Vec<Arc<dyn Plugin>> {
         Arc::new(rove_session::SessionPlugin),
         Arc::new(rove_fs::FsPlugin),
         Arc::new(rove_ssh::SshPlugin),
+        Arc::new(rove_ops::OpsPlugin),
+        #[cfg(desktop)]
+        Arc::new(rove_tailscale::TailscalePlugin),
         #[cfg(desktop)]
         Arc::new(rove_pty::PtyPlugin),
     ]

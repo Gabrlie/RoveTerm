@@ -1,6 +1,24 @@
 // Typed wrappers around the Tauri commands. Components call these instead of `invoke` directly.
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { TailscaleSnapshot } from './tailscale/types';
+import type { OpsTask, PrivateRef } from './ops/types';
+
+export function opsTasks(conversation?: string): Promise<OpsTask[]> {
+  return invoke('ops_task_list', { conversation });
+}
+export function opsTaskInput(id: string, text: string, hostIds: string[], resolveUncertain = false): Promise<OpsTask> {
+  return invoke('ops_task_input', { id, text, hostIds, resolveUncertain });
+}
+export function opsTaskCancel(id: string): Promise<void> { return invoke('ops_task_cancel', { id }); }
+export function opsTaskRetry(id: string): Promise<OpsTask> { return invoke('ops_task_retry', { id }); }
+export function opsTaskEvidence(id: string, reference: PrivateRef): Promise<unknown> {
+  return invoke('ops_task_evidence', { id, reference });
+}
+
+export function tailscaleSnapshot(): Promise<TailscaleSnapshot> {
+  return invoke('tailscale_snapshot');
+}
 
 export type SessionId = string;
 export type HostId = string;
@@ -1181,8 +1199,8 @@ export function aiSetKey(agent: string, key: string | null): Promise<void> {
 /** Starts `agent` on `context`; `terminal` is the user's terminal session there. */
 /** Starts `agent` on `context`; `terminal` is the user's terminal session there. `resume`
  *  continues an earlier conversation of that agent (same id). */
-export function aiStart(context: AiContext, agent: string, terminal: SessionId | null, resume: string | null = null, model: string | null = null): Promise<AiStarted> {
-  return invoke('ai_start', { context, agent, terminal, resume, model });
+export function aiStart(context: AiContext, agent: string, terminal: SessionId | null, resume: string | null = null, model: string | null = null, resumeConfirmed = false): Promise<AiStarted> {
+  return invoke('ai_start', { context, agent, terminal, resume, model, resumeConfirmed });
 }
 
 /** Sets setting `option` (such as `model`) of session `id`; returns the settings as they now are. */
@@ -1223,8 +1241,8 @@ export function aiRename(id: string, title: string): Promise<string> {
 }
 
 /** Sends a prompt and resolves with the stop reason when the turn ends. */
-export function aiPrompt(id: string, text: string): Promise<string> {
-  return invoke('ai_prompt', { id, text });
+export function aiPrompt(id: string, text: string, requestId?: string, allowChanges = false): Promise<string> {
+  return invoke('ai_prompt', { id, text, requestId, allowChanges });
 }
 
 export function aiCancel(id: string): Promise<void> {

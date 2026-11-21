@@ -1,4 +1,4 @@
 # Plugins of the desktop profile, in application order.
 [profile]
 name = "desktop"
-plugins = ["vault", "journal", "session", "fs", "pty", "ssh"]
+plugins = ["vault", "journal", "session", "fs", "pty", "ssh", "tailscale", "ops"]

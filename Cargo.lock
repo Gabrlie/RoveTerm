@@ -4368,6 +4368,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "rove-ops"
+version = "0.1.0"
+dependencies = [
+ "parking_lot",
+ "rove-journal",
+ "rove-kernel",
+ "rove-vault",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "rove-pty"
 version = "0.1.0"
 dependencies = [
@@ -4449,6 +4467,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rove-tailscale"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "rove-kernel",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "rove-vault"
 version = "0.1.0"
 dependencies = [
@@ -4484,10 +4515,12 @@ dependencies = [
  "rove-fs",
  "rove-journal",
  "rove-kernel",
+ "rove-ops",
  "rove-pty",
  "rove-session",
  "rove-ssh",
  "rove-sync",
+ "rove-tailscale",
  "rove-vault",
  "rusqlite",
  "serde",

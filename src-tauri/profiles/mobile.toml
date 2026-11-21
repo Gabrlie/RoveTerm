@@ -1,4 +1,4 @@
 # Plugins of the mobile profile, in application order. No local PTY.
 [profile]
 name = "mobile"
-plugins = ["vault", "journal", "session", "fs", "ssh"]
+plugins = ["vault", "journal", "session", "fs", "ssh", "ops"]

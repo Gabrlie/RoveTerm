@@ -4,7 +4,7 @@
 //! the app shows progress and records the audit trail.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
@@ -179,6 +179,8 @@ pub struct AiSession {
     reviewer: std::sync::RwLock<Option<(Arc<dyn crate::review::Reviewer>, f64)>>,
     /// Operations refused in the unattended mode, for the user to decide later.
     deferred: std::sync::Mutex<Vec<String>>,
+    /// A task's immutable upper bound, independent of interactive approval modes and grants.
+    read_only_scope: AtomicBool,
 }
 
 /// Most tool calls remembered for permission requests; older ones are forgotten all at once.
@@ -325,7 +327,26 @@ impl AiSession {
             replaying: std::sync::atomic::AtomicBool::new(false),
             reviewer: std::sync::RwLock::new(None),
             deferred: std::sync::Mutex::new(Vec::new()),
+            read_only_scope: AtomicBool::new(false),
         }
+    }
+
+    /// Permanently narrows this session to operations assessed as read-only. Changing mode,
+    /// remembered grants and reviewers cannot widen the task's authority again.
+    pub fn restrict_read_only(&self) {
+        self.read_only_scope.store(true, Ordering::Release);
+    }
+
+    fn refused_by_scope(&self, operation: &Operation, assessment: &Assessment) -> bool {
+        if !self.read_only_scope.load(Ordering::Acquire) || assessment.risk == risk::Risk::ReadOnly
+        {
+            return false;
+        }
+        let request = crate::review::ReviewRequest::new(&self.host.label(), operation, assessment);
+        if let Ok(mut deferred) = self.deferred.lock() {
+            deferred.push(request.operation);
+        }
+        true
     }
 
     /// The operations refused in the unattended mode so far, as text; taken once.
@@ -644,13 +665,16 @@ impl AiSession {
         assessment: &Assessment,
         agent_tool: bool,
     ) -> (bool, bool) {
+        if self.refused_by_scope(operation, assessment) {
+            return (false, false);
+        }
         let decision = self.policy.lock().await.decide(operation, assessment);
         let rememberable = match decision {
-            Decision::Allow => return (true, false),
+            Decision::Allow => return (!self.refused_by_scope(operation, assessment), false),
             Decision::Ask { rememberable } => rememberable,
         };
         let review = match self.review(operation, assessment, agent_tool).await {
-            Ok(()) => return (true, false),
+            Ok(()) => return (!self.refused_by_scope(operation, assessment), false),
             Err(note) => note,
         };
         // Nobody answers: refused, and noted for the user.
@@ -691,6 +715,7 @@ impl AiSession {
             .lock()
             .await
             .answer(operation, assessment, answer);
+        let allowed = allowed && !self.refused_by_scope(operation, assessment);
         (allowed, allowed)
     }
 

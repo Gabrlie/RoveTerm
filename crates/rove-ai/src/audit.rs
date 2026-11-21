@@ -422,7 +422,9 @@ impl Auditor {
             clip(text)
         };
         self.write(KIND_PROMPT, json!({ "text": kept, "clipped": clipped }));
-        if !self.titled.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        if !self.titled.swap(true, std::sync::atomic::Ordering::SeqCst)
+            && !self.private_text.load(std::sync::atomic::Ordering::SeqCst)
+        {
             self.write(
                 KIND_RENAMED,
                 json!({ "title": title_of(text), "auto": true }),
@@ -572,6 +574,22 @@ mod tests {
             ),
             records,
         )
+    }
+
+    #[test]
+    fn protected_prompts_do_not_leak_into_automatic_titles() {
+        let (audit, records) = auditor();
+        let private = "private-operations-request-marker";
+        audit.protect_text();
+        audit.prompt(private);
+        audit.turn_ended("end_turn");
+        let records = records.lock().unwrap();
+        assert!(!records.iter().any(|record| record.kind == KIND_RENAMED));
+        for record in records.iter() {
+            let mut summary = record.payload.clone();
+            tool_summary(&mut summary);
+            assert!(!summary.to_string().contains(private));
+        }
     }
 
     #[test]

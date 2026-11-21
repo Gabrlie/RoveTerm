@@ -1,5 +1,9 @@
 // English UI strings: the source catalog. Every other locale implements `Messages`.
+import { tailscaleEn } from '../tailscale/messages';
+import { opsEn } from '../ops/messages';
 export const en = {
+  ...tailscaleEn,
+  ...opsEn,
   'app.title': 'RoveTerm',
   'terminal.exited': 'Process exited (code {code})',
   'terminal.exitedSignal': 'Process terminated by signal {signal}',

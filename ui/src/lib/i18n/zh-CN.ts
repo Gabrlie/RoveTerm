@@ -1,7 +1,11 @@
 // Simplified Chinese UI strings. Keys must match `en.ts`.
 import type { Messages } from './en';
+import { tailscaleZhCN } from '../tailscale/messages';
+import { opsZhCN } from '../ops/messages';
 
 export const zhCN: Messages = {
+  ...tailscaleZhCN,
+  ...opsZhCN,
   'app.title': 'RoveTerm',
   'files.editBuiltin': '在 RoveTerm 中编辑',
   'files.editExternal': '用外部编辑器编辑',

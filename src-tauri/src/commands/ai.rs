@@ -57,6 +57,7 @@ struct InteractiveAssistant {
     session: Arc<AiSession>,
     provider: Arc<std::sync::RwLock<ProviderPrefs>>,
     info: std::sync::Mutex<SessionInfo>,
+    ops: Option<Arc<crate::ops_tools::OpsTools>>,
 }
 
 #[async_trait]
@@ -70,6 +71,7 @@ impl AgentBackend for InteractiveAssistant {
     async fn stop(&self) {
         self.cancel().await;
         self.session.stop_jobs().await;
+        let _idle = self.assistant.write().await;
     }
     fn session(&self) -> &Arc<AiSession> {
         &self.session
@@ -168,6 +170,85 @@ fn audit_sink(
             tracing::error!(%error, "could not persist audit record");
         }
     })
+}
+
+fn lead_checkpoint_sink(
+    app: AppHandle,
+    session: String,
+    audit: crate::ops_tools::AuditGuard,
+) -> rove_ai::assistant::CheckpointSink {
+    Arc::new(move |checkpoint| {
+        audit.check()?;
+        let result = (|| {
+            let state = app.state::<AppState>();
+            let value = serde_json::to_value(checkpoint)
+                .map_err(|_| "checkpoint encoding failed".to_owned())?;
+            let reference = crate::ops_runtime::save_private(&state, &session, &value)
+                .map_err(|_| "checkpoint persistence failed".to_owned())?;
+            state
+                .journal
+                .append(rove_journal::NewRecord {
+                    kind: "ops/lead_checkpoint".into(),
+                    session_id: Some(session.clone()),
+                    payload: serde_json::to_value(reference)
+                        .map_err(|_| "checkpoint reference failed".to_owned())?,
+                })
+                .map_err(|_| "checkpoint persistence failed".to_owned())?;
+            Ok(())
+        })();
+        if result.is_err() {
+            audit.fail();
+            app.state::<AppState>().ops.halt_on_storage_failure();
+        }
+        result
+    })
+}
+
+fn reviewed_lead_checkpoint(
+    mut checkpoint: rove_ai::assistant::AssistantCheckpoint,
+    confirmed: bool,
+    tasks: &serde_json::Value,
+) -> Result<rove_ai::assistant::AssistantCheckpoint, CommandError> {
+    if checkpoint.pending_tool.is_some() {
+        if !confirmed {
+            return Err(CommandError::new(
+                "ops.recovery_required",
+                "review the saved task states before resuming the interrupted operations lead",
+            ));
+        }
+        checkpoint.resolve_interrupted();
+        checkpoint.messages.push(llm::Message::User {
+            text: format!(
+                "The user has reviewed the interrupted operations lead's saved task states. The prior tool invocation must not be replayed. Inspect these persisted tasks and continue existing task IDs before creating any new work.\n{}",
+                rove_ai::assistant::untrusted("operations-recovery-state", &tasks.to_string()),
+            ),
+        });
+    }
+    Ok(checkpoint)
+}
+
+fn latest_lead_checkpoint(
+    state: &AppState,
+    session: &str,
+) -> Result<Option<rove_ai::assistant::AssistantCheckpoint>, CommandError> {
+    let record = state
+        .journal
+        .read(&rove_journal::JournalQuery {
+            session_id: Some(session.to_owned()),
+            kind: Some("ops/lead_checkpoint".into()),
+            limit: Some(1),
+            newest_first: true,
+            ..Default::default()
+        })
+        .map_err(|_| CommandError::new("ops.store", "checkpoint could not be read"))?;
+    record
+        .first()
+        .map(|record| {
+            let reference: rove_ops::PrivateRef = serde_json::from_value(record.payload.clone())
+                .map_err(|_| CommandError::new("ops.checkpoint", "invalid checkpoint reference"))?;
+            crate::ops_runtime::read_private(state, &reference)
+        })
+        .transpose()
 }
 
 #[tauri::command]
@@ -706,7 +787,7 @@ impl TerminalSource for Screen {
     }
 }
 
-fn mode(mode: AiMode) -> Mode {
+pub(crate) fn mode(mode: AiMode) -> Mode {
     match mode {
         AiMode::AskByRisk => Mode::AskByRisk,
         AiMode::AskAll => Mode::AskAll,
@@ -833,6 +914,10 @@ fn host_of(
 /// Starts `agent` (`builtin:<provider id>` or `acp:<agent id>`) working on `context`; `terminal`
 /// is the user's terminal session there, which the agent may read.
 #[tauri::command]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tauri binds individually named IPC fields"
+)]
 pub async fn ai_start(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -841,6 +926,7 @@ pub async fn ai_start(
     terminal: Option<String>,
     resume: Option<String>,
     model: Option<String>,
+    resume_confirmed: Option<bool>,
 ) -> Result<AiStarted, CommandError> {
     let agent_text = agent;
     let agent = agent_ref(&agent_text)?;
@@ -896,9 +982,10 @@ pub async fn ai_start(
         id.clone(),
         host.label(),
     ));
-    if earlier
-        .as_ref()
-        .is_some_and(|(_, _, rows, _)| rows.iter().any(|row| row.payload["private_text"] == true))
+    if matches!(context, AiContext::Fleet)
+        || earlier.as_ref().is_some_and(|(_, _, rows, _)| {
+            rows.iter().any(|row| row.payload["private_text"] == true)
+        })
     {
         auditor.protect_text();
     }
@@ -937,6 +1024,7 @@ pub async fn ai_start(
     }
 
     let mut builtin = None;
+    let mut operations = None;
     let mut agent_session = None;
     let (backend, mcp, started): (Arc<dyn AgentBackend>, _, AiStarted) = match agent {
         AgentRef::Builtin(provider_id) => {
@@ -979,26 +1067,50 @@ pub async fn ai_start(
                 .map_err(|error| CommandError::new("ai.model", error.to_string()))?
                 .with_cache_key(&id);
             let assistant = if matches!(context, AiContext::Fleet) {
-                let tools = crate::commands::fleet::FleetTools::new(
+                let tools = Arc::new(crate::ops_tools::OpsTools::new(
                     app.clone(),
                     id.clone(),
                     selection.clone(),
                     session.clone(),
                     None,
-                );
-                Assistant::with_toolbox(
-                    client,
-                    session,
-                    crate::commands::fleet::PROMPT.to_owned(),
-                    Arc::new(tools),
-                )
+                ));
+                operations = Some(tools.clone());
+                let audit = tools.audit_guard();
+                Assistant::with_toolbox(client, session, crate::ops_tools::PROMPT.to_owned(), tools)
+                    .with_checkpoint_sink(lead_checkpoint_sink(app.clone(), id.clone(), audit))
             } else {
                 Assistant::new(client, session, &meta)
             }
             .with_models(&provider.models)
             .with_max_steps(prefs.ai.max_steps as usize)
             .with_contexts(provider.contexts.clone(), provider.context_window);
-            if let Some((_, _, records, _)) = &earlier {
+            let checkpoint = if matches!(context, AiContext::Fleet) && earlier.is_some() {
+                latest_lead_checkpoint(state.inner(), &id)?
+            } else {
+                None
+            };
+            if let Some(checkpoint) = checkpoint {
+                let tasks = if checkpoint.pending_tool.is_some() {
+                    serde_json::to_value(
+                        state
+                            .ops
+                            .list()
+                            .map_err(crate::ops_runtime::error)?
+                            .into_iter()
+                            .filter(|task| task.conversation == id)
+                            .collect::<Vec<_>>(),
+                    )
+                    .map_err(|_| CommandError::new("ops.store", "invalid task state"))?
+                } else {
+                    serde_json::Value::Null
+                };
+                let checkpoint =
+                    reviewed_lead_checkpoint(checkpoint, resume_confirmed == Some(true), &tasks)?;
+                assistant
+                    .restore_checkpoint(checkpoint)
+                    .await
+                    .map_err(|error| CommandError::new("ops.checkpoint", error.to_string()))?;
+            } else if let Some((_, _, records, _)) = &earlier {
                 let records: Vec<(String, serde_json::Value)> = records
                     .iter()
                     .map(|record| (record.kind.clone(), record.payload.clone()))
@@ -1017,6 +1129,7 @@ pub async fn ai_start(
             };
             let active = Arc::new(InteractiveAssistant {
                 session: assistant.session().clone(),
+                ops: operations,
                 assistant: tokio::sync::RwLock::new(assistant),
                 provider: selection,
                 info: std::sync::Mutex::new(SessionInfo {
@@ -1258,33 +1371,45 @@ pub const AI_SUBTASK_EVENT: &str = "ai-subtask";
 /// Starts a sub-agent for fleet lead `parent` on saved host `host_id`: RoveTerm's assistant with
 /// `provider`, the host's tools and notes, the user's approval rules and judge, recorded as its
 /// own conversation (with `parent`) and announced to the UI. Returns its id and assistant.
-async fn start_subagent(
+pub(crate) async fn start_ops_worker(
     app: &AppHandle,
     parent: &str,
     host_id: rove_vault::HostId,
     provider: &ProviderPrefs,
-    task: &str,
     lead_mode: Mode,
     unattended: Option<bool>,
-) -> Result<(String, Arc<Assistant>), CommandError> {
+    spec: crate::ops_runtime::WorkerSpec,
+) -> Result<crate::ops_runtime::OpsWorker, CommandError> {
     let state = app.state::<AppState>();
     let state = state.inner();
     let prefs = state.vault.preferences()?;
+    let requested_model = provider.model.clone();
+    let mut provider = prefs
+        .ai
+        .providers
+        .iter()
+        .find(|current| current.id == provider.id)
+        .cloned()
+        .ok_or_else(|| CommandError::new("ops.failed", "the model provider was removed"))?;
+    select_model(&mut provider, &requested_model)?;
     let context = AiContext::Host {
         host_id: host_id.to_string(),
     };
     let (host, meta, _cwd) = host_of(app, state, &context)?;
-    let id = format!("ai-{}", uuid::Uuid::now_v7());
+    let id = spec.session;
     let auditor = Arc::new(Auditor::new(
         audit_sink(state.vault.clone(), state.journal.clone()),
         id.clone(),
         host.label(),
     ));
+    auditor.protect_text();
+    let observer = spec.on_event;
     let sink = {
         let app = app.clone();
         let auditor = auditor.clone();
         let id = id.clone();
         Arc::new(move |event: AiEvent| {
+            observer(&event);
             auditor.event(&event);
             if let Err(error) = app.emit(AI_EVENT, serde_json::json!({ "id": id, "event": event }))
             {
@@ -1306,6 +1431,9 @@ async fn start_subagent(
         ..SessionSettings::default()
     };
     let session = Arc::new(AiSession::new(host.clone(), settings, sink));
+    if !spec.can_modify {
+        session.restrict_read_only();
+    }
     attach_notes(state, &session, &context);
     let agent_ref = AgentRef::Builtin(provider.id.clone());
     // A scheduled run that may not change anything has no judge: every change is refused.
@@ -1326,19 +1454,35 @@ async fn start_subagent(
         .ai_key(&format!("builtin:{}", provider.id))?
         .unwrap_or_default();
     let idle = Duration::from_secs(u64::from(prefs.ai.request_timeout_secs));
-    let client = Client::new(endpoint(provider), &key, idle)
+    let client = Client::new(endpoint(&provider), &key, idle)
         .map_err(|error| CommandError::new("ai.model", error.to_string()))?
         .with_cache_key(&id);
-    let assistant = Arc::new(
-        Assistant::new(client, session, &meta)
-            .with_models(&provider.models)
-            .with_max_steps(prefs.ai.max_steps as usize)
-            .with_contexts(provider.contexts.clone(), provider.context_window),
-    );
-    let mode_value = serde_json::to_value(prefs.ai.mode)
-        .ok()
-        .and_then(|mode| mode.as_str().map(str::to_owned))
-        .unwrap_or_default();
+    let verification = Arc::new(crate::ops_verifier::Verification::new(spec.acceptance));
+    let toolbox = Arc::new(crate::ops_verifier::VerifiedTools::new(
+        Arc::new(rove_ai::mcp::SessionTools(session.clone())),
+        verification.clone(),
+    ));
+    let assistant = Assistant::with_host_toolbox(client, session, &meta, toolbox)
+        .with_models(&provider.models)
+        .with_max_steps(prefs.ai.max_steps as usize)
+        .with_contexts(provider.contexts.clone(), provider.context_window)
+        .with_checkpoint_sink(spec.persist);
+    let resumed = spec.checkpoint.is_some();
+    if let Some(checkpoint) = spec.checkpoint {
+        assistant
+            .restore_checkpoint(checkpoint)
+            .await
+            .map_err(|error| CommandError::new("ops.checkpoint", error.to_string()))?;
+    }
+    let assistant = Arc::new(assistant);
+    let mode_value = serde_json::to_value(if unattended.is_some() {
+        Mode::Unattended
+    } else {
+        lead_mode
+    })
+    .ok()
+    .and_then(|mode| mode.as_str().map(str::to_owned))
+    .unwrap_or_default();
     auditor.started(&SessionInfo {
         agent: Some(provider.name.clone()),
         agent_version: Some(provider.model.clone()),
@@ -1346,7 +1490,7 @@ async fn start_subagent(
         agent_ref: Some(format!("builtin:{}", provider.id)),
         context: serde_json::to_value(&context).ok(),
         agent_session: None,
-        resumed: false,
+        resumed,
         parent: Some(parent.to_owned()),
     });
     state.ai.entries.lock().await.insert(
@@ -1361,74 +1505,22 @@ async fn start_subagent(
     );
     if let Err(error) = app.emit(
         AI_SUBTASK_EVENT,
-        serde_json::json!({ "parent": parent, "id": id, "host": host.label(), "task": task }),
+        serde_json::json!({ "parent": parent, "id": id, "host": host.label(), "task": spec.task }),
     ) {
         tracing::warn!(%error, "announcing a sub-agent failed");
     }
-    Ok((id, assistant))
+    Ok(crate::ops_runtime::OpsWorker {
+        id,
+        assistant,
+        verification,
+    })
 }
 
-/// Ends a sub-agent when its run is dropped (the lead's turn was cancelled) as well as when it
-/// finishes.
-struct EndSubagent {
-    app: AppHandle,
-    id: String,
-}
-
-impl Drop for EndSubagent {
-    fn drop(&mut self) {
-        let app = self.app.clone();
-        let id = std::mem::take(&mut self.id);
-        tauri::async_runtime::spawn(async move {
-            let state = app.state::<AppState>();
-            end_subagent(&app, &state, &id).await;
-        });
-    }
-}
-
-/// Runs `task` with a sub-agent of fleet lead `parent` on host `host_id` to the end of its turn
-/// and ends it; returns its last reply (with what it had to leave for the user, when
-/// unattended), or why it failed. It runs in the lead's approval mode `lead_mode`;
-/// `unattended` is `Some(allow_changes)` in a scheduled run.
-pub(crate) async fn run_subagent(
-    app: &AppHandle,
-    parent: &str,
-    host_id: rove_vault::HostId,
-    provider: &ProviderPrefs,
-    task: &str,
-    lead_mode: Mode,
-    unattended: Option<bool>,
-) -> Result<String, String> {
+/// The current conversation policy, for resumed operations workers.
+pub(crate) async fn ops_live_mode(app: &AppHandle, parent: &str) -> Option<Mode> {
     let state = app.state::<AppState>();
-    let (id, assistant) =
-        start_subagent(app, parent, host_id, provider, task, lead_mode, unattended)
-            .await
-            .map_err(|error| error.message)?;
-    let _end = EndSubagent {
-        app: app.clone(),
-        id: id.clone(),
-    };
-    let entry = state.ai.get(&id).await.map_err(|error| error.message)?;
-    entry.auditor.prompt(task);
-    let result = assistant.prompt(task).await;
-    let stop = match &result {
-        Ok(reason) => reason.clone(),
-        Err(error) => format!("error: {error}"),
-    };
-    entry.auditor.turn_ended(&stop);
-    let mut reply = assistant.last_reply().await;
-    let deferred = assistant.session().take_deferred();
-    if !deferred.is_empty() {
-        reply.push_str("\n\nRefused for lack of approval (needs the user's decision):\n");
-        for operation in deferred {
-            reply.push_str(&format!("- {operation}\n"));
-        }
-    }
-    match result {
-        Ok(_) if reply.trim().is_empty() => Ok(format!("(no reply; the turn ended with {stop})")),
-        Ok(_) => Ok(reply),
-        Err(error) => Err(error.to_string()),
-    }
+    let entry = state.ai.entries.lock().await.get(parent).cloned()?;
+    Some(entry.backend.session().mode().await)
 }
 
 /// The provider the fleet lead uses: the default agent when it is a provider, else the first.
@@ -1455,6 +1547,7 @@ pub(crate) async fn run_scheduled(
     app: &AppHandle,
     schedule: &rove_vault::Schedule,
     when: &str,
+    due: i64,
 ) -> (Option<String>, Result<String, String>) {
     let state = app.state::<AppState>();
     let Ok(prefs) = state.vault.preferences() else {
@@ -1471,6 +1564,7 @@ pub(crate) async fn run_scheduled(
         "fleet",
     ));
     auditor.set_titled();
+    auditor.protect_text();
     let sink = {
         let app = app.clone();
         let auditor = auditor.clone();
@@ -1502,23 +1596,35 @@ pub(crate) async fn run_scheduled(
         Ok(client) => client.with_cache_key(&id),
         Err(error) => return (None, Err(error.to_string())),
     };
-    let tools = crate::commands::fleet::FleetTools::new(
+    let tools = Arc::new(crate::ops_tools::OpsTools::new(
         app.clone(),
         id.clone(),
         Arc::new(std::sync::RwLock::new(provider.clone())),
         session.clone(),
         Some(schedule.allow_changes),
-    );
+    ));
+    let request_id = match rove_ops::OpsRequestId::new(format!("schedule:{}:{due}", schedule.id)) {
+        Ok(id) => id,
+        Err(error) => return (None, Err(error.to_string())),
+    };
+    let _request = match tools.begin_request(
+        request_id,
+        rove_ops::TaskSource::Schedule {
+            schedule: schedule.id.to_string(),
+            due,
+        },
+        schedule.allow_changes,
+    ) {
+        Ok(guard) => guard,
+        Err(error) => return (None, Err(error)),
+    };
+    let audit = tools.audit_guard();
     let assistant = Arc::new(
-        Assistant::with_toolbox(
-            client,
-            session,
-            crate::commands::fleet::PROMPT.to_owned(),
-            Arc::new(tools),
-        )
-        .with_models(&provider.models)
-        .with_max_steps(prefs.ai.max_steps as usize)
-        .with_contexts(provider.contexts.clone(), provider.context_window),
+        Assistant::with_toolbox(client, session, crate::ops_tools::PROMPT.to_owned(), tools)
+            .with_checkpoint_sink(lead_checkpoint_sink(app.clone(), id.clone(), audit))
+            .with_models(&provider.models)
+            .with_max_steps(prefs.ai.max_steps as usize)
+            .with_contexts(provider.contexts.clone(), provider.context_window),
     );
     auditor.started(&SessionInfo {
         agent: Some(provider.name.clone()),
@@ -1556,12 +1662,79 @@ pub(crate) async fn run_scheduled(
         false,
     ));
     let result = assistant.prompt(&prompt).await;
+    let mut operations_failure = None;
+    let mut reports = Vec::new();
+    if matches!(&result, Ok(reason) if reason == "end_turn") {
+        let mut updates = state.ops.subscribe();
+        loop {
+            let tasks = match state.ops.list() {
+                Ok(tasks) => tasks
+                    .into_iter()
+                    .filter(|task| task.conversation == id)
+                    .collect::<Vec<_>>(),
+                Err(error) => {
+                    operations_failure = Some(error.to_string());
+                    break;
+                }
+            };
+            if tasks.iter().any(|task| {
+                matches!(
+                    task.state,
+                    rove_ops::OpsTaskState::Queued
+                        | rove_ops::OpsTaskState::Running
+                        | rove_ops::OpsTaskState::WaitingApproval
+                )
+            }) {
+                if state.ops.is_closed() || updates.changed().await.is_err() {
+                    operations_failure = Some("operations stopped before completion".into());
+                    break;
+                }
+                continue;
+            }
+            for task in tasks {
+                if task.state != rove_ops::OpsTaskState::Completed {
+                    operations_failure =
+                        Some(format!("operations task {} is {:?}", task.id, task.state));
+                }
+                let evidence = task.report.into_iter().chain(
+                    task.subtasks
+                        .iter()
+                        .filter_map(|sub| sub.evidence.last().cloned()),
+                );
+                for reference in evidence {
+                    match state
+                        .journal
+                        .private_body(&reference.session, &reference.reference.to_string())
+                        .map_err(|error| error.to_string())
+                        .and_then(|sealed| {
+                            state
+                                .vault
+                                .open_audit(&reference.session, reference.reference, &sealed)
+                                .map_err(|error| error.to_string())
+                        }) {
+                        Ok(report) => reports.push(report.to_string()),
+                        Err(error) => operations_failure = Some(error),
+                    }
+                }
+            }
+            break;
+        }
+    }
     let ended = match &result {
         Ok(reason) => reason.clone(),
         Err(error) => format!("error: {error}"),
     };
     auditor.turn_ended(&ended);
-    let report = assistant.last_reply().await;
+    let mut report = assistant.last_reply().await;
+    if !reports.is_empty() {
+        report = reports.join("\n\n");
+        assistant.session().emit(AiEvent::Update {
+            update: acp::SessionUpdate::Message {
+                text: report.clone(),
+                message_id: Some("ops-final-report".into()),
+            },
+        });
+    }
     let entry = state.ai.entries.lock().await.remove(&id);
     if let Some(entry) = entry {
         stop(&entry).await;
@@ -1569,7 +1742,11 @@ pub(crate) async fn run_scheduled(
     (
         Some(id),
         match result {
-            Ok(_) => Ok(report),
+            Ok(reason) if reason == "end_turn" => match operations_failure {
+                Some(error) => Err(error),
+                None => Ok(report),
+            },
+            Ok(reason) => Err(reason),
             Err(error) => Err(error.to_string()),
         },
     )
@@ -1609,6 +1786,8 @@ pub async fn ai_prompt(
     state: State<'_, AppState>,
     id: String,
     text: String,
+    request_id: Option<String>,
+    allow_changes: Option<bool>,
 ) -> Result<String, CommandError> {
     if text.trim().is_empty() || text.len() > MAX_PROMPT {
         return Err(CommandError::new(
@@ -1617,6 +1796,27 @@ pub async fn ai_prompt(
         ));
     }
     let entry = state.ai.get(&id).await?;
+    let _request = if let Some(tools) = entry
+        .builtin
+        .as_ref()
+        .and_then(|active| active.ops.as_ref())
+    {
+        let request = rove_ops::OpsRequestId::new(
+            request_id.unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
+        )
+        .map_err(|e| CommandError::new("input.invalid", e.to_string()))?;
+        Some(
+            tools
+                .begin_request(
+                    request,
+                    rove_ops::TaskSource::User,
+                    allow_changes.unwrap_or(false),
+                )
+                .map_err(|e| CommandError::new("ai.busy", e))?,
+        )
+    } else {
+        None
+    };
     entry.auditor.prompt(&text);
     let result = entry.backend.prompt(&text).await;
     let stop = match &result {
@@ -1630,7 +1830,20 @@ pub async fn ai_prompt(
 /// Stops the current turn of session `id`.
 #[tauri::command]
 pub async fn ai_cancel(state: State<'_, AppState>, id: String) -> Result<(), CommandError> {
-    state.ai.get(&id).await?.backend.cancel().await;
+    let entry = state.ai.get(&id).await?;
+    entry.backend.cancel().await;
+    if let Some(active) = &entry.builtin {
+        let _idle = active.assistant.write().await;
+        state
+            .ops
+            .cancel_conversation(&id)
+            .map_err(|e| CommandError::new("ops.store", e.to_string()))?;
+    } else {
+        state
+            .ops
+            .cancel_conversation(&id)
+            .map_err(|e| CommandError::new("ops.store", e.to_string()))?;
+    }
     Ok(())
 }
 
@@ -1687,6 +1900,10 @@ pub async fn ai_stop(state: State<'_, AppState>, id: String) -> Result<(), Comma
     if let Some(entry) = entry {
         stop(&entry).await;
     }
+    state
+        .ops
+        .cancel_conversation(&id)
+        .map_err(|e| CommandError::new("ops.store", e.to_string()))?;
     Ok(())
 }
 
@@ -1700,6 +1917,35 @@ pub async fn ai_delete(state: State<'_, AppState>, id: String) -> Result<(), Com
     if let Some(entry) = entry {
         stop(&entry).await;
     }
+    state
+        .ops
+        .cancel_conversation(&id)
+        .map_err(|e| CommandError::new("ops.store", e.to_string()))?;
+    state
+        .ops
+        .wait_conversation_idle(&id)
+        .await
+        .map_err(|e| CommandError::new("ops.store", e.to_string()))?;
+    let tasks = state
+        .ops
+        .list()
+        .map_err(|e| CommandError::new("ops.store", e.to_string()))?;
+    state
+        .ops
+        .forget_conversation(&id)
+        .map_err(|e| CommandError::new("ops.store", e.to_string()))?;
+    for task in tasks.into_iter().filter(|task| task.conversation == id) {
+        for session in task.subtasks.into_iter().filter_map(|sub| sub.session) {
+            state
+                .journal
+                .delete_session(&session, "ops/")
+                .map_err(|e| CommandError::new("journal.io", e.to_string()))?;
+        }
+    }
+    state
+        .journal
+        .delete_session(&id, "ops/")
+        .map_err(|e| CommandError::new("journal.io", e.to_string()))?;
     let recorder = state.ai.recorder.clone();
     let journal = state.journal.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -2223,6 +2469,48 @@ mod history_tests {
     use super::*;
     use rove_journal::{JournalQuery, JournalRecord, JournalStore, NewRecord, SqliteJournal};
     use serde_json::json;
+
+    fn interrupted_lead() -> rove_ai::assistant::AssistantCheckpoint {
+        serde_json::from_value(json!({
+            "version":1,"format":"chat","model":"model","turns":1,"last_used":0,
+            "pending_tool":"pending-start",
+            "messages":[{"role":"assistant","text":"queued a task","tool_calls":[{
+                "id":"pending-start","name":"start_tasks","arguments":"{}"
+            }],"opaque":null}]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn interrupted_lead_requires_review_before_restoring() {
+        let checkpoint = interrupted_lead();
+        let error = reviewed_lead_checkpoint(checkpoint.clone(), false, &json!([])).unwrap_err();
+        assert_eq!(error.code, "ops.recovery_required");
+        let mut clean = checkpoint;
+        clean.resolve_interrupted();
+        assert_eq!(
+            reviewed_lead_checkpoint(clean.clone(), false, &json!([])).unwrap(),
+            clean,
+        );
+    }
+
+    #[test]
+    fn reviewed_lead_preserves_history_and_adds_durable_task_state() {
+        let checkpoint = reviewed_lead_checkpoint(
+            interrupted_lead(),
+            true,
+            &json!([{"id":"existing-task","state":"interrupted"}]),
+        )
+        .unwrap();
+        assert!(checkpoint.pending_tool.is_none());
+        assert!(
+            matches!(checkpoint.messages.first(),Some(llm::Message::Assistant{text,..}) if text=="queued a task")
+        );
+        assert!(checkpoint.messages.iter().any(|message| matches!(message,llm::Message::Tool{call_id,output,..} if call_id=="pending-start" && output.contains("do not replay"))));
+        assert!(
+            matches!(checkpoint.messages.last(),Some(llm::Message::User{text}) if text.contains("existing-task") && text.contains("operations-recovery-state"))
+        );
+    }
 
     #[test]
     fn roles_are_filtered_before_limit_and_children_follow_parent() {

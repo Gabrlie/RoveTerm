@@ -107,9 +107,9 @@ pub async fn sftp_read_text(
     path: String,
 ) -> Result<TextFile, CommandError> {
     let fs = state.fs_sessions.get(id)?;
-    Ok(read_text_file(fs.as_ref(), remote_path(&path)?)
+    read_text_file(fs.as_ref(), remote_path(&path)?)
         .await
-        .map_err(text_edit_error)?)
+        .map_err(text_edit_error)
 }
 
 /// Saves text only when the remote file still has the version that was read for editing.
@@ -122,11 +122,9 @@ pub async fn sftp_save_text(
     text: String,
 ) -> Result<String, CommandError> {
     let fs = state.fs_sessions.get(id)?;
-    Ok(
-        save_text_file(fs.as_ref(), remote_path(&path)?, &version, &text)
-            .await
-            .map_err(text_edit_error)?,
-    )
+    save_text_file(fs.as_ref(), remote_path(&path)?, &version, &text)
+        .await
+        .map_err(text_edit_error)
 }
 
 fn text_edit_error(error: TextEditError) -> CommandError {

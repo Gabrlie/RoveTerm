@@ -280,3 +280,211 @@ async fn switching_between_providers_with_the_same_model_keeps_tool_history() {
         assert!(messages.contains(text));
     }
 }
+
+fn durable_assistant(
+    base: &str,
+    sink: rove_ai::assistant::CheckpointSink,
+    toolbox: Option<Arc<dyn rove_ai::mcp::McpTools>>,
+) -> Assistant {
+    let session = Arc::new(AiSession::new(
+        Arc::new(LocalHost),
+        SessionSettings::default(),
+        Arc::new(|_| {}),
+    ));
+    let client = Client::new(
+        Endpoint {
+            format: Format::Chat,
+            base_url: base.into(),
+            model: "m".into(),
+            effort: None,
+            max_tokens: None,
+        },
+        "",
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    let assistant = match toolbox {
+        Some(toolbox) => Assistant::with_toolbox(client, session, "test worker".into(), toolbox),
+        None => Assistant::new(client, session, &HostMeta::default()),
+    };
+    assistant.with_checkpoint_sink(sink)
+}
+
+#[tokio::test]
+async fn durable_checkpoints_restore_complete_tool_history_and_turn_numbering() {
+    let (base, _) = model(vec![
+        call(
+            "c1",
+            "run_command",
+            json!({"command":"echo preserved-result"}),
+        ),
+        say("first complete"),
+    ])
+    .await;
+    let saved = Arc::new(Mutex::new(Vec::new()));
+    let records = saved.clone();
+    let assistant = durable_assistant(
+        &base,
+        Arc::new(move |checkpoint| {
+            records.lock().unwrap().push(checkpoint);
+            Ok(())
+        }),
+        None,
+    );
+    assistant.prompt("inspect it").await.unwrap();
+    let checkpoint = assistant.checkpoint().await.unwrap();
+    assert_eq!(checkpoint.turns, 1);
+    assert!(checkpoint.pending_tool.is_none());
+    assert!(checkpoint.messages.iter().any(|message| matches!(message,
+        rove_ai::llm::Message::Tool { output, .. } if output.contains("preserved-result"))));
+    {
+        let saved = saved.lock().unwrap();
+        assert!(
+            saved
+                .iter()
+                .any(|checkpoint| checkpoint.pending_tool.as_deref() == Some("c1"))
+        );
+        assert_eq!(saved.last().unwrap(), &checkpoint);
+    }
+
+    let (base, seen) = model(vec![say("continued")]).await;
+    let restored = durable_assistant(&base, Arc::new(|_| Ok(())), None);
+    let encoded = serde_json::to_vec(&checkpoint).unwrap();
+    restored
+        .restore_checkpoint(serde_json::from_slice(&encoded).unwrap())
+        .await
+        .unwrap();
+    restored.prompt("follow up").await.unwrap();
+    assert_eq!(restored.checkpoint().await.unwrap().turns, 2);
+    let messages = seen.lock().unwrap()[0]["messages"].to_string();
+    assert!(messages.contains("preserved-result"));
+    assert!(messages.contains("first complete"));
+    assert!(messages.contains("follow up"));
+}
+
+#[tokio::test]
+async fn a_failed_initial_checkpoint_prevents_the_model_request() {
+    let (base, seen) = model(vec![say("must not run")]).await;
+    let assistant = durable_assistant(&base, Arc::new(|_| Err("storage unavailable".into())), None);
+    assert!(matches!(
+        assistant.prompt("inspect it").await,
+        Err(rove_ai::assistant::AssistantError::Checkpoint(_))
+    ));
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+struct CountTools(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait]
+impl rove_ai::mcp::McpTools for CountTools {
+    fn instructions(&self) -> String {
+        "test counter".into()
+    }
+    fn specs(&self) -> Value {
+        json!([{"name":"count","description":"count one execution","inputSchema":{"type":"object"}}])
+    }
+    async fn call(
+        &self,
+        _name: &str,
+        _arguments: &Value,
+    ) -> Result<rove_ai::tools::ToolResult, (i64, String)> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(rove_ai::tools::ToolResult {
+            text: "counted".into(),
+            is_error: false,
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_failed_tool_intent_checkpoint_prevents_the_tool() {
+    let (base, seen) = model(vec![call("c1", "count", json!({}))]).await;
+    let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let assistant = durable_assistant(
+        &base,
+        Arc::new(|checkpoint| {
+            if checkpoint.pending_tool.is_some() {
+                Err("storage unavailable".into())
+            } else {
+                Ok(())
+            }
+        }),
+        Some(Arc::new(CountTools(count.clone()))),
+    );
+    assert!(matches!(
+        assistant.prompt("count").await,
+        Err(rove_ai::assistant::AssistantError::Checkpoint(_))
+    ));
+    assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_failed_result_checkpoint_keeps_the_interrupted_marker_and_never_replays() {
+    let (base, seen) = model(vec![
+        call("c1", "count", json!({})),
+        say("must not request"),
+    ])
+    .await;
+    let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let assistant = durable_assistant(
+        &base,
+        Arc::new(|checkpoint| {
+            if matches!(
+                checkpoint.messages.last(),
+                Some(rove_ai::llm::Message::Tool { .. })
+            ) {
+                Err("result storage unavailable".into())
+            } else {
+                Ok(())
+            }
+        }),
+        Some(Arc::new(CountTools(count.clone()))),
+    );
+    assert!(assistant.prompt("count").await.is_err());
+    assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let checkpoint = assistant.checkpoint().await.unwrap();
+    assert_eq!(checkpoint.pending_tool.as_deref(), Some("c1"));
+    assert!(assistant.prompt("continue").await.is_err());
+    assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn restore_rejects_versions_and_unresolved_effects_and_clears_incompatible_opaque_content() {
+    let (base, seen) = model(Vec::new()).await;
+    let assistant = durable_assistant(&base, Arc::new(|_| Ok(())), None);
+    let mut checkpoint = assistant.checkpoint().await.unwrap();
+    checkpoint.version += 1;
+    assert!(assistant.restore_checkpoint(checkpoint).await.is_err());
+    let mut checkpoint = assistant.checkpoint().await.unwrap();
+    checkpoint.messages.push(rove_ai::llm::Message::Assistant {
+        text: "write requested".into(),
+        tool_calls: vec![rove_ai::llm::ToolCall {
+            id: "c1".into(),
+            name: "count".into(),
+            arguments: "{}".into(),
+        }],
+        opaque: Some(json!({"signed":"provider content"})),
+    });
+    checkpoint.pending_tool = Some("c1".into());
+    assert!(
+        assistant
+            .restore_checkpoint(checkpoint.clone())
+            .await
+            .is_err()
+    );
+    checkpoint.resolve_interrupted();
+    checkpoint.format = Format::Anthropic;
+    assistant.restore_checkpoint(checkpoint).await.unwrap();
+    let restored = assistant.checkpoint().await.unwrap();
+    assert!(restored.pending_tool.is_none());
+    assert!(matches!(
+        &restored.messages[0],
+        rove_ai::llm::Message::Assistant { opaque: None, .. }
+    ));
+    assert!(
+        matches!(&restored.messages[1], rove_ai::llm::Message::Tool { output,is_error:true,.. } if output.contains("unknown"))
+    );
+    assert!(seen.lock().unwrap().is_empty());
+}

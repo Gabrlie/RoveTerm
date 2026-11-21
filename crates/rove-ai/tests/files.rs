@@ -44,6 +44,81 @@ fn file(dir: &tempfile::TempDir, text: &str) -> (PathBuf, String) {
 }
 
 #[tokio::test]
+async fn a_read_only_task_scope_cannot_be_widened_by_changing_approval_modes() {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured = events.clone();
+    let session = AiSession::new(
+        Arc::new(LocalHost),
+        SessionSettings::default(),
+        Arc::new(move |event| captured.lock().unwrap().push(event)),
+    );
+    session.restrict_read_only();
+    session.set_mode(Mode::Auto).await;
+    let dir = tempfile::tempdir().unwrap();
+    let readable = dir.path().join("readable.txt");
+    std::fs::write(&readable, "current state").unwrap();
+    assert_eq!(
+        session
+            .read_file(readable.to_str().unwrap())
+            .await
+            .unwrap()
+            .content,
+        "current state"
+    );
+    let path = dir.path().join("blocked.txt");
+    assert!(
+        session
+            .write_file(path.to_str().unwrap(), "must not write")
+            .await
+            .is_err()
+    );
+    assert!(!path.exists());
+    assert_eq!(session.take_deferred().len(), 1);
+    let events = events.lock().unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AiEvent::Approval { .. }))
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AiEvent::Executed {
+            outcome: rove_ai::session::Outcome::Denied,
+            ..
+        }
+    )));
+}
+
+#[tokio::test]
+async fn narrowing_scope_while_an_approval_waits_still_prevents_the_write() {
+    let (events, mut received) = mpsc::unbounded_channel();
+    let session = Arc::new(AiSession::new(
+        Arc::new(LocalHost),
+        SessionSettings::default(),
+        Arc::new(move |event| {
+            let _ = events.send(event);
+        }),
+    ));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("blocked.txt");
+    let pending = {
+        let session = session.clone();
+        let path = path.clone();
+        tokio::spawn(async move { session.write_file(path.to_str().unwrap(), "change").await })
+    };
+    let request = loop {
+        if let Some(AiEvent::Approval { request_id, .. }) = received.recv().await {
+            break request_id;
+        }
+    };
+    session.restrict_read_only();
+    assert!(session.answer(request, Answer::AllowSession).await);
+    assert!(pending.await.unwrap().is_err());
+    assert!(!path.exists());
+    assert_eq!(session.take_deferred().len(), 1);
+}
+
+#[tokio::test]
 async fn an_edit_is_made_on_the_file_as_it_is_after_the_approval() {
     let dir = tempfile::tempdir().unwrap();
     let (path, name) = file(&dir, "port 80\nhost a\n");

@@ -11,6 +11,8 @@
   import type { HostEntry } from '../ipc';
   import { hostMenuItems } from './hostMenu';
   import { hostAddress, hostSubtitle } from './route';
+  import TailscaleDialog from '../tailscale/TailscaleDialog.svelte';
+  import { isMobile } from '../platform';
 
   interface Props {
     onconnect: (host: HostEntry) => void;
@@ -26,6 +28,7 @@
   let { onconnect, onfiles, onforwards, onedit, onnotice, onsettings, onkeys }: Props = $props();
 
   let menu = $state<{ x: number; y: number; host: HostEntry } | null>(null);
+  let tailscaleOpen = $state(false);
 
   function openMenu(event: MouseEvent, host: HostEntry): void {
     event.preventDefault();
@@ -55,6 +58,9 @@
     <Icon name="search" size={14} />
     <input class="bare" bind:value={hosts.query} placeholder={t('host.search')} spellcheck="false" />
   </div>
+  {#if !isMobile}
+    <div class="integration"><button type="button" class="footer-button" onclick={() => tailscaleOpen = true}><Icon name="cloud" size={14} />{t('tailscale.title')}</button></div>
+  {/if}
   <div class="list">
     {#each hosts.grouped as [group, entries] (group ?? '')}
       {#if group}<div class="group section-label">{group}</div>{/if}
@@ -125,6 +131,10 @@
   </footer>
 </aside>
 
+{#if tailscaleOpen}
+  <TailscaleDialog onclose={() => tailscaleOpen = false} {onconnect} onmanagekeys={onkeys} />
+{/if}
+
 <style>
   .sidebar {
     width: 248px;
@@ -167,6 +177,8 @@
     overflow-y: auto;
     padding: 0 var(--space-2) var(--space-2);
   }
+  .integration { padding: 0 var(--space-3) var(--space-2); }
+  .integration .footer-button { width: 100%; }
   .group {
     padding: var(--space-3) var(--space-2) var(--space-1);
   }

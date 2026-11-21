@@ -36,6 +36,10 @@ pub struct AppState {
     pub local_fs: Arc<LocalFs>,
     /// Durable event journal.
     pub journal: Arc<dyn rove_journal::JournalStore>,
+    /// Durable, device-local operations tasks and their global worker budget.
+    pub ops: Arc<rove_ops::OpsSupervisor>,
+    #[cfg(desktop)]
+    pub tailscale: Arc<dyn rove_tailscale::TailnetDiscovery>,
     /// Local PTY provider.
     #[cfg(desktop)]
     pub pty: Arc<rove_pty::LocalTerminals>,
@@ -69,6 +73,9 @@ impl AppState {
             transfers: ctx.require::<TransferQueue>()?,
             local_fs: ctx.require::<LocalFs>()?,
             journal,
+            ops: ctx.require::<rove_ops::OpsSupervisor>()?,
+            #[cfg(desktop)]
+            tailscale: ctx.require::<dyn rove_tailscale::TailnetDiscovery>()?,
             ai,
             external: crate::commands::external::ExternalAccess::new(data_dir),
             #[cfg(desktop)]

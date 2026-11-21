@@ -13,4 +13,6 @@
 | [journal](journal.md) | 持久事件日志 |
 | [sync](sync.md) | 端到端加密的多设备同步：空间、分段、HLC 合并 |
 | [ai](ai.md) | AI Agent：风险分级、审批策略 |
+| [tailscale](tailscale.md) | 桌面客户端发现、尾网设备快照和普通 SSH 连接 |
+| [ops](ops.md) | 持久运维任务、授权范围、共享调度和恢复 |
 | [ui](ui.md) | 前端结构、actions 表、i18n、设计 token |

@@ -40,6 +40,7 @@ import { errorText, t, type MessageKey } from '../i18n';
 import { addCache, type CacheTotals } from './quota';
 import { approvalFor, connectionProblem, itemsFromRecords, titleOf, waitingApproval, type ChatItem } from './chatview';
 import { prefs } from '../settings/prefs.svelte';
+import { canSendPrompt, requestForSend, type PromptRequest } from './requests';
 
 export type { ChatItem } from './chatview';
 
@@ -58,6 +59,12 @@ export function contextKey(context: AiContext): string {
 }
 
 export class Chat {
+  private request: PromptRequest | null = null;
+  allowChanges = $state(false);
+  recoveryRequired = $state(false);
+  recoveryConfirmed = $state(false);
+  /** An input rejected before planner recovery remains available for an explicit retry. */
+  recoveryRequest = $state<PromptRequest | null>(null);
   /** The backend session, once started. */
   id = $state<string | null>(null);
   /** The agent answering (`builtin:<id>` or `acp:<id>`); the default when not chosen. */
@@ -115,6 +122,10 @@ export class Chat {
   /** Approvals still waiting for the user. */
   get waiting(): number {
     return this.items.filter((item) => item.kind === 'approval' && item.answer === undefined).length;
+  }
+
+  get canSend(): boolean {
+    return canSendPrompt(this.busy, this.starting, this.recoveryRequired, this.recoveryConfirmed);
   }
 
   private last(): ChatItem | undefined {
@@ -256,7 +267,21 @@ export class Chat {
       open.state = 'retrying';
       open.retries = 0;
     }
-    await this.send(last.text, terminal, true);
+    await this.send(this.request?.text ?? last.text, terminal, true);
+  }
+
+  /** Confirms recovery and starts the planner without submitting an input. */
+  async confirmRecovery(terminal: SessionId | null): Promise<void> {
+    if (!this.recoveryRequired || this.starting || this.busy) return;
+    this.recoveryConfirmed = true;
+    await this.prepare(terminal);
+  }
+
+  /** Retries the preserved input with its original authorization after recovery. */
+  async retryRecovery(terminal: SessionId | null): Promise<void> {
+    const request = this.recoveryRequest;
+    if (!request || !this.canSend || this.recoveryRequired) return;
+    await this.submit(request, terminal);
   }
 
   /** Sends `text`, starting the agent first when needed. `terminal` is the user's terminal on the
@@ -276,9 +301,11 @@ export class Chat {
         const agent = this.agent ?? (this.context.kind === 'fleet' ? ai.fleetAgent : ai.defaultAgent);
         if (!agent) throw { code: 'ai.no_agent', message: 'no agent' };
         this.agent = agent;
-        const started = await aiStart(this.context, agent, this.attachTerminal ? terminal : null, this.resumeId, this.selectedModel);
+        const started = await aiStart(this.context, agent, this.attachTerminal ? terminal : null, this.resumeId, this.selectedModel, this.recoveryConfirmed);
         this.id = started.id;
         this.resumeId = null;
+        this.recoveryRequired = false;
+        this.recoveryConfirmed = false;
         this.host = started.host;
         this.agentName = started.agent;
         this.options = started.config_options;
@@ -290,6 +317,10 @@ export class Chat {
         this.wanted = {};
         if (this.title) await aiRename(started.id, this.title);
       } catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ops.recovery_required') {
+          this.recoveryRequired = true;
+          this.recoveryConfirmed = false;
+        }
         this.notice(error);
         return false;
       } finally {
@@ -300,14 +331,27 @@ export class Chat {
   }
 
   async send(text: string, terminal: SessionId | null, again = false): Promise<void> {
-    if (this.busy || this.starting || !text.trim()) return;
+    if (!this.canSend || !text.trim()) return;
+    const request = requestForSend(this.request, text, again, this.allowChanges, () => crypto.randomUUID());
+    if (request !== this.request) {
+      this.allowChanges = false;
+    }
     if (!again) this.items.push({ kind: 'user', text });
-    if (!(await this.start(terminal))) return;
+    await this.submit(request, terminal);
+  }
+
+  private async submit(request: PromptRequest, terminal: SessionId | null): Promise<void> {
+    this.request = request;
+    if (!(await this.start(terminal))) {
+      if (this.recoveryRequired) this.recoveryRequest = request;
+      return;
+    }
     const id = this.id;
     if (!id) return;
     this.busy = true;
     try {
-      const reason = await aiPrompt(id, text);
+      const reason = await aiPrompt(id, request.text, request.id, request.allowChanges);
+      if (this.recoveryRequest?.id === request.id) this.recoveryRequest = null;
       if (reason !== 'end_turn' && reason !== 'cancelled') {
         const key = `ai.stop.${reason}` as MessageKey;
         this.items.push({ kind: 'notice', text: t(key) === key ? reason : t(key), code: null });

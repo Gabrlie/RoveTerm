@@ -43,6 +43,7 @@ impl From<AssistantError> for BackendError {
             AssistantError::Busy => Self::Busy,
             AssistantError::Llm(error) => Self::Model(error.to_string()),
             AssistantError::UnknownModel(_) => Self::Invalid(error.to_string()),
+            AssistantError::Checkpoint(_) => Self::Model(error.to_string()),
         }
     }
 }
@@ -105,6 +106,7 @@ impl AgentBackend for Assistant {
     async fn stop(&self) {
         Assistant::cancel(self).await;
         self.session().stop_jobs().await;
+        self.wait_idle().await;
     }
 
     fn session(&self) -> &Arc<AiSession> {

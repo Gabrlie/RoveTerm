@@ -8,26 +8,34 @@
   import { hosts } from './hosts.svelte';
 
   import { keys } from '../keys/keys.svelte';
+  import { findDuplicateHost } from '../tailscale/discovery';
 
   interface Props {
     host: HostEntry | null;
     onclose: () => void;
     /** Opens the key library above the editor. */
     onmanagekeys: () => void;
+    prefill?: { name: string; hostname: string; username?: string };
+    reuseExisting?: boolean;
+    onreuse?: (host: HostEntry) => void;
+    onsaved?: (host: HostEntry) => void;
+    submitLabel?: string;
   }
 
-  let { host, onclose, onmanagekeys }: Props = $props();
+  let { host, onclose, onmanagekeys, prefill, reuseExisting = false, onreuse, onsaved, submitLabel }: Props = $props();
 
   type Method = AuthMethod['method'];
   type RouteKind = 'direct' | 'jump' | 'http' | 'socks5';
 
   // svelte-ignore state_referenced_locally
   const initial = host;
-  let name = $state(initial?.name ?? '');
+  // svelte-ignore state_referenced_locally
+  const imported = prefill;
+  let name = $state(initial?.name ?? imported?.name ?? '');
   let group = $state(initial?.group ?? '');
-  let hostname = $state(initial?.hostname ?? '');
+  let hostname = $state(initial?.hostname ?? imported?.hostname ?? '');
   let port = $state(initial?.port ?? 22);
-  let username = $state(initial?.username ?? 'root');
+  let username = $state(initial?.username ?? imported?.username ?? 'root');
   let method = $state<Method>(initial?.auth.method ?? 'password');
   let keyPath = $state(initial?.auth.method === 'key_file' ? initial.auth.path : '~/.ssh/id_ed25519');
   let libraryKey = $state(initial?.auth.method === 'key' ? initial.auth.key : '');
@@ -52,6 +60,8 @@
     .map((candidate) => ({ value: candidate.id, label: `${candidate.name} (${candidate.username}@${candidate.hostname})` }));
   let error = $state('');
   let saving = $state(false);
+  let duplicate = $state<HostEntry | null>(null);
+  const duplicateMatch = $derived(duplicate ? findDuplicateHost([duplicate], { hostname, port: Number(port), username, route: route() }) : undefined);
   /** Notes kept about the host, for the user and the AI agents; saved with the host. */
   let notes = $state('');
   let notesLoaded = '';
@@ -129,10 +139,21 @@
     };
     saving = true;
     error = '';
+    duplicate = null;
     try {
+      if (!initial && reuseExisting) {
+        await hosts.refresh();
+        const existing = findDuplicateHost(hosts.items, draft);
+        if (existing) {
+          duplicate = existing;
+          return;
+        }
+      }
       const saved = initial ? await hostUpdate(initial.id, draft, secret(), false) : await hostCreate(draft, secret());
       if (notes.trim() !== notesLoaded.trim()) await hostNotesSet(saved.id, notes);
       await hosts.refresh();
+      const entry = hosts.find(saved.id);
+      if (entry) onsaved?.(entry);
       onclose();
     } catch (caught) {
       error = errorText(caught);
@@ -216,10 +237,15 @@
     {/if}
     <label>{t('host.notes')}<textarea bind:value={notes} rows="4" spellcheck="false" placeholder={t('host.notesHint')}></textarea></label>
     {#if error}<p class="error">{error}</p>{/if}
+    {#if duplicateMatch}<p class="hint" role="status">{t('tailscale.duplicate', { name: duplicateMatch.name })}</p>{/if}
   </form>
   {#snippet actions()}
     <button type="button" class="secondary" onclick={onclose}>{t('common.cancel')}</button>
-    <button type="submit" class="primary" form="host-form" disabled={saving}>{t('common.save')}</button>
+    {#if duplicateMatch && onreuse}
+      <button type="button" class="primary" onclick={() => duplicateMatch && onreuse?.(duplicateMatch)}>{t('tailscale.useExisting')}</button>
+    {:else}
+      <button type="submit" class="primary" form="host-form" disabled={saving}>{submitLabel ?? t('common.save')}</button>
+    {/if}
   {/snippet}
 </Dialog>
 

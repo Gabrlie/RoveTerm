@@ -20,6 +20,7 @@ rove-ai = { path = "../crates/rove-ai" }
 rove-fs = { path = "../crates/rove-fs" }
 rove-journal = { path = "../crates/rove-journal" }
 rove-kernel = { path = "../crates/rove-kernel" }
+rove-ops = { path = "../crates/rove-ops" }
 rove-session = { path = "../crates/rove-session" }
 rove-ssh = { path = "../crates/rove-ssh" }
 rove-sync = { path = "../crates/rove-sync" }
@@ -41,6 +42,7 @@ zeroize = "1"
 tauri-plugin-clipboard-manager = "2.5.0"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+rove-tailscale = { path = "../crates/rove-tailscale" }
 tauri-plugin-autostart = "2"
 rove-pty = { path = "../crates/rove-pty" }
 fontdb = "0.24"

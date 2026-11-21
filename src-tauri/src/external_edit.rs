@@ -700,7 +700,7 @@ async fn blocking<T: Send + 'static>(
 ) -> Result<T, EditError> {
     tokio::task::spawn_blocking(work)
         .await
-        .map_err(|error| io::Error::other(error))?
+        .map_err(io::Error::other)?
 }
 
 async fn read_local(path: PathBuf) -> Result<Vec<u8>, EditError> {

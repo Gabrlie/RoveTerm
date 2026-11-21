@@ -10,3 +10,5 @@
 | [0004](0004-static-plugin-kernel.md) | 静态链接的插件内核 |
 | [0005](0005-sync.md) | 每台设备只追加自己分段的端到端加密同步 |
 | [0006](0006-ai-acp.md) | 通过 ACP 接入外部 Agent，由本地 Policy 审批每一步 |
+| [0007](0007-tailscale-discovery.md) | 通过系统 Tailscale 客户端发现设备 |
+| [0008](0008-durable-operations.md) | 以持久任务监督层编排运维 |

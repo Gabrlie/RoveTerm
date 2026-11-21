@@ -230,7 +230,7 @@ pub fn spawn_run(app: &tauri::AppHandle, schedule: Schedule, due: i64) -> bool {
             })
             .unwrap_or_default();
         let (conversation, result) =
-            crate::commands::ai::run_scheduled(&app, &schedule, &when).await;
+            crate::commands::ai::run_scheduled(&app, &schedule, &when, due).await;
         let ok = result.is_ok();
         if let Err(error) = &result {
             tracing::warn!(schedule = %schedule.id, %error, "a scheduled task failed");

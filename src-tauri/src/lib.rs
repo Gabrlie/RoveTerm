@@ -5,6 +5,9 @@ mod connect;
 mod error;
 mod external_edit;
 mod logs;
+mod ops_runtime;
+mod ops_tools;
+mod ops_verifier;
 mod profile;
 mod reveal;
 mod schedule;
@@ -147,6 +150,9 @@ fn shutdown(app: &tauri::AppHandle) {
     state.fs_sessions.clear();
     tauri::async_runtime::block_on(async {
         state.external.disable().await;
+        if let Err(error) = state.ops.shutdown() {
+            tracing::error!(%error, "operations shutdown failed");
+        }
         state.ai.stop_all().await;
         state.sessions.close_all().await;
         state.ssh.disconnect_all().await;
@@ -212,6 +218,13 @@ pub fn run() {
         .on_menu_event(commands::menu::on_event)
         .invoke_handler(tauri::generate_handler![
             commands::session::session_open_local,
+            commands::tailscale::tailscale_snapshot,
+            commands::ops::ops_task_list,
+            commands::ops::ops_task_get,
+            commands::ops::ops_task_input,
+            commands::ops::ops_task_cancel,
+            commands::ops::ops_task_retry,
+            commands::ops::ops_task_evidence,
             commands::session::session_open_ssh,
             commands::session::session_open_quick,
             commands::session::session_write,

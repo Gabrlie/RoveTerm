@@ -4,12 +4,13 @@
 
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::acp::{ConfigChoice, ConfigKind, ConfigOption, SessionUpdate};
-use crate::llm::{Client, Delta, Effort, LlmError, Message, ToolSpec};
+use crate::llm::{Client, Delta, Effort, Format, LlmError, Message, ToolSpec};
 use crate::session::{AiEvent, AiSession};
 use crate::tools;
 
@@ -17,6 +18,38 @@ use crate::tools;
 pub const MAX_STEPS: usize = 40;
 /// Characters of conversation kept before old tool results are dropped.
 const MAX_HISTORY: usize = 400_000;
+
+pub const ASSISTANT_CHECKPOINT_VERSION: u32 = 1;
+
+/// Versioned model history for resuming one host worker. The caller must store this encrypted:
+/// messages contain full tool results, user input and provider-specific signed content.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssistantCheckpoint {
+    pub version: u32,
+    pub format: Format,
+    pub model: String,
+    pub messages: Vec<Message>,
+    pub turns: u64,
+    pub last_used: u64,
+    /// A tool whose invocation was durably announced but whose result was not saved.
+    pub pending_tool: Option<String>,
+}
+
+impl AssistantCheckpoint {
+    /// Closes unanswered tool calls as unknown after the user explicitly confirms that the
+    /// interrupted effects have been checked. This never replays a recorded tool invocation.
+    pub fn resolve_interrupted(&mut self) {
+        answer_unanswered_with(
+            &mut self.messages,
+            "the prior tool invocation was interrupted; its outcome is unknown and has been reviewed by the user; do not replay it",
+        );
+        self.pending_tool = None;
+    }
+}
+
+/// A successful return acknowledges durable storage before any subsequent model or tool call.
+/// The sink must encrypt the checkpoint and must not report success before it is recoverable.
+pub type CheckpointSink = Arc<dyn Fn(AssistantCheckpoint) -> Result<(), String> + Send + Sync>;
 
 /// What the assistant is told about its host, once per conversation.
 #[derive(Debug, Clone, Default)]
@@ -73,6 +106,8 @@ pub enum AssistantError {
     Busy,
     #[error("the model {0} is not offered")]
     UnknownModel(String),
+    #[error("assistant checkpoint failed: {0}")]
+    Checkpoint(String),
 }
 
 /// One conversation with a model about the session's host.
@@ -97,6 +132,18 @@ pub struct Assistant {
     /// Tokens the last request filled (its input and reply); 0 before the first or after a
     /// compaction.
     last_used: std::sync::atomic::AtomicU64,
+    checkpoint_sink: Option<CheckpointSink>,
+    pending_tool: std::sync::Mutex<Option<String>>,
+}
+
+struct RunningTurn<'a>(&'a std::sync::Mutex<Option<CancellationToken>>);
+
+impl Drop for RunningTurn<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = self.0.lock() {
+            *slot = None;
+        }
+    }
 }
 
 impl Assistant {
@@ -105,6 +152,18 @@ impl Assistant {
         let toolbox: Arc<dyn crate::mcp::McpTools> =
             Arc::new(crate::mcp::SessionTools(session.clone()));
         Self::with_toolbox(client, session, system_prompt(meta), toolbox)
+    }
+
+    /// Uses the ordinary host-bound instructions with a caller-owned toolbox and its trusted
+    /// protocol instructions, for host workers with additional completion-verification tools.
+    pub fn with_host_toolbox(
+        client: Client,
+        session: Arc<AiSession>,
+        meta: &HostMeta,
+        toolbox: Arc<dyn crate::mcp::McpTools>,
+    ) -> Self {
+        let system = format!("{}\n\n{}", system_prompt(meta), toolbox.instructions());
+        Self::with_toolbox(client, session, system, toolbox)
     }
 
     /// An assistant with `system` as its instructions and `toolbox` as its tools; `session`
@@ -143,7 +202,101 @@ impl Assistant {
             context_window: None,
             max_steps: MAX_STEPS,
             last_used: std::sync::atomic::AtomicU64::new(0),
+            checkpoint_sink: None,
+            pending_tool: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Requires durable checkpoints around each request and tool invocation. A failed sink
+    /// stops the turn before another external operation can be dispatched.
+    #[must_use]
+    pub fn with_checkpoint_sink(mut self, sink: CheckpointSink) -> Self {
+        self.checkpoint_sink = Some(sink);
+        self
+    }
+
+    fn checkpoint_from(
+        &self,
+        history: &[Message],
+        pending_tool: Option<String>,
+    ) -> Result<AssistantCheckpoint, AssistantError> {
+        let client = self.client.read().map_err(|_| AssistantError::Busy)?;
+        Ok(AssistantCheckpoint {
+            version: ASSISTANT_CHECKPOINT_VERSION,
+            format: client.endpoint().format,
+            model: client.endpoint().model.clone(),
+            messages: history.to_vec(),
+            turns: self.turns.load(std::sync::atomic::Ordering::Relaxed),
+            last_used: self.last_used.load(std::sync::atomic::Ordering::Relaxed),
+            pending_tool,
+        })
+    }
+
+    fn persist(&self, history: &[Message], pending: Option<String>) -> Result<(), AssistantError> {
+        if let Some(sink) = &self.checkpoint_sink {
+            sink(self.checkpoint_from(history, pending.clone())?)
+                .map_err(AssistantError::Checkpoint)?;
+        }
+        *self.pending_tool.lock().map_err(|_| AssistantError::Busy)? = pending;
+        Ok(())
+    }
+
+    /// Returns a consistent idle checkpoint. During a turn it waits for the history lock;
+    /// durable in-flight checkpoints are delivered to the sink before external calls.
+    pub async fn checkpoint(&self) -> Result<AssistantCheckpoint, AssistantError> {
+        let history = self.history.lock().await;
+        let pending = self
+            .pending_tool
+            .lock()
+            .map_err(|_| AssistantError::Busy)?
+            .clone();
+        self.checkpoint_from(&history, pending)
+    }
+
+    /// Restores an idle worker. Interrupted tools require explicit resolution by the caller;
+    /// unknown versions and storage incompatibilities never silently restart the work.
+    pub async fn restore_checkpoint(
+        &self,
+        mut checkpoint: AssistantCheckpoint,
+    ) -> Result<(), AssistantError> {
+        if checkpoint.version != ASSISTANT_CHECKPOINT_VERSION {
+            return Err(AssistantError::Checkpoint(
+                "unsupported checkpoint version".into(),
+            ));
+        }
+        if checkpoint.pending_tool.is_some() {
+            return Err(AssistantError::Checkpoint(
+                "an interrupted tool requires confirmation".into(),
+            ));
+        }
+        {
+            let mut slot = self.running.lock().map_err(|_| AssistantError::Busy)?;
+            if slot.is_some() {
+                return Err(AssistantError::Busy);
+            }
+            *slot = Some(CancellationToken::new());
+        }
+        let _running = RunningTurn(&self.running);
+        let mut history = self.history.lock().await;
+        {
+            let client = self.client.read().map_err(|_| AssistantError::Busy)?;
+            if checkpoint.format != client.endpoint().format
+                || checkpoint.model != client.endpoint().model
+            {
+                for message in &mut checkpoint.messages {
+                    if let Message::Assistant { opaque, .. } = message {
+                        *opaque = None;
+                    }
+                }
+            }
+        }
+        *history = checkpoint.messages;
+        self.turns
+            .store(checkpoint.turns, std::sync::atomic::Ordering::Relaxed);
+        self.last_used
+            .store(checkpoint.last_used, std::sync::atomic::Ordering::Relaxed);
+        *self.pending_tool.lock().map_err(|_| AssistantError::Busy)? = None;
+        Ok(())
     }
 
     /// Makes at most `steps` model requests in one turn.
@@ -169,19 +322,19 @@ impl Assistant {
     /// Summarizes the turns before the current one when the last request filled more than
     /// [`COMPACT_AT`] of the model's context window. A failed summary leaves the history as it
     /// was: the turn goes on, and the provider may still refuse an oversized request.
-    async fn compact_if_full(&self, history: &mut Vec<Message>) {
+    async fn compact_if_full(&self, history: &mut Vec<Message>) -> Result<(), AssistantError> {
         let Ok(client) = self.client.read().map(|client| client.clone()) else {
-            return;
+            return Err(AssistantError::Busy);
         };
         let Some(size) = self.context_of(&client.endpoint().model) else {
-            return;
+            return Ok(());
         };
         let used = self.last_used.load(std::sync::atomic::Ordering::Relaxed);
         if (used as f64) < size as f64 * COMPACT_AT {
-            return;
+            return Ok(());
         }
         let Some(at) = compact_point(history) else {
-            return;
+            return Ok(());
         };
         let request = [Message::User {
             text: format!(
@@ -189,6 +342,7 @@ impl Assistant {
                 transcript_text(&history[..at])
             ),
         }];
+        self.persist(history, None)?;
         match client
             .complete(SUMMARY_SYSTEM, &request, &[], &mut |_| {})
             .await
@@ -201,10 +355,12 @@ impl Assistant {
                 self.session.emit(AiEvent::Update {
                     update: SessionUpdate::Compacted { summary },
                 });
+                self.persist(history, None)?;
             }
             Ok(_) => tracing::warn!("the conversation summary came back empty"),
             Err(error) => tracing::warn!(%error, "summarizing the conversation failed"),
         }
+        Ok(())
     }
 
     /// The context window of `model`, when known.
@@ -355,6 +511,12 @@ impl Assistant {
         self.session.stop_jobs().await;
     }
 
+    /// Waits until the current turn has released its history and can no longer persist tools.
+    /// The caller must prevent new prompts and request cancellation before awaiting quiescence.
+    pub async fn wait_idle(&self) {
+        let _history = self.history.lock().await;
+    }
+
     /// Runs one turn for `text`; returns why it ended (`end_turn`, `cancelled`, `max_turn_requests`).
     /// The text of the last reply, for a caller that hands the result on (the fleet lead's
     /// sub-agents); empty before any.
@@ -380,14 +542,28 @@ impl Assistant {
             }
             *slot = Some(token.clone());
         }
-        let result = tokio::select! {
-            result = self.turn(text) => result,
-            () = token.cancelled() => { self.session.stop_jobs().await; Ok("cancelled".to_owned()) },
-        };
-        if let Ok(mut slot) = self.running.lock() {
-            *slot = None;
+        let _running = RunningTurn(&self.running);
+        if self
+            .pending_tool
+            .lock()
+            .map_err(|_| AssistantError::Busy)?
+            .is_some()
+        {
+            return Err(AssistantError::Checkpoint(
+                "an interrupted tool requires confirmation".into(),
+            ));
         }
-        result
+        tokio::select! {
+            result = self.turn(text) => result,
+            () = token.cancelled() => {
+                self.session.stop_jobs().await;
+                if self.checkpoint_sink.is_none() {
+                    // Non-durable sessions can continue after an explicit cancellation.
+                    *self.pending_tool.lock().map_err(|_| AssistantError::Busy)? = None;
+                }
+                Ok("cancelled".to_owned())
+            },
+        }
     }
 
     async fn turn(&self, text: &str) -> Result<String, AssistantError> {
@@ -401,7 +577,7 @@ impl Assistant {
         });
         for step in 0..self.max_steps {
             trim(&mut history);
-            self.compact_if_full(&mut history).await;
+            self.compact_if_full(&mut history).await?;
             let message_id = format!("t{turn}s{step}");
             let session = self.session.clone();
             let mut on_delta = |delta: Delta| {
@@ -419,6 +595,7 @@ impl Assistant {
                 .read()
                 .map_err(|_| AssistantError::Busy)?
                 .clone();
+            self.persist(&history, None)?;
             let reply = client
                 .complete(&self.system, &history, &self.tools, &mut on_delta)
                 .await?;
@@ -448,10 +625,12 @@ impl Assistant {
                 tool_calls: reply.tool_calls,
                 opaque: reply.opaque,
             });
+            self.persist(&history, None)?;
             if calls.is_empty() {
                 return Ok("end_turn".into());
             }
             for call in calls {
+                self.persist(&history, Some(call.id.clone()))?;
                 let result = match serde_json::from_str::<Value>(&call.arguments) {
                     Ok(arguments) if arguments.is_object() => {
                         match self.toolbox.call(&call.name, &arguments).await {
@@ -473,6 +652,7 @@ impl Assistant {
                     name: call.name,
                     is_error: result.is_error,
                 });
+                self.persist(&history, None)?;
             }
         }
         Ok("max_turn_requests".into())
@@ -482,6 +662,10 @@ impl Assistant {
 /// Gives every tool call of the last assistant message a result. A cancelled turn can stop
 /// between a call and its result, and providers refuse a conversation with a call left open.
 fn answer_unanswered(history: &mut Vec<Message>) {
+    answer_unanswered_with(history, "cancelled by the user");
+}
+
+fn answer_unanswered_with(history: &mut Vec<Message>, outcome: &str) {
     let Some(at) = history.iter().rposition(|message| matches!(message, Message::Assistant { tool_calls, .. } if !tool_calls.is_empty())) else {
         return;
     };
@@ -501,7 +685,7 @@ fn answer_unanswered(history: &mut Vec<Message>) {
         .map(|call| Message::Tool {
             call_id: call.id.clone(),
             name: call.name.clone(),
-            output: "cancelled by the user".into(),
+            output: outcome.into(),
             is_error: true,
         })
         .collect();
@@ -653,6 +837,56 @@ mod compact_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct AdditionalTools;
+
+    #[async_trait::async_trait]
+    impl crate::mcp::McpTools for AdditionalTools {
+        fn instructions(&self) -> String {
+            "submit_result verification protocol".into()
+        }
+        fn specs(&self) -> Value {
+            serde_json::json!([])
+        }
+        async fn call(&self, _: &str, _: &Value) -> Result<tools::ToolResult, (i64, String)> {
+            Err((-32601, "no test tool".into()))
+        }
+    }
+
+    #[test]
+    fn host_toolbox_keeps_host_binding_and_adds_its_protocol() {
+        let client = Client::new(
+            crate::llm::Endpoint {
+                format: Format::Chat,
+                base_url: "http://127.0.0.1:1/v1".into(),
+                model: "test".into(),
+                max_tokens: None,
+                effort: None,
+            },
+            "",
+            std::time::Duration::from_secs(1),
+        )
+        .unwrap();
+        let session = Arc::new(AiSession::new(
+            Arc::new(crate::host::LocalHost),
+            crate::session::SessionSettings::default(),
+            Arc::new(|_| {}),
+        ));
+        let meta = HostMeta {
+            name: "bound-test-host".into(),
+            address: "user@example.invalid:22".into(),
+            ..HostMeta::default()
+        };
+        let assistant =
+            Assistant::with_host_toolbox(client, session, &meta, Arc::new(AdditionalTools));
+        assert!(assistant.system.contains("bound-test-host"));
+        assert!(assistant.system.contains("Work only on this host"));
+        assert!(
+            assistant
+                .system
+                .contains("submit_result verification protocol")
+        );
+    }
 
     #[test]
     fn untrusted_data_keeps_its_boundary() {
