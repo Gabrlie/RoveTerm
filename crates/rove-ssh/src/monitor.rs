@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::{SshConnection, SshError};
+use crate::{SshConnection, SshError, os::specialized_os};
 
 /// Script run on the server. Sections are separated by `---` lines, in the order parsed by
 /// [`parse`]. Only reads files and runs read-only tools.
@@ -19,7 +19,9 @@ cat /proc/uptime; echo ---; \
 tail -n +3 /proc/net/dev; echo ---; \
 nproc; echo ---; \
 uname -sr; hostname; echo ---; \
-grep -m1 '^PRETTY_NAME=' /etc/os-release 2>/dev/null; true";
+grep -m1 '^PRETTY_NAME=' /etc/os-release 2>/dev/null; echo ---; \
+pveversion 2>/dev/null; echo '==FNOS=='; [ -d /usr/trim ] && echo trim; \
+cat /etc/fn-os-release /etc/trim_version /usr/trim/etc/version 2>/dev/null; true";
 
 /// Largest accepted output of [`SCRIPT`].
 const MAX_OUTPUT: usize = 64 * 1024;
@@ -142,8 +144,20 @@ fn is_data_disk(filesystem: &str, mount: &str) -> bool {
 
 /// Parses the output of [`SCRIPT`].
 fn parse(text: &str) -> Option<ServerStats> {
-    let sections: Vec<&str> = text.split("---\n").collect();
-    let [load, cpu, mem, disk, uptime, net, cores, system, os] = sections.as_slice() else {
+    let sections: Vec<&str> = text.splitn(10, "---\n").collect();
+    let [
+        load,
+        cpu,
+        mem,
+        disk,
+        uptime,
+        net,
+        cores,
+        system,
+        os,
+        extra @ ..,
+    ] = sections.as_slice()
+    else {
         return None;
     };
     let mut stats = ServerStats::default();
@@ -242,6 +256,10 @@ fn parse(text: &str) -> Option<ServerStats> {
         .unwrap_or_default()
         .trim_matches('"')
         .to_owned();
+    let extra = extra.first().copied().unwrap_or_default();
+    if let Some((_, name)) = specialized_os(&stats.kernel, extra, None, &stats.os) {
+        stats.os = name;
+    }
     Some(stats)
 }
 
@@ -301,5 +319,25 @@ PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\n";
         assert_eq!(parse(without_os).unwrap().os, "");
         assert_eq!(parse("not linux\n"), None);
         assert_eq!(parse(&SAMPLE.replace("0.52", "x")), None);
+    }
+    #[test]
+    fn detects_proxmox_and_fnos_in_status_samples() {
+        for (extra, expected) in [
+            ("pve-manager/8.2.4/abc\n==FNOS==\n", "Proxmox VE 8.2.4"),
+            ("==FNOS==\ntrim\n0.8.41\n", "fnOS 0.8.41"),
+            ("==FNOS==\nVERSION_ID='1.0'\n", "fnOS 1.0"),
+            ("==FNOS==\n", "Ubuntu 24.04.4 LTS"),
+        ] {
+            assert_eq!(
+                parse(&format!("{SAMPLE}---\n{extra}")).unwrap().os,
+                expected
+            );
+        }
+        for (suffix, expected) in [("-pve", "Proxmox VE"), ("-trim", "fnOS")] {
+            assert_eq!(
+                parse(&SAMPLE.replace("-generic", suffix)).unwrap().os,
+                expected
+            );
+        }
     }
 }
