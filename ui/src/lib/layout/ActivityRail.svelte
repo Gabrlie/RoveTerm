@@ -14,12 +14,13 @@
     /** The right panel's open page, or `null` when closed. */
     page: RightPage | null;
     bottomOpen: boolean;
+    home?: boolean;
     /** The focused tab is on a remote host: files and forwards apply. */
     remote: boolean;
     onaction: (action: ActionId) => void;
   }
 
-  let { page, bottomOpen, remote, onaction }: Props = $props();
+  let { page, bottomOpen, home = false, remote, onaction }: Props = $props();
 
   const PAGES: { page: RightPage; action: ActionId; icon: IconName; label: 'action.panel.status' | 'action.ai.open' | 'action.panel.snippets' }[] = [
     { page: 'status', action: 'panel.status', icon: 'pulse', label: 'action.panel.status' },
@@ -31,13 +32,13 @@
 <nav class="rail" aria-label={t('rail.label')}>
   {#each PAGES as entry (entry.page)}
     <div class="slot">
-      <IconButton icon={entry.icon} label={t(entry.label)} active={page === entry.page} onclick={() => onaction(entry.action)} />
+      <IconButton icon={entry.icon} label={t(entry.label)} active={page === entry.page} disabled={home} onclick={() => onaction(entry.action)} />
       {#if entry.page === 'ai' && ai.waiting > 0}<span class="badge">{ai.waiting}</span>{/if}
     </div>
   {/each}
   <span class="rule"></span>
-  <IconButton icon="files" label={t('rail.files')} active={bottomOpen} disabled={!remote && !bottomOpen} onclick={() => onaction('panel.bottom')} />
-  <IconButton icon="forwards" label={t('rail.forwards')} disabled={!remote} onclick={() => onaction('forward.manage')} />
+  <IconButton icon="files" label={t('rail.files')} active={bottomOpen} disabled={home || (!remote && !bottomOpen)} onclick={() => onaction('panel.bottom')} />
+  <IconButton icon="forwards" label={t('rail.forwards')} disabled={home || !remote} onclick={() => onaction('forward.manage')} />
   <DownloadsButton onopen={() => onaction('panel.transfers')} />
   <span class="spacer"></span>
   <IconButton icon="quickConnect" label={t('rail.quickConnect')} onclick={() => onaction('host.quickConnect')} />

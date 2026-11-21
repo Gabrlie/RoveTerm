@@ -42,7 +42,7 @@
   import { terminalCopies, terminalPastes, type ClipboardContext } from './lib/terminal/claims';
   import { isActionId, nativeMenuLabels, nativeMenus } from './lib/menu';
   import { terminals } from './lib/terminal/registry';
-  import { workspace, type PaneTarget } from './lib/workspace/workspace.svelte';
+  import { remoteSourceOf, workspace, type PaneTarget } from './lib/workspace/workspace.svelte';
   import { aiRecords, aiSessions, logsReveal, menuSet, type AiRecord, type AiSessionSummary, onHostKeyPrompt, onMenuAction, workspaceLoad, workspaceSave, type CredentialKind, type HostEntry, type HostKeyPrompt } from './lib/ipc';
   import { parseSnapshot } from './lib/workspace/snapshot';
   import { errorText, t } from './lib/i18n';
@@ -100,6 +100,14 @@
   }
   /** The right panel's open page; `null` when closed. One page at a time, as in VSCode. */
   let rightPage = $state<RightPage | null>(storedPage('ui.panel.rightPage'));
+  const onHome = $derived(!workspace.focusedPane);
+  let homeTransfersOpen = $state(false);
+  const effectiveRightPage = $derived<RightPage | null>(
+    onHome ? (homeTransfersOpen || rightPage === 'transfers' ? 'transfers' : null) : rightPage,
+  );
+  $effect(() => {
+    if (!onHome) homeTransfersOpen = false;
+  });
   /** The page `panel.right` reopens. */
   let lastRightPage: RightPage = storedPage('ui.panel.rightPage') ?? 'status';
   $effect(() => {
@@ -112,12 +120,21 @@
 
   /** Opens `page`, or closes the panel when `page` is already open. */
   function toggleRight(page: RightPage): void {
+    if (onHome) return;
     rightPage = rightPage === page ? null : page;
     lastRightPage = page;
   }
 
-  /** Shows where the first waiting approval is: the fleet lead's tab for it and its sub-agents,
-   *  else that host's tab (when open) with the AI page. */
+  function closeRight(): void {
+    if (onHome) {
+      homeTransfersOpen = false;
+      if (rightPage === 'transfers') rightPage = null;
+    } else {
+      rightPage = null;
+    }
+  }
+
+  /** Reveals the first waiting approval in the fleet tab or the context's AI panel. */
   function showWaiting(): void {
     const chat = ai.firstWaiting();
     if (chat?.context.kind === 'fleet') {
@@ -128,6 +145,20 @@
       const tab = workspace.tabsOfHost(chat.context.host_id)[0];
       if (tab) workspace.reveal(tab);
     }
+    const context = chat?.context;
+    if (onHome && context?.kind === 'local') {
+      const local = Object.values(workspace.panes).find((pane) => pane.target.kind === 'local');
+      if (local) workspace.reveal(local.id);
+      else workspace.openTab({ kind: 'local' });
+    }
+    if (onHome && context?.kind === 'quick') {
+      const tab = Object.values(workspace.panes).find((pane) => {
+        const remote = remoteSourceOf(pane.target);
+        return remote && 'address' in remote && remote.address === context.address;
+      });
+      if (tab) workspace.reveal(tab.id);
+    }
+    if (onHome) return;
     rightPage = 'ai';
     lastRightPage = 'ai';
   }
@@ -138,10 +169,11 @@
     return !!pane && pane.target.kind !== 'local';
   });
   let bottomOpen = $state(stored('ui.panel.bottom', false));
+  const effectiveBottomOpen = $derived(bottomOpen && !onHome);
   $effect(() => store('ui.panel.bottom', bottomOpen));
   let bottomMounted = $state(false);
   $effect(() => {
-    if (bottomOpen) bottomMounted = true;
+    if (effectiveBottomOpen) bottomMounted = true;
   });
   let rightSize = $state(storedSize('ui.panel.rightSize', 300));
   $effect(() => storeSize('ui.panel.rightSize', rightSize));
@@ -404,7 +436,7 @@
         keysOpen = true;
         break;
       case 'panel.right':
-        rightPage = rightPage ? null : lastRightPage;
+        if (!onHome) rightPage = rightPage ? null : lastRightPage;
         break;
       case 'panel.status':
         toggleRight('status');
@@ -414,11 +446,15 @@
         break;
       case 'panel.transfers':
         // Opened from the downloads popover too: it shows the page rather than toggling it.
-        rightPage = 'transfers';
-        lastRightPage = 'transfers';
+        if (onHome) {
+          homeTransfersOpen = true;
+        } else {
+          rightPage = 'transfers';
+          lastRightPage = 'transfers';
+        }
         break;
       case 'panel.bottom':
-        bottomOpen = !bottomOpen;
+        if (!onHome) bottomOpen = !bottomOpen;
         break;
       case 'ai.open':
         toggleRight('ai');
@@ -574,7 +610,7 @@
 <svelte:document oncopy={onCopy} />
 
 <div class="app">
-  <TitleBar {sidebarOpen} rightOpen={rightPage !== null} {bottomOpen} onaction={run} />
+  <TitleBar {sidebarOpen} rightOpen={effectiveRightPage !== null} bottomOpen={effectiveBottomOpen} onaction={run} />
   <div class="body">
   {#if sidebarOpen}
     <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onnotice={(message) => showNotice(message, 'error')} onsettings={() => (settingsOpen = true)} ontailscale={() => (tailscaleOpen = true)} onkeys={() => (keysOpen = true)} />
@@ -597,25 +633,25 @@
       />
     {/snippet}
     <EditorGroups {home} oncredentials={requestPaneCredentials} onedithost={(hostId) => (editing = hosts.find(hostId) ?? undefined)} onaisettings={() => openSettings('ai')} onschedules={() => run('fleet.schedules')} />
-    {#if bottomOpen}
+    {#if effectiveBottomOpen}
       <div class="edge horizontal" role="separator" aria-orientation="horizontal" onpointerdown={resizeBottom}></div>
     {/if}
     <!-- Once opened the panel stays mounted while hidden, keeping its file browsers open. -->
     {#if bottomMounted}
-      <div class="bottom" hidden={!bottomOpen} style:height="{bottomSize}px">
+      <div class="bottom" hidden={!effectiveBottomOpen} style:height="{bottomSize}px">
         <BottomPanel onclose={() => (bottomOpen = false)} />
       </div>
     {/if}
     </div>
-    {#if rightPage}
+    {#if effectiveRightPage}
       <div class="edge vertical" role="separator" aria-orientation="vertical" onpointerdown={resizeRight}></div>
       <div class="right" style:width="{rightSize}px">
-        <RightPanel page={rightPage} onclose={() => (rightPage = null)} onsettings={() => openSettings('ai')} />
+        <RightPanel page={effectiveRightPage} onclose={closeRight} onsettings={() => openSettings('ai')} />
       </div>
     {/if}
     </div>
   </div>
-  <ActivityRail page={rightPage} {bottomOpen} remote={focusedRemote} onaction={run} />
+  <ActivityRail page={effectiveRightPage} bottomOpen={effectiveBottomOpen} home={onHome} remote={focusedRemote} onaction={run} />
   </div>
   <StatusBar onaction={run} />
 </div>
