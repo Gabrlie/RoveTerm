@@ -505,7 +505,7 @@ impl Default for StatusPrefs {
     }
 }
 
-/// An external editor on this device. Empty `program` and `args` disable it.
+/// An external editor on this device. Empty `program` and `args` select the system opener.
 ///
 /// Validation checks native absolute-path syntax and sizes without accessing the filesystem.
 /// Callers must pass `args` as separate arguments, preserving their spaces; the application
@@ -528,7 +528,7 @@ const MAX_EDITOR_ARGS_BYTES: usize = 32 * 1024;
 
 impl ExternalEditorPrefs {
     /// Trims the program path and checks native absolute-path syntax, sizes and control
-    /// characters. Empty configuration disables the editor; arguments without a program fail.
+    /// characters. Empty configuration selects the system opener. Arguments require a program.
     /// Windows accepts only `.exe` programs. On macOS an `.app` bundle requires no arguments.
     /// The path need not exist, and arguments are returned unchanged.
     pub fn validate(mut self) -> Result<Self, VaultError> {

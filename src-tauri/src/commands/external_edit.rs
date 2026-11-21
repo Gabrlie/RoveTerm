@@ -24,6 +24,7 @@ fn events(app: AppHandle) -> UpdateSink {
     })
 }
 
+/// Empty preferences select the system opener for both new and recovered working copies.
 fn editor(state: &AppState) -> Result<ExternalEditorPrefs, CommandError> {
     if !cfg!(desktop) {
         return Err(CommandError::new(

@@ -71,8 +71,6 @@ pub enum EditError {
     Busy,
     #[error("too many external edit sessions are open")]
     Limit,
-    #[error("no external editor is configured")]
-    EditorMissing,
     #[error("could not start external editor: {0}")]
     EditorLaunch(String),
     #[error("reconnect to the same host before retrying this file")]
@@ -92,7 +90,6 @@ impl EditError {
             Self::Missing => "fs.edit_missing",
             Self::Busy => "fs.edit_busy",
             Self::Limit => "fs.edit_limit",
-            Self::EditorMissing => "fs.edit_editor_missing",
             Self::EditorLaunch(_) => "fs.edit_editor_launch",
             Self::Reconnect => "fs.edit_reconnect",
             Self::LocalChanged => "fs.edit_local_changed",
@@ -261,8 +258,8 @@ impl ExternalEditManager {
         manager
     }
 
-    /// Creates a private working copy and launches the configured editor without a shell. Failed
-    /// launches leave the copy visible so the user can open it again after fixing their settings.
+    /// Creates a private working copy and launches the configured editor or system opener.
+    /// Failed launches leave the copy available to reopen.
     pub async fn start(
         &self,
         emit: UpdateSink,
@@ -272,9 +269,6 @@ impl ExternalEditManager {
     ) -> Result<ExternalEditUpdate, EditError> {
         if !valid_remote_path(path) {
             return Err(EditError::InvalidPath);
-        }
-        if editor.program.is_empty() {
-            return Err(EditError::EditorMissing);
         }
         let label = fs.label();
         {
@@ -325,9 +319,6 @@ impl ExternalEditManager {
         let session = self.get(id)?;
         let _op = session.operation.lock().await;
         session.live()?;
-        if editor.program.is_empty() {
-            return Err(EditError::EditorMissing);
-        }
         let path = session.document.clone();
         blocking(move || regular_copy(&path).map(|_| ())).await?;
         launch(&editor, &session.document).await?;
@@ -906,21 +897,72 @@ fn editor_args(args: &[String], file: &Path) -> Vec<OsString> {
     resolved
 }
 
-async fn launch(editor: &rove_vault::ExternalEditorPrefs, file: &Path) -> Result<(), EditError> {
+fn launch_specs(
+    editor: &rove_vault::ExternalEditorPrefs,
+    file: &Path,
+) -> (tokio::process::Command, Option<tokio::process::Command>) {
+    use tokio::process::Command;
+
+    if editor.program.is_empty() {
+        #[cfg(target_os = "macos")]
+        {
+            let mut opener = Command::new("/usr/bin/open");
+            opener.arg(file);
+            let mut fallback = Command::new("/usr/bin/open");
+            fallback.arg("-t").arg(file);
+            return (opener, Some(fallback));
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let mut opener = Command::new("rundll32.exe");
+            opener.arg("shell32.dll,ShellExec_RunDLL").arg(file);
+            let mut fallback = Command::new("rundll32.exe");
+            fallback.arg("shell32.dll,OpenAs_RunDLL").arg(file);
+            return (opener, Some(fallback));
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let mut opener = Command::new("xdg-open");
+            opener.arg(file);
+            return (opener, None);
+        }
+    }
+
     let program = Path::new(&editor.program);
-    let mut command = if cfg!(target_os = "macos")
+    let command = if cfg!(target_os = "macos")
         && program
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
     {
-        let mut command = tokio::process::Command::new("/usr/bin/open");
+        let mut command = Command::new("/usr/bin/open");
         command.arg("-a").arg(program).arg(file);
         command
     } else {
-        let mut command = tokio::process::Command::new(program);
+        let mut command = Command::new(program);
         command.args(editor_args(&editor.args, file));
         command
     };
+    (command, None)
+}
+
+async fn launch(editor: &rove_vault::ExternalEditorPrefs, file: &Path) -> Result<(), EditError> {
+    let (mut command, fallback) = launch_specs(editor, file);
+    if let Some(fallback) = fallback {
+        let status = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+        if status.is_ok_and(|status| status.success()) {
+            return Ok(());
+        }
+        command = fallback;
+    }
+    spawn_editor(command).await
+}
+
+async fn spawn_editor(mut command: tokio::process::Command) -> Result<(), EditError> {
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -978,6 +1020,73 @@ mod tests {
         assert_eq!(working_name("/project/.env"), ".env");
         assert_eq!(working_name("/project/../CON.txt"), "document.txt");
         assert_eq!(working_name("/project/C:\\elsewhere.txt"), "document.txt");
+    }
+
+    fn assert_command(command: &tokio::process::Command, program: &str, args: &[&str]) {
+        let command = command.as_std();
+        assert_eq!(command.get_program(), program);
+        assert_eq!(command.get_args().collect::<Vec<_>>(), args);
+    }
+
+    #[test]
+    fn configured_editor_passes_each_argument_directly() {
+        let file = "/tmp/work copy #1.conf";
+        let editor = rove_vault::ExternalEditorPrefs {
+            program: "/opt/Rove Editor/editor".into(),
+            args: vec!["--wait".into(), "{file}".into()],
+        };
+        let (command, fallback) = launch_specs(&editor, Path::new(file));
+        assert_command(&command, &editor.program, &["--wait", file]);
+        assert!(fallback.is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn configured_macos_app_bundle_uses_open() {
+        let file = "/tmp/work copy #1.conf";
+        let editor = rove_vault::ExternalEditorPrefs {
+            program: "/Applications/Rove Editor.app".into(),
+            args: Vec::new(),
+        };
+        let (command, fallback) = launch_specs(&editor, Path::new(file));
+        assert_command(&command, "/usr/bin/open", &["-a", &editor.program, file]);
+        assert!(fallback.is_none());
+    }
+
+    #[test]
+    fn empty_editor_uses_native_opener_and_available_fallback() {
+        let file = if cfg!(windows) {
+            r"C:\Temp\work copy #1"
+        } else {
+            "/tmp/work copy #1"
+        };
+        let editor = rove_vault::ExternalEditorPrefs::default()
+            .validate()
+            .unwrap();
+        let (command, fallback) = launch_specs(&editor, Path::new(file));
+        #[cfg(target_os = "macos")]
+        {
+            assert_command(&command, "/usr/bin/open", &[file]);
+            assert_command(&fallback.unwrap(), "/usr/bin/open", &["-t", file]);
+        }
+        #[cfg(target_os = "windows")]
+        {
+            assert_command(
+                &command,
+                "rundll32.exe",
+                &["shell32.dll,ShellExec_RunDLL", file],
+            );
+            assert_command(
+                &fallback.unwrap(),
+                "rundll32.exe",
+                &["shell32.dll,OpenAs_RunDLL", file],
+            );
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            assert_command(&command, "xdg-open", &[file]);
+            assert!(fallback.is_none());
+        }
     }
 
     #[test]
