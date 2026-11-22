@@ -29,7 +29,7 @@ export function t(key: MessageKey, params: Record<string, string | number> = {})
 
 /** Localizes a command error by its code, falling back to the generic message. */
 /** Codes whose backend message names the cause (a path, an OS error) and is shown after the text. */
-const DETAILED = new Set(['tailscale.failed', 'tailscale.timeout', 'tailscale.key_rejected', 'tailscale.peer_not_found', 'sync.backend', 'sync.forbidden', 'sync.format', 'sync.store', 'ssh.key', 'ssh.agent', 'ssh.connect', 'ssh.protocol', 'ssh.sftp', 'ssh.proxy', 'ssh.jump', 'ssh.jump_host', 'key.in_use', 'key.install_failed', 'fs.io', 'fs.edit_error', 'ai.spawn', 'ai.agent', 'ai.protocol', 'ai.auth_required', 'ai.model', 'input.invalid']);
+const DETAILED = new Set(['tailscale.failed', 'tailscale.timeout', 'tailscale.key_rejected', 'tailscale.peer_not_found', 'sync.backend', 'sync.forbidden', 'sync.format', 'sync.store', 'ssh.key', 'ssh.agent', 'ssh.connect', 'ssh.protocol', 'ssh.sftp', 'ssh.proxy', 'ssh.jump', 'ssh.jump_host', 'key.in_use', 'key.install_failed', 'fs.io', 'fs.edit_error', 'ai.spawn', 'ai.agent', 'ai.protocol', 'ai.auth_required', 'ai.model', 'update.check_failed', 'update.invalid_response', 'update.install_failed', 'input.invalid']);
 
 export function errorText(error: unknown): string {
   if (isCommandError(error)) {

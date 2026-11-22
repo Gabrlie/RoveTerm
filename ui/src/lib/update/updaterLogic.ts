@@ -1,0 +1,68 @@
+// Pure helpers for update state presentation, skipped-version checks and download progress.
+
+export type UpdatePhase =
+  | 'idle'
+  | 'checking'
+  | 'up_to_date'
+  | 'available'
+  | 'downloading'
+  | 'installing'
+  | 'ready'
+  | 'error';
+
+/** Strips whitespace and an optional leading `v`/`V` so versions compare consistently. */
+export function normalizeVersion(version: string | null | undefined): string {
+  if (!version) return '';
+  return version.trim().replace(/^v/i, '');
+}
+
+/** `true` when `version` matches the user's skipped version. */
+export function isSkippedVersion(
+  version: string | null | undefined,
+  skipped: string | null | undefined,
+): boolean {
+  const target = normalizeVersion(version);
+  const ignored = normalizeVersion(skipped);
+  return target.length > 0 && target === ignored;
+}
+
+/** Whether the status bar should display a subtle update badge. */
+export function shouldShowUpdateBadge(
+  phase: UpdatePhase,
+  version: string | null | undefined,
+  skipped: string | null | undefined,
+): boolean {
+  if (phase === 'ready' || phase === 'downloading' || phase === 'installing') return true;
+  if (phase !== 'available') return false;
+  const normalized = normalizeVersion(version);
+  return normalized.length > 0 && !isSkippedVersion(normalized, skipped);
+}
+
+/** Download percentage (0–100), or `null` when total byte size is unknown. */
+export function downloadPercent(downloaded: number, total: number | null): number | null {
+  if (total === null || !Number.isFinite(total) || total <= 0) return null;
+  if (!Number.isFinite(downloaded) || downloaded <= 0) return 0;
+  return Math.min(100, Math.max(0, Math.round((downloaded / total) * 100)));
+}
+
+/** Formats a byte count into a compact label for progress display. */
+export function formatUpdateBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb < 100 ? mb.toFixed(1) : Math.round(mb)} MB`;
+  const gb = mb / 1024;
+  return `${gb.toFixed(2)} GB`;
+}
+
+/** Extracts a short `YYYY-MM-DD` date from an ISO timestamp, or returns empty when unparseable. */
+export function formatReleaseDate(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(iso.trim());
+  if (match) return match[1]!;
+  const parsed = Date.parse(iso);
+  if (Number.isNaN(parsed)) return '';
+  return new Date(parsed).toISOString().slice(0, 10);
+}

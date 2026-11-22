@@ -36,6 +36,7 @@ export type ActionId =
   | 'panel.transfers'
   | 'host.import'
   | 'help.shortcuts'
+  | 'help.checkUpdates'
   | 'help.about'
   | 'help.logs'
   | 'fleet.open'
@@ -92,6 +93,7 @@ export const actions: Action[] = [
   { id: 'panel.transfers', label: 'action.panel.transfers', keys: [] },
   { id: 'host.import', label: 'action.host.import', keys: [] },
   { id: 'help.shortcuts', label: 'action.help.shortcuts', keys: [] },
+  { id: 'help.checkUpdates', label: 'action.help.checkUpdates', keys: [] },
   { id: 'help.about', label: 'action.help.about', keys: [] },
   { id: 'help.logs', label: 'action.help.logs', keys: [] },
   { id: 'fleet.open', label: 'action.fleet.open', keys: [] },

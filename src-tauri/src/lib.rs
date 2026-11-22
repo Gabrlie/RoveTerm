@@ -168,35 +168,43 @@ fn request_edit_exit_confirmation(app: &tauri::AppHandle) -> bool {
     }
 }
 
-fn shutdown(app: &tauri::AppHandle) {
+pub(crate) async fn shutdown_async(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
-    tauri::async_runtime::block_on(state.external_edits.shutdown());
+    if state
+        .shutting_down
+        .swap(true, std::sync::atomic::Ordering::AcqRel)
+    {
+        return;
+    }
+    state.external_edits.shutdown().await;
     state.transfers.cancel_all();
     state.forwards.stop_all();
     // The config file names a port that is about to close.
     state.fs_sessions.clear();
-    tauri::async_runtime::block_on(async {
-        state.external.disable().await;
-        if let Err(error) = state.ops.shutdown() {
-            tracing::error!(%error, "operations shutdown failed");
+    state.external.disable().await;
+    if let Err(error) = state.ops.shutdown() {
+        tracing::error!(%error, "operations shutdown failed");
+    }
+    state.ai.stop_all().await;
+    state.sessions.close_all().await;
+    state.ssh.disconnect_all().await;
+    #[cfg(desktop)]
+    {
+        let _guard = state.tailscale_lock.lock().await;
+        let configured = state.tailscale.status().configured;
+        if let Err(error) = state.tailscale.disconnect(configured).await {
+            tracing::warn!(%error, "Tailscale shutdown failed");
         }
-        state.ai.stop_all().await;
-        state.sessions.close_all().await;
-        state.ssh.disconnect_all().await;
-        #[cfg(desktop)]
-        {
-            let _guard = state.tailscale_lock.lock().await;
-            let configured = state.tailscale.status().configured;
-            if let Err(error) = state.tailscale.disconnect(configured).await {
-                tracing::warn!(%error, "Tailscale shutdown failed");
-            }
-        }
-    });
+    }
     let lifetime = state.lifetime.lock().map(|mut guard| guard.take());
     if let Ok(Some((runtime, disposers))) = lifetime {
         drop(disposers);
         drop(runtime);
     }
+}
+
+fn shutdown(app: &tauri::AppHandle) {
+    tauri::async_runtime::block_on(shutdown_async(app));
 }
 
 /// Runs the MCP bridge for an agent: connects stdin and stdout to the running app named by the
@@ -237,10 +245,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init());
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_autostart::init(
-        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-        Some(vec![commands::autostart::MINIMIZED_ARG]),
-    ));
+    let builder = builder
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![commands::autostart::MINIMIZED_ARG]),
+        ))
+        .plugin(tauri_plugin_updater::Builder::new().build());
     let app = builder
         .setup(boot)
         .on_window_event(|window, event| {
@@ -385,6 +395,10 @@ pub fn run() {
             commands::prefs::device_prefs_set,
             commands::prefs::prefs_set,
             commands::prefs::fonts_monospace,
+            commands::update::update_check,
+            commands::update::update_install,
+            commands::update::update_restart,
+            commands::update::update_open_release,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the Tauri application");

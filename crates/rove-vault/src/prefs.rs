@@ -680,6 +680,46 @@ pub struct DevicePrefs {
     /// Embedded tailnet configuration for this device.
     #[serde(default)]
     pub tailscale: TailscalePrefs,
+    /// Update checking preferences for this device.
+    #[serde(default)]
+    pub updates: UpdatePrefs,
+}
+
+/// Device-local update check settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdatePrefs {
+    /// Checks for new releases shortly after startup.
+    pub auto_check: bool,
+    /// Release version the user chose to skip; empty means none skipped.
+    pub skipped_version: String,
+}
+
+impl Default for UpdatePrefs {
+    fn default() -> Self {
+        Self {
+            auto_check: true,
+            skipped_version: String::new(),
+        }
+    }
+}
+
+impl UpdatePrefs {
+    /// Trims `skipped_version` and rejects control characters or overly long strings.
+    pub fn validate(mut self) -> Result<Self, VaultError> {
+        if self.skipped_version.chars().any(char::is_control) {
+            return Err(VaultError::Invalid(
+                "skipped update version contains control characters".into(),
+            ));
+        }
+        self.skipped_version = self.skipped_version.trim().to_owned();
+        if self.skipped_version.len() > 64 {
+            return Err(VaultError::Invalid(
+                "skipped update version is too long".into(),
+            ));
+        }
+        Ok(self)
+    }
 }
 
 /// Device-local tailnet connection settings.
@@ -765,6 +805,7 @@ impl Default for DevicePrefs {
             agents: AgentsPrefs::default(),
             connection: ConnectionPrefs::default(),
             tailscale: TailscalePrefs::default(),
+            updates: UpdatePrefs::default(),
         }
     }
 }
@@ -1110,6 +1151,7 @@ impl DevicePrefs {
         check_range("concurrent transfers", self.max_transfers, 1..=8)?;
         self.external_editor = self.external_editor.validate()?;
         self.tailscale = self.tailscale.validate()?;
+        self.updates = self.updates.validate()?;
         self.agents.validate()?;
         check_range(
             "connect timeout",
@@ -1539,5 +1581,38 @@ mod tests {
             ..DevicePrefs::default()
         };
         assert!(too_many.validate().is_err());
+    }
+
+    #[test]
+    fn update_preferences_default_and_validate() {
+        let legacy: DevicePrefs = serde_json::from_str(r#"{"max_transfers":4}"#).unwrap();
+        assert_eq!(
+            legacy.updates,
+            UpdatePrefs {
+                auto_check: true,
+                skipped_version: String::new(),
+            }
+        );
+
+        let trimmed = UpdatePrefs {
+            auto_check: false,
+            skipped_version: "  0.2.0-beta.1  ".into(),
+        }
+        .validate()
+        .unwrap();
+        assert!(!trimmed.auto_check);
+        assert_eq!(trimmed.skipped_version, "0.2.0-beta.1");
+
+        let control = UpdatePrefs {
+            auto_check: true,
+            skipped_version: "0.2.0\n".into(),
+        };
+        assert!(control.validate().is_err());
+
+        let too_long = UpdatePrefs {
+            auto_check: true,
+            skipped_version: "1".repeat(65),
+        };
+        assert!(too_long.validate().is_err());
     }
 }

@@ -18,5 +18,6 @@ pub mod sftp;
 pub mod snippets;
 pub mod sync;
 pub mod tailscale;
+pub mod update;
 pub mod vault;
 pub mod workspace;

@@ -45,7 +45,7 @@ export const MENUS: Menu[] = [
   },
   { id: 'host', label: 'menu.host', items: ['files.open', 'forward.manage'] },
   { id: 'fleet', label: 'menu.fleet', items: ['fleet.open', 'fleet.new', '-', 'fleet.schedules'] },
-  { id: 'help', label: 'menu.help', items: ['help.shortcuts', 'help.logs', 'help.about'] },
+  { id: 'help', label: 'menu.help', items: ['help.shortcuts', 'help.logs', '-', 'help.checkUpdates', 'help.about'] },
 ];
 
 /** The menus for the macOS menu bar, labelled in the current language. The Edit menu is left

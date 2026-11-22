@@ -485,6 +485,12 @@ export interface DevicePrefs {
   /** Device-private executable and argument vector; an empty program is unconfigured. */
   external_editor: { program: string; args: string[] };
   tailscale: TailscalePrefs;
+  updates: UpdatePrefs;
+}
+
+export interface UpdatePrefs {
+  auto_check: boolean;
+  skipped_version: string;
 }
 
 export interface TailscalePrefs {
@@ -1466,4 +1472,42 @@ export function aiAuditDetail(id: string, reference: string): Promise<Record<str
 
 export function aiRecords(id: string): Promise<AiRecord[]> {
   return invoke('ai_records', { id });
+}
+
+export type UpdateInstallMode = 'in_app' | 'external';
+
+export interface UpdateInfo {
+  current_version: string;
+  available: boolean;
+  version: string | null;
+  notes: string;
+  published_at: string | null;
+  release_url: string;
+  install_mode: UpdateInstallMode;
+  asset_sha256?: string | null;
+  asset_size?: number | null;
+}
+
+export type UpdateProgress =
+  | { stage: 'started'; total: number | null }
+  | { stage: 'downloading'; downloaded: number; total: number | null }
+  | { stage: 'installing' }
+  | { stage: 'finished' };
+
+export function updateCheck(): Promise<UpdateInfo> {
+  return invoke('update_check');
+}
+
+export function updateInstall(version: string, onProgress: (progress: UpdateProgress) => void): Promise<void> {
+  const channel = new Channel<UpdateProgress>();
+  channel.onmessage = onProgress;
+  return invoke('update_install', { version, onProgress: channel });
+}
+
+export function updateRestart(): Promise<void> {
+  return invoke('update_restart');
+}
+
+export function updateOpenRelease(url: string): Promise<void> {
+  return invoke('update_open_release', { url });
 }

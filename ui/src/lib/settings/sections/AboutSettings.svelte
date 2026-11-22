@@ -2,13 +2,48 @@
   import { onMount } from 'svelte';
   import { getVersion } from '@tauri-apps/api/app';
   import Icon from '../../ui/Icon.svelte';
+  import Switch from '../../ui/Switch.svelte';
   import { errorText, t } from '../../i18n';
   import { logsReveal } from '../../ipc';
   import { notify } from '../../ui/toast.svelte';
   import AutostartRow from '../AutostartRow.svelte';
+  import { editDevice } from '../edit.svelte';
+  import { prefs } from '../prefs.svelte';
+  import { updater } from '../../update/updater.svelte';
 
   let { onopenlogs }: { onopenlogs?: () => void } = $props();
   let version = $state('');
+
+  const updateSummary = $derived.by(() => {
+    switch (updater.phase) {
+      case 'checking':
+        return t('update.checking');
+      case 'available':
+        return updater.info?.version
+          ? updater.skipped
+            ? t('update.availableSkipped', { version: updater.info.version })
+            : t('update.availableSummary', { version: updater.info.version })
+          : t('update.checkHint');
+      case 'downloading':
+        return updater.percent !== null
+          ? t('update.downloadingPercent', { percent: updater.percent })
+          : t('update.downloading');
+      case 'installing':
+        return t('update.installing');
+      case 'ready':
+        return updater.info?.version
+          ? t('update.readySummary', { version: updater.info.version })
+          : t('update.readyBanner');
+      case 'up_to_date':
+        return t('update.upToDate');
+      case 'error':
+        return updater.error || t('update.checkHint');
+      default:
+        return prefs.device.updates.skipped_version
+          ? t('update.skippedHint', { version: prefs.device.updates.skipped_version })
+          : t('update.checkHint');
+    }
+  });
 
   onMount(() => {
     getVersion()
@@ -22,6 +57,43 @@
   <h3>RoveTerm</h3>
   <p class="version">{t('settings.version')} {version || '…'}</p>
   <p>{t('settings.aboutText')}</p>
+</div>
+<div class="form-group">
+  <div class="form-row">
+    <span class="form-label">{t('update.autoCheck')}<small>{t('update.autoCheckHint')}</small></span>
+    <Switch
+      label={t('update.autoCheck')}
+      checked={prefs.device.updates.auto_check}
+      onchange={(value) => void editDevice((draft) => (draft.updates.auto_check = value))}
+    />
+  </div>
+  <div class="form-row">
+    <span class="form-label">
+      {t('update.sectionTitle')}
+      <small class:update-error={updater.phase === 'error'}>{updateSummary}</small>
+    </span>
+    <div class="log-buttons">
+      {#if prefs.device.updates.skipped_version}
+        <button type="button" class="plain" onclick={() => void updater.clearSkipped()}>
+          {t('update.clearSkipped')}
+        </button>
+      {/if}
+      {#if updater.phase === 'ready' || updater.phase === 'available' || updater.phase === 'downloading' || updater.phase === 'installing'}
+        <button type="button" class="primary" onclick={() => updater.openDialog()}>
+          {updater.phase === 'ready' ? t('update.restartNow') : t('update.viewUpdate')}
+        </button>
+      {:else}
+        <button
+          type="button"
+          class="secondary"
+          disabled={updater.phase === 'checking'}
+          onclick={() => void updater.check({ silent: false, interactive: true })}
+        >
+          {updater.phase === 'checking' ? t('update.checking') : t('update.checkNow')}
+        </button>
+      {/if}
+    </div>
+  </div>
 </div>
 <div class="form-group">
   <AutostartRow />
@@ -42,6 +114,9 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
+  }
+  .update-error {
+    color: var(--danger);
   }
   .about {
     display: flex;

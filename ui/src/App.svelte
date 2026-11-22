@@ -7,7 +7,9 @@
   import { isMobile } from './lib/platform';
   import Dialog from './lib/ui/Dialog.svelte';
   import { ask } from './lib/ui/confirm.svelte';
-  import { externalEditSetDirty, externalEditShutdown, onExternalEditExitRequest } from './lib/ipc';
+  import { externalEditSetDirty, externalEditShutdown, onExternalEditExitRequest, updateRestart } from './lib/ipc';
+  import UpdateDialog from './lib/update/UpdateDialog.svelte';
+  import { updater } from './lib/update/updater.svelte';
   import TitleBar from './lib/layout/TitleBar.svelte';
   import ActivityRail from './lib/layout/ActivityRail.svelte';
   import StatusBar from './lib/layout/StatusBar.svelte';
@@ -425,6 +427,9 @@
       case 'help.logs':
         void openLogs();
         break;
+      case 'help.checkUpdates':
+        void updater.check({ silent: false, interactive: true });
+        break;
       case 'help.about':
         settingsSection = 'about';
         settingsOpen = true;
@@ -557,17 +562,37 @@
 
   let allowingExit = false;
   let decidingExit = false;
+  async function confirmExitDrafts(): Promise<boolean> {
+    if (!await editors.canClose(editors.drafts.map((draft) => draft.id))) return false;
+    if (externalEdits.all.length && !await ask({ title: t('external.exitTitle'), message: t('external.exitConfirm'), confirmLabel: t('external.exit'), danger: true })) return false;
+    return true;
+  }
   async function protectExit(): Promise<void> {
     if (decidingExit) return;
     decidingExit = true;
     editors.exiting = true;
     try {
-      if (!await editors.canClose(editors.drafts.map((draft) => draft.id))) return;
-      if (externalEdits.all.length && !await ask({ title: t('external.exitTitle'), message: t('external.exitConfirm'), confirmLabel: t('external.exit'), danger: true })) return;
+      if (!await confirmExitDrafts()) return;
       allowingExit = true;
       await externalEditShutdown();
     } catch (error) { allowingExit = false; notify(errorText(error), 'error'); }
     finally { decidingExit = false; if (!allowingExit) editors.exiting = false; }
+  }
+  async function restartForUpdate(): Promise<void> {
+    if (decidingExit) return;
+    decidingExit = true;
+    editors.exiting = true;
+    try {
+      if (!await confirmExitDrafts()) return;
+      allowingExit = true;
+      await updateRestart();
+    } catch (error) {
+      allowingExit = false;
+      notify(errorText(error), 'error');
+    } finally {
+      decidingExit = false;
+      if (!allowingExit) editors.exiting = false;
+    }
   }
   function protectReload(event: BeforeUnloadEvent): void {
     if (!allowingExit && (editors.pending || externalEdits.all.length)) { event.preventDefault(); event.returnValue = ''; }
@@ -601,8 +626,12 @@
     keys.refresh().catch((error: unknown) => console.warn('key library unavailable', error));
     forwardStatuses.start().catch((error: unknown) => console.warn('forward events unavailable', error));
     if (!isMobile) void tailscale.init();
+    const cancelStartupUpdate = updater.scheduleStartupCheck();
     const unlisten = onHostKeyPrompt((prompt) => (hostKeyPrompts = [...hostKeyPrompts, prompt]));
-    return () => void unlisten.then((stop) => stop());
+    return () => {
+      cancelStartupUpdate();
+      void unlisten.then((stop) => stop());
+    };
   });
 </script>
 
@@ -725,6 +754,10 @@
   {#key hostKeyPrompts[0].request_id}
     <HostKeyDialog prompt={hostKeyPrompts[0]} ondone={() => (hostKeyPrompts = hostKeyPrompts.slice(1))} />
   {/key}
+{/if}
+
+{#if updater.dialogOpen}
+  <UpdateDialog onrestart={restartForUpdate} onclose={() => updater.closeDialog()} />
 {/if}
 
 <style>

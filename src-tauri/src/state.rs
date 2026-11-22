@@ -52,6 +52,10 @@ pub struct AppState {
     pub external: crate::commands::external::ExternalAccess,
     /// Held while a sync round runs, so rounds never overlap.
     pub sync_lock: tokio::sync::Mutex<()>,
+    /// Verified pending update and check lock.
+    pub updates: crate::commands::update::UpdateState,
+    /// Guards shutdown so restart and exit paths unload services at most once.
+    pub shutting_down: AtomicBool,
     /// Plugin runtime and app-level registrations; taken on exit to unload plugins in order.
     pub lifetime: Mutex<Option<(Runtime, Vec<Disposer>)>>,
 }
@@ -86,6 +90,8 @@ impl AppState {
             #[cfg(desktop)]
             pty: ctx.require::<rove_pty::LocalTerminals>()?,
             sync_lock: tokio::sync::Mutex::new(()),
+            updates: crate::commands::update::UpdateState::default(),
+            shutting_down: AtomicBool::new(false),
             lifetime: Mutex::new(Some((runtime, Vec::new()))),
         })
     }

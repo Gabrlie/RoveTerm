@@ -15,6 +15,7 @@
   import { forwardStatuses } from '../forwards/forwards.svelte';
   import { ai } from '../ai/ai.svelte';
   import { sync } from '../sync/sync.svelte';
+  import { updater } from '../update/updater.svelte';
   import { prefs } from '../settings/prefs.svelte';
   import { editPrefs } from '../settings/edit.svelte';
   import { clock, durationKind, durationParts, untilNextMinute } from './status';
@@ -109,6 +110,25 @@
     {#if forwards > 0}<span class="item"><Icon name="forwards" size={12} />{t('status.forwardsRunning', { n: forwards })}</span>{/if}
   </div>
   <div class="right">
+    {#if updater.badgeVisible}
+      <button
+        type="button"
+        class="pill update-pill"
+        class:ready={updater.phase === 'ready'}
+        title={updater.phase === 'ready' ? t('update.restartNow') : t('update.dialogTitle')}
+        onclick={() => updater.openDialog()}
+      >
+        {#if updater.phase === 'ready'}
+          {t('update.badgeRestart')}
+        {:else if updater.phase === 'downloading'}
+          {updater.percent !== null ? t('update.badgeDownloading', { percent: updater.percent }) : t('update.badgeUpdating')}
+        {:else if updater.phase === 'installing'}
+          {t('update.badgeUpdating')}
+        {:else if updater.info?.version}
+          ↑ v{updater.info.version}
+        {/if}
+      </button>
+    {/if}
     {#if ai.waiting > 0}
       <button type="button" class="pill" onclick={() => onaction('ai.showWaiting')}>{t('status.waiting', { n: ai.waiting })}</button>
     {/if}
@@ -204,6 +224,15 @@
     font-size: 11px;
     font-weight: 600;
     cursor: pointer;
+  }
+  .update-pill {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .update-pill.ready {
+    background: color-mix(in srgb, var(--success) 18%, transparent);
+    color: var(--success);
   }
   .sync.failed :global(svg) {
     color: var(--danger);

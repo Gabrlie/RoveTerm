@@ -20,6 +20,7 @@
 | Agent 子进程（ACP） | 不信任 | 校验路径、大小、枚举；它的权限请求不参与决策；环境变量按白名单传入 |
 | MCP 桥接连接 | 不信任 | 只监听回环地址；先校验每会话随机生成、只在内存中的 256 位 token（经环境变量而非命令行传给桥接进程）；工具调用与 ACP 请求走同一审批 |
 | 同步后端 | 不信任 | 只接收密文；无法读出明文，也无法伪造记录 |
+| 更新清单与发布页 | 不信任 | 桌面端以内置 minisign 公钥校验更新包签名；外链发布页与移动端清单元数据仅允许 `https://github.com/Gabrlie/RoveTerm/releases` |
 
 ## 密钥层级
 
@@ -71,6 +72,10 @@ Tailscale 设备身份用本机 vault 密钥加密，留在当前设备。注册
 - 持久运维任务冻结目标主机及连接身份，实际操作权限取任务范围与实时 Policy 的交集。交互任务遵循实时审批模式，`Dangerous` 操作始终需要人工确认；无人值守的定时任务默认只读，启用 `schedule.allow_changes` 后才允许审阅者放行修改。只读任务的 `AiSession::restrict_read_only` 约束在 `set_mode`、会话授权和审阅之后仍生效。
 - 运维任务的输入、工具正文、报告和检查点密封到本机 `ops/private` 审计，任务元数据保存状态及 `PrivateRef`。私有正文与检查点不参与同步，执行队列归属于当前设备；同步对话不会转移执行权。
 - 未知的远端修改先保留为待核对状态，用户核对服务器后明确确认才允许继续；模型追加输入不能自动解除该状态。应用重启只恢复任务状态，旧的一次性审批不重复使用。恢复边界见 [ops](subsystems/ops.md#恢复和跟进)。
+
+## 应用更新
+
+桌面端更新经 `tauri-plugin-updater` 读取签名清单 `latest.json`，安装前使用 `src-tauri/tauri.conf.json` 内置的 minisign 公钥校验包体签名；私钥只留在构建机本地（如 `~/.tauri/roveterm.key`），不进入仓库、不写日志。Rust 命令不接受前端传入任意下载地址，跳转发布页及 Android 清单 `latest-android.json` 的包体链接均限制在 `https://github.com/Gabrlie/RoveTerm/releases` 下，且 Android 清单校验 64 位十六进制 SHA-256 摘要。
 
 ## 日志
 
