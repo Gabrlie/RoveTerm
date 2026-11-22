@@ -10,6 +10,18 @@ pub struct Word {
     /// Part of the word comes from an expansion (`$X`, `$(…)`, `${…}`, `$'…'`), so its real value
     /// is unknown here.
     pub dynamic: bool,
+    /// Quoting or escaping prevents a word from being a shell reserved word.
+    pub quoted: bool,
+    /// The word began with a literal variable name followed by an unquoted `=`.
+    pub assignment: bool,
+}
+
+pub(crate) fn is_variable_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// An output or input redirection of a simple command.
@@ -77,6 +89,8 @@ impl Lexer<'_> {
         self.word.get_or_insert_with(|| Word {
             text: String::new(),
             dynamic: false,
+            quoted: false,
+            assignment: false,
         })
     }
 
@@ -220,7 +234,7 @@ impl Lexer<'_> {
     }
 
     fn single_quoted(&mut self) {
-        self.word();
+        self.word().quoted = true;
         while let Some(c) = self.peek(0) {
             self.pos += 1;
             if c == '\'' {
@@ -231,7 +245,7 @@ impl Lexer<'_> {
     }
 
     fn double_quoted(&mut self) {
-        self.word();
+        self.word().quoted = true;
         while let Some(c) = self.peek(0) {
             self.pos += 1;
             match c {
@@ -425,7 +439,9 @@ impl Lexer<'_> {
                         Some('\n') => self.pos += 1,
                         Some(next) => {
                             self.pos += 1;
-                            self.word().text.push(next);
+                            let word = self.word();
+                            word.quoted = true;
+                            word.text.push(next);
                         }
                         None => {}
                     }
@@ -451,6 +467,13 @@ impl Lexer<'_> {
                 '`' => {
                     self.pos += 1;
                     self.backtick();
+                }
+                '=' => {
+                    self.pos += 1;
+                    let word = self.word();
+                    word.assignment |=
+                        !word.quoted && !word.dynamic && is_variable_name(&word.text);
+                    word.text.push(c);
                 }
                 _ => {
                     self.pos += 1;

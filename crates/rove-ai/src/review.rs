@@ -109,7 +109,7 @@ pub trait Reviewer: Send + Sync {
     async fn review(&self, request: &ReviewRequest) -> Result<Verdict, String>;
 }
 
-const INSTRUCTIONS: &str = "An AI assistant wants to do this on a server the user manages. Allow it only if it is an ordinary, low-risk maintenance step that the user would expect: it does not delete data, stop production services, weaken security, expose secrets, or change things outside its evident purpose. When unsure, ask the user.";
+const INSTRUCTIONS: &str = "An AI assistant wants to do this on a server the user manages. Allow only ordinary, expected maintenance that preserves data, service availability, security and secrecy. For dynamic_target, allow only if the command makes the target's origin and purpose clear. For package operations, check the scope and effects on installed packages, repositories and services. Ask the user about uncertain effects or changes outside the evident purpose.";
 
 /// The session's own model as reviewer: one request without tools, answered `allow` or `ask`.
 pub struct ModelReviewer {

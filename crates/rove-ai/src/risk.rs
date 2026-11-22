@@ -35,8 +35,7 @@ pub struct Assessment {
     pub risk: Risk,
     /// Programs a command runs (base names), for remembering approvals per program.
     pub programs: BTreeSet<String>,
-    /// Part of the command could not be resolved (expansions, scripts): approvals are not
-    /// remembered for it.
+    /// The executed program or script cannot be inspected. Its approval cannot be remembered.
     pub opaque: bool,
     pub reasons: Vec<Reason>,
 }
@@ -222,6 +221,7 @@ const READ_ONLY: &[&str] = &[
     "whois",
     "test",
     "[",
+    "[[",
     "true",
     "false",
     "sleep",
@@ -229,6 +229,16 @@ const READ_ONLY: &[&str] = &[
     "cd",
     "export",
     "alias",
+    "exit",
+    "return",
+    "unset",
+    "local",
+    "shift",
+    "break",
+    "continue",
+    "readonly",
+    ":",
+    "set",
     "getent",
     "last",
     "lastlog",
@@ -248,7 +258,6 @@ const READ_ONLY: &[&str] = &[
     "fc-list",
     "apt-cache",
     "dpkg-query",
-    "rpm",
     "ldd",
     "nm",
     "objdump",
@@ -257,7 +266,6 @@ const READ_ONLY: &[&str] = &[
     "help",
     "tldr",
     "zless",
-    "column",
     "fold",
     "fmt",
     "expand",
@@ -266,6 +274,18 @@ const READ_ONLY: &[&str] = &[
     "join",
     "split",
     "watch",
+];
+
+/// These commands do not expose file contents through their arguments.
+const NON_FILE_READERS: &[&str] = &[
+    "ls", "stat", "test", "[", "[[", "ssh", "file", "echo", "printf", "true", "false", "sleep",
+    "seq", "exit", "return", "unset", "local", "shift", "break", "continue", "readonly", ":",
+    "export", "alias", "set", "which", "whereis", "type", "basename", "dirname", "pwd", "whoami",
+    "id", "hostname", "uname", "date",
+];
+
+const CONTROL_KEYWORDS: &[&str] = &[
+    "if", "then", "elif", "else", "do", "!", "fi", "done", "esac",
 ];
 
 /// Runs other programs given as arguments; the real program follows their options.
@@ -467,11 +487,21 @@ pub fn is_secret_path(path: &str) -> bool {
         || path.ends_with("/.env")
 }
 
-/// The scripts a `sed` command runs (`-e` values, else its first operand); `None` when one is
-/// not visible (a script file or a computed word).
-fn sed_scripts(args: &[Word]) -> Option<Vec<String>> {
+enum ScriptInspect<T> {
+    /// All scripts/programs are visible inline and every option was recognized.
+    Visible(T),
+    /// No external file or computed script was seen, but an unrecognized option prevents proving
+    /// read-only safety statically; let the policy or AI reviewer judge it.
+    UnknownOption,
+    /// A script file, dynamic script word, or missing script hides what runs.
+    Hidden,
+}
+
+/// The scripts a `sed` command runs (`-e` values, else its first operand).
+fn sed_scripts(args: &[Word]) -> ScriptInspect<Vec<String>> {
     let mut scripts = Vec::new();
     let mut positional = None;
+    let mut unknown_option = false;
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         let text = arg.text.as_str();
@@ -488,16 +518,18 @@ fn sed_scripts(args: &[Word]) -> Option<Vec<String>> {
                 "expression" => match value {
                     Some(value) => scripts.push((value.to_owned(), arg.dynamic)),
                     None => {
-                        let script = args.get(at)?;
+                        let Some(script) = args.get(at) else {
+                            return ScriptInspect::Hidden;
+                        };
                         at += 1;
                         scripts.push((script.text.clone(), script.dynamic));
                     }
                 },
-                "file" => return None,
+                "file" => return ScriptInspect::Hidden,
                 "line-length" if value.is_none() => at += 1,
                 "line-length" | "quiet" | "silent" | "regexp-extended" | "posix" | "sandbox"
-                | "null-data" | "separate" | "unbuffered" => {}
-                _ => return None,
+                | "null-data" | "separate" | "unbuffered" | "in-place" => {}
+                _ => unknown_option = true,
             }
             continue;
         }
@@ -508,7 +540,9 @@ fn sed_scripts(args: &[Word]) -> Option<Vec<String>> {
                 let letter = &cluster[index..=index];
                 let rest = &cluster[index + 1..];
                 let value = if rest.is_empty() {
-                    let next = args.get(at)?;
+                    let Some(next) = args.get(at) else {
+                        return ScriptInspect::Hidden;
+                    };
                     at += 1;
                     (next.text.clone(), next.dynamic)
                 } else {
@@ -516,7 +550,7 @@ fn sed_scripts(args: &[Word]) -> Option<Vec<String>> {
                 };
                 match letter {
                     "e" => scripts.push(value),
-                    "f" => return None,
+                    "f" => return ScriptInspect::Hidden,
                     _ => {}
                 }
             }
@@ -527,13 +561,22 @@ fn sed_scripts(args: &[Word]) -> Option<Vec<String>> {
         }
     }
     if scripts.is_empty() {
-        let script = positional?;
+        let Some(script) = positional else {
+            return if unknown_option {
+                ScriptInspect::UnknownOption
+            } else {
+                ScriptInspect::Hidden
+            };
+        };
         scripts.push((script.text.clone(), script.dynamic));
     }
     if scripts.iter().any(|(_, dynamic)| *dynamic) {
-        return None;
+        return ScriptInspect::Hidden;
     }
-    Some(scripts.into_iter().map(|(script, _)| script).collect())
+    if unknown_option {
+        return ScriptInspect::UnknownOption;
+    }
+    ScriptInspect::Visible(scripts.into_iter().map(|(script, _)| script).collect())
 }
 
 /// Whether `sed` script `script` writes files or runs commands: the `w`, `W` and `e` commands
@@ -675,17 +718,20 @@ fn sed_writes(script: &str) -> bool {
     }
 }
 
-/// The program an `awk` command runs (its first operand, or `--source` / `-e` values); `None`
-/// when it is not visible (a program file or a computed word).
-fn awk_program(args: &[Word]) -> Option<String> {
+/// The program an `awk` command runs (its first operand, or `--source` / `-e` values).
+fn awk_program(args: &[Word]) -> ScriptInspect<String> {
     let mut sources = Vec::new();
+    let mut unknown_option = false;
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         let text = arg.text.as_str();
         at += 1;
         if text == "--" {
-            let program = args.get(at)?;
-            sources.push(program);
+            if let Some(program) = args.get(at) {
+                sources.push(program);
+            } else {
+                return ScriptInspect::Hidden;
+            }
             break;
         }
         if let Some(long) = text.strip_prefix("--") {
@@ -693,35 +739,41 @@ fn awk_program(args: &[Word]) -> Option<String> {
                 .split_once('=')
                 .map_or((long, None), |(n, v)| (n, Some(v)));
             match name {
-                "file" | "exec" | "load" | "include" => return None,
+                "file" | "exec" | "load" | "include" => return ScriptInspect::Hidden,
                 "source" => {
                     if value.is_some() {
                         sources.push(arg);
                     } else {
-                        sources.push(args.get(at)?);
+                        let Some(source) = args.get(at) else {
+                            return ScriptInspect::Hidden;
+                        };
+                        sources.push(source);
                         at += 1;
                     }
                 }
                 "field-separator" | "assign" if value.is_none() => at += 1,
                 "field-separator" | "assign" | "posix" | "traditional" => {}
-                _ => return None,
+                _ => unknown_option = true,
             }
             continue;
         }
         if let Some(cluster) = text.strip_prefix('-').filter(|cluster| !cluster.is_empty()) {
             match cluster.chars().next() {
-                Some('f' | 'E' | 'l') => return None,
+                Some('f' | 'E' | 'l') => return ScriptInspect::Hidden,
                 Some('e') => {
                     if cluster.len() > 1 {
                         sources.push(arg);
                     } else {
-                        sources.push(args.get(at)?);
+                        let Some(source) = args.get(at) else {
+                            return ScriptInspect::Hidden;
+                        };
+                        sources.push(source);
                         at += 1;
                     }
                 }
                 Some('F' | 'v') if cluster.len() == 1 => at += 1,
                 Some('F' | 'v') => {}
-                _ => return None,
+                _ => unknown_option = true,
             }
             continue;
         }
@@ -730,10 +782,20 @@ fn awk_program(args: &[Word]) -> Option<String> {
         }
         break;
     }
-    if sources.is_empty() || sources.iter().any(|source| source.dynamic) {
-        return None;
+    if sources.is_empty() {
+        return if unknown_option {
+            ScriptInspect::UnknownOption
+        } else {
+            ScriptInspect::Hidden
+        };
     }
-    Some(
+    if sources.iter().any(|source| source.dynamic) {
+        return ScriptInspect::Hidden;
+    }
+    if unknown_option {
+        return ScriptInspect::UnknownOption;
+    }
+    ScriptInspect::Visible(
         sources
             .iter()
             .map(|source| source.text.as_str())
@@ -868,6 +930,10 @@ fn skip_wrapper(name: &str, words: &[Word], start: usize) -> usize {
         ],
         "flock" => &["-w", "-E", "-c"],
         "watch" => &["-n", "--interval", "-d"],
+        "ssh" => &[
+            "-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m", "-O",
+            "-o", "-P", "-p", "-R", "-S", "-W", "-w",
+        ],
         _ => &[],
     };
     let mut index = start;
@@ -892,15 +958,33 @@ fn skip_wrapper(name: &str, words: &[Word], start: usize) -> usize {
     index
 }
 
-fn is_assignment(word: &Word) -> bool {
-    match word.text.split_once('=') {
-        Some((name, _)) => {
-            !name.is_empty()
-                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                && !name.starts_with(|c: char| c.is_ascii_digit())
-        }
-        None => false,
-    }
+fn skip_control(words: &[Word]) -> &[Word] {
+    let start = words
+        .iter()
+        .position(|word| {
+            word.quoted || word.dynamic || !CONTROL_KEYWORDS.contains(&word.text.as_str())
+        })
+        .unwrap_or(words.len());
+    &words[start..]
+}
+
+fn secret_assignments(segment: &Segment) -> impl Iterator<Item = &str> {
+    let words = skip_control(&segment.words);
+    let start = words
+        .iter()
+        .position(|word| !word.assignment)
+        .unwrap_or(words.len());
+    let declared = match words[start..].split_first() {
+        Some((word, args)) if matches!(word.text.as_str(), "export" | "local" | "readonly") => args,
+        _ => &[],
+    };
+    words[..start]
+        .iter()
+        .chain(declared.iter())
+        .filter_map(|word| word.text.split_once('='))
+        .filter(|(name, _)| shell::is_variable_name(name))
+        .map(|(_, value)| value)
+        .filter(|value| is_secret_path(value))
 }
 
 /// Assesses a command line.
@@ -959,13 +1043,25 @@ fn assess_line(line: &str, rules: &Rules, depth: usize) -> Assessment {
         return assessment;
     }
     let parsed = shell::parse(line);
+    let secret_paths: BTreeSet<_> = parsed
+        .pipelines
+        .iter()
+        .flatten()
+        .flat_map(secret_assignments)
+        .collect();
     for nested in &parsed.nested {
         assessment.merge(assess_line(nested, rules, depth + 1));
     }
     for pipeline in &parsed.pipelines {
         for (index, segment) in pipeline.iter().enumerate() {
             let previous = index.checked_sub(1).map(|at| &pipeline[at]);
-            assessment.merge(assess_segment(segment, previous, rules, depth));
+            assessment.merge(assess_segment(
+                segment,
+                previous,
+                rules,
+                depth,
+                &secret_paths,
+            ));
         }
     }
     assessment
@@ -976,6 +1072,7 @@ fn assess_segment(
     previous: Option<&Segment>,
     rules: &Rules,
     depth: usize,
+    secret_paths: &BTreeSet<&str>,
 ) -> Assessment {
     let mut assessment = Assessment::new();
     for redirect in &segment.redirects {
@@ -983,15 +1080,16 @@ fn assess_segment(
             if is_secret_path(&redirect.target.text) {
                 assessment.raise(Risk::Modify, "read_secret", redirect.target.text.clone());
             } else if redirect.target.dynamic {
-                assessment.opaque = true;
-                assessment.raise(Risk::Modify, "script", redirect.target.text.clone());
+                for path in secret_paths {
+                    assessment.raise(Risk::Modify, "read_secret", *path);
+                }
             }
             continue;
         }
         let target = &redirect.target;
         if target.dynamic {
-            assessment.opaque = true;
             assessment.raise(Risk::Modify, "write_file", target.text.clone());
+            assessment.raise(Risk::Modify, "dynamic_target", target.text.clone());
         } else if HARMLESS_DEVICES.contains(&target.text.as_str()) {
             continue;
         } else if is_system_path(&target.text) {
@@ -1000,10 +1098,10 @@ fn assess_segment(
             assessment.raise(Risk::Modify, "write_file", target.text.clone());
         }
     }
-    let words = &segment.words;
+    let words = skip_control(&segment.words);
     let mut index = words
         .iter()
-        .position(|word| !is_assignment(word))
+        .position(|word| !word.assignment)
         .unwrap_or(words.len());
     let mut elevated = false;
     while let Some(word) = words.get(index) {
@@ -1018,9 +1116,6 @@ fn assess_segment(
         }
         if matches!(name, "sudo" | "doas") {
             elevated = true;
-        }
-        if name == "watch" {
-            break;
         }
         // `env` and `command` without a program only print.
         let next = skip_wrapper(name, words, index + 1);
@@ -1042,7 +1137,7 @@ fn assess_segment(
     }
     // Secrets read through a command are asked about like reading them with the file tool.
     // Programs that only name or use a key without showing it are left out.
-    if !matches!(name.as_str(), "ls" | "stat" | "test" | "[" | "ssh" | "file") {
+    if !NON_FILE_READERS.contains(&name.as_str()) {
         let named = args.iter().map(|arg| {
             arg.text
                 .split_once('=')
@@ -1050,8 +1145,9 @@ fn assess_segment(
                 .map_or(arg.text.as_str(), |(_, value)| value)
         });
         if args.iter().any(|arg| arg.dynamic) {
-            assessment.opaque = true;
-            assessment.raise(Risk::Modify, "script", name.clone());
+            for path in secret_paths {
+                assessment.raise(Risk::Modify, "read_secret", *path);
+            }
         }
         if let Some(path) = named.into_iter().find(|path| is_secret_path(path)) {
             assessment.raise(Risk::Modify, "read_secret", path.to_owned());
@@ -1218,6 +1314,9 @@ fn program(
             }
         }
         "git" => git(assessment, args),
+        "apt" | "apt-get" | "dpkg" | "dnf" | "yum" | "pacman" | "apk" | "zypper" | "rpm" => {
+            package(assessment, name, args);
+        }
         "docker" | "podman" | "nerdctl" => container(assessment, name, args),
         "kubectl" | "oc" => match subcommand(args) {
             Some(
@@ -1247,7 +1346,13 @@ fn program(
                     words: args[at + 1..end].to_vec(),
                     redirects: Vec::new(),
                 };
-                assessment.merge(assess_segment(&inner, None, rules, depth + 1));
+                assessment.merge(assess_segment(
+                    &inner,
+                    None,
+                    rules,
+                    depth + 1,
+                    &BTreeSet::new(),
+                ));
             }
             if has_any(args, &["-fprint", "-fprint0", "-fprintf", "-fls"]) {
                 modify(assessment, "write_file");
@@ -1258,13 +1363,16 @@ fn program(
                 modify(assessment, "write_file");
             }
             match sed_scripts(args) {
-                Some(scripts) => {
+                ScriptInspect::Visible(scripts) => {
                     if scripts.iter().any(|script| sed_writes(script)) {
                         modify(assessment, "write_file");
                     }
                 }
+                ScriptInspect::UnknownOption => {
+                    modify(assessment, "modify");
+                }
                 // A script file or a computed script: what runs is not visible.
-                None => {
+                ScriptInspect::Hidden => {
                     assessment.opaque = true;
                     modify(assessment, "script");
                 }
@@ -1275,12 +1383,15 @@ fn program(
                 modify(assessment, "modify");
             }
             match awk_program(args) {
-                Some(program) => {
+                ScriptInspect::Visible(program) => {
                     if awk_writes(&program) {
                         modify(assessment, "modify");
                     }
                 }
-                None => {
+                ScriptInspect::UnknownOption => {
+                    modify(assessment, "modify");
+                }
+                ScriptInspect::Hidden => {
                     assessment.opaque = true;
                     modify(assessment, "script");
                 }
@@ -1350,21 +1461,11 @@ fn program(
         "watch" => {
             // `watch -n 2 'cmd args'`: assess the watched command.
             let start = skip_wrapper("watch", args, 0);
-            let text: Vec<&str> = args[start.min(args.len())..]
-                .iter()
-                .map(|arg| arg.text.as_str())
-                .collect();
-            if args[start.min(args.len())..].iter().any(|arg| arg.dynamic) {
-                assessment.opaque = true;
-                modify(assessment, "unknown_program");
-            }
-            assessment.merge(assess_line(&text.join(" "), rules, depth + 1));
+            assess_command_string(assessment, args.iter().skip(start), name, rules, depth);
         }
         "eval" => {
-            let text: Vec<&str> = args.iter().map(|arg| arg.text.as_str()).collect();
-            assessment.opaque |= args.iter().any(|arg| arg.dynamic);
             modify(assessment, "script");
-            assessment.merge(assess_line(&text.join(" "), rules, depth + 1));
+            assess_command_string(assessment, args, name, rules, depth);
         }
         "su" => {
             modify(assessment, "elevated");
@@ -1373,8 +1474,7 @@ fn program(
                 .position(|arg| arg.text == "-c" || arg.text == "--command")
             {
                 if let Some(command) = args.get(at + 1) {
-                    assessment.opaque |= command.dynamic;
-                    assessment.merge(assess_line(&command.text, rules, depth + 1));
+                    assess_command_string(assessment, [command], name, rules, depth);
                 }
             } else {
                 assessment.opaque = true;
@@ -1382,14 +1482,16 @@ fn program(
         }
         "ssh" => {
             // The remote command runs elsewhere but is still the agent's doing.
-            let remote: Vec<&Word> = operands(args).skip(1).collect();
-            if remote.is_empty() {
+            let remote = args.iter().skip(skip_wrapper("ssh", args, 0) + 1);
+            if remote.len() == 0 {
                 modify(assessment, "interactive");
             } else {
-                let text: Vec<&str> = remote.iter().map(|arg| arg.text.as_str()).collect();
-                assessment.opaque |= remote.iter().any(|arg| arg.dynamic);
-                assessment.merge(assess_line(&text.join(" "), rules, depth + 1));
+                assess_command_string(assessment, remote, name, rules, depth);
             }
+        }
+        "." | "source" => {
+            assessment.opaque = true;
+            modify(assessment, "script");
         }
         _ if INTERPRETERS.contains(&name) => {
             interpreter(assessment, name, args, previous, rules, depth)
@@ -1400,6 +1502,338 @@ fn program(
         }
     }
 }
+
+fn assess_command_string<'a>(
+    assessment: &mut Assessment,
+    words: impl IntoIterator<Item = &'a Word>,
+    name: &str,
+    rules: &Rules,
+    depth: usize,
+) {
+    let mut text = Vec::new();
+    for word in words {
+        if word.dynamic {
+            assessment.opaque = true;
+            assessment.raise(Risk::Modify, "script", name);
+        }
+        text.push(word.text.as_str());
+    }
+    assessment.merge(assess_line(&text.join(" "), rules, depth + 1));
+}
+
+fn package(assessment: &mut Assessment, name: &str, args: &[Word]) {
+    let (valued_short, valued_long): (&str, &[&str]) = match name {
+        "apt" | "apt-get" => (
+            "acotS",
+            &[
+                "config-file",
+                "option",
+                "target-release",
+                "default-release",
+                "host-architecture",
+                "snapshot",
+            ],
+        ),
+        "dnf" | "yum" => (
+            "cRx",
+            &[
+                "config",
+                "installroot",
+                "releasever",
+                "setopt",
+                "enablerepo",
+                "disablerepo",
+                "repo",
+                "exclude",
+                "disableexcludes",
+            ],
+        ),
+        "apk" => (
+            "pX",
+            &[
+                "root",
+                "arch",
+                "repository",
+                "repositories-file",
+                "keys-dir",
+                "cache-dir",
+                "wait",
+            ],
+        ),
+        "zypper" => (
+            "cR",
+            &[
+                "config",
+                "root",
+                "installroot",
+                "reposd-dir",
+                "cache-dir",
+                "raw-cache-dir",
+                "solv-cache-dir",
+                "pkg-cache-dir",
+                "plus-repo",
+                "plus-content",
+                "releasever",
+            ],
+        ),
+        "dpkg" => ("", &["root", "admindir", "instdir"]),
+        "pacman" => (
+            "br",
+            &[
+                "root", "sysroot", "dbpath", "cachedir", "config", "gpgdir", "hookdir", "logfile",
+                "arch",
+            ],
+        ),
+        "rpm" => (
+            "",
+            &[
+                "root",
+                "dbpath",
+                "rcfile",
+                "macros",
+                "define",
+                "undefine",
+                "eval",
+                "queryformat",
+                "qf",
+            ],
+        ),
+        _ => return,
+    };
+    let mut short = String::new();
+    let mut long = BTreeSet::new();
+    let mut apt_simulation_disabled = false;
+    let mut action = None;
+    let mut unknown_options = false;
+    let mut words = args.iter();
+    while let Some(arg) = words.next() {
+        let text = arg.text.as_str();
+        if text == "--" && !arg.dynamic {
+            action = action.or_else(|| {
+                words
+                    .next()
+                    .filter(|arg| !arg.dynamic)
+                    .map(|arg| arg.text.as_str())
+            });
+            break;
+        }
+        if let Some(option) = text.strip_prefix("--") {
+            let (flag, value) = option
+                .split_once('=')
+                .map_or((option, None), |(flag, value)| (flag, Some(value)));
+            if !arg.dynamic || value.is_some() {
+                long.insert(flag);
+            } else {
+                unknown_options = true;
+            }
+            if matches!(name, "apt" | "apt-get")
+                && (matches!(flag, "no-simulate" | "no-dry-run")
+                    || (APT_SIMULATION.contains(&flag)
+                        && value.is_some_and(|value| !matches!(value, "true" | "yes" | "1"))))
+            {
+                apt_simulation_disabled = true;
+            }
+            if value.is_none() && valued_long.contains(&flag) {
+                words.next();
+            }
+        } else if let Some(cluster) = text.strip_prefix('-').filter(|cluster| !cluster.is_empty()) {
+            if arg.dynamic {
+                unknown_options = true;
+            }
+            for (index, flag) in cluster.char_indices() {
+                if !arg.dynamic {
+                    short.push(flag);
+                }
+                if valued_short.contains(flag) {
+                    if index + flag.len_utf8() == cluster.len() && !arg.dynamic {
+                        words.next();
+                    }
+                    break;
+                }
+            }
+        } else if action.is_none() {
+            action = Some(text);
+            unknown_options |= arg.dynamic;
+        }
+    }
+
+    let has = |flags: &[&str]| flags.iter().any(|flag| long.contains(flag));
+    if has(&["allow-remove-essential", "force-remove-essential"]) {
+        assessment.raise(Risk::Dangerous, "package", name);
+        return;
+    }
+    let read_only = match name {
+        "apt" | "apt-get" => {
+            let simulation = !apt_simulation_disabled
+                && !short.contains(['c', 'o'])
+                && !has(&["config-file", "option"])
+                && (short.contains('s') || has(APT_SIMULATION))
+                && matches!(
+                    action,
+                    Some(
+                        "install"
+                            | "reinstall"
+                            | "remove"
+                            | "purge"
+                            | "upgrade"
+                            | "dist-upgrade"
+                            | "dselect-upgrade"
+                            | "full-upgrade"
+                            | "autoremove"
+                            | "auto-remove"
+                            | "autopurge"
+                            | "check"
+                            | "clean"
+                            | "autoclean"
+                            | "auto-clean"
+                            | "distclean"
+                            | "dist-clean"
+                            | "build-dep"
+                            | "satisfy"
+                            | "source"
+                    )
+                );
+            simulation
+                || matches!(
+                    action,
+                    Some("list" | "search" | "show" | "info" | "indextargets" | "help" | "moo")
+                )
+        }
+        "dnf" | "yum" => matches!(
+            action,
+            Some(
+                "list"
+                    | "info"
+                    | "search"
+                    | "provides"
+                    | "whatprovides"
+                    | "repoquery"
+                    | "repolist"
+                    | "repoinfo"
+                    | "check"
+                    | "check-update"
+                    | "check-upgrade"
+                    | "help"
+            )
+        ),
+        "apk" => {
+            matches!(
+                action,
+                Some(
+                    "info"
+                        | "search"
+                        | "list"
+                        | "policy"
+                        | "version"
+                        | "stats"
+                        | "dot"
+                        | "manifest"
+                        | "verify"
+                        | "help"
+                )
+            ) && !short.contains('U')
+                && !long.contains("update-cache")
+        }
+        "zypper" => matches!(
+            action,
+            Some(
+                "search"
+                    | "se"
+                    | "info"
+                    | "if"
+                    | "list-updates"
+                    | "lu"
+                    | "list-patches"
+                    | "lp"
+                    | "patch-check"
+                    | "pchk"
+                    | "packages"
+                    | "pa"
+                    | "patterns"
+                    | "pt"
+                    | "products"
+                    | "pd"
+                    | "repos"
+                    | "lr"
+                    | "services"
+                    | "ls"
+                    | "help"
+            )
+        ),
+        "dpkg" => {
+            (short.contains(['l', 's', 'L', 'S', 'C', 'V'])
+                || has(&[
+                    "list",
+                    "status",
+                    "listfiles",
+                    "search",
+                    "audit",
+                    "verify",
+                    "get-selections",
+                    "print-architecture",
+                    "print-foreign-architectures",
+                    "compare-versions",
+                    "validate-version",
+                    "assert-feature",
+                ]))
+                && !short.contains(['i', 'r', 'P'])
+                && !has(&[
+                    "install",
+                    "unpack",
+                    "configure",
+                    "remove",
+                    "purge",
+                    "set-selections",
+                    "clear-selections",
+                    "triggers-only",
+                    "add-architecture",
+                    "remove-architecture",
+                ])
+        }
+        "pacman" => {
+            let sync = short.contains('S') || long.contains("sync");
+            let files = short.contains('F') || long.contains("files");
+            let query = short.contains('Q') || long.contains("query");
+            let database = short.contains('D') || long.contains("database");
+            !short.contains(['R', 'U'])
+                && !has(&["remove", "upgrade"])
+                && !((sync || files)
+                    && (short.contains(['y', 'u', 'c', 'w'])
+                        || has(&["refresh", "sysupgrade", "clean", "downloadonly"])))
+                && ((sync
+                    && (short.contains(['s', 'i', 'l', 'g', 'p'])
+                        || has(&["search", "info", "list", "groups", "print"])))
+                    || files
+                    || query
+                    || (database && (short.contains('k') || long.contains("check"))))
+        }
+        "rpm" => {
+            let query = short.contains('q') || long.contains("query");
+            let verify =
+                (short.contains('V') || long.contains("verify")) && long.contains("noscripts");
+            (query || verify || has(&["checksig", "querytags", "showrc"]))
+                && !short.contains(['U', 'F', 'e'])
+                && !has(&[
+                    "install",
+                    "upgrade",
+                    "freshen",
+                    "erase",
+                    "rebuilddb",
+                    "initdb",
+                    "import",
+                    "eval",
+                ])
+        }
+        _ => false,
+    };
+    let help_or_version = matches!(args, [arg] if !arg.dynamic
+        && matches!(arg.text.as_str(), "--help" | "--version"));
+    if unknown_options || !(read_only || help_or_version) {
+        assessment.raise(Risk::Modify, "package", name);
+    }
+}
+
+const APT_SIMULATION: &[&str] = &["simulate", "dry-run", "just-print", "recon", "no-act"];
 
 fn git(assessment: &mut Assessment, args: &[Word]) {
     // `git -C dir status`: skip global options.
@@ -1563,23 +1997,70 @@ fn interpreter(
         name,
         "sh" | "bash" | "zsh" | "dash" | "ksh" | "fish" | "ash" | "busybox"
     );
-    // `bash -c '…'` (also `-lc`, `-ec`): the command string is visible, so assess it.
-    let command_string = args
-        .iter()
-        .position(|arg| {
-            arg.text.starts_with('-') && !arg.text.starts_with("--") && arg.text.ends_with('c')
-        })
-        .and_then(|at| args.get(at + 1));
-    if let (true, Some(command)) = (shell_like, command_string) {
-        assessment.opaque |= command.dynamic;
-        assessment.merge(assess_line(&command.text, rules, depth + 1));
+    let code_flags: &[&str] = match name {
+        "python" | "python2" | "python3" | "pwsh" | "powershell" => &["-c", "-Command"],
+        "perl" | "ruby" | "lua" => &["-e"],
+        "node" | "bun" => &["-e", "--eval", "-p", "--print"],
+        "php" => &["-r"],
+        _ => &[],
+    };
+    let args = if name == "busybox"
+        && args
+            .first()
+            .is_some_and(|arg| matches!(arg.text.as_str(), "sh" | "ash"))
+    {
+        &args[1..]
+    } else {
+        args
+    };
+    let mut options = args.iter();
+    while let Some(arg) = options.next() {
+        let flag = arg.text.as_str();
+        if arg.dynamic
+            || !(flag.starts_with('-') || (shell_like && flag.starts_with('+')))
+            || matches!(flag, "-" | "--")
+        {
+            break;
+        }
+        let shell_command =
+            shell_like && flag.starts_with('-') && !flag.starts_with("--") && flag.contains('c');
+        if shell_command || code_flags.contains(&flag) {
+            if let Some(code) = options.next() {
+                if shell_command {
+                    assess_command_string(assessment, [code], name, rules, depth);
+                } else {
+                    assessment.opaque |= code.dynamic;
+                    assessment.raise(Risk::Modify, "script", name);
+                }
+                return;
+            }
+            break;
+        }
+        if (shell_like && matches!(flag, "-o" | "+o" | "-O" | "+O"))
+            || (matches!(name, "python" | "python2" | "python3") && matches!(flag, "-W" | "-X"))
+        {
+            options.next();
+        }
+    }
+    if name == "deno"
+        && args
+            .first()
+            .is_some_and(|arg| !arg.dynamic && arg.text == "eval")
+        && let Some(code) = args.get(1).filter(|arg| !arg.text.starts_with('-'))
+    {
+        assessment.opaque |= code.dynamic;
+        assessment.raise(Risk::Modify, "script", name);
         return;
     }
-    // A script, inline program or code from a pipe: what runs is not visible.
+    // An external script or code from stdin must be approved without automatic review.
     assessment.opaque = true;
     let reads_stdin = operands(args).next().is_none() || has_any(args, &["-", "-s"]);
     let downloaded = previous
-        .and_then(|segment| segment.words.iter().find(|word| !is_assignment(word)))
+        .and_then(|segment| {
+            skip_control(&segment.words)
+                .iter()
+                .find(|word| !word.assignment)
+        })
         .is_some_and(|word| {
             matches!(
                 base_name(&word.text),
@@ -1688,6 +2169,212 @@ mod tests {
             "ssh -i ~/.ssh/id_rsa host uptime",
         ] {
             assert_eq!(risk(line), Risk::ReadOnly, "{line}");
+        }
+    }
+
+    #[test]
+    fn variable_arguments_and_shell_control_preserve_command_risk() {
+        for line in [
+            r#"update_status=$?; printf 'exit=%s\n' "$update_status""#,
+            r#"echo "$msg"; cat "$LOG_FILE"; grep "$pat" /var/log/syslog"#,
+            r#"systemctl status "$svc"; < "$input_file""#,
+            r#"sed -n '1,5p' "$input_file"; awk -v n="$n" 'NR > n {print}' "$input_file""#,
+            "if [ $? -ne 0 ]; then exit 1; fi",
+            "if ! true; then :; elif false; then return; else shift; fi",
+            r#"[[ -n "$val" ]]; local foo=bar; readonly foo; unset foo; set -e"#,
+            "do break; continue; done; esac",
+            "echo $(id) \x60date\x60",
+        ] {
+            let assessment = assess_command(line, &Rules::default());
+            assert_eq!(assessment.risk, Risk::ReadOnly, "{line}: {assessment:?}");
+            assert!(!assessment.opaque, "{line}");
+        }
+        for line in [
+            "if rm -rf /; then echo ok; fi",
+            "if true; then ! sudo rm -rf /; fi",
+            r#"rm -rf "$DIR/"; true"#,
+            r#"chmod -R 777 "$DIR""#,
+            r#"mv "$DIR" /tmp/backup"#,
+            "echo \x60rm -rf /\x60",
+        ] {
+            let assessment = assess_command(line, &Rules::default());
+            assert_eq!(assessment.risk, Risk::Dangerous, "{line}: {assessment:?}");
+            assert!(!assessment.opaque, "{line}");
+        }
+        assert_eq!(risk("'if'"), Risk::Modify);
+    }
+
+    #[test]
+    fn secret_paths_in_arguments_assignments_and_redirects() {
+        let path = "~/.ssh/id_rsa";
+        for line in [
+            r#"k=~/.ssh/id_rsa; cat "$k""#,
+            r#"K=~/.ssh/id_rsa head "$K""#,
+            r#"export K=~/.ssh/id_rsa; cat "$K""#,
+            r#"read_only=1; : < ~/.ssh/id_rsa"#,
+            r#"K=~/.ssh/id_rsa; cat < "$K""#,
+            r#"K=~/.ssh/id_rsa; echo hi < "$K""#,
+        ] {
+            let assessment = assess_command(line, &Rules::default());
+            assert_eq!(assessment.risk, Risk::Modify, "{line}: {assessment:?}");
+            assert!(!assessment.opaque, "{line}");
+            assert!(
+                assessment
+                    .reasons
+                    .iter()
+                    .any(|reason| { reason.code == "read_secret" && reason.detail == path }),
+                "{line}: {assessment:?}"
+            );
+        }
+        for line in [
+            r#"KEY=~/.ssh/id_rsa; ssh -i "$KEY" host uptime"#,
+            r#"KEY=~/.ssh/id_rsa; ssh -i "$KEY" -p 22 host uptime -p"#,
+            r#"KEY=~/.ssh/id_rsa; printf '%s\n' "$KEY""#,
+            r#"echo KEY=~/.ssh/id_rsa; cat "$LOG_FILE""#,
+            "printf '%s\\n' ~/.ssh/id_rsa; basename ~/.ssh/id_rsa; [[ -f ~/.ssh/id_rsa ]]",
+            "export KEY=~/.ssh/id_rsa; date",
+        ] {
+            assert_eq!(risk(line), Risk::ReadOnly, "{line}");
+        }
+    }
+
+    #[test]
+    fn dynamic_output_is_a_visible_modification() {
+        for line in [
+            r#"echo hi > "$OUT""#,
+            r#"printf hi >> "$LOG""#,
+            r#"echo hi > "$DIR/file""#,
+        ] {
+            let assessment = assess_command(line, &Rules::default());
+            assert_eq!(assessment.risk, Risk::Modify, "{line}");
+            assert!(!assessment.opaque, "{line}");
+            assert_eq!(
+                assessment
+                    .reasons
+                    .iter()
+                    .map(|reason| reason.code)
+                    .collect::<Vec<_>>(),
+                ["write_file", "dynamic_target"],
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn package_queries_and_apt_simulations_are_read_only() {
+        for line in [
+            "apt list --installed",
+            "apt search nginx",
+            "apt show nginx",
+            "apt-get -s upgrade",
+            "apt-get --simulate install curl",
+            "apt install --dry-run curl",
+            "apt-get -qqs dist-upgrade",
+            "dpkg -l",
+            "dpkg --status bash",
+            "dpkg --admindir /tmp/db --get-selections",
+            "dnf -q list installed",
+            "dnf --installroot /srv/root info nginx",
+            "yum -q search nginx",
+            "yum repolist",
+            "pacman -Qi bash",
+            "pacman -Ss curl",
+            "pacman -Si nginx",
+            "pacman -Fl curl",
+            "pacman --root /srv/root -Q",
+            "apk --no-cache info curl",
+            "apk search bash",
+            "zypper --non-interactive lr",
+            "zypper -R /srv/root list-updates",
+            "zypper se curl",
+            "rpm -qi bash",
+            "rpm --dbpath /tmp/db -qa",
+            "rpm -V --noscripts bash",
+        ] {
+            let assessment = assess_command(line, &Rules::default());
+            assert_eq!(assessment.risk, Risk::ReadOnly, "{line}: {assessment:?}");
+            assert!(!assessment.opaque, "{line}");
+        }
+    }
+
+    #[test]
+    fn package_changes_and_overrides_have_package_reason() {
+        for (expected, commands) in [
+            (
+                Risk::Modify,
+                &[
+                    "apt-get -y -qq update",
+                    "apt-get -s update",
+                    "apt-get -s --simulate=false upgrade",
+                    "apt-get --help=false install nginx",
+                    "apt-get upgrade",
+                    "apt dist-upgrade",
+                    "apt full-upgrade",
+                    "apt install nginx",
+                    "apt reinstall nginx",
+                    "apt remove nginx",
+                    "apt purge nginx",
+                    "apt autoremove",
+                    "apt clean",
+                    "apt-get -t stable install nginx",
+                    "apt-get install -- --simulate",
+                    "dpkg -i file.deb",
+                    "dpkg -r bash",
+                    "dpkg -P nginx",
+                    "dpkg --configure -a",
+                    "dnf -y install nginx",
+                    "dnf update",
+                    "dnf upgrade",
+                    "dnf remove nginx",
+                    "yum erase nginx",
+                    "yum autoremove",
+                    "dnf makecache",
+                    "pacman -S nginx",
+                    "pacman -Sy",
+                    "pacman -Syu",
+                    "pacman -R nginx",
+                    "pacman -U file.pkg.tar.zst",
+                    "pacman -D --asdeps nginx",
+                    "pacman -Fy",
+                    "pacman -Ssy nginx",
+                    "apk update",
+                    "apk upgrade",
+                    "apk --no-cache add curl",
+                    "apk del curl",
+                    "apk fix curl",
+                    "apk -U info curl",
+                    "zypper refresh",
+                    "zypper install curl",
+                    "zypper remove curl",
+                    "zypper update",
+                    "zypper dup",
+                    "zypper patch",
+                    "zypper --non-interactive up",
+                    "rpm -i file.rpm",
+                    "rpm -U file.rpm",
+                    "rpm -F file.rpm",
+                    "rpm -e curl",
+                    "rpm -V bash",
+                    "dnf unrecognized-action",
+                ][..],
+            ),
+            (
+                Risk::Dangerous,
+                &[
+                    "apt-get --allow-remove-essential remove bash",
+                    "apt-get --allow-remove-essential=true remove bash",
+                    "dpkg --force-remove-essential -r bash",
+                    "apt-get -s --allow-remove-essential remove bash",
+                ][..],
+            ),
+        ] {
+            for line in commands {
+                let assessment = assess_command(line, &Rules::default());
+                assert_eq!(assessment.risk, expected, "{line}: {assessment:?}");
+                assert!(!assessment.opaque, "{line}");
+                assert_eq!(assessment.reasons.len(), 1, "{line}: {assessment:?}");
+                assert_eq!(assessment.reasons[0].code, "package", "{line}");
+            }
         }
     }
 
@@ -1840,10 +2527,50 @@ mod tests {
     }
 
     #[test]
-    fn opaque_commands_are_not_remembered() {
-        assert!(assess_command("$CMD", &Rules::default()).opaque);
-        assert!(assess_command("python3 -c 'print(1)'", &Rules::default()).opaque);
-        assert!(!assess_command("systemctl restart nginx", &Rules::default()).opaque);
+    fn hidden_code_needs_approval() {
+        for line in [
+            "$CMD",
+            r#""$CMD"x=foo"#,
+            "sudo $CMD",
+            "bash deploy.sh",
+            "source deploy.sh",
+            "sh < script.sh",
+            "python3 script.py",
+            "bash deploy.sh -c true",
+            r#"python3 -c "$CODE""#,
+            r#"bash -c "$X""#,
+            r#"eval "$X""#,
+            r#"su -c "$X""#,
+            "su",
+            r#"ssh host "$X""#,
+            r#"watch "$X""#,
+            r#"sed "$SCRIPT" f"#,
+            r#"awk "$PROG" f"#,
+            "sed -f script.sed f",
+            "sed --debug -f script.sed f",
+            "awk -f prog.awk f",
+            "awk --lint -f prog.awk f",
+        ] {
+            let assessment = assess_command(line, &Rules::default());
+            assert_eq!(assessment.risk, Risk::Modify, "{line}: {assessment:?}");
+            assert!(assessment.opaque, "{line}");
+        }
+        for line in [
+            "python3 -c 'print(1)'",
+            "node -e 'console.log(1)'",
+            "sed --in-place 's/a/b/' config.yml",
+            "sed --debug 's/a/b/' config.yml",
+            "awk --lint '{print $1}' app.log",
+        ] {
+            let visible_code = assess_command(line, &Rules::default());
+            assert_eq!(visible_code.risk, Risk::Modify, "{line}: {visible_code:?}");
+            assert!(!visible_code.opaque, "{line}");
+        }
+        let line = (0..=MAX_DEPTH).fold("id".to_owned(), |inner, _| format!("echo $({inner})"));
+        let assessment = assess_command(&line, &Rules::default());
+        assert_eq!(assessment.risk, Risk::Modify);
+        assert!(assessment.opaque);
+        assert_eq!(assessment.reasons[0].code, "too_nested");
     }
 
     #[test]

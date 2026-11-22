@@ -147,7 +147,10 @@ impl Operation {
                 command: Some(_), ..
             } => {
                 if assessment.programs.is_empty()
-                    || assessment.reasons.iter().any(|r| r.code == "read_secret")
+                    || assessment
+                        .reasons
+                        .iter()
+                        .any(|r| matches!(r.code, "read_secret" | "dynamic_target" | "script"))
                 {
                     return None;
                 }
@@ -350,6 +353,35 @@ mod tests {
         let assessment = script.assess(policy.rules());
         policy.answer(&script, &assessment, Answer::AllowSession);
         assert_eq!(decide(&policy, &script), ASK_ONCE);
+    }
+
+    #[test]
+    fn dynamic_output_targets_do_not_inherit_or_create_grants() {
+        let mut policy = Policy::new(Mode::Auto, Rules::default());
+        let dynamic = command(r#"echo hi > "$OUT""#);
+        let fixed = command("echo hi > /tmp/out");
+        let assessment = dynamic.assess(policy.rules());
+
+        assert_eq!(decide(&policy, &dynamic), ASK_ONCE);
+        assert!(policy.answer(&dynamic, &assessment, Answer::AllowSession));
+        assert_eq!(decide(&policy, &dynamic), ASK_ONCE);
+        assert_eq!(decide(&policy, &fixed), ASK);
+
+        let assessment = fixed.assess(policy.rules());
+        assert!(policy.answer(&fixed, &assessment, Answer::AllowSession));
+        assert_eq!(decide(&policy, &fixed), Decision::Allow);
+        assert_eq!(decide(&policy, &dynamic), ASK_ONCE);
+    }
+
+    #[test]
+    fn visible_inline_scripts_are_not_remembered() {
+        let mut policy = Policy::new(Mode::AskByRisk, Rules::default());
+        let inline = command("python3 -c 'print(1)'");
+        let assessment = inline.assess(policy.rules());
+        assert!(!assessment.opaque);
+        assert_eq!(decide(&policy, &inline), ASK_ONCE);
+        assert!(policy.answer(&inline, &assessment, Answer::AllowSession));
+        assert_eq!(decide(&policy, &inline), ASK_ONCE);
     }
 
     #[test]

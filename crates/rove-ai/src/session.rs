@@ -1279,7 +1279,121 @@ impl Client for AiSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::review::{ReviewRequest, Reviewer, Verdict};
     use serde_json::json;
+
+    struct RecordingReviewer(tokio::sync::mpsc::UnboundedSender<ReviewRequest>);
+
+    #[async_trait]
+    impl Reviewer for RecordingReviewer {
+        fn name(&self) -> &'static str {
+            "test"
+        }
+
+        async fn review(&self, request: &ReviewRequest) -> Result<Verdict, String> {
+            self.0.send(request.clone()).unwrap();
+            Ok(Verdict {
+                allow: true,
+                confidence: 1.0,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn automatic_modes_review_visible_modifications_and_defer_hidden_commands() {
+        for mode in [Mode::Auto, Mode::Unattended] {
+            let (events, mut emitted) = tokio::sync::mpsc::unbounded_channel();
+            let session = AiSession::new(
+                Arc::new(host::LocalHost),
+                SessionSettings {
+                    mode,
+                    ..SessionSettings::default()
+                },
+                Arc::new(move |event| events.send(event).unwrap()),
+            );
+            let (requests, mut reviewed) = tokio::sync::mpsc::unbounded_channel();
+            session.set_reviewer(Some((Arc::new(RecordingReviewer(requests)), 0.9)));
+            for (command, reason) in [
+                (
+                    r#"apt-get update && update_status=$?; printf 'exit=%s\n' "$update_status""#,
+                    "package: apt-get",
+                ),
+                (r#"echo hi > "$OUT""#, "dynamic_target"),
+                ("python3 -c 'print(1)'", "script: python3"),
+                ("sed --in-place 's/a/b/' config.yml", "write_file: sed"),
+                ("awk --lint '{print $1}' app.log", "modify: awk"),
+            ] {
+                let operation = Operation::Command {
+                    command: command.into(),
+                };
+                let assessed = session.assess(&operation).await;
+                let allowed = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    session.authorize(&operation, &assessed, false),
+                )
+                .await
+                .unwrap();
+                assert_eq!(allowed, (true, false), "{mode:?}: {command}");
+                let request = reviewed.try_recv().unwrap();
+                assert_eq!(
+                    request.operation,
+                    format!("run the shell command: {command}")
+                );
+                assert!(request.reasons.iter().any(|actual| actual == reason));
+                assert!(matches!(
+                    emitted.try_recv().unwrap(),
+                    AiEvent::Reviewed { allowed: true, .. }
+                ));
+            }
+
+            for command in ["bash deploy.sh", "$CMD"] {
+                let operation = Operation::Command {
+                    command: command.into(),
+                };
+                let assessed = session.assess(&operation).await;
+                let authorization = session.authorize(&operation, &assessed, false);
+                let allowed = if mode == Mode::Auto {
+                    let respond = async {
+                        let event = emitted.recv().await.unwrap();
+                        let AiEvent::Approval {
+                            request_id,
+                            rememberable: false,
+                            review: Some(ReviewNote::Opaque),
+                            ..
+                        } = event
+                        else {
+                            panic!("expected approval for opaque command, got {event:?}");
+                        };
+                        assert!(session.answer(request_id, Answer::Deny).await);
+                    };
+                    let (allowed, ()) =
+                        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                            tokio::join!(authorization, respond)
+                        })
+                        .await
+                        .unwrap();
+                    assert!(matches!(
+                        emitted.try_recv().unwrap(),
+                        AiEvent::Approved { .. }
+                    ));
+                    allowed
+                } else {
+                    assert_eq!(
+                        session.review(&operation, &assessed, false).await,
+                        Err(Some(ReviewNote::Opaque)),
+                    );
+                    let allowed = authorization.await;
+                    assert_eq!(
+                        session.take_deferred(),
+                        [format!("run the shell command: {command}")]
+                    );
+                    allowed
+                };
+                assert_eq!(allowed, (false, false), "{mode:?}: {command}");
+                assert!(reviewed.try_recv().is_err());
+            }
+        }
+    }
 
     #[test]
     fn reads_tool_commands() {
