@@ -591,13 +591,13 @@
       inset 0 1px 0 var(--separator),
       inset 0 -1px 0 var(--separator);
   }
-  /* A sidebar of its own, the full height of the dialog. */
+  /* A sidebar of its own, the full height of the split view. */
   nav {
-    flex: 0 0 clamp(120px, 28%, 220px);
+    flex: 0 0 232px;
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    padding: var(--space-3) var(--space-2);
+    padding: var(--space-3);
     box-shadow: inset -1px 0 0 var(--separator);
     min-height: 0;
   }
@@ -705,16 +705,21 @@
     font-size: var(--text-footnote);
   }
   .footer-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-2);
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    width: calc(232px - var(--space-3) * 2);
+    margin-left: calc(var(--space-3) - var(--space-5));
     margin-right: auto;
   }
   .footer-actions button {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: var(--space-1);
+    min-width: 0;
+    padding: 0 var(--space-2);
+    font-size: var(--text-footnote);
   }
   .footer-actions button.active {
     background: var(--accent-soft);
@@ -729,7 +734,13 @@
     gap: var(--space-2);
     padding: var(--space-4) var(--space-5) var(--space-6);
     overflow-y: auto;
-    background: color-mix(in srgb, var(--fill) 50%, transparent);
+    background: color-mix(in srgb, var(--fill) 36%, transparent);
+  }
+  .pane :global(.form-group) {
+    background: color-mix(in srgb, var(--surface-raised) 76%, transparent);
+  }
+  :global(:root[data-blur='off']) .pane :global(.form-group) {
+    background: var(--surface-raised);
   }
   .pane > :global(*),
   form > :global(*) {
@@ -770,6 +781,16 @@
     flex: 1;
   }
   @media (max-width: 600px) {
+    nav {
+      flex: 0 0 clamp(120px, 32%, 180px);
+      padding: var(--space-3) var(--space-2);
+    }
+    .footer-actions {
+      display: flex;
+      flex-wrap: wrap;
+      width: auto;
+      margin-left: 0;
+    }
     .pane {
       padding-inline: var(--space-2);
     }
@@ -784,6 +805,9 @@
     padding: var(--space-3);
     border: 1px solid var(--separator);
     border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--surface-raised) 76%, transparent);
+  }
+  :global(:root[data-blur='off']) .card {
     background: var(--surface-raised);
   }
   .summary {
