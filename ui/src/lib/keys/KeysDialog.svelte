@@ -372,15 +372,9 @@
           <p class="empty">{keys.items.length === 0 ? t('keys.empty') : t('host.noMatch')}</p>
         {/each}
       </div>
-      <!-- At the foot of the sidebar. -->
-      <div class="add">
-        <button type="button" class:active={mode === 'generate'} disabled={busy} onclick={() => reset('generate')}><Icon name="add" size={13} />{t('keys.generate')}</button>
-        <button type="button" class:active={mode === 'import'} disabled={busy} onclick={() => reset('import')}><Icon name="importConfig" size={13} />{t('keys.import')}</button>
-      </div>
     </nav>
 
-    <div class="main">
-      <div class="pane">
+    <div class="pane">
         {#if mode === 'view' && selected}
           <section class="card summary">
             <div class="head">
@@ -568,12 +562,19 @@
         {/if}
         {#if error}<p class="message error">{error}</p>{/if}
         {#if notice}<p class="message notice">{notice}</p>{/if}
-      </div>
-      <div class="foot">
-        <button type="button" class="primary" onclick={onclose}>{t('settings.done')}</button>
-      </div>
     </div>
   </div>
+  {#snippet actions()}
+    <div class="footer-actions">
+      <button type="button" class="secondary" class:active={mode === 'generate'} disabled={busy} onclick={() => reset('generate')}>
+        <Icon name="add" size={13} />{t('keys.generate')}
+      </button>
+      <button type="button" class="secondary" class:active={mode === 'import'} disabled={busy} onclick={() => reset('import')}>
+        <Icon name="importConfig" size={13} />{t('keys.import')}
+      </button>
+    </div>
+    <button type="button" class="primary" onclick={onclose}>{t('settings.done')}</button>
+  {/snippet}
 </Dialog>
 
 {#if keyMenu}
@@ -581,12 +582,14 @@
 {/if}
 
 <style>
-  /* Runs to the bottom of the dialog, so the line between the list and the pane does too. */
+  /* Matches SettingsDialog: full-bleed split bordered cleanly above the unified dialog footer. */
   .layout {
     display: flex;
-    height: min(620px, 74vh);
-    margin: 0 calc(-1 * var(--space-5)) calc(-1 * var(--space-2));
-    box-shadow: inset 0 1px 0 var(--separator);
+    height: min(580px, 70vh);
+    margin: 0 calc(-1 * var(--space-5));
+    box-shadow:
+      inset 0 1px 0 var(--separator),
+      inset 0 -1px 0 var(--separator);
   }
   /* A sidebar of its own, the full height of the dialog. */
   nav {
@@ -701,45 +704,21 @@
     color: var(--fg-muted);
     font-size: var(--text-footnote);
   }
-  .add {
+  .footer-actions {
     display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-    padding-top: var(--space-2);
-    box-shadow: inset 0 1px 0 var(--separator);
-  }
-  .add button {
-    display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
-    height: var(--control-height);
-    padding: 0 var(--space-2);
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
+    margin-right: auto;
+  }
+  .footer-actions button {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+  .footer-actions button.active {
+    background: var(--accent-soft);
     color: var(--accent);
-    font: inherit;
-    font-size: var(--text-footnote);
-    text-align: left;
-  }
-  .add button:hover,
-  .add button.active {
-    background: var(--fill-hover);
-  }
-  /* The right side: the pane above its bottom bar. */
-  .main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-  }
-  /* The bottom bar of the right side, apart from the sidebar's buttons. */
-  .foot {
-    flex: none;
-    display: flex;
-    justify-content: flex-end;
-    padding: var(--space-3) var(--space-5) var(--space-4);
-    box-shadow: inset 0 1px 0 var(--separator);
   }
   .pane {
     flex: 1;
