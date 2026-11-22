@@ -40,6 +40,7 @@ export const en = {
   'connect.failed': 'Connection failed: {reason}',
   'connect.retry': 'Retry',
   'connect.usePassword': 'Sign in with password',
+  'connect.tailscaleSettings': 'Open Tailscale settings',
   'connect.enterPassphrase': 'Enter passphrase',
   'connect.editHost': 'Edit host',
   'error.ssh.jump': 'Jump host could not reach the server',

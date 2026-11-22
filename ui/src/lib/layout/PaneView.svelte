@@ -1,6 +1,12 @@
+<script lang="ts" module>
+  /** Last Tailscale connection timestamp auto-retried for each pane target, preventing retry loops. */
+  const tailscaleRetriedAt = new Map<string, number>();
+</script>
+
 <script lang="ts">
   // One tab's content: a terminal or a file browser, with the connection failure banner. Stays
   // mounted while another tab of its group is shown (hidden, keeping its size).
+  import { untrack } from 'svelte';
   import TermView from '../terminal/TermView.svelte';
   import TerminalStatusBar from '../terminal/TerminalStatusBar.svelte';
   import { prefs } from '../settings/prefs.svelte';
@@ -9,12 +15,20 @@
   import TextEditor from '../files/TextEditor.svelte';
   import { editors } from '../files/editors.svelte';
   import { terminals } from '../terminal/registry';
-  import { hostOf, remoteSourceOf, workspace, type PaneState } from '../workspace/workspace.svelte';
-  import { sessionOpenLocal, sessionOpenQuick, sessionOpenSsh, credentialKindOf, type CredentialKind, type OutputMessage, type TermSize } from '../ipc';
+  import { hostOf, remoteSourceOf, sourceKey, workspace, type PaneState } from '../workspace/workspace.svelte';
+  import { isCommandError, sessionOpenLocal, sessionOpenQuick, sessionOpenSsh, credentialKindOf, type CredentialKind, type OutputMessage, type TermSize } from '../ipc';
   import type { PaneId } from './layout';
   import { errorText, t } from '../i18n';
   import Icon from '../ui/Icon.svelte';
   import { hosts } from '../hosts/hosts.svelte';
+  import { isMobile } from '../platform';
+  import { tailscale } from '../tailscale/tailscale.svelte';
+  import {
+    shouldAutoRetryTailscale,
+    showPasswordFallbackAction,
+    showTailscaleSettingsAction,
+    usesTailscaleRoute,
+  } from '../tailscale/autoRetry';
 
   interface Props {
     pane: PaneState;
@@ -30,13 +44,26 @@
     /** Opens the editor of a saved host. */
     onedithost: (hostId: string) => void;
     onaisettings: () => void;
+    ontailscalesettings: () => void;
     /** Opens the fleet lead's scheduled tasks. */
     onschedules: () => void;
   }
 
-  let { pane, shown, focused, oncredentials, onedithost, onaisettings, onschedules }: Props = $props();
+  let { pane, shown, focused, oncredentials, onedithost, onaisettings, ontailscalesettings, onschedules }: Props = $props();
   let view = $state<TermView>();
+  let sftpFailureCode = $state<string | null>(null);
   const editorDraft = $derived(pane.target.kind === 'editor' ? editors.find(pane.target.draftId) : undefined);
+
+  const host = $derived.by(() => {
+    const hostId = hostOf(pane.target);
+    return hostId ? hosts.find(hostId) ?? null : null;
+  });
+  const isTailscaleHost = $derived(usesTailscaleRoute(host, (id) => hosts.find(id)));
+  const retryTargetKey = $derived.by(() => {
+    if (pane.target.kind === 'ssh') return `ssh:${pane.target.hostId}`;
+    if (pane.target.kind === 'sftp') return `sftp:${sourceKey(pane.target.source)}`;
+    return pane.id;
+  });
 
   /** The saved host was deleted (here or on another device) and the tab holds no live session:
    *  it can never connect again, so it says so instead of failing with a lookup error. */
@@ -89,6 +116,27 @@
   $effect(() => {
     if (pane.target.kind === 'editor' && !editorDraft) workspace.closePane(pane.id);
   });
+
+  // Automatically retry tabs that failed before embedded Tailscale finished connecting.
+  let wasTailscaleConnected = tailscale.connected;
+  $effect(() => {
+    const connected = tailscale.connected;
+    const prevConnected = wasTailscaleConnected;
+    wasTailscaleConnected = connected;
+    const key = retryTargetKey;
+    if (!connected) {
+      tailscaleRetriedAt.delete(key);
+      return;
+    }
+    const failureCode = pane.failure?.code ?? sftpFailureCode;
+    if (pane.deferred || orphaned) return;
+    const epoch = tailscale.status.updated_at;
+    const alreadyRetriedForEpoch = tailscaleRetriedAt.get(key) === epoch;
+    if (shouldAutoRetryTailscale({ isTailscaleHost, failureCode, connected, wasConnected: prevConnected, alreadyRetriedForEpoch })) {
+      tailscaleRetriedAt.set(key, epoch);
+      untrack(() => workspace.reopen(pane.id, null, false));
+    }
+  });
 </script>
 
 <div class="pane-view" class:hidden={!shown} role="group" onfocusin={() => workspace.focus(pane.id)}>
@@ -107,8 +155,12 @@
       remember={pane.remember}
       active={focused}
       visible={shown}
-      onopened={() => workspace.opened(pane.id)}
+      onopened={() => {
+        sftpFailureCode = null;
+        workspace.opened(pane.id);
+      }}
       onerror={(error) => {
+        sftpFailureCode = isCommandError(error) ? error.code : null;
         const kind = credentialKindOf(error);
         if (kind) oncredentials(pane.id, kind);
       }}
@@ -152,6 +204,18 @@
         {/if}
         {#if pane.failure}
           {@const failure = pane.failure}
+          {@const offerTailscaleSettings = showTailscaleSettingsAction({
+            isMobile,
+            isTailscaleHost,
+            tailscaleConnected: tailscale.connected,
+            failureCode: failure.code,
+          })}
+          {@const offerPasswordFallback = showPasswordFallbackAction({
+            isRemote: pane.target.kind !== 'local',
+            isTailscaleHost,
+            tailscaleConnected: tailscale.connected,
+            failureCode: failure.code,
+          })}
           <div class="failure" role="alert">
             <Icon name="warning" size={16} />
             <span class="reason selectable">{t('connect.failed', { reason: errorText(failure) })}</span>
@@ -160,7 +224,9 @@
               {#if failure.code === 'ssh.passphrase_required'}
                 <button type="button" class="secondary" onclick={() => oncredentials(pane.id, 'passphrase')}>{t('connect.enterPassphrase')}</button>
               {/if}
-              {#if pane.target.kind !== 'local' && failure.code !== 'ssh.connect' && failure.code !== 'ssh.timeout'}
+              {#if offerTailscaleSettings}
+                <button type="button" class="secondary" onclick={ontailscalesettings}>{t('connect.tailscaleSettings')}</button>
+              {:else if offerPasswordFallback}
                 <button type="button" class="secondary" onclick={() => oncredentials(pane.id, 'password', true)}>{t('connect.usePassword')}</button>
               {/if}
               {#if pane.target.kind === 'ssh'}

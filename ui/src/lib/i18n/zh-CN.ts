@@ -121,6 +121,7 @@ export const zhCN: Messages = {
   'connect.failed': '连接失败：{reason}',
   'connect.retry': '重试',
   'connect.usePassword': '使用密码登录',
+  'connect.tailscaleSettings': '打开 Tailscale 设置',
   'connect.enterPassphrase': '输入私钥密码',
   'connect.editHost': '编辑主机',
   'error.ssh.jump': '跳板机无法连到目标服务器',
