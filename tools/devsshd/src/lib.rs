@@ -368,6 +368,7 @@ impl russh::server::Handler for Client {
             shell: self.config.shell.clone(),
             cwd: None,
             size: Some(size),
+            ..LocalRequest::default()
         };
         let mut opened = match self.terminals.open(request) {
             Ok(opened) => opened,

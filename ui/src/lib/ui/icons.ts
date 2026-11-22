@@ -13,6 +13,7 @@ import shieldCheck from 'lucide-static/icons/shield-check.svg?raw';
 import shieldAlert from 'lucide-static/icons/shield-alert.svg?raw';
 import unlock from 'lucide-static/icons/lock-open.svg?raw';
 import key from 'lucide-static/icons/key-round.svg?raw';
+import logIn from 'lucide-static/icons/log-in.svg?raw';
 import edit from 'lucide-static/icons/pencil.svg?raw';
 import remove from 'lucide-static/icons/trash-2.svg?raw';
 import importConfig from 'lucide-static/icons/file-down.svg?raw';
@@ -118,6 +119,7 @@ export const icons = {
   shieldAlert,
   unlock,
   key,
+  logIn,
   edit,
   remove,
   importConfig,

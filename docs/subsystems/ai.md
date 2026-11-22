@@ -68,8 +68,8 @@ Agent 在权限请求中附带的选项（如"始终允许"）不参与决策。
 
 `runner::start` 以子进程启动 Agent，经 stdio 上按行分隔的 JSON-RPC（ACP 版本 1）通信：
 
-1. `initialize`：声明客户端能力 `fs.readTextFile`、`fs.writeTextFile`、`terminal`，读取 Agent 名称与登录方式。
-2. `session/new`：工作目录为会话主机对应的目录，附带内置 MCP server。Agent 要求登录时，用配置的方式 `authenticate` 后重试。
+1. `initialize`：声明客户端能力 `fs.readTextFile`、`fs.writeTextFile`、`terminal`、`auth.terminal` 与 `_meta["terminal-auth"]`，读取 Agent 名称与结构化登录方式（`agent`、`terminal`、`env_var`）。
+2. `session/new`：工作目录为会话主机对应的目录，附带内置 MCP server。Agent 要求登录时，仅对 `agent` 类型按配置执行 `authenticate` 后重试；`terminal` 与 `env_var` 返回 `AuthRequired` 交由界面引导登录。
 3. 若 Agent 提供配置中偏好的模式（Codex 为 `read-only`），用 `session/set_mode` 切换过去，使 Agent 自带的工具在改动任何东西前都发出权限请求。
 4. `session/prompt` 发出用户的话，等待回合结束；期间 `session/update` 转为 `AiEvent::Update`（回复与思考片段、工具调用、计划、模式变化），其余类型忽略。
 
@@ -115,6 +115,7 @@ AI 设置分为模型与智能体、默认与安全、外部接入三页。服�
 | `ai_agents()` | 本机可用的 Agent 与默认项：每个服务商对应一个内置助手（`builtin:<id>`，附模型），然后是检测到的 ACP 智能体与按命令添加的智能体（`acp:<id>`，附运行的程序、是否经 npx）；各项是否已存 key、是否启用（`enabled`，用户关闭的检测项仍列出，供设置页重新打开，`ai_start` 只启动启用的）、是否按命令添加（`custom`） |
 | `ai_set_key(agent, key)` | 密封保存或删除某个 Agent 的 API key |
 | `ai_reveal_key(agent)` / `ai_reveal_review_key()` | 解锁 vault 后按需读取 Agent 或 Jev 的 API key，缺省时返回空值 |
+| `ai_acp_auth_methods(agent)` / `ai_acp_authenticate` / `ai_acp_cancel_auth` / `ai_acp_login_terminal` | 探测 ACP 智能体声明的登录方式（含 `_meta["terminal-auth"]`、`type: "terminal"`、协议 `authenticate` 与本机 CLI 兜底），在后端缓存校验后的登录方案，供界面发起协议认证或内嵌 PTY 终端交互登录 |
 | `ai_delete(id)` | 删除一段对话：运行中先停止，等 Journal 写完排队的记录后移除该会话的 `ai/*` 记录，并追加一条不属于任何会话的 `ai/conversation_deleted`（`payload.session`），同步据此删除其他设备上的同一对话（见 [sync](sync.md#应用中的同步)） |
 | `ai_provider_models(provider, key)` | 列出服务商提供的模型及其上下文窗口（列表给出时：`context_length`、`context_window`、`max_model_len`、`max_input_tokens` 等，超过 1 亿的不采信；`GET /models`；OpenAI 兼容用 Bearer，Anthropic 用 x-api-key 并按 `after_id` 翻页，最多 20 页），排序去重后返回 id；key 未给出时用已保存的，vault 未解锁时不带 key |
 | `ai_provider_test(provider, key)` | 用一次最小请求检查服务商的地址、模型和 key（未给出时用已保存的），返回模型的回复 |

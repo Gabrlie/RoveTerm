@@ -14,6 +14,8 @@
     type AgentAuth, type AgentChoice, type AiMode, type CustomAgent, type ExternalStatus, type Preferences, type ProviderPrefs,
   } from '../../ipc';
   import { ai } from '../../ai/ai.svelte';
+  import AgentLoginDialog from '../../ai/AgentLoginDialog.svelte';
+  import { isMobile } from '../../platform';
   import { prefs } from '../prefs.svelte';
   import { editDevice, editPrefs, settingsError } from '../edit.svelte';
   import { isKeylessProvider } from '../providers';
@@ -26,6 +28,7 @@
   let providerEditor = $state<{ provider: ProviderPrefs | null } | null>(null);
   let customEditor = $state<{ agent: CustomAgent | null } | null>(null);
   let keyFor = $state<string | null>(null);
+  let loginAgent = $state<AgentChoice | null>(null);
   let key = $state('');
   let keySaving = $state(false);
   let jevKey = $state('');
@@ -259,6 +262,9 @@
         </span>
         <span class="badge" class:stored={agent.has_key}>{t(agent.has_key ? 'ai.keyStoredShort' : 'ai.noKey')}</span>
         <div class="row-actions">
+          {#if !isMobile}
+            <IconButton icon="logIn" small label={t('ai.login.action')} onclick={() => (loginAgent = agent)} />
+          {/if}
           <IconButton icon="key" small label={t('ai.key')} disabled={keySaving} onclick={() => (keyFor = agent.agent)} />
           {#if agent.custom}
             <IconButton icon="edit" small label={t('ai.edit')} onclick={() => startEditingCustom(agent)} />
@@ -369,6 +375,19 @@
 {/if}
 {#if customEditor}
   <CustomAgentDialog agent={customEditor.agent} onclose={() => (customEditor = null)} onsaved={customSaved} />
+{/if}
+{#if loginAgent}
+  {@const target = loginAgent}
+  <AgentLoginDialog
+    agent={target.agent}
+    agentName={target.name}
+    onclose={() => (loginAgent = null)}
+    onsignedin={() => void refresh()}
+    onapikey={() => {
+      loginAgent = null;
+      keyFor = target.agent;
+    }}
+  />
 {/if}
 {#if keyAgent}
   {@const agent = keyAgent.agent}

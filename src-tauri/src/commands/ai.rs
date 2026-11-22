@@ -5,10 +5,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use rove_ai::acp::{self, McpServer};
+use rove_ai::acp::{self, AuthMethodKind, McpServer};
 use rove_ai::assistant::{Assistant, HostMeta};
 use rove_ai::audit::{self, Auditor, SessionInfo};
 use rove_ai::backend::{AgentBackend, AgentRef, BackendError};
@@ -19,15 +20,17 @@ use rove_ai::mcp::McpListener;
 use rove_ai::runner::{self, AgentSpec};
 use rove_ai::session::{AiEvent, AiSession, SessionSettings, TerminalSource};
 use rove_ai::{Answer, Mode, Rules};
-use rove_session::{SessionId, SessionManager};
+use rove_session::{SessionId, SessionManager, TermSize};
 use rove_ssh::{SshConnection, SshConnector, SshTarget};
 use rove_vault::{AgentAuth, AiMode, ProviderFormat, ProviderPrefs, ReasoningEffort};
 use serde::{Deserialize, Serialize};
+use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, State};
 use zeroize::Zeroizing;
 
 use crate::connect::{host_target, quick_target};
 use crate::error::CommandError;
+use crate::sink::ChannelSink;
 use crate::state::AppState;
 
 /// Event carrying an AI session's [`AiEvent`]s.
@@ -92,6 +95,11 @@ impl AgentBackend for InteractiveAssistant {
 /// AI sessions of this app.
 pub struct AiSessions {
     entries: tokio::sync::Mutex<HashMap<String, Arc<Entry>>>,
+    /// Server-verified ACP sign-in plans from the latest probe of each agent id.
+    auth_plans: tokio::sync::Mutex<HashMap<String, Vec<ResolvedAuthMethod>>>,
+    /// Active ACP probe or `authenticate` task that can be cancelled on demand or app exit.
+    active_auth: tokio::sync::Mutex<Option<(u64, tokio::task::AbortHandle)>>,
+    next_auth_op: AtomicU64,
     /// Working directory of agents whose host is remote: an empty scratch directory.
     workspace: PathBuf,
     recorder: rove_journal::Recorder,
@@ -104,6 +112,9 @@ impl AiSessions {
     ) -> std::io::Result<Self> {
         Ok(Self {
             entries: tokio::sync::Mutex::new(HashMap::new()),
+            auth_plans: tokio::sync::Mutex::new(HashMap::new()),
+            active_auth: tokio::sync::Mutex::new(None),
+            next_auth_op: AtomicU64::new(1),
             workspace: data_dir.join("ai-workspace"),
             recorder: rove_journal::Recorder::start(journal)?,
         })
@@ -118,8 +129,31 @@ impl AiSessions {
             .ok_or_else(|| CommandError::new("ai.not_found", "no such AI session"))
     }
 
+    async fn cancel_active_auth(&self) {
+        if let Some((_, handle)) = self.active_auth.lock().await.take() {
+            handle.abort();
+        }
+    }
+
+    async fn register_active_auth(&self, handle: tokio::task::AbortHandle) -> u64 {
+        let token = self.next_auth_op.fetch_add(1, Ordering::Relaxed);
+        let mut slot = self.active_auth.lock().await;
+        if let Some((_, previous)) = slot.replace((token, handle)) {
+            previous.abort();
+        }
+        token
+    }
+
+    async fn clear_active_auth(&self, token: u64) {
+        let mut slot = self.active_auth.lock().await;
+        if slot.as_ref().is_some_and(|(active, _)| *active == token) {
+            slot.take();
+        }
+    }
+
     /// Stops every session; used on exit.
     pub async fn stop_all(&self) {
+        self.cancel_active_auth().await;
         let entries: Vec<Arc<Entry>> = self
             .entries
             .lock()
@@ -460,6 +494,376 @@ async fn acp_launch(
         (_, None) => Vec::new(),
     };
     Ok((found, extra, auth_methods))
+}
+
+/// One sign-in method exposed to the UI for an ACP agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AcpAuthMethod {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// `"agent"` (ACP `authenticate`), `"terminal"` (embedded PTY), or `"api_key"` (key vault).
+    pub kind: &'static str,
+    /// Display-only preview of the command launched for `"terminal"` methods.
+    pub command_preview: Option<String>,
+    /// True when offered from a detected local CLI fallback rather than ACP `initialize`.
+    pub fallback: bool,
+}
+
+/// Sign-in methods discovered for one ACP agent.
+#[derive(Debug, Clone, Serialize)]
+pub struct AcpAuthInfo {
+    pub agent: String,
+    pub agent_name: String,
+    pub methods: Vec<AcpAuthMethod>,
+    /// Non-fatal error from probing the ACP process; fallback methods may still be listed.
+    pub probe_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ResolvedAuthAction {
+    Agent,
+    Terminal {
+        program: String,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+    },
+    ApiKey,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedAuthMethod {
+    public: AcpAuthMethod,
+    action: ResolvedAuthAction,
+}
+
+/// Timeout for probing an ACP agent's `initialize` (first `npx` download can be slow).
+const ACP_PROBE_TIMEOUT: Duration = Duration::from_secs(60);
+/// Timeout for an interactive protocol `authenticate` (such as browser OAuth).
+const ACP_AUTH_TIMEOUT: Duration = Duration::from_secs(300);
+
+fn format_command_preview(program: &str, args: &[String]) -> String {
+    let display = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(program);
+    let mut parts = Vec::with_capacity(args.len() + 1);
+    parts.push(display.to_owned());
+    for arg in args {
+        if arg.chars().any(char::is_whitespace) {
+            parts.push(format!("\"{arg}\""));
+        } else {
+            parts.push(arg.clone());
+        }
+    }
+    parts.join(" ")
+}
+
+fn resolve_terminal_program(command: &str, path: &str) -> String {
+    let candidate = Path::new(command);
+    if candidate.is_absolute() || command.contains('/') || command.contains('\\') {
+        return command.to_owned();
+    }
+    detect::which(command, path)
+        .map(|found| found.to_string_lossy().into_owned())
+        .unwrap_or_else(|| command.to_owned())
+}
+
+fn build_auth_methods(
+    found: &AcpAgent,
+    discovered: Vec<acp::AuthMethod>,
+    path: &str,
+) -> Vec<ResolvedAuthMethod> {
+    let mut resolved = Vec::new();
+    let mut has_terminal = false;
+    for method in discovered {
+        match method.kind {
+            AuthMethodKind::Terminal(term) => {
+                has_terminal = true;
+                let (program, args) = match term.command {
+                    Some(cmd) => (resolve_terminal_program(&cmd, path), term.args),
+                    None if found.via_npx && found.args.len() >= 2 => {
+                        let mut args = found.args[..2].to_vec();
+                        args.extend(term.args);
+                        (found.program.clone(), args)
+                    }
+                    None => (found.program.clone(), term.args),
+                };
+                let preview = format_command_preview(&program, &args);
+                resolved.push(ResolvedAuthMethod {
+                    public: AcpAuthMethod {
+                        id: method.id,
+                        name: method.name,
+                        description: method.description,
+                        kind: "terminal",
+                        command_preview: Some(preview),
+                        fallback: false,
+                    },
+                    action: ResolvedAuthAction::Terminal {
+                        program,
+                        args,
+                        env: term.env,
+                    },
+                });
+            }
+            AuthMethodKind::EnvVar { .. } => {
+                resolved.push(ResolvedAuthMethod {
+                    public: AcpAuthMethod {
+                        id: method.id,
+                        name: method.name,
+                        description: method.description,
+                        kind: "api_key",
+                        command_preview: None,
+                        fallback: false,
+                    },
+                    action: ResolvedAuthAction::ApiKey,
+                });
+            }
+            AuthMethodKind::Agent => {
+                let is_key = found
+                    .known
+                    .is_some_and(|known| known.key_methods.contains(&method.id.as_str()));
+                resolved.push(ResolvedAuthMethod {
+                    public: AcpAuthMethod {
+                        id: method.id,
+                        name: method.name,
+                        description: method.description,
+                        kind: if is_key { "api_key" } else { "agent" },
+                        command_preview: None,
+                        fallback: false,
+                    },
+                    action: if is_key {
+                        ResolvedAuthAction::ApiKey
+                    } else {
+                        ResolvedAuthAction::Agent
+                    },
+                });
+            }
+        }
+    }
+    if !has_terminal
+        && let Some(known) = found.known
+        && let Some((cmd, args)) = known.login_command
+        && let Some(program) = detect::which(cmd, path)
+    {
+        let args_owned: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+        let preview = format_command_preview(cmd, &args_owned);
+        let program_str = program.to_string_lossy().into_owned();
+        resolved.push(ResolvedAuthMethod {
+            public: AcpAuthMethod {
+                id: format!("roveterm-cli:{cmd}"),
+                name: preview.clone(),
+                description: None,
+                kind: "terminal",
+                command_preview: Some(preview),
+                fallback: true,
+            },
+            action: ResolvedAuthAction::Terminal {
+                program: program_str,
+                args: args_owned,
+                env: Vec::new(),
+            },
+        });
+    }
+    resolved
+}
+
+async fn find_acp_agent(state: &AppState, agent: &str) -> Result<(String, AcpAgent), CommandError> {
+    let AgentRef::Acp(agent_id) = agent_ref(agent)? else {
+        return Err(CommandError::new(
+            "input.invalid",
+            "sign-in is only available for ACP agents",
+        ));
+    };
+    let vault = state.vault.clone();
+    let target = agent_id.clone();
+    let found = tauri::async_runtime::spawn_blocking(move || acp_agents(&vault))
+        .await
+        .map_err(|error| CommandError::new("app.task", error.to_string()))??
+        .into_iter()
+        .find(|(id, _)| id == &target)
+        .map(|(_, found)| found)
+        .ok_or_else(|| CommandError::new("ai.no_agent", "no such agent"))?;
+    Ok((agent_id, found))
+}
+
+fn auth_cwd(state: &AppState) -> Result<PathBuf, CommandError> {
+    if let Some(home) = std::env::home_dir().filter(|dir| dir.is_dir()) {
+        return Ok(home);
+    }
+    std::fs::create_dir_all(&state.ai.workspace)
+        .map_err(|error| CommandError::new("app.io", error.to_string()))?;
+    Ok(state.ai.workspace.clone())
+}
+
+/// Probes an ACP agent's `initialize` response for available sign-in methods and caches the
+/// server-verified launch plans for subsequent `ai_acp_authenticate` or `ai_acp_login_terminal`
+/// calls.
+#[tauri::command]
+pub async fn ai_acp_auth_methods(
+    state: State<'_, AppState>,
+    agent: String,
+) -> Result<AcpAuthInfo, CommandError> {
+    let (agent_id, found) = find_acp_agent(state.inner(), &agent).await?;
+    let path = detect::search_path();
+    let env = acp::agent_env(acp::ENV_ALLOWED, &[("PATH".to_owned(), path.clone())]);
+    let cwd = auth_cwd(state.inner())?;
+    let program = found.program.clone();
+    let args = found.args.clone();
+    let task = tokio::spawn(async move {
+        let client = acp::spawn_for_auth(&program, &args, &env, &cwd).await?;
+        let methods = client.info().auth_methods.clone();
+        client.shutdown().await;
+        Ok::<Vec<acp::AuthMethod>, acp::AcpError>(methods)
+    });
+    let token = state.ai.register_active_auth(task.abort_handle()).await;
+    let probe = tokio::time::timeout(ACP_PROBE_TIMEOUT, task).await;
+    state.ai.clear_active_auth(token).await;
+
+    let (discovered, probe_error) = match probe {
+        Ok(Ok(Ok(methods))) => (methods, None),
+        Ok(Ok(Err(error))) => (Vec::new(), Some(acp_error(error).message)),
+        Ok(Err(error)) if error.is_cancelled() => {
+            return Err(CommandError::new("ai.cancelled", "sign-in check cancelled"));
+        }
+        Ok(Err(error)) => (Vec::new(), Some(error.to_string())),
+        Err(_) => (
+            Vec::new(),
+            Some("timed out waiting for the agent to report sign-in methods".into()),
+        ),
+    };
+    let resolved = build_auth_methods(&found, discovered, &path);
+    let methods = resolved.iter().map(|entry| entry.public.clone()).collect();
+    state
+        .ai
+        .auth_plans
+        .lock()
+        .await
+        .insert(agent_id, resolved);
+    Ok(AcpAuthInfo {
+        agent,
+        agent_name: found.name,
+        methods,
+        probe_error,
+    })
+}
+
+/// Runs an ACP agent's protocol-driven `authenticate(method_id)` flow (for example, OAuth).
+#[tauri::command]
+pub async fn ai_acp_authenticate(
+    state: State<'_, AppState>,
+    agent: String,
+    method_id: String,
+) -> Result<(), CommandError> {
+    let (agent_id, found) = find_acp_agent(state.inner(), &agent).await?;
+    let allowed = state
+        .ai
+        .auth_plans
+        .lock()
+        .await
+        .get(&agent_id)
+        .and_then(|methods| methods.iter().find(|entry| entry.public.id == method_id))
+        .is_some_and(|entry| matches!(entry.action, ResolvedAuthAction::Agent));
+    if !allowed {
+        return Err(CommandError::new(
+            "input.invalid",
+            "sign-in method is not available; refresh and try again",
+        ));
+    }
+    let path = detect::search_path();
+    let env = acp::agent_env(acp::ENV_ALLOWED, &[("PATH".to_owned(), path)]);
+    let cwd = auth_cwd(state.inner())?;
+    let program = found.program;
+    let args = found.args;
+    let method = method_id.clone();
+    let task = tokio::spawn(async move {
+        let client = acp::spawn_for_auth(&program, &args, &env, &cwd).await?;
+        let result = client.authenticate(&method).await;
+        client.shutdown().await;
+        result
+    });
+    let token = state.ai.register_active_auth(task.abort_handle()).await;
+    let outcome = tokio::time::timeout(ACP_AUTH_TIMEOUT, task).await;
+    state.ai.clear_active_auth(token).await;
+
+    match outcome {
+        Ok(Ok(Ok(()))) => Ok(()),
+        Ok(Ok(Err(error))) => Err(acp_error(error)),
+        Ok(Err(error)) if error.is_cancelled() => {
+            Err(CommandError::new("ai.cancelled", "sign-in cancelled"))
+        }
+        Ok(Err(error)) => Err(CommandError::new("app.task", error.to_string())),
+        Err(_) => Err(CommandError::new(
+            "ai.timeout",
+            "sign-in timed out before completing",
+        )),
+    }
+}
+
+/// Cancels any in-flight ACP sign-in probe or protocol `authenticate` request.
+#[tauri::command]
+pub async fn ai_acp_cancel_auth(state: State<'_, AppState>) -> Result<(), CommandError> {
+    state.ai.cancel_active_auth().await;
+    Ok(())
+}
+
+/// Opens a local interactive PTY running a server-verified ACP terminal sign-in command and
+/// streams its output to `on_output`.
+#[tauri::command]
+pub async fn ai_acp_login_terminal(
+    state: State<'_, AppState>,
+    agent: String,
+    method_id: String,
+    on_output: Channel<InvokeResponseBody>,
+    cols: u16,
+    rows: u16,
+) -> Result<SessionId, CommandError> {
+    let size = TermSize::new(cols, rows)?;
+    let (agent_id, _) = find_acp_agent(state.inner(), &agent).await?;
+    let launch = state
+        .ai
+        .auth_plans
+        .lock()
+        .await
+        .get(&agent_id)
+        .and_then(|methods| methods.iter().find(|entry| entry.public.id == method_id))
+        .and_then(|entry| match &entry.action {
+            ResolvedAuthAction::Terminal { program, args, env } => {
+                Some((program.clone(), args.clone(), env.clone()))
+            }
+            _ => None,
+        })
+        .ok_or_else(|| {
+            CommandError::new(
+                "input.invalid",
+                "terminal sign-in method is not available; refresh and try again",
+            )
+        })?;
+    #[cfg(desktop)]
+    {
+        let (program, args, extra_env) = launch;
+        let mut env = vec![("PATH".to_owned(), detect::search_path())];
+        env.extend(extra_env);
+        let opened = state.pty.open(rove_pty::LocalRequest {
+            shell: Some(program),
+            args: Some(args),
+            cwd: std::env::home_dir(),
+            size: Some(size),
+            env,
+        })?;
+        Ok(state
+            .sessions
+            .attach(opened, Arc::new(ChannelSink(on_output))))
+    }
+    #[cfg(mobile)]
+    {
+        let _ = (launch, on_output, size);
+        Err(CommandError::new(
+            "session.unsupported",
+            "local terminals are not available on this platform",
+        ))
+    }
 }
 
 /// Vault key of the Jev reviewer.
@@ -2683,5 +3087,85 @@ mod history_tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn builds_acp_auth_methods_with_terminal_agent_key_and_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = std::env::join_paths([dir.path()])
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let cli_name = if cfg!(windows) { "codex.exe" } else { "codex" };
+        std::fs::write(dir.path().join(cli_name), b"").unwrap();
+
+        let codex = AcpAgent {
+            name: "Codex".into(),
+            program: "/usr/bin/codex-acp".into(),
+            args: Vec::new(),
+            known: detect::known("codex"),
+            via_npx: false,
+            enabled: true,
+            custom: false,
+        };
+        let discovered = vec![
+            acp::AuthMethod {
+                id: "chatgpt".into(),
+                name: "ChatGPT".into(),
+                description: Some("Sign in with ChatGPT".into()),
+                kind: AuthMethodKind::Agent,
+            },
+            acp::AuthMethod {
+                id: "codex-api-key".into(),
+                name: "CODEX_API_KEY".into(),
+                description: None,
+                kind: AuthMethodKind::Agent,
+            },
+        ];
+        let methods = build_auth_methods(&codex, discovered, &path);
+        assert_eq!(methods.len(), 3);
+        assert_eq!(methods[0].public.kind, "agent");
+        assert_eq!(methods[1].public.kind, "api_key");
+        assert_eq!(methods[2].public.kind, "terminal");
+        assert!(methods[2].public.fallback);
+        assert_eq!(
+            methods[2].public.command_preview.as_deref(),
+            Some("codex login")
+        );
+
+        let claude_name = if cfg!(windows) { "claude.exe" } else { "claude" };
+        std::fs::write(dir.path().join(claude_name), b"").unwrap();
+        let claude = AcpAgent {
+            name: "Claude Code".into(),
+            program: "/usr/bin/npx".into(),
+            args: vec!["-y".into(), "@agentclientprotocol/claude-agent-acp".into()],
+            known: detect::known("claude"),
+            via_npx: true,
+            enabled: true,
+            custom: false,
+        };
+        let advertised = vec![acp::AuthMethod {
+            id: "claude-login".into(),
+            name: "Log in with Claude".into(),
+            description: None,
+            kind: AuthMethodKind::Terminal(acp::TerminalAuth {
+                command: Some("claude".into()),
+                args: vec!["auth".into(), "login".into()],
+                env: vec![("FOO".into(), "bar".into())],
+                label: None,
+            }),
+        }];
+        let claude_methods = build_auth_methods(&claude, advertised, &path);
+        // When the agent already advertises terminal-auth, do not duplicate the CLI fallback.
+        assert_eq!(claude_methods.len(), 1);
+        assert!(!claude_methods[0].public.fallback);
+        assert_eq!(
+            claude_methods[0].public.command_preview.as_deref(),
+            Some(if cfg!(windows) {
+                "claude.exe auth login"
+            } else {
+                "claude auth login"
+            })
+        );
     }
 }

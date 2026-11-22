@@ -282,6 +282,31 @@ pub trait Client: Send + Sync {
     ) -> Result<(), ClientError>;
 }
 
+/// Terminal launch parameters attached to an ACP terminal authentication method.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalAuth {
+    /// Explicit command from `_meta["terminal-auth"]`, or `None` when the agent's configured
+    /// program should be launched with [`Self::args`].
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
+    pub label: Option<String>,
+}
+
+/// How an [`AuthMethod`] is completed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AuthMethodKind {
+    /// Protocol-driven authentication via JSON-RPC `authenticate(methodId)`.
+    Agent,
+    /// Interactive terminal login run out-of-band in a PTY.
+    Terminal(TerminalAuth),
+    /// Environment variable / API key authentication.
+    EnvVar { vars: Vec<String> },
+}
+
 /// A way to sign in that the agent offers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthMethod {
@@ -289,6 +314,140 @@ pub struct AuthMethod {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
+    pub kind: AuthMethodKind,
+}
+
+const MAX_AUTH_METHODS: usize = 16;
+const MAX_AUTH_ARGS: usize = 32;
+const MAX_AUTH_ENV: usize = 32;
+
+fn clean_text(value: Option<&Value>, limit: usize) -> Option<String> {
+    let text = value?.as_str()?.trim();
+    if text.is_empty() || text.contains('\0') {
+        return None;
+    }
+    Some(truncate(text, limit).to_owned())
+}
+
+fn parse_auth_args(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .take(MAX_AUTH_ARGS)
+                .filter_map(|item| {
+                    let arg = item.as_str()?;
+                    (!arg.contains('\0')).then(|| truncate(arg, 4096).to_owned())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_auth_env(value: Option<&Value>) -> Vec<(String, String)> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    if let Some(map) = value.as_object() {
+        return map
+            .iter()
+            .take(MAX_AUTH_ENV)
+            .filter_map(|(key, val)| {
+                let name = key.trim();
+                let val = val.as_str()?;
+                if name.is_empty()
+                    || name.contains('\0')
+                    || name.contains('=')
+                    || val.contains('\0')
+                {
+                    return None;
+                }
+                Some((truncate(name, 256).to_owned(), truncate(val, 4096).to_owned()))
+            })
+            .collect();
+    }
+    if let Some(items) = value.as_array() {
+        return items
+            .iter()
+            .take(MAX_AUTH_ENV)
+            .filter_map(|item| {
+                let name = clean_text(item.get("name"), 256)?;
+                let val = item.get("value")?.as_str()?;
+                if name.contains('=') || val.contains('\0') {
+                    return None;
+                }
+                Some((name, truncate(val, 4096).to_owned()))
+            })
+            .collect();
+    }
+    Vec::new()
+}
+
+/// Parses `authMethods` from an ACP `initialize` result, recognizing ACP v1
+/// `_meta["terminal-auth"]`, ACP `type: "terminal"`, `type: "env_var"`, and default `agent`
+/// methods.
+pub fn parse_auth_methods(value: Option<&Value>) -> Vec<AuthMethod> {
+    let Some(items) = value.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .take(MAX_AUTH_METHODS)
+        .filter_map(|item| {
+            let id = clean_text(item.get("id").or_else(|| item.get("methodId")), 256)?;
+            let description = clean_text(item.get("description"), 1024);
+            let meta_terminal = item
+                .get("_meta")
+                .and_then(|meta| meta.get("terminal-auth"))
+                .filter(|meta| meta.is_object());
+            let kind_tag = item.get("type").and_then(Value::as_str);
+            let (kind, fallback_label) = if let Some(terminal) = meta_terminal {
+                let label = clean_text(terminal.get("label"), 256);
+                let spec = TerminalAuth {
+                    command: clean_text(terminal.get("command"), 4096),
+                    args: parse_auth_args(terminal.get("args")),
+                    env: parse_auth_env(terminal.get("env")),
+                    label: label.clone(),
+                };
+                (AuthMethodKind::Terminal(spec), label)
+            } else if kind_tag == Some("terminal") {
+                let spec = TerminalAuth {
+                    command: None,
+                    args: parse_auth_args(item.get("args")),
+                    env: parse_auth_env(item.get("env")),
+                    label: None,
+                };
+                (AuthMethodKind::Terminal(spec), None)
+            } else if matches!(kind_tag, Some("env_var" | "env-var")) {
+                let vars = item
+                    .get("vars")
+                    .and_then(Value::as_array)
+                    .map(|vars| {
+                        vars.iter()
+                            .take(MAX_AUTH_METHODS)
+                            .filter_map(|entry| {
+                                clean_text(Some(entry), 256)
+                                    .or_else(|| clean_text(entry.get("name"), 256))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (AuthMethodKind::EnvVar { vars }, None)
+            } else {
+                (AuthMethodKind::Agent, None)
+            };
+            let name = clean_text(item.get("name"), 256)
+                .or(fallback_label)
+                .unwrap_or_else(|| id.clone());
+            Some(AuthMethod {
+                id,
+                name,
+                description,
+                kind,
+            })
+        })
+        .collect()
 }
 
 /// What `initialize` told about the agent.
@@ -486,6 +645,92 @@ pub async fn spawn(
         *slot = Some(child);
     }
     Ok(agent)
+}
+
+/// Starts `program` with `args` and `env` solely to inspect `initialize` or run `authenticate`.
+/// Every file, terminal, and permission callback from the agent is rejected.
+pub async fn spawn_for_auth(
+    program: &str,
+    args: &[String],
+    env: &[(String, String)],
+    cwd: &std::path::Path,
+) -> Result<Agent, AcpError> {
+    spawn(program, args, env, cwd, Arc::new(AuthClient)).await
+}
+
+struct AuthClient;
+
+#[async_trait]
+impl Client for AuthClient {
+    async fn session_update(&self, _session_id: &str, _update: SessionUpdate) {}
+
+    async fn request_permission(
+        &self,
+        _session_id: &str,
+        _call: ToolCall,
+        _options: Vec<PermissionOption>,
+    ) -> PermissionOutcome {
+        PermissionOutcome::Cancelled
+    }
+
+    async fn read_text_file(
+        &self,
+        _session_id: &str,
+        _path: &str,
+        _line: Option<u32>,
+        _limit: Option<u32>,
+    ) -> Result<String, ClientError> {
+        Err(ClientError::denied("unavailable during sign-in"))
+    }
+
+    async fn write_text_file(
+        &self,
+        _session_id: &str,
+        _path: &str,
+        _content: &str,
+    ) -> Result<(), ClientError> {
+        Err(ClientError::denied("unavailable during sign-in"))
+    }
+
+    async fn create_terminal(
+        &self,
+        _session_id: &str,
+        _command: &str,
+        _args: &[String],
+        _env: &[(String, String)],
+        _cwd: Option<&str>,
+        _output_limit: Option<usize>,
+    ) -> Result<String, ClientError> {
+        Err(ClientError::denied("unavailable during sign-in"))
+    }
+
+    async fn terminal_output(
+        &self,
+        _session_id: &str,
+        _terminal_id: &str,
+    ) -> Result<TerminalState, ClientError> {
+        Err(ClientError::denied("unavailable during sign-in"))
+    }
+
+    async fn wait_for_terminal_exit(
+        &self,
+        _session_id: &str,
+        _terminal_id: &str,
+    ) -> Result<Option<u32>, ClientError> {
+        Err(ClientError::denied("unavailable during sign-in"))
+    }
+
+    async fn kill_terminal(&self, _session_id: &str, _terminal_id: &str) -> Result<(), ClientError> {
+        Err(ClientError::denied("unavailable during sign-in"))
+    }
+
+    async fn release_terminal(
+        &self,
+        _session_id: &str,
+        _terminal_id: &str,
+    ) -> Result<(), ClientError> {
+        Err(ClientError::denied("unavailable during sign-in"))
+    }
 }
 
 /// Speaks ACP over `reader` and `writer` (an agent's stdout and stdin) and initializes it.
@@ -1071,7 +1316,12 @@ impl Agent {
                 "initialize",
                 json!({
                     "protocolVersion": PROTOCOL_VERSION,
-                    "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true }, "terminal": true },
+                    "clientCapabilities": {
+                        "fs": { "readTextFile": true, "writeTextFile": true },
+                        "terminal": true,
+                        "auth": { "terminal": true },
+                        "_meta": { "terminal-auth": true },
+                    },
                     "clientInfo": { "name": "roveterm", "title": "RoveTerm", "version": env!("CARGO_PKG_VERSION") },
                 }),
             )
@@ -1086,17 +1336,7 @@ impl Agent {
         Ok(AgentInfo {
             name: info.and_then(|info| string(info, "title").or_else(|| string(info, "name"))),
             version: info.and_then(|info| string(info, "version")),
-            auth_methods: result
-                .get("authMethods")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .take(16)
-                        .filter_map(|item| serde_json::from_value(item.clone()).ok())
-                        .collect()
-                })
-                .unwrap_or_default(),
+            auth_methods: parse_auth_methods(result.get("authMethods")),
             load_session: result
                 .pointer("/agentCapabilities/loadSession")
                 .and_then(Value::as_bool)
@@ -1364,5 +1604,85 @@ mod tests {
         assert!(check_path("C:\\Users\\me\\a.txt").is_ok());
         assert!(check_path("relative/a.txt").is_err());
         assert!(check_path("/a\0b").is_err());
+    }
+
+    #[test]
+    fn parses_agent_terminal_and_env_auth_methods() {
+        let methods = parse_auth_methods(Some(&json!([
+            {
+                "id": "chatgpt",
+                "name": "ChatGPT",
+                "description": "Sign in with your ChatGPT account"
+            },
+            {
+                "id": "claude-login",
+                "name": "Log in with Claude",
+                "description": "Interactive login",
+                "_meta": {
+                    "terminal-auth": {
+                        "command": "/usr/local/bin/claude",
+                        "args": ["auth", "login"],
+                        "env": { "CLAUDE_FOO": "1", "BAD=NAME": "ignored" },
+                        "label": "Claude Code Login"
+                    }
+                }
+            },
+            {
+                "id": "cli-login",
+                "name": "Terminal Login",
+                "type": "terminal",
+                "args": ["--login"],
+                "env": [{ "name": "MODE", "value": "interactive" }]
+            },
+            {
+                "id": "api-key",
+                "name": "API Key",
+                "type": "env_var",
+                "vars": [{ "name": "MY_API_KEY" }, "ALT_KEY"]
+            },
+            { "id": "", "name": "ignored" },
+            { "id": "bad\0id", "name": "ignored" }
+        ])));
+        assert_eq!(
+            methods,
+            vec![
+                AuthMethod {
+                    id: "chatgpt".into(),
+                    name: "ChatGPT".into(),
+                    description: Some("Sign in with your ChatGPT account".into()),
+                    kind: AuthMethodKind::Agent,
+                },
+                AuthMethod {
+                    id: "claude-login".into(),
+                    name: "Log in with Claude".into(),
+                    description: Some("Interactive login".into()),
+                    kind: AuthMethodKind::Terminal(TerminalAuth {
+                        command: Some("/usr/local/bin/claude".into()),
+                        args: vec!["auth".into(), "login".into()],
+                        env: vec![("CLAUDE_FOO".into(), "1".into())],
+                        label: Some("Claude Code Login".into()),
+                    }),
+                },
+                AuthMethod {
+                    id: "cli-login".into(),
+                    name: "Terminal Login".into(),
+                    description: None,
+                    kind: AuthMethodKind::Terminal(TerminalAuth {
+                        command: None,
+                        args: vec!["--login".into()],
+                        env: vec![("MODE".into(), "interactive".into())],
+                        label: None,
+                    }),
+                },
+                AuthMethod {
+                    id: "api-key".into(),
+                    name: "API Key".into(),
+                    description: None,
+                    kind: AuthMethodKind::EnvVar {
+                        vars: vec!["MY_API_KEY".into(), "ALT_KEY".into()],
+                    },
+                },
+            ]
+        );
     }
 }

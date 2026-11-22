@@ -11,6 +11,7 @@ fn sh() -> LocalRequest {
         shell: Some("/bin/sh".into()),
         cwd: None,
         size: Some(TermSize::new(100, 30).unwrap()),
+        ..LocalRequest::default()
     }
 }
 

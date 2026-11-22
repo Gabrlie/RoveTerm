@@ -4,8 +4,10 @@
   import IconButton from '../ui/IconButton.svelte';
   import Markdown from './Markdown.svelte';
   import AuditDialog from './AuditDialog.svelte';
+  import AgentLoginDialog from './AgentLoginDialog.svelte';
   import UsageMeter from './UsageMeter.svelte';
   import ModelPopover from './ModelPopover.svelte';
+  import { isMobile } from '../platform';
   import { builtinCommands, canPrestart, choiceKey, optionKey, slashItems, slashQuery, splitOptions, type SlashItem } from './composer';
   import { ai, contextKey, type Chat } from './ai.svelte';
   import { outcomeState, rows, subject, toolSubject, type ApprovalItem } from './chatview';
@@ -96,6 +98,7 @@
   let modeTrigger = $state<HTMLButtonElement>();
   let slashMenu = $state<HTMLDivElement>();
   let historyOpen = $state(false);
+  let loginTarget = $state<{ agent: string; name: string } | null>(null);
   /** The title being typed, while renaming. */
   let renaming = $state<string | null>(null);
   /** The setting whose choices the `/` menu lists, after it was picked there. */
@@ -520,6 +523,9 @@
           <div class="notice">
             <Icon name="warning" size={13} />
             <span class="selectable">{item.text}</span>
+            {#if item.code === 'ai.auth_required' && !isMobile && agentRef?.startsWith('acp:') && target === chat}
+              <button type="button" class="link" onclick={() => (loginTarget = { agent: agentRef, name: agent?.name ?? agentRef })}>{t('ai.login.action')}</button>
+            {/if}
             {#if item.code === 'ai.no_agent' || item.code === 'ai.spawn' || item.code === 'ai.no_key' || item.code === 'ai.auth_required' || item.code === 'ai.model'}
               <button type="button" class="link" onclick={onsettings}>{t('ai.openSettings')}</button>
             {:else if item.code === 'vault.locked' && !vault.unlocked && !vault.keyLost}
@@ -776,6 +782,19 @@
 
 {#if historyOpen}
   <AuditDialog role={fleet ? 'fleet' : 'assistant'} initial={chat.id ?? chat.resumeId} onclose={() => (historyOpen = false)} onresume={(summary, records) => void resume(summary, records)} />
+{/if}
+{#if loginTarget}
+  <AgentLoginDialog
+    agent={loginTarget.agent}
+    agentName={loginTarget.name}
+    onclose={() => (loginTarget = null)}
+    onsignedin={() => {
+      chat.prestartedAgent = null;
+      void ai.refreshAgents().catch(() => undefined);
+      void prepareAgent();
+    }}
+    onapikey={onsettings}
+  />
 {/if}
 
 <style>

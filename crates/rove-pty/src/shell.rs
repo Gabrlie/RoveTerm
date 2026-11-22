@@ -10,12 +10,16 @@ use crate::PtyConfig;
 /// defaults.
 #[derive(Debug, Clone, Default)]
 pub struct LocalRequest {
-    /// Shell program; absent uses the configured or platform default.
+    /// Shell or program to run; absent uses the configured or platform default shell.
     pub shell: Option<String>,
+    /// Explicit arguments for `shell`; when `Some`, replaces platform default shell flags.
+    pub args: Option<Vec<String>>,
     /// Working directory; absent uses the user's home directory.
     pub cwd: Option<PathBuf>,
     /// Initial size; absent uses 80x24.
     pub size: Option<TermSize>,
+    /// Additional environment variables merged after the terminal defaults (later values win).
+    pub env: Vec<(String, String)>,
 }
 
 /// A fully resolved launch: no field is defaulted later.
@@ -36,28 +40,37 @@ pub struct LaunchSpec {
 impl LocalRequest {
     /// Resolves defaults: request values first, then `config`, then the platform default.
     pub fn resolve(self, config: &PtyConfig) -> LaunchSpec {
-        let (program, args) = match (self.shell, &config.shell) {
-            (Some(shell), _) => {
+        let (program, args) = match (self.shell, self.args, &config.shell) {
+            (Some(program), Some(args), _) => (program, args),
+            (Some(shell), None, _) => {
                 let args = default_args(&shell);
                 (shell, args)
             }
-            (None, Some(shell)) => (shell.clone(), config.args.clone()),
-            (None, None) => {
+            (None, _, Some(shell)) => (shell.clone(), config.args.clone()),
+            (None, _, None) => {
                 let shell = default_shell();
                 let args = default_args(&shell);
                 (shell, args)
             }
         };
+        let mut env = vec![
+            ("TERM".into(), "xterm-256color".into()),
+            ("COLORTERM".into(), "truecolor".into()),
+            ("TERM_PROGRAM".into(), "RoveTerm".into()),
+        ];
+        for (key, value) in self.env {
+            if let Some(existing) = env.iter_mut().find(|(name, _)| *name == key) {
+                existing.1 = value;
+            } else {
+                env.push((key, value));
+            }
+        }
         LaunchSpec {
             program,
             args,
             cwd: self.cwd.or_else(std::env::home_dir),
             size: self.size.unwrap_or_default(),
-            env: vec![
-                ("TERM".into(), "xterm-256color".into()),
-                ("COLORTERM".into(), "truecolor".into()),
-                ("TERM_PROGRAM".into(), "RoveTerm".into()),
-            ],
+            env,
         }
     }
 }
@@ -130,6 +143,34 @@ mod tests {
             spec.env
                 .iter()
                 .any(|(key, value)| key == "TERM" && value == "xterm-256color")
+        );
+    }
+
+    #[test]
+    fn explicit_args_and_env_replace_shell_defaults() {
+        let spec = LocalRequest {
+            shell: Some("/usr/local/bin/claude".into()),
+            args: Some(vec!["auth".into(), "login".into()]),
+            env: vec![
+                ("PATH".into(), "/custom/bin".into()),
+                ("TERM".into(), "xterm".into()),
+            ],
+            ..LocalRequest::default()
+        }
+        .resolve(&PtyConfig::default());
+        assert_eq!(spec.program, "/usr/local/bin/claude");
+        assert_eq!(spec.args, ["auth", "login"]);
+        assert!(
+            spec.env
+                .iter()
+                .any(|(key, value)| key == "PATH" && value == "/custom/bin")
+        );
+        assert_eq!(
+            spec.env
+                .iter()
+                .filter(|(key, _)| key == "TERM")
+                .collect::<Vec<_>>(),
+            vec![&("TERM".into(), "xterm".into())]
         );
     }
 }

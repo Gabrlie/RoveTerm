@@ -24,6 +24,8 @@ pub struct KnownAgent {
     pub key_methods: &'static [&'static str],
     /// ACP sign-in methods that use the agent's own account.
     pub account_methods: &'static [&'static str],
+    /// Interactive CLI login fallback (`(program, args)`) when installed locally.
+    pub login_command: Option<(&'static str, &'static [&'static str])>,
 }
 
 /// The agents RoveTerm knows, in the order they are offered.
@@ -37,6 +39,7 @@ pub const KNOWN: &[KnownAgent] = &[
         key_vars: &["CODEX_API_KEY", "OPENAI_API_KEY"],
         key_methods: &["codex-api-key", "openai-api-key"],
         account_methods: &["chatgpt"],
+        login_command: Some(("codex", &["login"])),
     },
     KnownAgent {
         id: "claude",
@@ -47,6 +50,7 @@ pub const KNOWN: &[KnownAgent] = &[
         key_vars: &["ANTHROPIC_API_KEY"],
         key_methods: &[],
         account_methods: &[],
+        login_command: Some(("claude", &["auth", "login"])),
     },
     KnownAgent {
         id: "gemini",
@@ -57,6 +61,7 @@ pub const KNOWN: &[KnownAgent] = &[
         key_vars: &["GEMINI_API_KEY"],
         key_methods: &["gemini-api-key"],
         account_methods: &["oauth-personal"],
+        login_command: None,
     },
     KnownAgent {
         id: "qwen",
@@ -67,6 +72,7 @@ pub const KNOWN: &[KnownAgent] = &[
         key_vars: &["OPENAI_API_KEY"],
         key_methods: &["openai"],
         account_methods: &["qwen-oauth"],
+        login_command: None,
     },
 ];
 

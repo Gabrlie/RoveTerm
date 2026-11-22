@@ -6,7 +6,8 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::acp::{
-    self, AcpError, Agent, ConfigKind, ConfigOption, McpServer, NewSession, SessionMode,
+    self, AcpError, Agent, AuthMethodKind, ConfigKind, ConfigOption, McpServer, NewSession,
+    SessionMode,
 };
 use crate::session::AiSession;
 
@@ -135,6 +136,8 @@ pub async fn open(
 }
 
 /// Runs `open` (`session/new` or `session/load`), signing in first when the agent asks for it.
+/// Only protocol-driven [`AuthMethodKind::Agent`] methods are attempted automatically; terminal
+/// and env-var methods return [`AcpError::AuthRequired`] so the user can complete them explicitly.
 async fn signed_in<F, Fut>(agent: &Agent, spec: &AgentSpec, open: F) -> Result<NewSession, AcpError>
 where
     F: Fn() -> Fut,
@@ -143,17 +146,31 @@ where
     match open().await {
         Err(AcpError::AuthRequired(message)) => {
             let offered = &agent.info().auth_methods;
-            let method = spec
-                .auth_methods
-                .iter()
-                .find(|wanted| offered.iter().any(|method| &method.id == *wanted))
-                .or(spec.auth_methods.first())
+            let method = choose_auto_auth(&spec.auth_methods, offered)
                 .ok_or(AcpError::AuthRequired(message))?;
             agent.authenticate(method).await?;
             open().await
         }
         other => other,
     }
+}
+
+fn choose_auto_auth<'a>(
+    wanted: &'a [String],
+    offered: &[acp::AuthMethod],
+) -> Option<&'a str> {
+    if let Some(matched) = wanted.iter().find(|id| {
+        offered
+            .iter()
+            .any(|method| &method.id == *id && matches!(method.kind, AuthMethodKind::Agent))
+    }) {
+        return Some(matched.as_str());
+    }
+    // Older agents that omit `authMethods` on `initialize` still accept a known method id.
+    if offered.is_empty() {
+        return wanted.first().map(String::as_str);
+    }
+    None
 }
 
 impl Running {
@@ -232,5 +249,56 @@ impl Running {
         self.session.withdraw_approvals().await;
         self.session.stop_jobs().await;
         self.agent.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::acp::{AuthMethod, TerminalAuth};
+
+    #[test]
+    fn auto_auth_only_selects_agent_methods_and_never_terminal_methods() {
+        let terminal = AuthMethod {
+            id: "claude-login".into(),
+            name: "Claude Login".into(),
+            description: None,
+            kind: AuthMethodKind::Terminal(TerminalAuth {
+                command: Some("claude".into()),
+                args: vec!["auth".into(), "login".into()],
+                env: Vec::new(),
+                label: None,
+            }),
+        };
+        let agent = AuthMethod {
+            id: "chatgpt".into(),
+            name: "ChatGPT".into(),
+            description: None,
+            kind: AuthMethodKind::Agent,
+        };
+        let env_var = AuthMethod {
+            id: "api-key".into(),
+            name: "API Key".into(),
+            description: None,
+            kind: AuthMethodKind::EnvVar {
+                vars: vec!["OPENAI_API_KEY".into()],
+            },
+        };
+        assert_eq!(
+            choose_auto_auth(&["claude-login".into()], std::slice::from_ref(&terminal)),
+            None
+        );
+        assert_eq!(
+            choose_auto_auth(&["api-key".into()], &[env_var]),
+            None
+        );
+        assert_eq!(
+            choose_auto_auth(&["chatgpt".into()], &[terminal, agent]),
+            Some("chatgpt")
+        );
+        assert_eq!(
+            choose_auto_auth(&["legacy-id".into()], &[]),
+            Some("legacy-id")
+        );
     }
 }

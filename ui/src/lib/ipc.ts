@@ -1283,6 +1283,49 @@ export function aiRevealKey(agent: string): Promise<string | null> {
   return invoke('ai_reveal_key', { agent });
 }
 
+/** One sign-in method reported for a local ACP agent. */
+export interface AcpAuthMethod {
+  id: string;
+  name: string;
+  description: string | null;
+  kind: 'agent' | 'terminal' | 'api_key';
+  command_preview: string | null;
+  fallback: boolean;
+}
+
+/** Sign-in options probed for an ACP agent. */
+export interface AcpAuthInfo {
+  agent: string;
+  agent_name: string;
+  methods: AcpAuthMethod[];
+  probe_error: string | null;
+}
+
+/** Probes an ACP agent for sign-in methods (`authMethods` and local CLI fallback). */
+export function aiAcpAuthMethods(agent: string): Promise<AcpAuthInfo> {
+  return invoke('ai_acp_auth_methods', { agent });
+}
+
+/** Runs an ACP agent's protocol-driven `authenticate(methodId)` flow. */
+export function aiAcpAuthenticate(agent: string, methodId: string): Promise<void> {
+  return invoke('ai_acp_authenticate', { agent, methodId });
+}
+
+/** Cancels any in-flight ACP sign-in probe or protocol authentication. */
+export function aiAcpCancelAuth(): Promise<void> {
+  return invoke('ai_acp_cancel_auth');
+}
+
+/** Opens an interactive local PTY running a verified ACP terminal sign-in method. */
+export function aiAcpLoginTerminal(
+  agent: string,
+  methodId: string,
+  size: TermSize,
+  onOutput: OutputHandler,
+): Promise<SessionId> {
+  return invoke('ai_acp_login_terminal', { agent, methodId, onOutput: outputChannel(onOutput), ...size });
+}
+
 /** Starts `agent` on `context`; `terminal` is the user's terminal session there. */
 /** Starts `agent` on `context`; `terminal` is the user's terminal session there. `resume`
  *  continues an earlier conversation of that agent (same id). */
