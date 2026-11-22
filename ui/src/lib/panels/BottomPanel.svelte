@@ -9,9 +9,13 @@
   let { onclose }: { onclose: () => void } = $props();
 
   const pane = $derived(workspace.focusedPane);
-  // A file pane already shows these files; the panel follows terminals only, once they are
-  // connected, so it reuses their connection instead of starting (and prompting for) its own.
-  const source = $derived(pane && pane.target.kind !== 'sftp' && pane.sessionId ? remoteSourceOf(pane.target) : null);
+  // A file pane already shows these files; the panel follows connected terminals and editor tabs
+  // opened from a remote host, reusing their shared connection instead of prompting for its own.
+  const source = $derived(
+    pane && pane.target.kind !== 'sftp' && (pane.sessionId || pane.target.kind === 'editor')
+      ? remoteSourceOf(pane.target)
+      : null,
+  );
   const current = $derived(source ? sourceKey(source) : null);
 
   /** File browsers kept open, most recently shown last. Switching back to a host shows its

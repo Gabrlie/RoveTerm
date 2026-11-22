@@ -166,7 +166,7 @@
   /** The focused tab is on a remote host. */
   const focusedRemote = $derived.by(() => {
     const pane = workspace.focusedPane;
-    return !!pane && pane.target.kind !== 'local';
+    return !!pane && remoteSourceOf(pane.target) !== null;
   });
   let bottomOpen = $state(stored('ui.panel.bottom', false));
   const effectiveBottomOpen = $derived(bottomOpen && !onHome);
@@ -300,7 +300,7 @@
 
   function hostIdOf(target: PaneTarget): string | undefined {
     if (target.kind === 'ssh') return target.hostId;
-    if (target.kind === 'sftp' && 'hostId' in target.source) return target.source.hostId;
+    if ((target.kind === 'sftp' || target.kind === 'editor') && 'hostId' in target.source) return target.source.hostId;
     return undefined;
   }
 
