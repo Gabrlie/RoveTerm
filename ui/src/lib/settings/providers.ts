@@ -13,13 +13,15 @@ export interface ProviderPreset {
   keyless: boolean;
 }
 
+export const CUSTOM_PRESET: ProviderPreset = { id: 'custom', name: '', format: 'chat', base_url: '', keyless: false };
+
 export const PRESETS: ProviderPreset[] = [
   { id: 'openai', name: 'OpenAI', format: 'responses', base_url: 'https://api.openai.com/v1', keyless: false },
   { id: 'anthropic', name: 'Anthropic', format: 'anthropic', base_url: 'https://api.anthropic.com/v1', keyless: false },
   { id: 'deepseek', name: 'DeepSeek', format: 'chat', base_url: 'https://api.deepseek.com/v1', keyless: false },
   { id: 'openrouter', name: 'OpenRouter', format: 'chat', base_url: 'https://openrouter.ai/api/v1', keyless: false },
   { id: 'ollama', name: 'Ollama', format: 'chat', base_url: 'http://localhost:11434/v1', keyless: true },
-  { id: 'custom', name: '', format: 'chat', base_url: '', keyless: false },
+  CUSTOM_PRESET,
 ];
 
 /** A provider id (lowercase letters, digits and `-`, at most 40) from `name`, unused in `taken`. */
@@ -70,4 +72,21 @@ export function providerModels(picked: readonly string[], star: string): { model
 /** A fetched model list with the already-checked models kept (they may not be listed). */
 export function mergeListed(fetched: readonly string[], picked: readonly string[]): string[] {
   return [...new Set([...picked, ...fetched])].sort((a, b) => Number(picked.includes(b)) - Number(picked.includes(a)) || a.localeCompare(b));
+}
+
+/** Makes a manually entered model available and selects it for the provider. */
+export function addModel(id: string, picked: readonly string[], listed: readonly string[], star: string) {
+  const model = id.trim();
+  const selected = model ? [...new Set([...picked, model])] : [...picked];
+  return {
+    picked: selected,
+    listed: mergeListed(listed, selected),
+    star: providerModels(selected, star).model,
+  };
+}
+
+/** The persisted provider fields identify the known keyless preset. */
+export function isKeylessProvider(provider: ProviderPrefs): boolean {
+  const address = provider.base_url.replace(/\/+$/, '');
+  return PRESETS.some((preset) => preset.keyless && preset.format === provider.format && preset.base_url === address);
 }

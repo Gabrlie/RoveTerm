@@ -465,6 +465,30 @@ async fn acp_launch(
 /// Vault key of the Jev reviewer.
 const JEV_KEY: &str = "review:jev";
 
+fn reveal_saved_key(vault: &rove_vault::Vault, id: &str) -> Result<Option<String>, CommandError> {
+    Ok(vault.ai_key(id)?.map(|secret| secret.to_string()))
+}
+
+/// Returns the saved key of a validated agent after unlocking the vault.
+#[tauri::command]
+pub async fn ai_reveal_key(
+    state: State<'_, AppState>,
+    agent: String,
+) -> Result<Option<String>, CommandError> {
+    agent_ref(&agent)?;
+    state.ensure_unlocked().await?;
+    reveal_saved_key(&state.vault, &agent)
+}
+
+/// Returns the saved Jev reviewer key after unlocking the vault.
+#[tauri::command]
+pub async fn ai_reveal_review_key(
+    state: State<'_, AppState>,
+) -> Result<Option<String>, CommandError> {
+    state.ensure_unlocked().await?;
+    reveal_saved_key(&state.vault, JEV_KEY)
+}
+
 /// The judge of the auto mode as the preferences choose it, with its confidence threshold: the
 /// session's model (for local agents, the default provider's), a chosen provider's model, or Jev
 /// with its key. `None` when it cannot work (no provider, no key): the user is asked instead.
@@ -2457,6 +2481,49 @@ async fn claude_usage(
     }
     let text = report.lock().map(|text| text.clone()).unwrap_or_default();
     Ok(rove_ai::quota::claude_limits(&text))
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+    use rove_vault::{LockState, MemoryKeyCache, Vault};
+
+    #[test]
+    fn validates_agent_references_for_key_reveal() {
+        assert!(
+            matches!(agent_ref("builtin:openai-2"), Ok(AgentRef::Builtin(id)) if id == "openai-2")
+        );
+        assert!(
+            matches!(agent_ref("acp:custom-agent"), Ok(AgentRef::Acp(id)) if id == "custom-agent")
+        );
+        for invalid in [
+            "",
+            "acp:",
+            "acp:../agent",
+            "builtin:OpenAI",
+            "acp:a:b",
+            JEV_KEY,
+        ] {
+            assert!(agent_ref(invalid).is_err());
+        }
+        assert!(agent_ref(&format!("acp:{}", "a".repeat(49))).is_err());
+    }
+
+    #[test]
+    fn reveals_saved_agent_and_reviewer_keys() {
+        let vault = Vault::open_in_memory(Arc::new(MemoryKeyCache::default())).unwrap();
+        assert_eq!(vault.try_unlock(), LockState::Unlocked);
+        let ids = ["builtin:openai-2", "acp:custom-agent", JEV_KEY];
+        let secrets = ids.map(|_| Zeroizing::new(uuid::Uuid::now_v7().to_string()));
+        for (id, secret) in ids.into_iter().zip(&secrets) {
+            assert!(reveal_saved_key(&vault, id).unwrap().is_none());
+            vault.set_ai_key(id, Some(secret.as_str())).unwrap();
+        }
+        for (id, secret) in ids.into_iter().zip(&secrets) {
+            let revealed = reveal_saved_key(&vault, id).unwrap().map(Zeroizing::new);
+            assert!(revealed.is_some_and(|value| value.as_str() == secret.as_str()));
+        }
+    }
 }
 
 #[cfg(test)]

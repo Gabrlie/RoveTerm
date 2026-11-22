@@ -1100,6 +1100,10 @@ export function aiSetReviewKey(key: string | null): Promise<void> {
   return invoke('ai_set_review_key', { key });
 }
 
+export function aiRevealReviewKey(): Promise<string | null> {
+  return invoke('ai_reveal_review_key');
+}
+
 /** A mode the agent itself offers (such as read-only). */
 export interface AgentMode {
   id: string;
@@ -1273,6 +1277,10 @@ export function aiProviderModels(provider: ProviderPrefs, key: string | null): P
 /** Stores the API key of `agent` sealed on this device; `null` removes it. */
 export function aiSetKey(agent: string, key: string | null): Promise<void> {
   return invoke('ai_set_key', { agent, key });
+}
+
+export function aiRevealKey(agent: string): Promise<string | null> {
+  return invoke('ai_reveal_key', { agent });
 }
 
 /** Starts `agent` on `context`; `terminal` is the user's terminal session there. */

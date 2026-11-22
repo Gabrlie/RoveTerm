@@ -106,12 +106,15 @@ Agent 以子进程方式启动 MCP server，所以应用二进制带一个桥接
 
 ## 应用接入
 
+AI 设置分为模型与智能体、默认与安全、外部接入三页。服务商可手工添加模型 ID 或拉取模型列表，并选择默认模型。编辑自定义 ACP 智能体时保留其 ID。审批规则以标签编辑，回车、逗号和粘贴多行均可添加。
+
 `src-tauri/src/commands/ai.rs` 管理运行中的 AI 会话（`AppState.ai`），事件以 `ai-update`（`{ id, event }`）发给界面，同时由 `Auditor` 写入 Journal：
 
 | 命令 | 作用 |
 |---|---|
 | `ai_agents()` | 本机可用的 Agent 与默认项：每个服务商对应一个内置助手（`builtin:<id>`，附模型），然后是检测到的 ACP 智能体与按命令添加的智能体（`acp:<id>`，附运行的程序、是否经 npx）；各项是否已存 key、是否启用（`enabled`，用户关闭的检测项仍列出，供设置页重新打开，`ai_start` 只启动启用的）、是否按命令添加（`custom`） |
 | `ai_set_key(agent, key)` | 密封保存或删除某个 Agent 的 API key |
+| `ai_reveal_key(agent)` / `ai_reveal_review_key()` | 解锁 vault 后按需读取 Agent 或 Jev 的 API key，缺省时返回空值 |
 | `ai_delete(id)` | 删除一段对话：运行中先停止，等 Journal 写完排队的记录后移除该会话的 `ai/*` 记录，并追加一条不属于任何会话的 `ai/conversation_deleted`（`payload.session`），同步据此删除其他设备上的同一对话（见 [sync](sync.md#应用中的同步)） |
 | `ai_provider_models(provider, key)` | 列出服务商提供的模型及其上下文窗口（列表给出时：`context_length`、`context_window`、`max_model_len`、`max_input_tokens` 等，超过 1 亿的不采信；`GET /models`；OpenAI 兼容用 Bearer，Anthropic 用 x-api-key 并按 `after_id` 翻页，最多 20 页），排序去重后返回 id；key 未给出时用已保存的，vault 未解锁时不带 key |
 | `ai_provider_test(provider, key)` | 用一次最小请求检查服务商的地址、模型和 key（未给出时用已保存的），返回模型的回复 |

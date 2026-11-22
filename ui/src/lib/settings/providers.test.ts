@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { customAgentId, fromPreset, mergeListed, PRESETS, providerId, providerModels } from './providers.ts';
+import { addModel, customAgentId, fromPreset, mergeListed, PRESETS, providerId, providerModels } from './providers.ts';
 
 test('ids are slugs that do not collide', () => {
   assert.equal(providerId('OpenAI', []), 'openai');
@@ -27,4 +27,22 @@ test('checked models become the default and the others', () => {
   assert.deepEqual(providerModels(['a', ' b ', 'a'], 'x'), { model: 'a', models: ['b'] });
   assert.deepEqual(providerModels([], ''), { model: '', models: [] });
   assert.deepEqual(mergeListed(['z', 'a', 'm'], ['m', 'custom']), ['custom', 'm', 'a', 'z']);
+});
+
+test('adding a manual model selects and stars the first model without a fetch', () => {
+  assert.deepEqual(addModel(' local/model ', [], [], ''), {
+    picked: ['local/model'],
+    listed: ['local/model'],
+    star: 'local/model',
+  });
+});
+
+test('manual model ids deduplicate and preserve the current default and fetched options', () => {
+  const first = addModel('manual', ['default'], ['fetched', 'default'], 'default');
+  assert.deepEqual(addModel(' manual ', first.picked, first.listed, first.star), {
+    picked: ['default', 'manual'],
+    listed: ['default', 'manual', 'fetched'],
+    star: 'default',
+  });
+  assert.deepEqual(mergeListed(['remote', 'manual'], first.picked), ['default', 'manual', 'remote']);
 });
