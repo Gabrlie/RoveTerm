@@ -1063,6 +1063,11 @@ export function syncNow(): Promise<SyncReport> {
   return invoke('sync_now');
 }
 
+/** Returns the saved WebDAV password on this device, or null when none is stored. */
+export function syncRevealSecret(): Promise<string | null> {
+  return invoke('sync_reveal_secret');
+}
+
 export function syncDisable(): Promise<void> {
   return invoke('sync_disable');
 }

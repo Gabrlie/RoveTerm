@@ -369,6 +369,7 @@ pub fn run() {
             commands::sync::sync_probe,
             commands::sync::sync_setup,
             commands::sync::sync_now,
+            commands::sync::sync_reveal_secret,
             commands::sync::sync_disable,
             commands::window::window_set_material,
             commands::menu::menu_set,

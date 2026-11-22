@@ -1,11 +1,12 @@
 <script lang="ts">
   // Sync in two steps: connect to a storage (stored on this device once it answers), then join
   // the space found there or create one. Failures show both inline in the panel and as notifications.
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import Icon from '../../ui/Icon.svelte';
+  import IconButton from '../../ui/IconButton.svelte';
   import { errorText, t } from '../../i18n';
-  import type { SyncTarget } from '../../ipc';
+  import { syncRevealSecret, type SyncTarget } from '../../ipc';
   import { draft, sync } from '../../sync/sync.svelte';
   import { splitWebdavUrl, webdavUrl } from '../../sync/webdav';
   import { notify } from '../../ui/toast.svelte';
@@ -14,6 +15,10 @@
 
   let editing = $state(false);
   let panelError = $state('');
+  let showStoragePassword = $state(false);
+  let revealingPassword = $state(false);
+  let loadedSavedPassword = $state(false);
+  let revealedSummaryPassword = $state<string | null>(null);
 
   function reportError(message: string): void {
     panelError = message;
@@ -22,6 +27,15 @@
 
   function clearError(): void {
     if (panelError) panelError = '';
+  }
+
+  function clearRevealedPasswords(clearDraftSecret = false): void {
+    revealedSummaryPassword = null;
+    showStoragePassword = false;
+    if (clearDraftSecret || loadedSavedPassword) {
+      draft.storagePassword = '';
+      loadedSavedPassword = false;
+    }
   }
 
   async function chooseFolder(): Promise<void> {
@@ -33,6 +47,7 @@
   function startEdit(): void {
     if (!status?.target) return;
     clearError();
+    clearRevealedPasswords(true);
     if (status.target.kind === 'folder') {
       draft.storage = 'folder';
       draft.folder = status.target.path;
@@ -49,8 +64,56 @@
 
   function cancelEdit(): void {
     editing = false;
-    draft.storagePassword = '';
+    clearRevealedPasswords(true);
     clearError();
+  }
+
+  async function toggleSummaryPassword(): Promise<void> {
+    if (revealedSummaryPassword !== null) {
+      revealedSummaryPassword = null;
+      return;
+    }
+    if (revealingPassword) return;
+    clearError();
+    revealingPassword = true;
+    try {
+      revealedSummaryPassword = (await syncRevealSecret()) ?? '';
+    } catch (error) {
+      reportError(errorText(error));
+    } finally {
+      revealingPassword = false;
+    }
+  }
+
+  async function toggleDraftPassword(): Promise<void> {
+    if (showStoragePassword) {
+      showStoragePassword = false;
+      return;
+    }
+    if (editing && status?.target?.kind === 'webdav' && status.connected && !draft.storagePassword && !loadedSavedPassword) {
+      if (revealingPassword) return;
+      clearError();
+      revealingPassword = true;
+      try {
+        const saved = await syncRevealSecret();
+        if (saved !== null) {
+          draft.storagePassword = saved;
+          loadedSavedPassword = true;
+        }
+        showStoragePassword = true;
+      } catch (error) {
+        reportError(errorText(error));
+      } finally {
+        revealingPassword = false;
+      }
+      return;
+    }
+    showStoragePassword = true;
+  }
+
+  function onStoragePasswordInput(): void {
+    clearError();
+    if (loadedSavedPassword) loadedSavedPassword = false;
   }
 
   /** The storage as typed, or null with an inline error and notification when something is missing. */
@@ -75,7 +138,7 @@
     try {
       const storagePassword = target.kind === 'webdav' ? (draft.storagePassword || null) : null;
       await sync.connect(target, storagePassword);
-      draft.storagePassword = '';
+      clearRevealedPasswords(true);
       if (wasEditing) {
         editing = false;
         notify(t('sync.configSaved'), 'success');
@@ -113,6 +176,7 @@
   async function change(): Promise<void> {
     clearError();
     editing = false;
+    clearRevealedPasswords(true);
     await sync.disable().catch((error: unknown) => reportError(errorText(error)));
   }
 
@@ -146,6 +210,10 @@
   onMount(() => {
     sync.refreshStatus().catch((caught: unknown) => console.warn('sync status unavailable', caught));
   });
+
+  onDestroy(() => {
+    clearRevealedPasswords(false);
+  });
 </script>
 
 {#if status?.configured && status.target && !editing}
@@ -155,6 +223,25 @@
       <span class="form-label">{status.target.kind === 'folder' ? t('sync.folder') : t('sync.storageWebdav')}<small class="path" title={where(status.target)}>{where(status.target)}</small></span>
       <button type="button" class="secondary" onclick={startEdit}>{t('sync.edit')}</button>
     </div>
+    {#if status.target.kind === 'webdav' && status.connected}
+      <div class="form-row">
+        <span class="form-label">{t('sync.storagePassword')}</span>
+        <div class="secret-display">
+          {#if revealedSummaryPassword !== null}
+            <code class="secret selectable">{revealedSummaryPassword}</code>
+          {:else}
+            <span class="secret masked" aria-hidden="true">••••••••</span>
+          {/if}
+          <IconButton
+            icon={revealedSummaryPassword !== null ? 'eyeOff' : 'eye'}
+            label={t(revealedSummaryPassword !== null ? 'sync.hidePassword' : 'sync.showPassword')}
+            small
+            disabled={revealingPassword}
+            onclick={() => void toggleSummaryPassword()}
+          />
+        </div>
+      </div>
+    {/if}
     {#if status.ready}
       <div class="form-row">
         <span class="form-label">{t('sync.records')}</span>
@@ -173,7 +260,15 @@
     <div class="form-group">
       <div class="form-row">
         <span class="form-label">{t('sync.storagePassword')}</span>
-        <input class="field" type="password" bind:value={draft.storagePassword} oninput={clearError} autocomplete="off" aria-label={t('sync.storagePassword')} />
+        <div class="secret-input">
+          <input class="field" type={showStoragePassword ? 'text' : 'password'} bind:value={draft.storagePassword} oninput={onStoragePasswordInput} autocomplete="off" aria-label={t('sync.storagePassword')} />
+          <IconButton
+            icon={showStoragePassword ? 'eyeOff' : 'eye'}
+            label={t(showStoragePassword ? 'sync.hidePassword' : 'sync.showPassword')}
+            small
+            onclick={() => void toggleDraftPassword()}
+          />
+        </div>
         <button type="button" class="primary" disabled={sync.connecting || !draft.storagePassword} onclick={() => void connect(target)}>{sync.connecting ? t('sync.connecting') : t('sync.connect')}</button>
       </div>
     </div>
@@ -251,7 +346,16 @@
       </div>
       <div class="form-row">
         <span class="form-label">{t('sync.storagePassword')}<small>{editing && status?.target?.kind === 'webdav' && status.connected ? t('sync.storagePasswordKeepHint') : t('sync.storagePasswordHint')}</small></span>
-        <input class="field" type="password" bind:value={draft.storagePassword} oninput={clearError} autocomplete="off" aria-label={t('sync.storagePassword')} />
+        <div class="secret-input">
+          <input class="field" type={showStoragePassword ? 'text' : 'password'} bind:value={draft.storagePassword} oninput={onStoragePasswordInput} autocomplete="off" aria-label={t('sync.storagePassword')} />
+          <IconButton
+            icon={showStoragePassword ? 'eyeOff' : 'eye'}
+            label={t(showStoragePassword ? 'sync.hidePassword' : 'sync.showPassword')}
+            small
+            disabled={revealingPassword}
+            onclick={() => void toggleDraftPassword()}
+          />
+        </div>
       </div>
     {/if}
   </div>
@@ -287,6 +391,29 @@
   }
   .field {
     width: 220px;
+  }
+  .secret-input,
+  .secret-display {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+  .secret-input .field {
+    width: 188px;
+  }
+  .secret {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: var(--text-footnote);
+    color: var(--fg);
+  }
+  .secret.masked {
+    color: var(--fg-muted);
+    letter-spacing: 0.08em;
   }
   .path-input {
     font-family: var(--font-mono);

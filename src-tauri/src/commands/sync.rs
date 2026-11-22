@@ -938,6 +938,22 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<Report, CommandError
     .await
 }
 
+/// The stored WebDAV password when WebDAV sync is configured on this device.
+fn revealed_webdav_secret(local: Option<Local>) -> Option<String> {
+    let local = local?;
+    match local.target {
+        SyncTarget::WebDav { .. } => local.secret.map(|secret| secret.to_string()),
+        SyncTarget::Folder { .. } => None,
+    }
+}
+
+/// Returns the saved WebDAV password so the user can inspect or edit it on this device.
+#[tauri::command]
+pub async fn sync_reveal_secret(state: State<'_, AppState>) -> Result<Option<String>, CommandError> {
+    state.ensure_unlocked().await?;
+    Ok(revealed_webdav_secret(read_local(&state.vault)?))
+}
+
 /// Turns sync off on this device. The space and the data on other devices are left alone.
 #[tauri::command]
 pub async fn sync_disable(state: State<'_, AppState>) -> Result<(), CommandError> {
@@ -988,6 +1004,33 @@ mod tests {
         };
         assert!(resolve_connect_secret(&folder, None, Some(&previous)).is_none());
         assert!(resolve_connect_secret(&dav, None, None).is_none());
+    }
+
+    #[test]
+    fn reveals_only_saved_webdav_secret() {
+        let dav = SyncTarget::WebDav {
+            url: "https://dav.example/RoveTerm".into(),
+            username: "me".into(),
+        };
+        let mut with_secret = local(dav.clone(), "device-1");
+        with_secret.secret = Some(Zeroizing::new("stored-pass".into()));
+        assert_eq!(
+            revealed_webdav_secret(Some(with_secret)).as_deref(),
+            Some("stored-pass")
+        );
+
+        let without_secret = local(dav, "device-1");
+        assert!(revealed_webdav_secret(Some(without_secret)).is_none());
+
+        let mut folder = local(
+            SyncTarget::Folder {
+                path: "/sync".into(),
+            },
+            "device-1",
+        );
+        folder.secret = Some(Zeroizing::new("ignored".into()));
+        assert!(revealed_webdav_secret(Some(folder)).is_none());
+        assert!(revealed_webdav_secret(None).is_none());
     }
 
     #[test]
