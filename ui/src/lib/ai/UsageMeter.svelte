@@ -105,7 +105,7 @@
 
 <div class="meter" bind:this={root}>
   <button type="button" class="ring {meter.tone}" bind:this={trigger} onclick={toggle} aria-expanded={open} aria-haspopup="dialog" title={hint} aria-label={t('ai.sidebar.usageLabel', { usage: hint })}>
-    <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
+    <svg viewBox="0 0 20 20" width="13" height="13" aria-hidden="true">
       <circle cx="10" cy="10" r="7" class="track" />
       {#if meter.percent !== null && meter.percent > 0}
         <circle cx="10" cy="10" r="7" pathLength="100" class="fill" stroke-dasharray={`${meter.percent} 100`} />
@@ -180,31 +180,40 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    height: 22px;
-    padding: 0 6px;
+    height: 20px;
+    padding: 0 5px;
     border: none;
-    border-radius: var(--radius-sm);
-    background: var(--fill);
+    border-radius: var(--radius-xs);
+    background: transparent;
     color: var(--fg-muted);
     font: inherit;
-    font-size: 11px;
+    font-size: var(--text-caption);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
     cursor: pointer;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
   }
-  .ring:hover,
-  .ring[aria-expanded='true'] {
+  .ring:hover {
     background: var(--fill-hover);
+    color: var(--fg);
+  }
+  .ring[aria-expanded='true'] {
+    background: var(--fill);
+    color: var(--fg);
   }
   .ring.warning,
   .ring.danger {
     color: var(--meter-color);
   }
   svg {
+    flex: none;
     transform: rotate(-90deg);
   }
   circle {
     fill: none;
-    stroke-width: 3;
+    stroke-width: 2.6;
   }
   .track {
     stroke: var(--fill-pressed);
@@ -218,21 +227,28 @@
   }
   .popover {
     position: absolute;
-    left: 0;
     right: 0;
     bottom: calc(100% + 8px);
     z-index: 20;
     display: grid;
     gap: var(--space-2);
+    width: min(100%, 300px);
     max-height: min(380px, 55vh);
     overflow-y: auto;
     padding: var(--space-2) var(--space-3) var(--space-3);
-    border: 1px solid var(--border);
+    border: none;
     border-radius: var(--radius-md);
     background: var(--material-popover);
-    box-shadow: var(--shadow-lg);
+    box-shadow: var(--glass-edge), var(--shadow-lg);
     font-size: var(--text-footnote);
     overscroll-behavior: contain;
+    animation: pop var(--dur-fast) var(--ease-out);
+  }
+  @keyframes pop {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
   }
   .head {
     min-height: 24px;
@@ -247,7 +263,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--space-2);
+    flex-wrap: wrap;
+    gap: 2px var(--space-2);
+    min-width: 0;
   }
   .title {
     margin: 0;
@@ -259,10 +277,13 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
+    min-width: 0;
   }
   .value {
+    margin-left: auto;
     color: var(--fg-muted);
     font-variant-numeric: tabular-nums;
+    text-align: right;
   }
   .bar {
     height: 5px;

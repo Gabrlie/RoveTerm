@@ -37,6 +37,11 @@
   const effortLabel = $derived(effort && chosenEffort ? effortPill(shortEffort(effort, chosenEffort)) : '');
   const fast = $derived(fastIndicator(speed, toggles, value));
   const groups = $derived(modelGroups(model?.choices ?? [], query));
+  const triggerHint = $derived(
+    starting
+      ? t('ai.loadingModels')
+      : [modelName, effortLabel, fast === 'on' ? t('ai.fastMode') : ''].filter(Boolean).join(' '),
+  );
 
   const SHORT_EFFORT: Record<string, MessageKey> = {
     minimal: 'ai.sidebar.effort.minimal',
@@ -104,14 +109,13 @@
 <svelte:window onpointerdown={onWindowPointer} onkeydown={onKey} />
 
 <div class="holder" bind:this={root}>
-  <button type="button" class="trigger" class:starting bind:this={trigger} onclick={() => void toggle()} disabled={starting || busy} aria-expanded={open} aria-haspopup="dialog" title={starting ? t('ai.loadingModels') : modelName}>
-    <Icon name="brain" size={13} />
+  <button type="button" class="trigger" class:starting bind:this={trigger} onclick={() => void toggle()} disabled={starting || busy} aria-expanded={open} aria-haspopup="dialog" title={triggerHint}>
     <span class="trigger-name">{modelName}</span>
     {#if effortLabel}<span class="effort-pill">{effortLabel}</span>{/if}
-    {#if fast}
-      <span class:fast-on={fast === 'on'} class="fast" title={t('ai.fastMode')}><Icon name="quickConnect" size={12} /></span>
+    {#if fast === 'on'}
+      <span class="fast" title={t('ai.fastMode')}><Icon name="quickConnect" size={11} /></span>
     {/if}
-    <span class="chevron"><Icon name="chevronDown" size={11} /></span>
+    <span class="chevron"><Icon name="chevronDown" size={10} /></span>
   </button>
   {#if open}
     <div class="popover" role="dialog" aria-label={t('ai.sidebar.modelOptions')}>
@@ -193,29 +197,41 @@
 
 <style>
   .holder {
+    flex: 0 1 auto;
     min-width: 0;
+    max-width: 100%;
   }
   .trigger {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
     max-width: 100%;
-    height: 26px;
-    padding: 0 7px;
+    min-width: 0;
+    height: 24px;
+    padding: 0 6px;
+    overflow: hidden;
     border: none;
     border-radius: var(--radius-sm);
-    background: var(--fill);
+    background: transparent;
     color: var(--fg-muted);
     font: inherit;
-    font-size: 11.5px;
+    font-size: var(--text-footnote);
+    font-weight: 500;
     cursor: pointer;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
   }
-  .trigger:not(:disabled):hover,
-  .trigger[aria-expanded='true'] {
+  .trigger:not(:disabled):hover {
     background: var(--fill-hover);
     color: var(--fg);
   }
+  .trigger[aria-expanded='true'] {
+    background: var(--fill);
+    color: var(--fg);
+  }
   .trigger:disabled {
+    opacity: 0.65;
     cursor: default;
   }
   .trigger.starting .trigger-name {
@@ -237,46 +253,78 @@
     flex: none;
   }
   .trigger-name {
+    flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--fg);
-    font-weight: 600;
+    font-weight: 500;
   }
   .effort-pill {
+    color: var(--fg-subtle);
+    font-size: var(--text-caption);
+    font-weight: 400;
     white-space: nowrap;
   }
   .fast,
   .chevron,
   .check {
-    display: flex;
+    display: inline-flex;
+    align-items: center;
+  }
+  .fast {
+    color: var(--accent);
   }
   .chevron {
-    opacity: 0.7;
+    color: var(--fg-subtle);
+    transition:
+      transform var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
   }
-  .fast-on,
+  .trigger:not(:disabled):hover .chevron,
+  .trigger[aria-expanded='true'] .chevron {
+    color: var(--fg-muted);
+  }
+  .trigger[aria-expanded='true'] .chevron {
+    transform: rotate(180deg);
+  }
   .check {
     color: var(--accent);
   }
+  @container card (max-width: 245px) {
+    .trigger {
+      padding: 0 5px;
+    }
+    .effort-pill {
+      display: none;
+    }
+  }
   .popover {
     position: absolute;
-    right: 0;
     bottom: calc(100% + 8px);
     left: 0;
     z-index: 20;
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
+    width: min(100%, 320px);
     max-height: min(360px, 55vh);
     overflow: auto;
     padding: var(--space-2);
-    border: 1px solid var(--border);
+    border: none;
     border-radius: var(--radius-md);
     background: var(--material-popover);
-    box-shadow: var(--shadow-lg);
+    box-shadow: var(--glass-edge), var(--shadow-lg);
     font-size: var(--text-footnote);
     overscroll-behavior: contain;
+    animation: pop var(--dur-fast) var(--ease-out);
+  }
+  @keyframes pop {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
   }
   .section-title,
   .empty {
@@ -302,6 +350,7 @@
     font: inherit;
     text-align: left;
     cursor: pointer;
+    transition: background-color var(--dur-fast) var(--ease-out);
   }
   .model-row:hover,
   .model-row:focus-visible,
@@ -363,6 +412,9 @@
     font-size: 11px;
     overflow-wrap: anywhere;
     cursor: pointer;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
   }
   .segmented button:hover {
     background: var(--fill-hover);
@@ -379,10 +431,14 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    min-width: 0;
   }
   .toggle-row {
     justify-content: space-between;
     padding: var(--space-1) var(--space-2);
+  }
+  .toggle-row > span {
+    overflow-wrap: anywhere;
   }
   .list-head {
     color: var(--fg);

@@ -110,7 +110,7 @@
   let expanded = $state<Record<string, boolean>>({});
 
   const MODES: AiMode[] = ['ask_all', 'ask_by_risk', 'auto'];
-  const MODE_ICONS: Record<AiMode, IconName> = { ask_all: 'lock', ask_by_risk: 'eye', auto: 'play' };
+  const MODE_ICONS: Record<AiMode, IconName> = { ask_all: 'shieldLock', ask_by_risk: 'shieldCheck', auto: 'shieldAlert' };
   const EXAMPLES: MessageKey[] = ['ai.example.health', 'ai.example.logs', 'ai.example.disk'];
   const FLEET_EXAMPLES: MessageKey[] = ['fleet.example.health', 'fleet.example.updates', 'fleet.example.certs'];
   const GROUPS: { kind: AgentChoice['kind']; title: MessageKey }[] = [
@@ -669,8 +669,8 @@
         <span class="chip host" title={hostName}><Icon name={context.kind === 'local' ? 'terminal' : 'server'} size={11} /><span>{hostName}</span></span>
         {#if !fleet}
           <span class="terminal-toggle" title={chat.hasUserMessage ? t('ai.terminalFixed') : t('ai.terminalHint')}>
-            <button type="button" class="chip toggle" class:on={chat.attachTerminal} aria-pressed={chat.attachTerminal} disabled={!chat.canAttachTerminal} onclick={() => void chat.setAttachTerminal(!chat.attachTerminal, terminalPane?.sessionId ?? null)}>
-              <Icon name="terminal" size={12} />{t('ai.sidebar.terminal')}
+            <button type="button" class="chip toggle" class:on={chat.attachTerminal} aria-pressed={chat.attachTerminal} aria-label={t('ai.sidebar.terminal')} disabled={!chat.canAttachTerminal} onclick={() => void chat.setAttachTerminal(!chat.attachTerminal, terminalPane?.sessionId ?? null)}>
+              <Icon name="terminal" size={11} /><span class="toggle-label">{t('ai.sidebar.terminal')}</span>
             </button>
           </span>
         {/if}
@@ -718,50 +718,55 @@
       {/if}
       <textarea bind:this={input} bind:value={draft} rows="1" placeholder={fleet ? t('fleet.placeholder') : t('ai.placeholder', { host: hostInText })} aria-label={fleet ? t('fleet.placeholder') : t('ai.placeholder', { host: hostInText })} oninput={onInput} onkeydown={onKeydown}></textarea>
       <div class="card-foot">
-        {#key chat}
-          <ModelPopover
-            model={split.model}
-            effort={split.effort}
-            toggles={split.toggles}
-            speed={split.speed}
-            title={optionName}
-            value={(option) => chat.optionValue(option)}
-            label={entryName}
-            onset={(option, value) => {
-              if (option === 'model' && agentRef?.startsWith('builtin:')) {
-                const [provider, model] = JSON.parse(value) as [string, string];
-                void chat.selectModel(provider, model);
-              } else void chat.setOption(option, value);
-            }}
-            onopen={prepareAgent}
-            starting={chat.starting}
-            busy={chat.busy}
-          />
-        {/key}
-        <div class="picker spread" bind:this={modePicker}>
-          <button type="button" class="pick mode-tone {chat.mode}" bind:this={modeTrigger} onclick={() => (modeOpen = !modeOpen)} aria-expanded={modeOpen} aria-haspopup="menu" aria-label={`${t('ai.mode')} · ${t(`ai.sidebar.mode.${chat.mode}`)}`} title={t(`ai.modeHint.${chat.mode}`)}>
-            <Icon name={MODE_ICONS[chat.mode]} size={13} />{t(`ai.sidebar.mode.${chat.mode}`)}
-          </button>
-          {#if modeOpen}
-            <div class="menu" role="menu" aria-label={t('ai.mode')}>
-              <p class="menu-title">{t('ai.mode')}</p>
-              {#each MODES as mode (mode)}
-                <button type="button" role="menuitemradio" aria-checked={mode === chat.mode} class="menu-item" class:current={mode === chat.mode} onclick={() => ((modeOpen = false), void chat.setMode(mode), modeTrigger?.focus())}>
-                  <span class="mode-badge mode-tone {mode}"><Icon name={MODE_ICONS[mode]} size={15} /></span>
-                  <span class="menu-copy">
-                    <span class="menu-name">{t(`ai.sidebar.mode.${mode}`)}</span>
-                    <span class="menu-detail wrap">{t(`ai.modeHint.${mode}`)}</span>
-                  </span>
-                  {#if mode === chat.mode}<span class="menu-check"><Icon name="check" size={13} /></span>{/if}
-                </button>
-              {/each}
-            </div>
-          {/if}
+        <div class="foot-controls">
+          {#key chat}
+            <ModelPopover
+              model={split.model}
+              effort={split.effort}
+              toggles={split.toggles}
+              speed={split.speed}
+              title={optionName}
+              value={(option) => chat.optionValue(option)}
+              label={entryName}
+              onset={(option, value) => {
+                if (option === 'model' && agentRef?.startsWith('builtin:')) {
+                  const [provider, model] = JSON.parse(value) as [string, string];
+                  void chat.selectModel(provider, model);
+                } else void chat.setOption(option, value);
+              }}
+              onopen={prepareAgent}
+              starting={chat.starting}
+              busy={chat.busy}
+            />
+          {/key}
+          <span class="foot-sep" aria-hidden="true"></span>
+          <div class="picker spread mode-picker" bind:this={modePicker}>
+            <button type="button" class="mode-trigger {chat.mode}" bind:this={modeTrigger} onclick={() => (modeOpen = !modeOpen)} aria-expanded={modeOpen} aria-haspopup="menu" aria-label={`${t('ai.mode')} · ${t(`ai.sidebar.mode.${chat.mode}`)}`} title={`${t(`ai.sidebar.mode.${chat.mode}`)} — ${t(`ai.modeHint.${chat.mode}`)}`}>
+              <span class="mode-icon"><Icon name={MODE_ICONS[chat.mode]} size={12} /></span>
+              <span class="mode-label">{t(`ai.sidebar.mode.${chat.mode}`)}</span>
+              <span class="mode-arrow"><Icon name="chevronDown" size={10} /></span>
+            </button>
+            {#if modeOpen}
+              <div class="menu" role="menu" aria-label={t('ai.mode')}>
+                <p class="menu-title">{t('ai.mode')}</p>
+                {#each MODES as mode (mode)}
+                  <button type="button" role="menuitemradio" aria-checked={mode === chat.mode} class="menu-item" class:current={mode === chat.mode} onclick={() => ((modeOpen = false), void chat.setMode(mode), modeTrigger?.focus())}>
+                    <span class="mode-badge mode-tone {mode}"><Icon name={MODE_ICONS[mode]} size={15} /></span>
+                    <span class="menu-copy">
+                      <span class="menu-name">{t(`ai.sidebar.mode.${mode}`)}</span>
+                      <span class="menu-detail wrap">{t(`ai.modeHint.${mode}`)}</span>
+                    </span>
+                    {#if mode === chat.mode}<span class="menu-check"><Icon name="check" size={13} /></span>{/if}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
         </div>
         {#if chat.busy}
-          <button type="button" class="send stop" title={t('ai.stop')} aria-label={t('ai.stop')} onclick={() => void chat.cancel()}><Icon name="stop" size={12} /></button>
+          <button type="button" class="send stop" title={t('ai.stop')} aria-label={t('ai.stop')} onclick={() => void chat.cancel()}><Icon name="stop" size={11} /></button>
         {:else}
-          <button type="button" class="send" title={t('ai.send')} aria-label={t('ai.send')} disabled={!draft.trim() || !chat.canSend || !agent} onclick={send}><Icon name="up" size={14} /></button>
+          <button type="button" class="send" title={t('ai.send')} aria-label={t('ai.send')} disabled={!draft.trim() || !chat.canSend || !agent} onclick={send}><Icon name="up" size={13} /></button>
         {/if}
       </div>
     </div>
@@ -777,16 +782,23 @@
   .recovery { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); margin-bottom: var(--space-2); font-size: var(--text-footnote); }
   .recovery p { margin: 0; color: var(--fg-muted); }
   .ai {
+    container: ai / inline-size;
     height: 100%;
     display: flex;
     flex-direction: column;
     min-height: 0;
+    min-width: 0;
   }
   .toolbar {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 2px;
+    min-width: 0;
     padding: 0 var(--space-2) var(--space-1) var(--space-3);
+  }
+  .toolbar :global(.icon-button) {
+    flex: none;
   }
   .title,
   .rename {
@@ -821,7 +833,8 @@
     outline: none;
   }
   .spacer {
-    flex: 1;
+    flex: 1 1 0;
+    min-width: 0;
   }
   .externals {
     display: flex;
@@ -1026,8 +1039,10 @@
     align-items: center;
     gap: 6px;
     width: 100%;
+    min-width: 0;
     min-height: 24px;
     padding: 2px var(--space-2);
+    overflow: hidden;
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;
@@ -1057,7 +1072,7 @@
   }
   .op-subject {
     flex: 1 1 0;
-    min-width: 3em;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1123,7 +1138,9 @@
   .approval-head {
     display: flex;
     align-items: center;
-    gap: 6px;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    min-width: 0;
     color: var(--risk);
   }
   .approval-title {
@@ -1263,7 +1280,9 @@
   .notice {
     display: flex;
     align-items: flex-start;
+    flex-wrap: wrap;
     gap: 6px;
+    min-width: 0;
     padding: var(--space-2);
     border-radius: var(--radius-sm);
     background: var(--danger-soft);
@@ -1271,7 +1290,8 @@
     font-size: var(--text-footnote);
   }
   .notice span {
-    flex: 1;
+    flex: 1 1 120px;
+    min-width: 0;
     overflow-wrap: anywhere;
   }
   .link {
@@ -1284,6 +1304,7 @@
     cursor: pointer;
   }
   .composer {
+    min-width: 0;
     padding: 0 var(--space-3) var(--space-3);
   }
   .status {
@@ -1305,66 +1326,95 @@
   }
   .card {
     position: relative;
+    container: card / inline-size;
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
+    gap: 6px;
+    min-width: 0;
     padding: var(--space-2);
     border-radius: var(--radius-md);
     background: var(--surface);
-    box-shadow: 0 0 0 1px var(--separator);
+    box-shadow:
+      0 0 0 0.5px var(--border),
+      var(--shadow-sm);
+    transition: box-shadow var(--dur-fast) var(--ease-out);
   }
   .card:focus-within {
-    box-shadow: 0 0 0 1px var(--accent);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 68%, transparent),
+      0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
   }
   .context {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
     min-width: 0;
   }
   .chip {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    height: 22px;
+    height: 20px;
     padding: 0 6px;
     border: 0;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-xs);
     background: var(--fill);
     color: var(--fg-muted);
     font: inherit;
-    font-size: 11px;
+    font-size: var(--text-caption);
     white-space: nowrap;
   }
   .host {
+    flex: 0 1 auto;
     min-width: 0;
+    overflow: hidden;
   }
   .host span {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .chip :global(svg),
+  .chip :global(svg) {
+    flex: none;
+  }
   .terminal-toggle {
+    display: inline-flex;
     flex: none;
   }
   .chip.toggle {
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    background: transparent;
+    color: var(--fg-subtle);
     cursor: pointer;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out);
   }
   .chip.toggle:not(:disabled):not(.on):hover {
     background: var(--fill-hover);
+    color: var(--fg-muted);
   }
   .chip.toggle.on {
-    background: var(--accent-soft);
+    background: var(--accent-softer);
+    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--accent) 26%, transparent);
     color: var(--accent);
   }
+  .chip.toggle.on:not(:disabled):hover {
+    background: var(--accent-soft);
+  }
   .chip.toggle:disabled {
+    opacity: 0.72;
     cursor: default;
   }
   textarea {
     width: 100%;
+    min-width: 0;
     min-height: 36px;
     resize: none;
-    padding: var(--space-1) 2px;
+    padding: 2px 2px 4px;
     border: none;
     border-radius: 0;
     background: transparent;
@@ -1376,8 +1426,23 @@
   .card-foot {
     display: flex;
     align-items: center;
-    gap: 5px;
+    justify-content: space-between;
+    gap: 6px;
     min-width: 0;
+  }
+  .foot-controls {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .foot-sep {
+    flex: none;
+    width: 1px;
+    height: 12px;
+    margin: 0 2px;
+    background: var(--separator);
   }
   .picker {
     position: relative;
@@ -1389,21 +1454,27 @@
     align-items: center;
     gap: 4px;
     max-width: 100%;
+    min-width: 0;
     height: 24px;
     padding: 0 4px;
+    overflow: hidden;
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--fg-muted);
     font: inherit;
-    font-size: 11.5px;
+    font-size: var(--text-footnote);
     cursor: pointer;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
   }
   .pick:hover {
     background: var(--fill-hover);
     color: var(--fg);
   }
   .pick-name {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1418,16 +1489,23 @@
     bottom: calc(100% + 8px);
     left: 0;
     z-index: 20;
-    width: 240px;
+    width: min(100%, 320px);
     max-height: min(340px, 55vh);
     overflow-y: auto;
     overscroll-behavior: contain;
     padding: var(--space-2);
-    border: 1px solid var(--border);
+    border: none;
     border-radius: var(--radius-md);
     background: var(--material-popover);
-    box-shadow: var(--shadow-lg);
+    box-shadow: var(--glass-edge), var(--shadow-lg);
     font-size: var(--text-footnote);
+    animation: pop var(--dur-fast) var(--ease-out);
+  }
+  @keyframes pop {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
   }
   .menu-title {
     margin: 3px var(--space-2) 4px;
@@ -1448,6 +1526,7 @@
     font: inherit;
     text-align: left;
     cursor: pointer;
+    transition: background-color var(--dur-fast) var(--ease-out);
   }
   .menu-item:hover,
   .menu-item:focus-visible,
@@ -1486,7 +1565,6 @@
     position: static;
     flex: none;
   }
-  .picker.spread .menu,
   .menu.slash {
     right: 0;
     width: auto;
@@ -1494,6 +1572,17 @@
   .menu.down {
     top: calc(100% + 4px);
     bottom: auto;
+    left: var(--space-2);
+    right: var(--space-2);
+    width: auto;
+    max-width: 260px;
+    animation: pop-down var(--dur-fast) var(--ease-out);
+  }
+  @keyframes pop-down {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
   }
   .menu-name .mono {
     font-family: var(--font-mono);
@@ -1501,6 +1590,80 @@
   .menu-name .hint {
     margin-left: 6px;
     color: var(--fg-muted);
+  }
+  .mode-picker {
+    flex: none;
+  }
+  .mode-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 100%;
+    min-width: 0;
+    height: 24px;
+    padding: 0 6px;
+    overflow: hidden;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--fg-muted);
+    font: inherit;
+    font-size: var(--text-footnote);
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out);
+  }
+  .mode-trigger:hover {
+    background: var(--fill-hover);
+    color: var(--fg);
+  }
+  .mode-trigger[aria-expanded='true'] {
+    background: var(--fill);
+    color: var(--fg);
+  }
+  .mode-icon,
+  .mode-arrow {
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+  }
+  .mode-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mode-arrow {
+    color: var(--fg-subtle);
+    transition:
+      transform var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
+  }
+  .mode-trigger:hover .mode-arrow,
+  .mode-trigger[aria-expanded='true'] .mode-arrow {
+    color: var(--fg-muted);
+  }
+  .mode-trigger[aria-expanded='true'] .mode-arrow {
+    transform: rotate(180deg);
+  }
+  .mode-trigger.ask_by_risk .mode-icon {
+    color: var(--accent);
+  }
+  .mode-trigger.auto {
+    background: color-mix(in srgb, var(--warning) 9%, transparent);
+    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--warning) 24%, transparent);
+    color: var(--warning);
+  }
+  .mode-trigger.auto:hover,
+  .mode-trigger.auto[aria-expanded='true'] {
+    background: color-mix(in srgb, var(--warning) 16%, transparent);
+    color: var(--warning);
+  }
+  .mode-trigger.auto .mode-arrow {
+    color: color-mix(in srgb, var(--warning) 75%, transparent);
   }
   .mode-tone {
     --mode-bg: var(--fill);
@@ -1515,17 +1678,6 @@
   .mode-tone.auto {
     --mode-bg: var(--warning-soft);
     --mode-fg: var(--warning);
-  }
-  .pick.mode-tone {
-    height: 26px;
-    padding: 0 7px;
-    white-space: nowrap;
-    font-weight: 600;
-  }
-  .pick.mode-tone:hover,
-  .pick.mode-tone[aria-expanded='true'] {
-    background: color-mix(in srgb, var(--mode-bg), var(--mode-fg) 8%);
-    color: var(--mode-fg);
   }
   .mode-badge {
     display: grid;
@@ -1547,7 +1699,9 @@
     font-weight: 600;
   }
   .toolbar .picker {
+    position: static;
     flex: 0 1 auto;
+    min-width: 0;
   }
   .divider {
     flex: none;
@@ -1560,14 +1714,26 @@
     display: grid;
     place-items: center;
     flex: none;
-    width: 26px;
-    height: 26px;
-    margin-left: auto;
+    width: 24px;
+    height: 24px;
     border: none;
     border-radius: 50%;
-    background: var(--accent);
+    background: linear-gradient(to bottom, color-mix(in srgb, var(--accent) 92%, #fff), var(--accent));
+    box-shadow:
+      0 0.5px 1px rgb(0 0 0 / 0.15),
+      inset 0 0.5px 0 rgb(255 255 255 / 0.25);
     color: var(--accent-fg);
     cursor: pointer;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      transform var(--dur-fast) var(--ease-out),
+      opacity var(--dur-fast);
+  }
+  .send:hover:not(:disabled) {
+    background: var(--accent-hover);
+  }
+  .send:active:not(:disabled) {
+    transform: scale(0.95);
   }
   .send:disabled {
     opacity: 0.4;
@@ -1575,7 +1741,35 @@
   }
   .send.stop {
     background: var(--fg);
+    box-shadow: none;
     color: var(--surface);
+  }
+  @container ai (max-width: 260px) {
+    .toolbar {
+      padding: 0 var(--space-2) var(--space-1);
+    }
+    .list {
+      padding: var(--space-2) var(--space-2) var(--space-3);
+    }
+    .composer {
+      padding: 0 var(--space-2) var(--space-2);
+    }
+  }
+  @container card (max-width: 230px) {
+    .toggle-label {
+      display: none;
+    }
+    .chip.toggle {
+      padding: 0 5px;
+    }
+  }
+  @container card (max-width: 215px) {
+    .mode-label {
+      display: none;
+    }
+    .mode-trigger {
+      padding: 0 5px;
+    }
   }
   .schedules {
     position: relative;

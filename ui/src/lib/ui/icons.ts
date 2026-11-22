@@ -8,6 +8,9 @@ import terminal from 'lucide-static/icons/square-terminal.svg?raw';
 import server from 'lucide-static/icons/server.svg?raw';
 import search from 'lucide-static/icons/search.svg?raw';
 import lock from 'lucide-static/icons/lock.svg?raw';
+import shieldLock from 'lucide-static/icons/shield-lock.svg?raw';
+import shieldCheck from 'lucide-static/icons/shield-check.svg?raw';
+import shieldAlert from 'lucide-static/icons/shield-alert.svg?raw';
 import unlock from 'lucide-static/icons/lock-open.svg?raw';
 import key from 'lucide-static/icons/key-round.svg?raw';
 import edit from 'lucide-static/icons/pencil.svg?raw';
@@ -110,6 +113,9 @@ export const icons = {
   server,
   search,
   lock,
+  shieldLock,
+  shieldCheck,
+  shieldAlert,
   unlock,
   key,
   edit,
