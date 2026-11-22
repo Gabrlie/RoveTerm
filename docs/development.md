@@ -32,6 +32,17 @@
 
 产物未签名：首次打开需在 Finder 中右键选择“打开”，或执行 `xattr -cr /Applications/RoveTerm.app`。钥匙串首次读取设备主密钥时会弹窗授权，选“始终允许”后之后启动即可静默解锁。
 
+### 版本号与手动签名发布（`gh`）
+
+版本号遵循 SemVer 2.0（`MAJOR.MINOR.PATCH[-prerelease]`），以根目录 `Cargo.toml` 的 `[workspace.package].version` 为单一真源（`src-tauri/tauri.conf.json` 自动继承）：Pre-1.0 阶段每完成一个大里程碑递增 `MINOR`（如 `0.2.0`、`0.3.0`），常规修复递增 `PATCH`，尝鲜版使用 `-beta.N` / `-rc.N`。
+
+本地构建带签名更新包并经 GitHub CLI（`gh`）发布：
+
+1. 同步递增版本号：`pnpm release:bump 0.2.0`，并在 [CHANGELOG.md](../CHANGELOG.md) 记录中英双语更新日志。
+2. 签名密钥保存在构建机本机（如 `~/.tauri/roveterm.key`，权限 `0600`），私钥绝不入库；公钥写入 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`。构建时传入私钥环境变量：`TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/roveterm.key)" pnpm tauri build`（若私钥设了密码则同时传入 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）。
+3. 汇总产物、生成 `latest.json`（若含 `.apk` 则同步生成 `latest-android.json`）、`SHA256SUMS.txt` 与带平台图标下载表的双语 `RELEASE_NOTES.md`：`pnpm release:prepare --tag v0.2.0`。多台机器分批补建其他平台时，传入 `--merge-latest <已有 latest.json 路径或 URL>` 合并平台签名条目，再使用 `gh release upload --clobber` 更新。
+4. 审阅并按需微调生成的 `RELEASE_NOTES.md`，执行脚本输出的 `gh release create` 命令（或附加 `--publish --draft` 直接创建草稿发布）。
+
 ### Android
 
 1. 确认已设置 `ANDROID_HOME`、`NDK_HOME`，并安装 JDK 17。
