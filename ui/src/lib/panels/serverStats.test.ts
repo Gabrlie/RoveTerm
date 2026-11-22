@@ -25,7 +25,7 @@ const hooks = registerHooks({
   },
 });
 
-const { cpuUsage, describeTailscalePath, formatLatencyMs, formatNetworkRate, networkRates } =
+const { combinedNetworkRate, cpuUsage, describeTailscalePath, formatLatencyMs, formatMemoryBar, formatNetworkRate, networkRates } =
   await import('./serverStats.svelte.ts');
 const { prefs } = await import('../settings/prefs.svelte.ts');
 hooks.deregister();
@@ -89,6 +89,19 @@ test('calculates interface deltas, clamps resets, and totals only non-loopback m
   assert.equal(networkRates(now, [], 2).totalRate, null);
 });
 
+test('formats terminal status bar memory in all display modes and combines network rates', () => {
+  const fmt = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  const used = 4.2 * 1024 ** 3;
+  const total = 16 * 1024 ** 3;
+  assert.equal(formatMemoryBar(used, total, 'full_percent', fmt), '4.2 GB / 16.0 GB (26%)');
+  assert.equal(formatMemoryBar(used, total, 'full', fmt), '4.2 GB / 16.0 GB');
+  assert.equal(formatMemoryBar(used, total, 'used', fmt), '4.2 GB');
+  assert.equal(formatMemoryBar(used, total, 'percent', fmt), '26%');
+  assert.equal(formatMemoryBar(0, 0, 'percent', fmt), '0%');
+  assert.equal(combinedNetworkRate(null), undefined);
+  assert.equal(combinedNetworkRate({ rx: 1200, tx: 800 }), 2000);
+});
+
 test('uses the backend defaults before saved status preferences load', () => {
   assert.deepEqual(prefs.value.status, {
     interval_secs: 3,
@@ -103,7 +116,10 @@ test('uses the backend defaults before saved status preferences load', () => {
     terminal_bar: true,
     terminal_bar_cpu: true,
     terminal_bar_memory: true,
+    terminal_bar_memory_display: 'full_percent',
     terminal_bar_network: true,
-    terminal_bar_latency: true,
+    terminal_bar_network_display: 'split',
+    terminal_bar_latency: false,
+    terminal_bar_tailscale_path: true,
   });
 });

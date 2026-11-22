@@ -35,8 +35,11 @@ const DEFAULTS: Preferences = {
     terminal_bar: true,
     terminal_bar_cpu: true,
     terminal_bar_memory: true,
+    terminal_bar_memory_display: 'full_percent',
     terminal_bar_network: true,
-    terminal_bar_latency: true,
+    terminal_bar_network_display: 'split',
+    terminal_bar_latency: false,
+    terminal_bar_tailscale_path: true,
   },
   ai: { mode: 'ask_by_risk', providers: [], default_agent: null, read_only: [], dangerous: [], max_steps: 40, request_timeout_secs: 180, reviewer: 'model', review_model: null, review_confidence: 80, schedules: [] },
 };

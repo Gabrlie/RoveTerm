@@ -1,5 +1,5 @@
 import { untrack } from 'svelte';
-import { isCommandError, serverStats, type CpuTimes, type NetInterface, type NetworkUnit, type RemoteSource, type ServerStats, type SessionId } from '../ipc';
+import { isCommandError, serverStats, type CpuTimes, type MemoryDisplay, type NetInterface, type NetworkUnit, type RemoteSource, type ServerStats, type SessionId } from '../ipc';
 import { prefs } from '../settings/prefs.svelte';
 import type { TailscalePath as TailnetPath } from '../tailscale/types';
 import { sourceKey } from '../workspace/workspace.svelte';
@@ -67,6 +67,31 @@ export function formatNetworkRate(bytesPerSec: number | undefined, unit: Network
     scale += 1;
   }
   return `${value.toFixed(scale === 0 ? 0 : 1)} ${suffixes[scale]}`;
+}
+
+/** Combined ingress and egress rate in bytes/s, or undefined before the second sample. */
+export function combinedNetworkRate(rate: Rate | null | undefined): number | undefined {
+  return rate ? rate.rx + rate.tx : undefined;
+}
+
+/** Formats terminal status bar memory according to the configured display style. */
+export function formatMemoryBar(
+  usedBytes: number,
+  totalBytes: number,
+  display: MemoryDisplay,
+  formatBytes: (bytes: number) => string,
+): string {
+  const percent = totalBytes > 0 ? ((usedBytes / totalBytes) * 100).toFixed(0) : '0';
+  switch (display) {
+    case 'percent':
+      return `${percent}%`;
+    case 'used':
+      return formatBytes(usedBytes);
+    case 'full':
+      return `${formatBytes(usedBytes)} / ${formatBytes(totalBytes)}`;
+    case 'full_percent':
+      return `${formatBytes(usedBytes)} / ${formatBytes(totalBytes)} (${percent}%)`;
+  }
 }
 
 /** Formats segment times in microseconds as milliseconds, in path order. */

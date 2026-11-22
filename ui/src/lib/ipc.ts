@@ -301,6 +301,8 @@ export interface FilePrefs {
 
 export type CpuDisplay = 'auto' | 'per_core' | 'summary';
 export type NetworkUnit = 'bytes' | 'bits';
+export type MemoryDisplay = 'full_percent' | 'full' | 'used' | 'percent';
+export type NetworkDisplay = 'split' | 'total';
 
 export interface StatusPrefs {
   interval_secs: number;
@@ -315,8 +317,11 @@ export interface StatusPrefs {
   terminal_bar: boolean;
   terminal_bar_cpu: boolean;
   terminal_bar_memory: boolean;
+  terminal_bar_memory_display: MemoryDisplay;
   terminal_bar_network: boolean;
+  terminal_bar_network_display: NetworkDisplay;
   terminal_bar_latency: boolean;
+  terminal_bar_tailscale_path: boolean;
 }
 
 /** Preferences that follow the user; see `Preferences` in rove-vault. */

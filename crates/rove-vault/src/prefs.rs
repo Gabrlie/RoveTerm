@@ -510,6 +510,26 @@ pub enum NetworkUnit {
     Bits,
 }
 
+/// How memory usage is formatted in the terminal status bar.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryDisplay {
+    #[default]
+    FullPercent,
+    Full,
+    Used,
+    Percent,
+}
+
+/// How network throughput is formatted in the terminal status bar.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkDisplay {
+    #[default]
+    Split,
+    Total,
+}
+
 /// Server status panel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -527,8 +547,11 @@ pub struct StatusPrefs {
     pub terminal_bar: bool,
     pub terminal_bar_cpu: bool,
     pub terminal_bar_memory: bool,
+    pub terminal_bar_memory_display: MemoryDisplay,
     pub terminal_bar_network: bool,
+    pub terminal_bar_network_display: NetworkDisplay,
     pub terminal_bar_latency: bool,
+    pub terminal_bar_tailscale_path: bool,
 }
 
 impl Default for StatusPrefs {
@@ -546,8 +569,11 @@ impl Default for StatusPrefs {
             terminal_bar: true,
             terminal_bar_cpu: true,
             terminal_bar_memory: true,
+            terminal_bar_memory_display: MemoryDisplay::FullPercent,
             terminal_bar_network: true,
-            terminal_bar_latency: true,
+            terminal_bar_network_display: NetworkDisplay::Split,
+            terminal_bar_latency: false,
+            terminal_bar_tailscale_path: true,
         }
     }
 }
@@ -1176,19 +1202,44 @@ mod tests {
             "terminal_bar_cpu",
             "terminal_bar_memory",
             "terminal_bar_network",
-            "terminal_bar_latency",
+            "terminal_bar_tailscale_path",
         ] {
             assert_eq!(wire[field], true, "{field}");
         }
+        assert_eq!(wire["terminal_bar_latency"], false);
         assert_eq!(wire["cpu_display"], "auto");
         assert_eq!(wire["network_unit"], "bytes");
+        assert_eq!(wire["terminal_bar_memory_display"], "full_percent");
+        assert_eq!(wire["terminal_bar_network_display"], "split");
     }
 
     #[test]
     fn status_preferences_round_trip_all_fields() {
-        for (cpu_display, serialized_cpu_display) in [
-            (CpuDisplay::PerCore, "per_core"),
-            (CpuDisplay::Summary, "summary"),
+        for (cpu_display, serialized_cpu_display, memory_display, serialized_memory_display, network_display, serialized_network_display) in [
+            (
+                CpuDisplay::PerCore,
+                "per_core",
+                MemoryDisplay::Full,
+                "full",
+                NetworkDisplay::Total,
+                "total",
+            ),
+            (
+                CpuDisplay::Summary,
+                "summary",
+                MemoryDisplay::Used,
+                "used",
+                NetworkDisplay::Split,
+                "split",
+            ),
+            (
+                CpuDisplay::Auto,
+                "auto",
+                MemoryDisplay::Percent,
+                "percent",
+                NetworkDisplay::Total,
+                "total",
+            ),
         ] {
             let prefs = StatusPrefs {
                 interval_secs: 30,
@@ -1203,12 +1254,19 @@ mod tests {
                 terminal_bar: false,
                 terminal_bar_cpu: false,
                 terminal_bar_memory: false,
+                terminal_bar_memory_display: memory_display,
                 terminal_bar_network: false,
-                terminal_bar_latency: false,
+                terminal_bar_network_display: network_display,
+                terminal_bar_latency: true,
+                terminal_bar_tailscale_path: false,
             };
             let wire = serde_json::to_value(&prefs).unwrap();
             assert_eq!(wire["cpu_display"], serialized_cpu_display);
             assert_eq!(wire["network_unit"], "bits");
+            assert_eq!(wire["terminal_bar_memory_display"], serialized_memory_display);
+            assert_eq!(wire["terminal_bar_network_display"], serialized_network_display);
+            assert_eq!(wire["terminal_bar_latency"], true);
+            assert_eq!(wire["terminal_bar_tailscale_path"], false);
             assert_eq!(serde_json::from_value::<StatusPrefs>(wire).unwrap(), prefs);
         }
     }

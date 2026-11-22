@@ -2,13 +2,15 @@
   import Select from '../../ui/Select.svelte';
   import Switch from '../../ui/Switch.svelte';
   import { t, type MessageKey } from '../../i18n';
-  import type { StatusPrefs } from '../../ipc';
+  import type { MemoryDisplay, NetworkDisplay, StatusPrefs } from '../../ipc';
   import { prefs } from '../prefs.svelte';
   import { editPrefs } from '../edit.svelte';
 
   const INTERVALS = [2, 3, 5, 10, 30];
   const CPU_MODES = ['auto', 'per_core', 'summary'] as const;
   const NETWORK_UNITS = ['bytes', 'bits'] as const;
+  const MEMORY_DISPLAYS = ['full_percent', 'full', 'used', 'percent'] as const satisfies readonly MemoryDisplay[];
+  const NETWORK_DISPLAYS = ['split', 'total'] as const satisfies readonly NetworkDisplay[];
   const status = $derived(prefs.value.status);
   const intervals = $derived([...new Set([...INTERVALS, status.interval_secs])].sort((a, b) => a - b));
 
@@ -21,12 +23,6 @@
     ['show_network', 'status.network'],
     ['show_disks', 'status.disks'],
   ] as const satisfies readonly [Toggle, MessageKey][];
-  const METRICS = [
-    ['terminal_bar_cpu', 'status.cpu'],
-    ['terminal_bar_memory', 'status.memory'],
-    ['terminal_bar_network', 'status.network'],
-    ['terminal_bar_latency', 'settings.statusLatencyPath'],
-  ] as const satisfies readonly [Toggle, MessageKey][];
 
   function update<K extends keyof StatusPrefs>(key: K, value: StatusPrefs[K]): void {
     void editPrefs((draft) => { draft.status[key] = value; });
@@ -35,7 +31,7 @@
 
 {#snippet toggle(key: Toggle, label: MessageKey, disabled = false)}
   <div class="form-row">
-    <span class="form-label" class:nested={key === 'show_swap'}>{t(label)}</span>
+    <span class="form-label">{t(label)}</span>
     <Switch label={t(label)} checked={status[key]} {disabled} onchange={(checked) => update(key, checked)} />
   </div>
 {/snippet}
@@ -88,9 +84,37 @@
 <div class="form-group">
   {@render toggle('terminal_bar', 'settings.statusShowTerminalBar')}
   {#if status.terminal_bar}
-    {#each METRICS as [key, label] (key)}
-      {@render toggle(key, label)}
-    {/each}
+    {@render toggle('terminal_bar_cpu', 'status.cpu')}
+    {@render toggle('terminal_bar_memory', 'status.memory')}
+    {#if status.terminal_bar_memory}
+      <div class="form-row">
+        <span class="form-label">{t('settings.statusMemoryDisplay')}</span>
+        <div class="control">
+          <Select
+            label={t('settings.statusMemoryDisplay')}
+            value={status.terminal_bar_memory_display}
+            options={MEMORY_DISPLAYS.map((value) => ({ value, label: t(`settings.statusMemoryDisplay.${value}`) }))}
+            onchange={(value) => update('terminal_bar_memory_display', value)}
+          />
+        </div>
+      </div>
+    {/if}
+    {@render toggle('terminal_bar_network', 'status.network')}
+    {#if status.terminal_bar_network}
+      <div class="form-row">
+        <span class="form-label">{t('settings.statusNetworkDisplay')}</span>
+        <div class="control">
+          <Select
+            label={t('settings.statusNetworkDisplay')}
+            value={status.terminal_bar_network_display}
+            options={NETWORK_DISPLAYS.map((value) => ({ value, label: t(`settings.statusNetworkDisplay.${value}`) }))}
+            onchange={(value) => update('terminal_bar_network_display', value)}
+          />
+        </div>
+      </div>
+    {/if}
+    {@render toggle('terminal_bar_latency', 'status.response')}
+    {@render toggle('terminal_bar_tailscale_path', 'settings.statusTailscalePath')}
   {/if}
 </div>
 
@@ -98,8 +122,5 @@
   .control {
     width: 16em;
     max-width: 62%;
-  }
-  .nested {
-    padding-left: var(--space-3);
   }
 </style>
