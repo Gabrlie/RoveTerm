@@ -81,9 +81,9 @@ cargo run -p devsshd -- --addr 127.0.0.1:2222
 # Build native installers for the current OS
 pnpm tauri build
 
-# macOS Universal binary (Apple Silicon + Intel)
+# Build an ad-hoc-signed macOS Universal bundle (Apple Silicon + Intel)
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
-pnpm tauri build --target universal-apple-darwin
+APPLE_SIGNING_IDENTITY="-" pnpm tauri build --target universal-apple-darwin --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
 # Cross-build Windows x64 NSIS installer from Linux
 pnpm build:windows
@@ -99,11 +99,13 @@ pnpm tauri android build --debug --apk --target aarch64
 pnpm release:bump 0.2.0
 
 # 2. Build signed updater artifacts with your local minisign private key (never committed)
-TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/roveterm.key)" pnpm tauri build
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/roveterm.key)" pnpm tauri build
 
 # 3. Collect artifacts and generate latest.json / latest-android.json / SHA256SUMS.txt / RELEASE_NOTES.md
 pnpm release:prepare --tag v0.2.0
 ```
+
+For a manual macOS release, add `APPLE_SIGNING_IDENTITY="-"` to the build command. The example uses a passwordless updater key.
 
 > See [docs/development.md](docs/development.md) for multi-machine `--merge-latest` merging, platform notes, and test commands.
 
@@ -195,7 +197,7 @@ RoveTerm/
 
 | Platform | Direct Packages | Auto-Update Support |
 |---|---|---|
-| **macOS** | [![macOS Apple Silicon](https://img.shields.io/badge/DMG-Apple%20Silicon-000000.svg?logo=apple&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![macOS Universal](https://img.shields.io/badge/DMG-Universal-00A9E0.svg?logo=apple&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | ✅ Signed in-app updates (`.app.tar.gz`) |
+| **macOS** | [![macOS Apple Silicon](https://img.shields.io/badge/DMG-Apple%20Silicon-000000.svg?logo=apple&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![macOS Intel x64](https://img.shields.io/badge/DMG-Intel%20x64-374151.svg?logo=apple&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![macOS Universal](https://img.shields.io/badge/DMG-Universal-00A9E0.svg?logo=apple&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | ✅ Signed in-app updates (`.app.tar.gz`) |
 | **Windows** | [![Windows x64](https://img.shields.io/badge/Setup-x64-2d7d9a.svg?logo=windows&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![Windows ARM64](https://img.shields.io/badge/Setup-ARM64-67b7d1.svg?logo=windows&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | ✅ Signed in-app updates (NSIS `.exe`) |
 | **Linux** | [![Linux AppImage](https://img.shields.io/badge/AppImage-x64%20%2F%20ARM64-f84e29.svg?logo=linux&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![Linux Debian](https://img.shields.io/badge/DebPackage-x64%20%2F%20ARM64-FF9966.svg?logo=debian&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![Linux RPM](https://img.shields.io/badge/RpmPackage-x64%20%2F%20ARM64-F1B42F.svg?logo=redhat&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | ✅ Signed in-app updates (AppImage) |
 | **Android** | [![Android APK](https://img.shields.io/badge/APK-ARMv8-168039.svg?logo=android&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | 🚧 Manifest & SHA-256 check ready (see Roadmap) |

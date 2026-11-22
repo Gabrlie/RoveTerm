@@ -430,7 +430,7 @@ export function collectArtifacts(dirs, { version = null } = {}) {
     'arm64-v8a': 0,
     'armeabi-v7a': 1,
   };
-  const macArchOrder = { aarch64: 0, universal: 1, x86_64: 2 };
+  const macArchOrder = { aarch64: 0, x86_64: 1, universal: 2 };
   installers.sort((a, b) => {
     const byOs = (osOrder[a.os] ?? 9) - (osOrder[b.os] ?? 9);
     if (byOs !== 0) return byOs;
@@ -622,6 +622,21 @@ export function renderReleaseNotes({
       );
     }
     lines.push('  </tbody>', '</table>', '</div>', '');
+  }
+
+  if (installers.some((item) => item.os === 'macos')) {
+    lines.push(
+      '**macOS 安装 / Installation**',
+      '',
+      '开源 macOS 安装包采用临时签名（ad hoc），未经 Apple 公证。将 RoveTerm 移到「应用程序」后，若系统提示「已损坏，无法打开」，请在终端运行以下命令，再重新打开应用。',
+      '',
+      'Open-source macOS builds are ad-hoc signed and are not notarized by Apple. If macOS says “RoveTerm is damaged and can’t be opened”, move it to Applications, run the command below in Terminal, then reopen the app.',
+      '',
+      '```bash',
+      'xattr -cr /Applications/RoveTerm.app',
+      '```',
+      '',
+    );
   }
 
   if (installers.length > 0) {

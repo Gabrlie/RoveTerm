@@ -56,6 +56,8 @@ describe('scripts/release.mjs', () => {
       for (const d of [macDir, winDir, linuxDir, androidDir]) mkdirSync(d, { recursive: true });
 
       writeFileSync(join(macDir, 'RoveTerm_0.2.0_aarch64.dmg'), 'dmg-arm64');
+      writeFileSync(join(macDir, 'RoveTerm_0.2.0_x64.dmg'), 'dmg-x64');
+      writeFileSync(join(macDir, 'RoveTerm_0.2.0_universal.dmg'), 'dmg-universal');
       writeFileSync(join(macDir, 'RoveTerm_0.2.0_universal.app.tar.gz'), 'tar-universal');
       writeFileSync(join(macDir, 'RoveTerm_0.2.0_universal.app.tar.gz.sig'), 'SIG-MAC-UNIVERSAL\n');
 
@@ -77,12 +79,16 @@ describe('scripts/release.mjs', () => {
       const collected = collectArtifacts([macDir, winDir, linuxDir, androidDir], {
         version: '0.2.0',
       });
-      assert.equal(collected.installers.length, 9);
+      assert.equal(collected.installers.length, 11);
       assert.equal(collected.updaterPackages.length, 5);
       assert.equal(collected.androidApks.length, 1);
 
       const names = collected.installers.map((item) => item.name);
-      assert.ok(names.includes('RoveTerm-0.2.0-macos-arm64.dmg'));
+      assert.deepEqual(names.slice(0, 3), [
+        'RoveTerm-0.2.0-macos-arm64.dmg',
+        'RoveTerm-0.2.0-macos-x64.dmg',
+        'RoveTerm-0.2.0-macos-universal.dmg',
+      ]);
       assert.ok(names.includes('RoveTerm-0.2.0-windows-x64-setup.exe'));
       assert.ok(names.includes('RoveTerm-0.2.0-windows-arm64-setup.exe'));
       assert.ok(names.includes('RoveTerm-0.2.0-linux-x64.AppImage'));
@@ -139,6 +145,10 @@ describe('scripts/release.mjs', () => {
       assert.doesNotMatch(notes, /style=for-the-badge/);
       assert.match(notes, /RoveTerm-0\.2\.0-macos-arm64\.dmg/);
       assert.match(notes, /img\.shields\.io\/badge\/DMG-Apple%20Silicon-000000\.svg\?logo=apple/);
+      assert.match(notes, /img\.shields\.io\/badge\/DMG-Intel%20x64-374151\.svg\?logo=apple&logoColor=white/);
+      assert.match(notes, /alt="macOS Apple Silicon"[\s\S]*alt="macOS Intel x64"[\s\S]*alt="macOS Universal"/);
+      assert.match(notes, /<\/table>\n<\/div>\n\n\*\*macOS 安装 \/ Installation\*\*/);
+      assert.match(notes, /已损坏，无法打开[\s\S]*RoveTerm is damaged[\s\S]*```bash\nxattr -cr \/Applications\/RoveTerm\.app\n```\n\n<details>/);
       assert.match(notes, /img\.shields\.io\/badge\/Setup-x64-2d7d9a\.svg\?logo=windows/);
       assert.match(notes, /img\.shields\.io\/badge\/Setup-ARM64-67b7d1\.svg\?logo=windows/);
       assert.match(notes, /img\.shields\.io\/badge\/AppImage-ARM64-d94826\.svg\?logo=linux/);
@@ -147,6 +157,21 @@ describe('scripts/release.mjs', () => {
       assert.match(notes, /img\.shields\.io\/badge\/APK-ARMv8-168039\.svg\?logo=android/);
       assert.match(notes, /SHA-256 校验和/);
       assert.match(notes, /compare\/v0\.1\.0\.\.\.v0\.2\.0/);
+    });
+  });
+
+  it('omits the macOS installation note when only other platforms have installers', () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, 'RoveTerm_0.2.0_x64-setup.exe'), 'win-nsis');
+      const { installers } = collectArtifacts([dir], { version: '0.2.0' });
+      const notes = renderReleaseNotes({
+        version: '0.2.0',
+        tag: 'v0.2.0',
+        changelogSection: '### English Changelog\n- New feature',
+        installers,
+      });
+      assert.match(notes, /<td>Windows<\/td>/);
+      assert.doesNotMatch(notes, /macOS 安装|xattr -cr/);
     });
   });
 

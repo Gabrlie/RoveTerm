@@ -27,10 +27,10 @@
 ### 在 macOS 上构建
 
 1. 安装 Xcode 命令行工具（`xcode-select --install`）、Rust、Node.js 24+ 与 pnpm。
-2. 构建：`pnpm install && pnpm tauri build`，产物位于 `target/release/bundle/macos/RoveTerm.app` 与 `target/release/bundle/dmg/`。
-3. 同时支持 Apple Silicon 与 Intel：先 `rustup target add aarch64-apple-darwin x86_64-apple-darwin`，再 `pnpm tauri build --target universal-apple-darwin`。
+2. 运行 `pnpm install`，再用 `APPLE_SIGNING_IDENTITY="-" pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'` 为本机架构构建临时签名（ad hoc）的安装包。产物位于 `target/release/bundle/`。
+3. 运行 `rustup target add aarch64-apple-darwin x86_64-apple-darwin`。构建时用 `--target` 选择 `aarch64-apple-darwin`（Apple Silicon）、`x86_64-apple-darwin`（Intel x64）或 `universal-apple-darwin`（通用包）。产物位于 `target/<target>/release/bundle/`。
 
-产物未签名：首次打开需在 Finder 中右键选择“打开”，或执行 `xattr -cr /Applications/RoveTerm.app`。钥匙串首次读取设备主密钥时会弹窗授权，选“始终允许”后之后启动即可静默解锁。
+临时签名的开源安装包未经 Apple 公证。将 RoveTerm 移到「应用程序」后，若 macOS 提示「已损坏，无法打开」，运行 `xattr -cr /Applications/RoveTerm.app` 后重新打开。钥匙串首次读取设备主密钥时会弹窗授权，选“始终允许”后后续启动可自动解锁。
 
 ### 版本号与手动签名发布（`gh`）
 
@@ -39,9 +39,11 @@
 本地构建带签名更新包并经 GitHub CLI（`gh`）发布：
 
 1. 同步递增版本号：`pnpm release:bump 0.2.0`，并在 [CHANGELOG.md](../CHANGELOG.md) 记录中英双语更新日志。
-2. 签名密钥保存在构建机本机（如 `~/.tauri/roveterm.key`，权限 `0600`），私钥绝不入库；公钥写入 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`。构建时传入私钥环境变量：`TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/roveterm.key)" pnpm tauri build`（若私钥设了密码则同时传入 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）。
+2. 签名密钥保存在构建机本机（如 `~/.tauri/roveterm.key`，权限 `0600`），私钥绝不入库。公钥写入 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`。构建时传入 `TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/roveterm.key)"` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，无密码时传空字符串。打包开源 macOS 版本时同时设置 `APPLE_SIGNING_IDENTITY="-"`。
 3. 汇总产物、生成 `latest.json`（若含 `.apk` 则同步生成 `latest-android.json`）、`SHA256SUMS.txt` 与带平台图标下载表的双语 `RELEASE_NOTES.md`：`pnpm release:prepare --tag v0.2.0`。多台机器分批补建其他平台时，传入 `--merge-latest <已有 latest.json 路径或 URL>` 合并平台签名条目，再使用 `gh release upload --clobber` 更新。
 4. 审阅并按需微调生成的 `RELEASE_NOTES.md`，执行脚本输出的 `gh release create` 命令（或附加 `--publish --draft` 直接创建草稿发布）。
+
+发布三个 macOS 安装包时，用多个 `--from` 指定各架构的 `bundle/dmg` 和通用包的 `bundle/macos`。通用包的更新归档及签名供两种 macOS 架构共用。
 
 ### Android
 
