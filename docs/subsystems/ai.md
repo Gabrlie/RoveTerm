@@ -152,7 +152,7 @@ ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次
 
 ## 运维总管
 
-总管是所有已保存主机上的内置助手（`AiContext::Fleet`），通过 `ops_tools::OpsTools` 创建和跟进[持久运维任务](ops.md)。它使用 `list_hosts`、`read_notes` 获取主机资料，以 `start_tasks` 派发带验收项的主机任务，再通过 `task_status`、`task_input`、`cancel_task`、`retry_task` 查询、追加输入、取消或重试。手工派发返回任务标识与当前状态，主机执行由 Supervisor 异步调度。
+总管是所有已保存主机上的内置助手（`AiContext::Fleet`），通过 `ops_tools::OpsTools` 创建和跟进[持久运维任务](ops.md)。它使用 `list_hosts`、`read_notes` 获取主机资料，以 `start_tasks` 派发带验收项的主机任务，再通过 `task_status`、`task_input`、`cancel_task`、`retry_task` 查询、追加输入、取消或重试。派发返回任务标识后，总管告知排队情况并结束回合。Supervisor 在主机执行结束后启动汇总回合。`task_status` 返回按状态统计与主机名，`task_report` 按任务或主机读取解密的验收结果。汇总输入以本机加密事件 `ai/ops_wakeup` 记录。
 
 每个主机子任务使用内置 `Assistant`，操作继续经过 `AiSession` 的 Policy、审阅者与审计。交互新任务默认只读，用户显式允许本次请求修改后才可创建可修改任务；定时任务沿用 `schedule.allow_changes`。子会话关联总管会话，开始与结束经 `ai-subtask` 通知界面。各总管与定时入口共享 worker 调度预算；任务状态、授权范围和跟进规则见 [ops](ops.md)。总管只使用内置助手，模型选择沿用现有服务商设置。
 
@@ -168,7 +168,7 @@ ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次
 
 - 应用没有后台常驻：运行期间每分钟检查一次（启动 20 秒后第一次）。每个任务取最近一个已到的时间（`latest_due`），早于任务创建时间或已处理过的不算；该时间在应用运行期间到达（含启动前 1 分钟内）就运行，在关闭期间错过的，允许补跑则运行一次（多次错过只补最近一次），否则记为"已错过"。
 - 新任务归创建设备执行。旧任务显示“待指定执行设备”，在目标设备认领后从该时刻计时。已同步的任务通过同一 WebDAV 空间或直接挂载的共享网络目录独占认领。使用异步复制的本机目录时，可在选定设备上新建任务，旧任务保持待认领。升级所有参与调度的设备后再认领。执行前以任务 ID 和到期时间唯一登记。每个处理过的时间写一条 `ai/schedule_run`（`schedule`、`due`、`status`：`started` / `done` / `failed` / `missed`、`conversation`），开始时就写，所以退出时被打断的运行不会重做；同一任务不会同时运行两次。
-- 一次运行是一段独立的总管对话（`ai::run_scheduled`）：标题为"任务名 · 时间"，派发的主机工作进入持久任务，并按任务是否允许修改以无人值守模式运行。该次运行等待关联任务离开排队、运行和等待审批状态，再汇集验收证据与报告；仍受阻、失败或中断的任务使本次运行标记为失败。结束时发出 `ai-report` 事件。
+- 一次运行是一段独立的总管对话（`ai::run_scheduled`）：标题为"任务名 · 时间"，派发的主机工作进入持久任务，并按任务是否允许修改以无人值守模式运行。该次运行等待关联任务离开排队、运行和等待审批状态，再请总管依据解密的主机证据生成 Markdown。模型失败或回复为空时，应用按主机生成 Markdown 报告。仍受阻、失败或中断的任务使本次运行标记为失败。结束时发出 `ai-report` 事件。
 - 命令：`schedule_status()`（各任务最近一次的处理）、`schedule_run_now(id)`（立即运行，不影响定时）。
 - 登录时启动（桌面端，`tauri-plugin-autostart`）：开启后登录系统时以 `--minimized` 启动、窗口最小化，定时任务因此能按时运行。设置保存在操作系统的登录项中（本身按设备），命令 `autostart_get()`（移动端为 `null`）/ `autostart_set(enabled)`；开关在定时任务对话框与设置"关于"页。
 

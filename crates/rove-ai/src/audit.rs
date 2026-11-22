@@ -16,6 +16,7 @@ use crate::session::{AiEvent, Outcome};
 
 pub const KIND_STARTED: &str = "ai/session_started";
 pub const KIND_PROMPT: &str = "ai/prompt";
+pub const KIND_WAKEUP: &str = "ai/ops_wakeup";
 pub const KIND_MESSAGE: &str = "ai/message";
 pub const KIND_THOUGHT: &str = "ai/thought";
 pub const KIND_TOOL_CALL: &str = "ai/tool_call";
@@ -414,14 +415,18 @@ impl Auditor {
         }
     }
 
-    pub fn prompt(&self, text: &str) {
+    fn turn_input(&self, kind: &str, text: &str) {
         self.flush();
         let (kept, clipped) = if self.private_text.load(std::sync::atomic::Ordering::SeqCst) {
             (text.to_owned(), false)
         } else {
             clip(text)
         };
-        self.write(KIND_PROMPT, json!({ "text": kept, "clipped": clipped }));
+        self.write(kind, json!({ "text": kept, "clipped": clipped }));
+    }
+
+    pub fn prompt(&self, text: &str) {
+        self.turn_input(KIND_PROMPT, text);
         if !self.titled.swap(true, std::sync::atomic::Ordering::SeqCst)
             && !self.private_text.load(std::sync::atomic::Ordering::SeqCst)
         {
@@ -430,6 +435,11 @@ impl Auditor {
                 json!({ "title": title_of(text), "auto": true }),
             );
         }
+    }
+
+    /// Records the internal input to a completion summary without naming the conversation.
+    pub fn wakeup(&self, text: &str) {
+        self.turn_input(KIND_WAKEUP, text);
     }
 
     pub fn turn_ended(&self, stop_reason: &str) {
@@ -590,6 +600,41 @@ mod tests {
             tool_summary(&mut summary);
             assert!(!summary.to_string().contains(private));
         }
+    }
+
+    #[test]
+    fn protected_ops_wakeup_is_private_and_does_not_become_a_user_prompt() {
+        let (audit, records) = auditor();
+        let private = "private-report-fixture";
+        audit.protect_text();
+        audit.write(KIND_STARTED, json!({}));
+        audit.wakeup(private);
+        let records = records.lock().unwrap();
+        let wakeup = records
+            .iter()
+            .find(|record| record.kind == KIND_WAKEUP)
+            .unwrap();
+        assert_eq!(wakeup.payload["text"], private);
+        assert_eq!(wakeup.payload["private_text"], true);
+        let mut summary = wakeup.payload.clone();
+        assert!(tool_summary(&mut summary));
+        assert!(summary.get("text").is_none());
+        let records: Vec<_> = records
+            .iter()
+            .enumerate()
+            .map(|(index, record)| (index as i64, record.kind.clone(), record.payload.clone()))
+            .collect();
+        let body = conversation_body(&records).unwrap();
+        assert!(!body.to_string().contains(private));
+        assert!(
+            transcript(
+                &records
+                    .into_iter()
+                    .map(|(_, kind, payload)| (kind, payload))
+                    .collect::<Vec<_>>()
+            )
+            .is_empty()
+        );
     }
 
     #[test]

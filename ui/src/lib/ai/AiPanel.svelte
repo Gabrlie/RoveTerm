@@ -667,7 +667,7 @@
     {/if}
     {#if chat.starting || chat.busy}
       <p class="status" class:attention={waiting > 0}>
-        {#if waiting > 0}{t('ai.waitingApproval', { n: waiting })}{:else if chat.starting}{t('ai.starting')}{:else}<span class="dots">{t('ai.working')}</span>{/if}
+        {#if waiting > 0}{t('ai.waitingApproval', { n: waiting })}{:else if chat.starting}{t('ai.starting')}{:else}<span class="dots">{t(chat.waking ? 'ai.summarizing' : 'ai.working')}</span>{/if}
       </p>
     {/if}
     <div class="card">

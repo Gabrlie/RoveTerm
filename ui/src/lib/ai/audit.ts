@@ -38,6 +38,8 @@ export function auditLine(entry: AiRecord): AuditLine | null {
       return { kind, text: str(payload.agent), note: str(payload.mode), detail: '', tone: 'muted' };
     case 'prompt':
       return { kind, text: str(payload.text), note: '', detail: '', tone: 'normal' };
+    case 'ops_wakeup':
+      return { kind, text: '', note: '', detail: str(payload.text), tone: 'muted' };
     case 'message':
       return { kind, text: str(payload.text).slice(0, 200), note: '', detail: str(payload.text), tone: 'normal' };
     case 'thought':

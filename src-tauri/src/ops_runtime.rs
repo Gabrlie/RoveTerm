@@ -1,5 +1,6 @@
 //! Host-bound model workers for the durable operations service.
 
+use std::fmt::Write;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -186,6 +187,227 @@ pub fn read_private<T: DeserializeOwned>(
     open_private(state.vault.as_ref(), state.journal.as_ref(), reference)
 }
 
+pub(crate) fn host_name(state: &AppState, id: HostId) -> String {
+    state
+        .vault
+        .host(id)
+        .map_or_else(|_| id.to_string(), |host| host.name)
+}
+
+pub(crate) fn active_state(state: &OpsTaskState) -> bool {
+    matches!(
+        state,
+        OpsTaskState::Queued | OpsTaskState::Running | OpsTaskState::WaitingApproval
+    )
+}
+
+fn settled(task: &OpsTask) -> bool {
+    task.subtasks.len() == task.scope.targets.len()
+        && !task.subtasks.iter().any(|sub| active_state(&sub.state))
+}
+
+pub(crate) fn can_wake_lead(task: &OpsTask) -> bool {
+    task.source == TaskSource::User
+        && settled(task)
+        && task
+            .subtasks
+            .iter()
+            .any(|sub| sub.state != OpsTaskState::Cancelled)
+}
+
+pub(crate) fn task_status_summary(state: &AppState, task: &OpsTask) -> Value {
+    build_task_summary(task, None, |id| host_name(state, id), None)
+}
+
+type EvidenceReader<'a> = dyn Fn(&PrivateRef) -> Result<Value, CommandError> + 'a;
+
+pub(crate) fn task_report_summary(
+    state: &AppState,
+    task: &OpsTask,
+    host_filter: Option<HostId>,
+) -> Result<Value, CommandError> {
+    if let Some(host) = host_filter
+        && !task
+            .scope
+            .targets
+            .iter()
+            .any(|target| target.host_id == host)
+    {
+        return Err(CommandError::new(
+            "input.invalid",
+            "host is outside the task scope",
+        ));
+    }
+    Ok(build_task_summary(
+        task,
+        host_filter,
+        |id| host_name(state, id),
+        Some(&|reference| read_private::<Value>(state, reference)),
+    ))
+}
+
+fn build_task_summary(
+    task: &OpsTask,
+    host_filter: Option<HostId>,
+    host_name: impl Fn(HostId) -> String,
+    read_evidence: Option<&EvidenceReader<'_>>,
+) -> Value {
+    let mut counts = json!({
+        "total":task.scope.targets.len(), "queued":0, "running":0, "waiting_approval":0,
+        "completed":0, "blocked":0, "failed":0, "cancelled":0, "interrupted":0,
+    });
+    for sub in &task.subtasks {
+        let state = json!(sub.state);
+        if let Some(key) = state.as_str() {
+            counts[key] = json!(counts[key].as_u64().unwrap_or_default() + 1);
+        }
+    }
+    let subtasks = task.scope.targets.iter()
+        .filter(|target| host_filter.is_none_or(|id| id == target.host_id))
+        .map(|target| {
+            let name = host_name(target.host_id);
+            let Some(sub) = task.subtasks.iter().find(|sub| sub.host_id == target.host_id) else {
+                let mut summary = json!({"host_id":target.host_id, "host_name":name});
+                if read_evidence.is_some() {
+                    summary["report_error"] = json!("No subtask was created for this host.");
+                }
+                return summary;
+            };
+            let mut summary = json!({
+                "id":sub.id, "host_id":sub.host_id, "host_name":name, "state":sub.state,
+                "reason":sub.reason, "error_code":sub.error_code, "uncertain_effect":sub.uncertain_effect,
+                "attempts":sub.attempts, "session":sub.session,
+            });
+            if let Some(read) = read_evidence {
+                match sub.evidence.last().map(read) {
+                    Some(Ok(body)) => add_host_report(&mut summary, &body),
+                    Some(Err(_)) => summary["report_error"] = json!("Could not read encrypted host evidence."),
+                    None => summary["report_error"] = json!("No host evidence was recorded."),
+                }
+            }
+            summary
+        }).collect::<Vec<_>>();
+    json!({
+        "id":task.id, "revision":task.revision, "request_id":task.request_id,
+        "conversation":task.conversation, "source":task.source, "state":task.state,
+        "created_at":task.created_at, "updated_at":task.updated_at, "can_modify":task.scope.can_modify,
+        "counts":counts, "settled":settled(task), "subtasks":subtasks,
+    })
+}
+
+const MAX_REPORT_REPLY: usize = 8 * 1024;
+
+fn add_host_report(summary: &mut Value, body: &Value) {
+    match body["kind"].as_str() {
+        Some("host_report") => {
+            let verification = &body["verification"];
+            let checks = verification["criteria"].as_array().into_iter().flatten()
+                .enumerate().map(|(index, criterion)| {
+                    let check = verification["checks"].as_array().into_iter().flatten()
+                        .find(|check| check["criterion_index"].as_u64() == Some(index as u64));
+                    json!({"criterion":criterion, "summary":check.and_then(|check| check["summary"].as_str())})
+                }).collect::<Vec<_>>();
+            let reply = body["reply"].as_str().unwrap_or_default();
+            let end = reply.floor_char_boundary(MAX_REPORT_REPLY);
+            summary["report"] = json!({
+                "kind":"host_report", "stop_reason":body["stop_reason"],
+                "verified":verification["verified"] == true, "checks":checks,
+                "successful_operations":body["successful_operations"],
+                "failed_operations":body["failed_operations"], "denied_operations":body["denied_operations"],
+                "reply":&reply[..end], "reply_clipped":end < reply.len(),
+            });
+        }
+        Some("worker_failure") => {
+            summary["report"] = json!({
+                "kind":"worker_failure", "failure_code":body["code"], "failure_message":body["message"],
+            })
+        }
+        _ => summary["report_error"] = json!("The latest evidence does not contain a host report."),
+    }
+}
+
+/// Renders report fields as Markdown text, escaping formatting in untrusted evidence.
+pub(crate) fn format_report_fallback(summaries: &[Value]) -> String {
+    fn plain(value: &str) -> String {
+        let mut text = String::new();
+        for ch in value
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+        {
+            if ch.is_ascii_punctuation() {
+                text.push('\\');
+            }
+            text.push(ch);
+        }
+        text
+    }
+
+    let mut markdown = String::from("# Operations report\n");
+    let total: u64 = summaries
+        .iter()
+        .filter_map(|task| task["counts"]["total"].as_u64())
+        .sum();
+    let completed: u64 = summaries
+        .iter()
+        .filter_map(|task| task["counts"]["completed"].as_u64())
+        .sum();
+    let _ = writeln!(markdown, "\n{completed} of {total} host tasks completed.");
+    for task in summaries {
+        let id = task["id"].as_str().unwrap_or_default();
+        let _ = writeln!(markdown, "\n## Task `{id}`");
+        for sub in task["subtasks"].as_array().into_iter().flatten() {
+            let name = plain(sub["host_name"].as_str().unwrap_or_default());
+            let state = sub["state"]
+                .as_str()
+                .unwrap_or("not started")
+                .replace('_', " ");
+            let _ = writeln!(markdown, "\n### {name} — {state}\n");
+            for (key, label) in [
+                ("reason", "Reason"),
+                ("error_code", "Error code"),
+                ("report_error", "Evidence"),
+            ] {
+                if let Some(text) = sub[key].as_str() {
+                    let _ = writeln!(markdown, "- {label} — {}", plain(text));
+                }
+            }
+            if sub["uncertain_effect"] == true {
+                markdown.push_str("- Confirm the remote outcome before continuing.\n");
+            }
+            let report = &sub["report"];
+            if report["kind"] == "host_report" {
+                let verification = if report["verified"] == true {
+                    "Verified"
+                } else {
+                    "Unverified"
+                };
+                let _ = writeln!(markdown, "- {verification}");
+                for check in report["checks"].as_array().into_iter().flatten() {
+                    let criterion = plain(check["criterion"].as_str().unwrap_or_default());
+                    let result = plain(check["summary"].as_str().unwrap_or("No result submitted"));
+                    let _ = writeln!(markdown, "- {criterion} — {result}");
+                }
+                if let Some(reply) = report["reply"]
+                    .as_str()
+                    .filter(|reply| !reply.trim().is_empty())
+                {
+                    let suffix = if report["reply_clipped"] == true {
+                        " …"
+                    } else {
+                        ""
+                    };
+                    let _ = writeln!(markdown, "- Worker findings — {}{suffix}", plain(reply));
+                }
+            } else if let Some(message) = report["failure_message"].as_str() {
+                let _ = writeln!(markdown, "- Worker failure — {}", plain(message));
+            }
+        }
+    }
+    markdown
+}
+
 fn open_private<T: DeserializeOwned>(
     vault: &rove_vault::Vault,
     journal: &dyn rove_journal::JournalStore,
@@ -361,14 +583,18 @@ pub fn kick(app: &AppHandle, id: OpsTaskId) {
         }
         drop(claim);
         // Input can arrive as a router finishes; re-reading after releasing its claim closes that race.
-        if let Ok(task) = ops.get(id)
-            && task.state != OpsTaskState::Cancelled
+        let Ok(task) = ops.get(id) else {
+            return;
+        };
+        if task.state != OpsTaskState::Cancelled
             && task
                 .subtasks
                 .iter()
                 .any(|sub| sub.state == OpsTaskState::Queued)
         {
             kick(&app, id);
+        } else if can_wake_lead(&task) {
+            ai::notify_ops_task_settled(&app, &task.conversation, task.id, task.revision).await;
         }
     });
 }
@@ -968,6 +1194,156 @@ mod tests {
             )
             .unwrap();
         assert!(open_private::<Value>(&vault, &journal, &altered).is_err());
+    }
+
+    #[test]
+    fn ops_task_report_decrypts_host_evidence_and_preserves_other_hosts_on_error() {
+        let vault = Vault::open_in_memory(Arc::new(MemoryKeyCache::default())).unwrap();
+        assert_eq!(vault.try_unlock(), rove_vault::LockState::Unlocked);
+        let journal = SqliteJournal::open_in_memory().unwrap();
+        let report = seal_private(&vault, &journal, "ai-fixture", &json!({
+            "kind":"host_report", "stop_reason":"end_turn",
+            "verification":{"verified":true,"criteria":["Service healthy","Port accessible"],"checks":[
+                {"criterion_index":1,"summary":"Port open"},
+                {"criterion_index":0,"summary":"Probe passed"}
+            ]},
+            "successful_operations":2,"failed_operations":1,"denied_operations":0,
+            "reply":"界".repeat(MAX_REPORT_REPLY)
+        })).unwrap();
+        let failure = seal_private(
+            &vault,
+            &journal,
+            "ai-fixture",
+            &json!({
+                "kind":"worker_failure", "code":"ssh.offline", "message":"Host unavailable"
+            }),
+        )
+        .unwrap();
+        let missing = PrivateRef {
+            reference: uuid::Uuid::now_v7(),
+            ..report.clone()
+        };
+        let mut task = OpsTask {
+            id: OpsTaskId::new(),
+            revision: 1,
+            request_id: OpsRequestId::new("fixture").unwrap(),
+            conversation: "ai-fixture".into(),
+            source: TaskSource::User,
+            state: OpsTaskState::Failed,
+            deleted: false,
+            scope: TaskScope {
+                targets: Vec::new(),
+                can_modify: false,
+            },
+            inputs: Vec::new(),
+            acceptance: None,
+            report: None,
+            subtasks: Vec::new(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        for (state, evidence) in [
+            (OpsTaskState::Completed, report),
+            (OpsTaskState::Failed, failure),
+            (OpsTaskState::Blocked, missing),
+        ] {
+            let host_id = HostId::new();
+            task.scope.targets.push(Target {
+                host_id,
+                fingerprint: "fixture".into(),
+                input: None,
+            });
+            task.subtasks.push(rove_ops::OpsSubtask {
+                id: OpsSubtaskId::new(),
+                host_id,
+                fingerprint: "fixture".into(),
+                state,
+                session: None,
+                checkpoint: None,
+                inputs: Vec::new(),
+                input_version: 0,
+                evidence: vec![evidence],
+                reason: None,
+                error_code: None,
+                uncertain_effect: false,
+                attempts: 1,
+            });
+        }
+        let reader = |reference: &PrivateRef| open_private(&vault, &journal, reference);
+        let summary = build_task_summary(&task, None, |_| "Saved host".into(), Some(&reader));
+        assert_eq!(summary["settled"], true);
+        assert_eq!(summary["counts"]["total"], 3);
+        assert_eq!(summary["counts"]["completed"], 1);
+        assert_eq!(summary["counts"]["failed"], 1);
+        assert_eq!(summary["counts"]["blocked"], 1);
+        assert_eq!(summary["subtasks"][0]["host_name"], "Saved host");
+        let verified = &summary["subtasks"][0]["report"];
+        assert_eq!(verified["verified"], true);
+        assert_eq!(
+            verified["checks"][0],
+            json!({"criterion":"Service healthy","summary":"Probe passed"})
+        );
+        assert_eq!(verified["checks"][1]["summary"], "Port open");
+        assert_eq!(verified["reply_clipped"], true);
+        assert_eq!(
+            verified["reply"].as_str().unwrap().len(),
+            MAX_REPORT_REPLY / 3 * 3
+        );
+        assert_eq!(
+            summary["subtasks"][1]["report"]["failure_code"],
+            "ssh.offline"
+        );
+        assert_eq!(
+            summary["subtasks"][1]["report"]["failure_message"],
+            "Host unavailable"
+        );
+        assert_eq!(
+            summary["subtasks"][2]["report_error"],
+            "Could not read encrypted host evidence."
+        );
+        let filtered = build_task_summary(
+            &task,
+            Some(task.subtasks[1].host_id),
+            |id| id.to_string(),
+            Some(&reader),
+        );
+        assert_eq!(filtered["subtasks"].as_array().unwrap().len(), 1);
+        assert_eq!(filtered["counts"], summary["counts"]);
+        assert_eq!(
+            filtered["subtasks"][0]["report"],
+            summary["subtasks"][1]["report"]
+        );
+        assert!(can_wake_lead(&task));
+        task.subtasks[0].state = OpsTaskState::WaitingApproval;
+        assert!(!can_wake_lead(&task));
+        for sub in &mut task.subtasks {
+            sub.state = OpsTaskState::Cancelled;
+        }
+        assert!(!can_wake_lead(&task));
+        task.subtasks.pop();
+        assert!(!settled(&task));
+    }
+
+    #[test]
+    fn ops_report_fallback_renders_evidence_as_markdown_text() {
+        let markdown = format_report_fallback(&[json!({
+            "id":"task-1", "counts":{"total":2,"completed":1},
+            "subtasks":[
+                {"host_name":"web", "state":"completed", "report":{
+                    "kind":"host_report", "verified":true, "checks":[{"criterion":"Health","summary":"Probe passed"}],
+                    "reply":"<script>\n# found it"
+                }},
+                {"host_name":"db", "state":"blocked", "uncertain_effect":true,
+                 "report":{"kind":"worker_failure","failure_message":"Disconnected"}}
+            ]
+        })]);
+        assert!(markdown.starts_with("# Operations report\n\n1 of 2 host tasks completed."));
+        assert!(markdown.contains("### web — completed\n\n- Verified\n- Health — Probe passed"));
+        assert!(markdown.contains(r"\<script\> \# found it"));
+        assert!(markdown.contains("### db — blocked"));
+        assert!(markdown.contains("Confirm the remote outcome"));
+        assert!(markdown.contains("Worker failure — Disconnected"));
+        assert!(!markdown.contains("host_name"));
     }
 
     #[test]

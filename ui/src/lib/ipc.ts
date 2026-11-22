@@ -1397,6 +1397,19 @@ export function aiStop(id: string): Promise<void> {
   return invoke('ai_stop', { id });
 }
 
+/** Lifecycle of an automatic fleet lead summary. */
+export type TurnEvent = {
+  id: string;
+  active: boolean;
+  kind: 'ops_wakeup';
+  stop_reason?: string;
+  error?: { code: string; message: string };
+};
+
+export function onAiTurn(handler: (event: TurnEvent) => void): Promise<UnlistenFn> {
+  return listen<TurnEvent>('ai-turn', (event) => handler(event.payload));
+}
+
 /** An agent the user runs started a conversation on a host, or one ended. */
 export type ExternalEvent = { id: string; context: AiContext; agent: string; host: string } | { id: string; ended: true };
 

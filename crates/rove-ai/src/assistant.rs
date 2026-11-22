@@ -533,6 +533,14 @@ impl Assistant {
             .unwrap_or_default()
     }
 
+    /// Returns the final assistant message after a successful turn, including an empty reply.
+    pub async fn final_reply(&self) -> String {
+        match self.history.lock().await.last() {
+            Some(Message::Assistant { text, .. }) => text.clone(),
+            _ => String::new(),
+        }
+    }
+
     pub async fn prompt(&self, text: &str) -> Result<String, AssistantError> {
         let token = CancellationToken::new();
         {

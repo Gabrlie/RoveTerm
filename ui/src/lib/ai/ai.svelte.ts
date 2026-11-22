@@ -15,6 +15,7 @@ import {
   onAiExternal,
   onAiSubtask,
   onAiReport,
+  onAiTurn,
   onAiUpdate,
   type AiSessionSummary,
   type AiRecord,
@@ -85,6 +86,8 @@ export class Chat {
   prepareErrorAt = $state<number | null>(null);
   /** A turn is running. */
   busy = $state(false);
+  waking = $state(false);
+  private prompting = false;
   mode = $state<AiMode>('ask_by_risk');
   /** Let the agent read the user's terminal on the host (decided when the agent starts). */
   attachTerminal = $state(true);
@@ -411,6 +414,7 @@ export class Chat {
     }
     const id = this.id;
     if (!id) return;
+    this.prompting = true;
     this.busy = true;
     try {
       const reason = await aiPrompt(id, request.text, request.id);
@@ -422,8 +426,15 @@ export class Chat {
     } catch (error) {
       this.notice(error);
     } finally {
-      this.busy = false;
+      this.prompting = false;
+      this.busy = this.waking;
     }
+  }
+
+  handleWakeup(active: boolean, error?: { code: string; message: string }): void {
+    this.waking = active;
+    this.busy = active || this.prompting;
+    if (error) this.items.push({ kind: 'notice', text: errorText(error), code: error.code });
   }
 
   async cancel(): Promise<void> {
@@ -502,6 +513,7 @@ export class Chat {
   private async closeSession(): Promise<void> {
     const id = this.id;
     this.id = null;
+    this.waking = false;
     this.busy = false;
     if (id) {
       delete ai.byId[id];
@@ -700,6 +712,7 @@ class AiStore {
     if (this.listening) return;
     this.listening = true;
     onAiUpdate((id, event) => this.byId[id]?.handle(event)).catch((error: unknown) => console.warn('AI events unavailable', error));
+    onAiTurn((event) => this.byId[event.id]?.handleWakeup(event.active, event.error)).catch((error: unknown) => console.warn('AI turn events unavailable', error));
     onAiExternal((event) => this.external(event)).catch((error: unknown) => console.warn('outside agent events unavailable', error));
     onAiSubtask((event) => this.subtask(event)).catch((error: unknown) => console.warn('sub-agent events unavailable', error));
     onAiReport((event) => {
