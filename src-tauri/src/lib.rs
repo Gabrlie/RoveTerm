@@ -31,11 +31,33 @@ const TRANSFER_EVENT: &str = "transfer-update";
 /// Event name of forwarded [`ForwardStatus`](rove_ssh::ForwardStatus) changes.
 const FORWARD_EVENT: &str = "forward-update";
 
-fn data_dir(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    if let Some(dir) = std::env::var_os("ROVETERM_DATA_DIR") {
-        return Ok(std::path::absolute(dir)?);
+fn resolve_data_dir(
+    override_dir: Option<std::ffi::OsString>,
+    app_data_dir: PathBuf,
+    debug: bool,
+    desktop: bool,
+) -> std::io::Result<PathBuf> {
+    if let Some(dir) = override_dir.filter(|dir| !dir.is_empty()) {
+        return std::path::absolute(dir);
     }
-    Ok(app.path().app_data_dir()?)
+    if !debug {
+        return Ok(app_data_dir);
+    }
+    if desktop && let Some(name) = app_data_dir.file_name() {
+        let mut dev_name = name.to_os_string();
+        dev_name.push(".dev");
+        return Ok(app_data_dir.with_file_name(dev_name));
+    }
+    Ok(app_data_dir.join("dev"))
+}
+
+fn data_dir(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    Ok(resolve_data_dir(
+        std::env::var_os("ROVETERM_DATA_DIR"),
+        app.path().app_data_dir()?,
+        cfg!(debug_assertions),
+        cfg!(desktop),
+    )?)
 }
 
 fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
@@ -430,5 +452,37 @@ mod mobile {
                 "no key store on this platform yet".into(),
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn data_dir_isolates_debug_builds_from_production() {
+        let prod = PathBuf::from("/tmp/app-support/dev.roveterm.app");
+        assert_eq!(
+            resolve_data_dir(None, prod.clone(), false, true).unwrap(),
+            prod
+        );
+        assert_eq!(
+            resolve_data_dir(None, prod.clone(), true, true).unwrap(),
+            PathBuf::from("/tmp/app-support/dev.roveterm.app.dev")
+        );
+        assert_eq!(
+            resolve_data_dir(Some(OsString::new()), prod.clone(), true, true).unwrap(),
+            PathBuf::from("/tmp/app-support/dev.roveterm.app.dev")
+        );
+        assert_eq!(
+            resolve_data_dir(None, PathBuf::from("/data/user/0/dev.roveterm.app/files"), true, false)
+                .unwrap(),
+            PathBuf::from("/data/user/0/dev.roveterm.app/files/dev")
+        );
+        assert_eq!(
+            resolve_data_dir(Some(OsString::from("/tmp/custom-dir")), prod, true, true).unwrap(),
+            PathBuf::from("/tmp/custom-dir")
+        );
     }
 }
