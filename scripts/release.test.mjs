@@ -74,10 +74,23 @@ describe('scripts/release.mjs', () => {
 
       writeFileSync(join(androidDir, 'RoveTerm_0.2.0_arm64-v8a.apk'), 'android-apk');
 
-      const collected = collectArtifacts([macDir, winDir, linuxDir, androidDir]);
+      const collected = collectArtifacts([macDir, winDir, linuxDir, androidDir], {
+        version: '0.2.0',
+      });
       assert.equal(collected.installers.length, 9);
       assert.equal(collected.updaterPackages.length, 5);
       assert.equal(collected.androidApks.length, 1);
+
+      const names = collected.installers.map((item) => item.name);
+      assert.ok(names.includes('RoveTerm-0.2.0-macos-arm64.dmg'));
+      assert.ok(names.includes('RoveTerm-0.2.0-windows-x64-setup.exe'));
+      assert.ok(names.includes('RoveTerm-0.2.0-windows-arm64-setup.exe'));
+      assert.ok(names.includes('RoveTerm-0.2.0-linux-x64.AppImage'));
+      assert.ok(names.includes('RoveTerm-0.2.0-linux-arm64.AppImage'));
+      assert.ok(names.includes('RoveTerm-0.2.0-linux-x64.deb'));
+      assert.ok(names.includes('RoveTerm-0.2.0-linux-arm64.deb'));
+      assert.ok(names.includes('RoveTerm-0.2.0-linux-arm64.rpm'));
+      assert.ok(names.includes('RoveTerm-0.2.0-android-arm64.apk'));
 
       const latest = buildLatestManifest({
         version: '0.2.0',
@@ -90,11 +103,16 @@ describe('scripts/release.mjs', () => {
       // Strictly Tauri v2 fields only (no unknown keys that would break tauri-plugin-updater).
       assert.deepEqual(Object.keys(latest).sort(), ['notes', 'platforms', 'pub_date', 'version']);
       assert.equal(latest.platforms['darwin-aarch64'].signature, 'SIG-MAC-UNIVERSAL');
+      assert.match(latest.platforms['darwin-aarch64'].url, /RoveTerm-0\.2\.0-macos-universal\.app\.tar\.gz$/);
       assert.equal(latest.platforms['darwin-x86_64'].signature, 'SIG-MAC-UNIVERSAL');
       assert.equal(latest.platforms['windows-x86_64'].signature, 'SIG-WIN-X64');
+      assert.match(latest.platforms['windows-x86_64'].url, /RoveTerm-0\.2\.0-windows-x64-setup\.exe$/);
       assert.equal(latest.platforms['windows-aarch64'].signature, 'SIG-WIN-ARM64');
+      assert.match(latest.platforms['windows-aarch64'].url, /RoveTerm-0\.2\.0-windows-arm64-setup\.exe$/);
       assert.equal(latest.platforms['linux-x86_64'].signature, 'SIG-LINUX-X64');
+      assert.match(latest.platforms['linux-x86_64'].url, /RoveTerm-0\.2\.0-linux-x64\.AppImage$/);
       assert.equal(latest.platforms['linux-aarch64'].signature, 'SIG-LINUX-ARM64');
+      assert.match(latest.platforms['linux-aarch64'].url, /RoveTerm-0\.2\.0-linux-arm64\.AppImage$/);
 
       const android = buildAndroidManifest({
         version: '0.2.0',
@@ -104,6 +122,7 @@ describe('scripts/release.mjs', () => {
         androidApks: collected.androidApks,
       });
       assert.equal(android.version, '0.2.0');
+      assert.match(android.platforms['arm64-v8a'].url, /RoveTerm-0\.2\.0-android-arm64\.apk$/);
       assert.match(android.platforms['arm64-v8a'].sha256, /^[a-f0-9]{64}$/);
       assert.equal(android.platforms['arm64-v8a'].size, 'android-apk'.length);
 
@@ -114,7 +133,11 @@ describe('scripts/release.mjs', () => {
         changelogSection: '### 中文更新日志\n- 新特性\n\n### English Changelog\n- New feature',
         installers: collected.installers,
       });
+      // No duplicate H1 title (GitHub Releases already renders --title), and changelog precedes downloads.
+      assert.doesNotMatch(notes, /^# RoveTerm v/m);
+      assert.ok(notes.indexOf('中文更新日志') < notes.indexOf('Download based on your OS'));
       assert.doesNotMatch(notes, /style=for-the-badge/);
+      assert.match(notes, /RoveTerm-0\.2\.0-macos-arm64\.dmg/);
       assert.match(notes, /img\.shields\.io\/badge\/DMG-Apple%20Silicon-000000\.svg\?logo=apple/);
       assert.match(notes, /img\.shields\.io\/badge\/Setup-x64-2d7d9a\.svg\?logo=windows/);
       assert.match(notes, /img\.shields\.io\/badge\/Setup-ARM64-67b7d1\.svg\?logo=windows/);

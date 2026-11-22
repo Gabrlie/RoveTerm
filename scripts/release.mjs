@@ -133,10 +133,53 @@ function detectArch(text, fallback = 'x86_64') {
   const lower = text.toLowerCase();
   if (lower.includes('universal')) return 'universal';
   if (lower.includes('arm64-v8a')) return 'arm64-v8a';
-  if (lower.includes('armeabi-v7a')) return 'armeabi-v7a';
+  if (/(?:armeabi-v7a|armv7)/.test(lower)) return 'armeabi-v7a';
   if (/(?:aarch64|arm64)/.test(lower)) return 'aarch64';
   if (/(?:x86_64|amd64|x64)/.test(lower)) return 'x86_64';
   return fallback;
+}
+
+/** Formats an OS- and architecture-tagged release asset filename (e.g. RoveTerm-0.1.0-linux-arm64.deb). */
+export function canonicalArtifactName(classified, version) {
+  if (!version) return classified.name;
+  const normalized = parseVersion(version);
+  const archSlug =
+    classified.os === 'android'
+      ? classified.abi === 'arm64-v8a'
+        ? 'arm64'
+        : classified.abi === 'armeabi-v7a'
+          ? 'armv7'
+          : classified.abi === 'x86_64'
+            ? 'x64'
+            : 'universal'
+      : classified.arch === 'universal'
+        ? 'universal'
+        : classified.arch === 'aarch64'
+          ? 'arm64'
+          : 'x64';
+  const base = `RoveTerm-${normalized}-${classified.os}-${archSlug}`;
+  switch (classified.format) {
+    case 'exe':
+      return `${base}-setup.exe`;
+    case 'msi':
+      return `${base}.msi`;
+    case 'dmg':
+      return `${base}.dmg`;
+    case 'app.tar.gz':
+      return `${base}.app.tar.gz`;
+    case 'AppImage':
+      return `${base}.AppImage`;
+    case 'AppImage.tar.gz':
+      return `${base}.AppImage.tar.gz`;
+    case 'deb':
+      return `${base}.deb`;
+    case 'rpm':
+      return `${base}.rpm`;
+    case 'apk':
+      return `${base}.apk`;
+    default:
+      return classified.name;
+  }
 }
 
 /** Classifies a single file path into installer / desktop updater / android APK metadata. */
@@ -331,7 +374,7 @@ export function classifyArtifact(filePath) {
 }
 
 /** Scans directories for installers, signed updater packages, and Android APKs. */
-export function collectArtifacts(dirs) {
+export function collectArtifacts(dirs, { version = null } = {}) {
   const seenNames = new Set();
   const installers = [];
   const updaterPackages = [];
@@ -343,8 +386,9 @@ export function collectArtifacts(dirs) {
     for (const filePath of walkFiles(dir).sort()) {
       const classified = classifyArtifact(filePath);
       if (!classified) continue;
-      if (seenNames.has(classified.name)) continue;
-      seenNames.add(classified.name);
+      const releaseName = canonicalArtifactName(classified, version);
+      if (seenNames.has(releaseName)) continue;
+      seenNames.add(releaseName);
 
       const stat = statSync(filePath);
       const sigPath = `${filePath}.sig`;
@@ -352,6 +396,8 @@ export function collectArtifacts(dirs) {
       const signature = hasSig ? readFileSync(sigPath, 'utf8').trim() : null;
       const item = {
         ...classified,
+        sourceName: classified.name,
+        name: releaseName,
         size: stat.size,
         sha256: sha256File(filePath),
         sigPath: hasSig ? sigPath : null,
@@ -360,7 +406,7 @@ export function collectArtifacts(dirs) {
 
       uploadFiles.set(item.name, filePath);
       if (hasSig) {
-        uploadFiles.set(basename(sigPath), sigPath);
+        uploadFiles.set(`${item.name}.sig`, sigPath);
       }
 
       if (item.role === 'installer' || item.role === 'both' || item.role === 'android') {
@@ -395,11 +441,16 @@ export function collectArtifacts(dirs) {
     return byArch !== 0 ? byArch : a.name.localeCompare(b.name);
   });
 
+  const uploadEntries = [...uploadFiles.entries()]
+    .map(([name, srcPath]) => ({ name, srcPath }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
   return {
     installers,
     updaterPackages,
     androidApks,
-    uploadFiles: [...uploadFiles.values()].sort(),
+    uploadEntries,
+    uploadFiles: uploadEntries.map((entry) => entry.srcPath),
   };
 }
 
@@ -505,7 +556,7 @@ function shieldsBadge(label, message, color, logo) {
   return `https://img.shields.io/badge/${esc(label)}-${esc(message)}-${color}.svg?logo=${logo}&logoColor=white`;
 }
 
-/** Renders FlClash-style compact clickable icon download table + bilingual changelog + SHA-256 table. */
+/** Renders bilingual changelog followed by FlClash-style compact icon download table and SHA-256 table. */
 export function renderReleaseNotes({
   version,
   tag,
@@ -514,9 +565,11 @@ export function renderReleaseNotes({
   changelogSection,
   installers,
 }) {
-  const normalized = parseVersion(version);
+  parseVersion(version);
   const lines = [
-    `# RoveTerm v${normalized}`,
+    changelogSection.trim(),
+    '',
+    '---',
     '',
     '<div align="center">',
     '',
@@ -571,12 +624,8 @@ export function renderReleaseNotes({
     lines.push('  </tbody>', '</table>', '</div>', '');
   }
 
-  lines.push('---', '', '## 📝 更新日志 / Changelog', '', changelogSection.trim(), '');
-
   if (installers.length > 0) {
     lines.push(
-      '---',
-      '',
       '<details>',
       '<summary>🔐 SHA-256 校验和 / Checksums</summary>',
       '',
@@ -741,7 +790,7 @@ async function runPrepare(rootDir, rawArgs) {
         })
       : DEFAULT_SCAN_DIRS.map((dir) => join(rootDir, dir)).filter((dir) => existsSync(dir));
 
-  const collected = collectArtifacts(scanDirs);
+  const collected = collectArtifacts(scanDirs, { version });
   const changelogPath = join(rootDir, 'CHANGELOG.md');
   const changelogText = existsSync(changelogPath) ? readFileSync(changelogPath, 'utf8') : '';
   const changelogSection = extractChangelogSection(changelogText, version);
@@ -806,10 +855,10 @@ async function runPrepare(rootDir, rawArgs) {
   writeFileSync(notesFile, releaseNotes, 'utf8');
 
   const releaseAssets = [];
-  for (const srcPath of collected.uploadFiles) {
-    const destPath = join(outDir, basename(srcPath));
-    if (resolve(srcPath) !== resolve(destPath)) {
-      copyFileSync(srcPath, destPath);
+  for (const entry of collected.uploadEntries) {
+    const destPath = join(outDir, entry.name);
+    if (resolve(entry.srcPath) !== resolve(destPath)) {
+      copyFileSync(entry.srcPath, destPath);
     }
     releaseAssets.push(destPath);
   }
