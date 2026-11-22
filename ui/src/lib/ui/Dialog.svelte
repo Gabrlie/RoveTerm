@@ -32,8 +32,7 @@
     };
   });
 
-  /** Moves the dialog to <body>: inside a translucent panel (backdrop-filter) a fixed element
-   *  would be positioned and clipped by the panel instead of the window. */
+  /** Moves the dialog to <body> so overflow clipping inside panels never cuts off modal sheets. */
   function portal(node: HTMLElement) {
     document.body.appendChild(node);
     return { destroy: () => node.remove() };
@@ -76,8 +75,6 @@
     overflow: hidden;
     border-radius: var(--radius-lg);
     background: var(--material-popover);
-    backdrop-filter: var(--material-blur);
-    -webkit-backdrop-filter: var(--material-blur);
     box-shadow: var(--glass-edge), var(--shadow-lg);
     outline: none;
     animation: rise var(--dur-slow) var(--ease);

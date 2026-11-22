@@ -45,7 +45,6 @@ const DEFAULTS: Preferences = {
 };
 
 const DEVICE_DEFAULTS: DevicePrefs = {
-  window_material: true,
   download_dir: '',
   max_transfers: 3,
   agents: { disabled: [], custom: [], auth: 'auto', expose: false },

@@ -234,7 +234,7 @@
 
 主机的右键菜单由 `src/lib/hosts/hostMenu.ts` 的 `hostMenuItems` 生成，侧栏与主页卡片共用；主页空白处右键提供新建主机、快速连接、从系统导入、新建本地终端。文件管理器在行上右键作用于选择（未选中的行先被选中）：打开目录、下载、下载到、重命名、复制路径、删除；空白处右键：新建文件夹、上传文件或文件夹、刷新、显示隐藏文件。在空白处单击或右键会清除选择。
 
-对话框（`Dialog`）挂载后移到 `<body>`：放在半透明面板（带 `backdrop-filter`）里的固定定位元素会以面板为参照被裁切。
+对话框（`Dialog`）挂载后移到 `<body>`，避免被面板或滚动容器的裁切边界影响。
 
 右键菜单统一使用 `ContextMenu`：在指定坐标弹出并移到 `<body>`，自动避开窗口边缘，支持方向键和 Enter，选中、Escape、点击别处或窗口缩放时关闭。
 
@@ -260,16 +260,15 @@ WebView 的原生右键菜单在任何位置都不出现：`EditMenu`（挂在 `
 
 组件只读取 `tokens.css` 中的 CSS 变量，不写死颜色、间距、圆角、阴影和动效时长。暗色主题跟随系统，也可以通过 `<html data-theme="light|dark">` 强制指定。
 
-- 表面分层：`--window`（窗口底色）之上是半透明材质 `--material-sidebar` / `--material-bar` / `--material-popover`，配合 `--material-blur` 做毛玻璃；内容区用不透明的 `--surface` / `--surface-raised`。WebKitGTK 接受但不绘制 `backdrop-filter`，所以 Linux 上 `<html data-blur="off">`，弹层材质改为不透明。
-- 窗口材质：启动时调用 `window_set_material`（`src/lib/ui/window.ts`），macOS 用侧栏毛玻璃（vibrancy；Liquid Glass 会清楚透出窗口后的内容，不用于整个窗口），Windows 11 用 Mica；Windows 10、Linux 和移动端返回 `false`，保持不透明。生效时 `<html data-material="on">`，`--window` 变为透明（macOS 上为 82% 不透明的底色，材质只带来淡淡的色调），侧栏和工具栏只做淡色叠加，内容区和终端仍不透明。窗口为此在 `tauri.macos.conf.json` / `tauri.windows.conf.json` 中设为 `transparent`。
-- 标题栏以下，侧栏、工作区（标签栏、终端区与底部面板）、右侧面板是浮动的圆角卡片（`--radius-lg`），彼此及与窗口边缘相隔 `--gap-panel`，轮廓为 `--panel-shadow`；间隙露出窗口底色或系统材质。工作区与右侧面板之间的间隙本身就是拖动调整宽度的把手，悬停时显示强调色细线。
+- 表面分层：`--window`（窗口底色）之上是不透明分层材质 `--material-sidebar` / `--material-bar` / `--material-popover`，内容区使用 `--surface` / `--surface-raised`，窗口与弹层均不使用半透明或毛玻璃特效。
+- 标题栏以下，侧栏、工作区（标签栏、终端区与底部面板）、右侧面板是浮动的圆角卡片（`--radius-lg`），彼此及与窗口边缘相隔 `--gap-panel`，轮廓为 `--panel-shadow`；间隙露出窗口底色。工作区与右侧面板之间的间隙本身就是拖动调整宽度的把手，悬停时显示强调色细线。
 - 窗口顶部是 `TitleBar`（`src/lib/layout/TitleBar.svelte`，高 38px），空白处带 `data-tauri-drag-region`，可拖动、双击最大化；右侧是侧栏、底部面板、右侧面板三个布局开关。
   - Windows 与 Linux 不用系统标题栏（`decorations: false`，见 `tauri.windows.conf.json` / `tauri.linux.conf.json`）：左侧是 `menu.ts` 定义的文字菜单，点击展开、展开时指向其他菜单名即切换、左右方向键在菜单间移动；最右侧是自绘的最小化、最大化/还原、关闭按钮，最大化状态随窗口缩放更新。Windows 11 悬停最大化按钮时的贴靠布局弹窗因此不可用。
   - macOS 使用覆盖式标题栏（`titleBarStyle: Overlay`，隐藏标题），红绿灯画在标题栏左侧（`trafficLightPosition` 为 16, 19），标题栏左侧留出 80px，不显示文字菜单。菜单进入系统菜单栏：界面启动和切换语言时调用 `menu_set`，传入 `nativeMenus()`（`menu.ts` 中除编辑外的菜单，文字为当前语言）和系统项文字；应用菜单含关于、设置、隐藏、退出，编辑菜单使用系统预定义项（保证输入框原生复制粘贴），另有窗口菜单。选中动作项时后端发出 `menu-action` 事件，界面核对是动作表中的 id 后执行。绑定中含 ⌘ 的动作项带上快捷键（`accelerator.ts` 的 `menuAccelerator`，如 `Cmd+Shift+I`），菜单显示并处理它们，按键因此不会再进入网页，不会重复触发；不含 ⌘ 的绑定（如 `Ctrl+Tab`）和复制粘贴等也作用于输入框的动作不设快捷键，仍由动作表处理。后端校验快捷键只由字母数字和 `+` 组成，系统无法解析时该项不带快捷键，不影响整个菜单。
 - 分隔一律用半透明细线 `--separator`（常以 0.5px 的 `box-shadow` 绘制），`--border` 只给输入类控件描边。
 - 强调色只设 `--accent`，`--accent-hover`、`--accent-soft`、`--focus-ring` 等由 `color-mix()` 派生；状态色有 `--success` / `--warning` / `--danger` 及其 soft 版本。
 - `--shadow-sm|md|lg` 是多层柔和阴影，`--glass-edge` 是玻璃边缘高光；动效用 `--ease` 与 `--dur-fast|dur|dur-slow`，系统要求减少动效时时长为 0。
-- 外观偏好由 `applyAppearance()`（`src/lib/settings/appearance.ts`）在偏好加载和保存后应用：主题写入 `<html data-theme>`（跟随系统时移除），并通过 `setTheme` 让原生窗口外观跟随（Mica 与 macOS 材质取的是窗口外观，否则深色界面后面会透出浅色材质），非蓝色的强调色把 `--accent` 指向 `--sys-*`，界面缩放写入 `--ui-scale`（文字与控件高度按它缩放，终端字号不受影响），语言交给 `setLocale()`。
+- 外观偏好由 `applyAppearance()`（`src/lib/settings/appearance.ts`）在偏好加载和保存后应用：主题写入 `<html data-theme>`（跟随系统时移除），并通过 `setTheme` 让原生窗口外观跟随，非蓝色的强调色把 `--accent` 指向 `--sys-*`，界面缩放写入 `--ui-scale`（文字与控件高度按它缩放，终端字号不受影响），语言交给 `setLocale()`。
 - 文案目录放在响应式状态 `locale`（`src/lib/i18n/locale.svelte.ts`）里，`t()` 读取它，切换语言后已渲染的界面随之更新，不需要重新挂载。
 - 旧名 `--bg`、`--bg-elevated`、`--bg-sunken` 暂作别名保留。
 - `controls.css` 的选择器都包在 `:where()` 里，没有优先级，组件自己的规则总能覆盖；自带外框的输入框（搜索框、路径栏）加 `class="bare"` 去掉文本框外观。开关用 `src/lib/ui/Switch.svelte`。

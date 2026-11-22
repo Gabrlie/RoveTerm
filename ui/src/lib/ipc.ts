@@ -477,7 +477,6 @@ export interface AgentsPrefs {
 }
 
 export interface DevicePrefs {
-  window_material: boolean;
   /** Absolute path; empty uses the system download directory. */
   download_dir: string;
   max_transfers: number;
@@ -967,11 +966,6 @@ export function workspaceSave(snapshot: object): Promise<void> {
 
 export function workspaceLoad(): Promise<object | null> {
   return invoke('workspace_load');
-}
-
-/** Turns the translucent window material on or off; resolves to whether it is now shown. */
-export function windowSetMaterial(enabled: boolean): Promise<boolean> {
-  return invoke('window_set_material', { enabled });
 }
 
 /** A menu as sent to the macOS menu bar; see `MenuSpec` in src-tauri. */

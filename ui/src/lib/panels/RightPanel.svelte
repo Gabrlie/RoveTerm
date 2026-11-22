@@ -64,8 +64,6 @@
     display: flex;
     flex-direction: column;
     background: var(--material-sidebar);
-    backdrop-filter: var(--material-blur);
-    -webkit-backdrop-filter: var(--material-blur);
   }
   .tabs {
     display: flex;

@@ -147,8 +147,6 @@
     flex-direction: column;
     border-radius: var(--radius-lg);
     background: var(--material-sidebar);
-    backdrop-filter: var(--material-blur);
-    -webkit-backdrop-filter: var(--material-blur);
     box-shadow: var(--panel-shadow);
     overflow: hidden;
   }

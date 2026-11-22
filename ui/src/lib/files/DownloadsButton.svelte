@@ -109,8 +109,6 @@
     padding: var(--space-2);
     border-radius: var(--radius-md);
     background: var(--material-popover);
-    backdrop-filter: var(--material-blur);
-    -webkit-backdrop-filter: var(--material-blur);
     box-shadow: var(--glass-edge), var(--shadow-md);
   }
   .head {

@@ -87,8 +87,6 @@
     flex-direction: column;
     border-radius: var(--radius-lg);
     background: var(--material-popover);
-    backdrop-filter: var(--material-blur);
-    -webkit-backdrop-filter: var(--material-blur);
     box-shadow: var(--glass-edge), var(--shadow-lg);
     overflow: hidden;
     animation: drop var(--dur-slow) var(--ease);

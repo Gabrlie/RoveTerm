@@ -833,7 +833,6 @@
     border: 2px dashed color-mix(in srgb, var(--accent) 70%, transparent);
     border-radius: var(--radius-lg);
     background: var(--accent-softer);
-    backdrop-filter: blur(2px);
     color: var(--accent);
     font-weight: 600;
     pointer-events: none;

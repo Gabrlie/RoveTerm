@@ -128,8 +128,6 @@
     padding: 5px;
     border-radius: var(--radius-md);
     background: var(--material-popover);
-    backdrop-filter: var(--material-blur);
-    -webkit-backdrop-filter: var(--material-blur);
     box-shadow: var(--glass-edge), var(--shadow-lg);
     outline: none;
     animation: pop var(--dur-fast) var(--ease-out);

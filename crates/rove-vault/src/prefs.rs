@@ -664,8 +664,6 @@ impl ExternalEditorPrefs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DevicePrefs {
-    /// Shows the system window material (Liquid Glass, vibrancy, Mica) where available.
-    pub window_material: bool,
     /// Absolute directory downloads go to; empty uses the system download directory.
     pub download_dir: String,
     /// Transfers copying at the same time (1–8).
@@ -760,7 +758,6 @@ impl Default for ConnectionPrefs {
 impl Default for DevicePrefs {
     fn default() -> Self {
         Self {
-            window_material: true,
             download_dir: String::new(),
             max_transfers: 3,
             external_editor: ExternalEditorPrefs::default(),
@@ -1289,7 +1286,6 @@ mod tests {
             r#"{"window_material":false,"download_dir":"","max_transfers":5}"#,
         )
         .unwrap();
-        assert!(!old.window_material);
         assert_eq!(old.max_transfers, 5);
         assert_eq!(old.external_editor, ExternalEditorPrefs::default());
         assert!(old.validate().is_ok());

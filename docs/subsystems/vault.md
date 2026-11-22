@@ -88,7 +88,6 @@ pub trait KeyCache: Send + Sync {
 | `files.default_conflict` | `ask` | `ask`、`rename`、`overwrite`、`skip` |
 | `files.show_hidden` / `confirm_delete` | 否 / 是 | |
 | `status.interval_secs` | 3 | 2–30 |
-| `DevicePrefs.window_material` | 是 | |
 | `DevicePrefs.download_dir` | 空（系统下载目录） | 去除首尾空白，空或绝对路径，最多 1024 字节 |
 | `DevicePrefs.max_transfers` | 3 | 1–8 |
 | `DevicePrefs.external_editor` | `program`、`args` 均空（禁用） | 只属于本机；见[本机编辑器偏好](#本机编辑器偏好) |

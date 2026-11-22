@@ -373,7 +373,7 @@ fn device_preferences_are_stored_apart_from_user_preferences() {
         let vault = Vault::open(&path, cache.clone()).unwrap();
         assert_eq!(vault.device_preferences().unwrap(), DevicePrefs::default());
         let device = DevicePrefs {
-            window_material: false,
+            download_dir: "/tmp/downloads".into(),
             max_transfers: 5,
             external_editor: editor_prefs(),
             ..DevicePrefs::default()
@@ -390,7 +390,7 @@ fn device_preferences_are_stored_apart_from_user_preferences() {
     }
     let vault = Vault::open(&path, cache).unwrap();
     let device = vault.device_preferences().unwrap();
-    assert!(!device.window_material);
+    assert_eq!(device.download_dir, "/tmp/downloads");
     assert_eq!(device.max_transfers, 5);
     assert_eq!(device.external_editor, editor_prefs());
     assert_eq!(vault.preferences().unwrap(), Preferences::default());
@@ -422,7 +422,7 @@ fn external_editor_device_preferences_never_enter_sync_records() {
     let target = unlocked();
     target
         .set_device_preferences(DevicePrefs {
-            window_material: false,
+            max_transfers: 6,
             ..DevicePrefs::default()
         })
         .unwrap();
@@ -437,7 +437,7 @@ fn external_editor_device_preferences_never_enter_sync_records() {
         .apply_sync(&as_changes(target.sync_records().unwrap()))
         .unwrap();
     assert_eq!(source.device_preferences().unwrap(), device);
-    assert!(!target.device_preferences().unwrap().window_material);
+    assert_eq!(target.device_preferences().unwrap().max_transfers, 6);
 
     source
         .set_device_preferences(DevicePrefs::default())

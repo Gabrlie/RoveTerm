@@ -19,5 +19,4 @@ pub mod snippets;
 pub mod sync;
 pub mod tailscale;
 pub mod vault;
-pub mod window;
 pub mod workspace;

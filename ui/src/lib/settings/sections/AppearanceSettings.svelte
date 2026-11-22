@@ -1,10 +1,9 @@
 <script lang="ts">
   import Select from '../../ui/Select.svelte';
-  import Switch from '../../ui/Switch.svelte';
   import { t, type MessageKey } from '../../i18n';
   import type { Accent, Language, Theme } from '../../ipc';
   import { prefs } from '../prefs.svelte';
-  import { editDevice, editPrefs } from '../edit.svelte';
+  import { editPrefs } from '../edit.svelte';
 
   const THEMES: { value: Theme; label: MessageKey }[] = [
     { value: 'system', label: 'settings.themeSystem' },
@@ -81,19 +80,6 @@
     </div>
   </div>
 </div>
-
-<p class="section-label">{t('settings.group.window')}</p>
-<div class="form-group">
-  <div class="form-row">
-    <span class="form-label">{t('settings.windowMaterial')}</span>
-    <Switch
-      label={t('settings.windowMaterial')}
-      checked={prefs.device.window_material}
-      onchange={(checked) => void editDevice((draft) => (draft.window_material = checked))}
-    />
-  </div>
-</div>
-<p class="form-note">{t('settings.windowMaterialHint')} {t('settings.deviceOnly')}</p>
 
 <style>
   .tall {

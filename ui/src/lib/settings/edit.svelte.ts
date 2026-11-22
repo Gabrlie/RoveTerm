@@ -3,7 +3,6 @@
 // `settingsError`.
 import type { DevicePrefs, Preferences } from '../ipc';
 import { errorText } from '../i18n';
-import { applyWindowMaterial } from '../ui/window';
 import { prefs } from './prefs.svelte';
 
 export const settingsError = $state({ text: '' });
@@ -20,15 +19,12 @@ export async function editPrefs(change: (draft: Preferences) => void): Promise<v
   }
 }
 
-/** Stores this device's preferences after `change` edits a copy, and applies the window material. */
+/** Stores this device's preferences after `change` edits a copy of them. */
 export async function editDevice(change: (draft: DevicePrefs) => void): Promise<void> {
   try {
-    const before = prefs.device.window_material;
     const draft = await prefs.currentDevice();
     change(draft);
-    const materialChanged = draft.window_material !== before;
     await prefs.saveDevice(draft);
-    if (materialChanged) await applyWindowMaterial(prefs.device.window_material);
     settingsError.text = '';
   } catch (error) {
     settingsError.text = errorText(error);
