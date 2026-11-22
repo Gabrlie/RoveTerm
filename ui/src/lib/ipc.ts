@@ -1414,7 +1414,9 @@ export function onAiTurn(handler: (event: TurnEvent) => void): Promise<UnlistenF
 export type ExternalEvent = { id: string; context: AiContext; agent: string; host: string } | { id: string; ended: true };
 
 /** A sub-agent of the fleet lead started on a host, or one ended. */
-export type SubtaskEvent = { parent: string; id: string; host: string; task: string } | { id: string; ended: true };
+export type SubtaskEvent =
+  | { parent: string; id: string; host: string; host_id: string; task: string; task_id: string; subtask_id: string }
+  | { id: string; parent?: string | null; ended: true };
 
 export function onAiSubtask(handler: (event: SubtaskEvent) => void): Promise<UnlistenFn> {
   return listen<SubtaskEvent>('ai-subtask', (event) => handler(event.payload));
@@ -1449,7 +1451,7 @@ export function onAiUpdate(handler: (id: string, event: AiEvent) => void): Promi
 }
 
 /** A past AI session. */
-export type HistoryRole = 'fleet' | 'assistant' | 'unknown';
+export type HistoryRole = 'fleet' | 'assistant' | 'subagent' | 'unknown';
 export interface AiSessionSummary {
   role: HistoryRole;
   children: AiSessionSummary[];

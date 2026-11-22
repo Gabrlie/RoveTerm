@@ -140,6 +140,7 @@
   function showWaiting(): void {
     const chat = ai.firstWaiting();
     if (chat?.context.kind === 'fleet') {
+      if (chat.parentId && chat.id) ai.openSubagent(chat.parentId, chat.id);
       openFleet();
       return;
     }

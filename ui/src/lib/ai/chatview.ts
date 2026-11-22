@@ -37,6 +37,7 @@ export function toolSubject(call: ToolCall): string {
 
 export type ChatItem =
   | { kind: 'user'; text: string }
+  | { kind: 'delegation'; task: string }
   | { kind: 'agent'; text: string; messageId: string | null }
   | { kind: 'thought'; text: string }
   /** One of an ACP agent's own tools, as it reported it. */
@@ -185,7 +186,7 @@ function outcomeOf(value: unknown): AiOutcome {
 
 /** The conversation of an earlier session from its journal records (oldest first), to show it
  *  again when it is resumed. Approvals left unanswered count as withdrawn. */
-export function itemsFromRecords(records: AiRecord[]): ChatItem[] {
+export function itemsFromRecords(records: AiRecord[], { asSubagent = false } = {}): ChatItem[] {
   const items: ChatItem[] = [];
   const text = (record: AiRecord): string => (typeof record.payload.text === 'string' ? record.payload.text : '');
   /** The reviewer that let the next operation run. */
@@ -194,7 +195,7 @@ export function itemsFromRecords(records: AiRecord[]): ChatItem[] {
     const payload = record.payload;
     switch (record.kind) {
       case 'ai/prompt':
-        items.push({ kind: 'user', text: text(record) });
+        items.push(asSubagent ? { kind: 'delegation', task: text(record) } : { kind: 'user', text: text(record) });
         break;
       case 'ai/message':
         // Warnings an agent passed on while reconnecting were recorded as its reply.
@@ -218,8 +219,8 @@ export function itemsFromRecords(records: AiRecord[]): ChatItem[] {
             outcome: null,
           });
         } else {
-          const asked = items.find((item) => item.kind === 'approval' && item.requestId === Number(payload.request_id));
-          if (asked?.kind === 'approval') asked.answer = (payload.answer as AiAnswer | null) ?? null;
+          const asked = waitingApproval(items, Number(payload.request_id));
+          if (asked) asked.answer = (payload.answer as AiAnswer | null) ?? null;
         }
         break;
       case 'ai/command':

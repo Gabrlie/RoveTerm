@@ -22,7 +22,7 @@
   let renaming = $state<string | null>(null);
 
   async function rename(): Promise<void> {
-    const session = current;
+    const session = parent;
     const title = renaming?.trim() ?? '';
     renaming = null;
     if (!session || !title || title === session.title) return;
@@ -36,28 +36,33 @@
   let sessions = $state<AiSessionSummary[]>([]);
   // svelte-ignore state_referenced_locally
   let selected = $state<string | null>(initial);
+  let loadRevision = 0;
   let lines = $state<{ ts: number; line: AuditLine; reference?: string }[]>([]);
   async function detail(event: Event, row: (typeof lines)[number]): Promise<void> {
     if (!(event.currentTarget instanceof HTMLDetailsElement) || !event.currentTarget.open || !selected || !row.reference || row.line.detail) return;
     const id = selected;
+    const revision = loadRevision;
     try {
       const payload = await aiAuditDetail(id, row.reference);
-      if (id !== selected) return;
+      if (revision !== loadRevision) return;
       const outcome = payload.outcome as Record<string, unknown> | undefined;
       row.line.detail = typeof outcome?.content === 'string' ? outcome.content : JSON.stringify(payload, null, 2);
-    } catch (caught) { error = errorText(caught); }
+    } catch (caught) { if (revision === loadRevision) error = errorText(caught); }
   }
   let error = $state('');
   const parent = $derived(sessions.find((s) => s.id === selected || s.children.some((c) => c.id === selected)) ?? null);
   const current = $derived(parent?.children.find((s) => s.id === selected) ?? parent);
 
   async function load(id: string): Promise<void> {
+    const revision = ++loadRevision;
     selected = id;
+    renaming = null;
+    error = '';
     records = [];
     lines = [];
     try {
       const loaded = await aiRecords(id);
-      if (selected !== id) return;
+      if (revision !== loadRevision) return;
       records = loaded;
       lines = loaded.flatMap((record) => {
         const line = auditLine(record);
@@ -65,13 +70,25 @@
       });
       error = '';
     } catch (caught) {
-      error = errorText(caught);
+      if (revision === loadRevision) error = errorText(caught);
+    }
+  }
+
+  async function resumeParent(): Promise<void> {
+    const session = parent;
+    if (!session || !onresume) return;
+    const revision = loadRevision;
+    try {
+      const leadRecords = current === session ? records : await aiRecords(session.id);
+      if (revision === loadRevision && leadRecords.length) onresume(session, leadRecords);
+    } catch (caught) {
+      if (revision === loadRevision) error = errorText(caught);
     }
   }
 
   /** Deletes the selected conversation, here and on the synced devices, after asking. */
   async function remove(): Promise<void> {
-    const session = current;
+    const session = parent;
     if (!session) return;
     const name = session.title ?? session.host ?? '';
     const confirmed = await ask({ title: t('ai.deleteTitle'), message: t('ai.deleteMessage', { name }), confirmLabel: t('ai.delete'), danger: true });
@@ -82,7 +99,7 @@
       error = errorText(caught);
       return;
     }
-    for (const entry of sessions) entry.children = entry.children.filter((child) => child.id !== session.id);
+    ++loadRevision;
     const at = sessions.findIndex((entry) => entry.id === session.id);
     sessions = sessions.filter((entry) => entry.id !== session.id);
     records = [];
@@ -119,7 +136,7 @@
       sessions = found;
       const first = found.find((entry) => entry.id === initial)?.id ?? found[0]?.id;
       if (first) void load(first);
-      else { selected = null; records = []; lines = []; }
+      else { ++loadRevision; selected = null; records = []; lines = []; }
     }).catch((caught: unknown) => { if (active) error = errorText(caught); });
     return () => { active = false; };
   });
@@ -134,45 +151,46 @@
         <option value="assistant">{t('ai.role.assistant')}</option>
       </select>
       {#each sessions as session (session.id)}
-        <button type="button" class:active={session.id === selected} onclick={() => void load(session.id)}>
+        <button type="button" class:active={session.id === parent?.id} onclick={() => void load(session.id)}>
           <span class="host">{session.title ?? session.host ?? '–'}</span>
           <small>{t(`ai.role.${session.role}`)} · {session.title && session.host ? `${session.host} · ` : ''}{time(session.started)}{session.agent ? ` · ${session.agent}` : ''}</small>
         </button>
-        {#if parent?.id === session.id}
-          {#each session.children as child (child.id)}
-            <button type="button" class="child" class:active={child.id === selected} onclick={() => void load(child.id)}>
-              <span>{child.title ?? child.host}</span><small>{t('ai.role.assistant')} · {child.host}</small>
-            </button>
-          {/each}
-        {/if}
       {:else}
         <p class="empty">{t('ai.historyEmpty')}</p>
       {/each}
     </nav>
     <div class="lines">
-      {#if current}
+      {#if parent}
         <div class="head">
           {#if renaming !== null}
             <!-- svelte-ignore a11y_autofocus -->
             <input class="field" bind:value={renaming} autofocus maxlength="120" aria-label={t('ai.rename')} onkeydown={(event) => (event.key === 'Enter' ? void rename() : event.key === 'Escape' ? (renaming = null) : undefined)} onblur={() => void rename()} />
           {:else}
-            <span>{t(`ai.role.${current.role}`)}{current.role === 'assistant' && current.host ? ` · ${current.host}` : ''}</span>
-            <span class="head-title">{current.title ?? current.host ?? '–'}</span>
-            <IconButton icon="edit" small label={t('ai.rename')} onclick={() => (renaming = current?.title ?? '')} />
+            <span>{t(`ai.role.${parent.role}`)}{parent.role === 'assistant' && parent.host ? ` · ${parent.host}` : ''}</span>
+            <span class="head-title">{parent.title ?? parent.host ?? '–'}</span>
+            <IconButton icon="edit" small label={t('ai.rename')} onclick={() => (renaming = parent?.title ?? '')} />
           {/if}
           <span class="spacer"></span>
           <IconButton icon="remove" small label={t('ai.delete')} onclick={() => void remove()} />
-          {#if onresume && current === parent}
-            <button type="button" class="secondary" disabled={!current.agent_ref || !current.context || !records.length} title={current.agent_ref ? '' : t('ai.resumeUnavailable')} onclick={() => current && onresume?.(current, records)}>{t('ai.resume')}</button>
+          {#if onresume}
+            <button type="button" class="secondary" disabled={!parent.agent_ref || !parent.context || (current === parent && !records.length)} title={parent.agent_ref ? '' : t('ai.resumeUnavailable')} onclick={resumeParent}>{t('ai.resume')}</button>
           {/if}
         </div>
+        {#if parent.children.length > 0}
+          <div class="switcher" role="group" aria-label={t('ai.subagents.auditViews')}>
+            <button type="button" aria-pressed={current === parent} onclick={() => parent && void load(parent.id)}>{t('ai.subagents.lead')}</button>
+            {#each parent.children as child (child.id)}
+              <button type="button" aria-pressed={current === child} title={time(child.started)} onclick={() => void load(child.id)}><span>{t('ai.role.subagent')}{child.host ? ` · ${child.host}` : ''}</span></button>
+            {/each}
+          </div>
+        {/if}
       {/if}
       {#if error}<p class="error">{error}</p>{/if}
-      {#each lines as row, index (index)}
+      {#each lines as row (row)}
         {@const {ts, line} = row}
         <div class="line {line.tone}">
           <span class="time">{new Date(ts).toLocaleTimeString()}</span>
-          <span class="kind">{label(line.kind)}</span>
+          <span class="kind">{current?.role === 'subagent' && line.kind === 'prompt' ? t('ai.subagents.delegatedTask') : label(line.kind)}</span>
           <div class="body">
             {#if line.text}<span class="text selectable">{line.text}</span>{/if}
             {#if line.note}<span class="note">{noteText(line)}</span>{/if}
@@ -220,7 +238,6 @@
     font: inherit;
     text-align: left;
   }
-  nav button.child { margin-inline-start: var(--space-3); }
   nav button:hover:not(.active) {
     background: var(--fill-hover);
   }
@@ -250,6 +267,27 @@
     padding: var(--space-1) 0 var(--space-2);
     box-shadow: inset 0 -1px 0 var(--separator);
   }
+  .switcher {
+    display: flex;
+    gap: var(--space-2);
+    overflow-x: auto;
+    padding: var(--space-2) 0;
+  }
+  .switcher button {
+    flex: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-pill);
+    background: var(--fill);
+    color: var(--fg);
+    padding: var(--space-1) var(--space-2);
+    font: inherit;
+    cursor: pointer;
+  }
+  .switcher button:hover, .switcher button[aria-pressed="true"] {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .switcher button[aria-pressed="true"] { border-color: var(--accent); }
   .head-title {
     min-width: 0;
     overflow: hidden;

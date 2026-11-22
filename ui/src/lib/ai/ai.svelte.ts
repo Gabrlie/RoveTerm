@@ -4,6 +4,7 @@ import {
   aiAnswer,
   aiCancel,
   aiDelete,
+  aiRecords,
   aiPrompt,
   aiSetMode,
   aiStart,
@@ -43,6 +44,7 @@ import { approvalFor, connectionProblem, itemsFromRecords, titleOf, waitingAppro
 import { prefs } from '../settings/prefs.svelte';
 import { canSendPrompt, requestForSend, type PromptRequest } from './requests';
 import { canChangeTerminal } from './composer';
+import { firstWaitingChat, purgeSubagents, startSubagent, waitingCount, type SubagentSelection } from './subagent';
 
 export type { ChatItem } from './chatview';
 
@@ -113,8 +115,41 @@ export class Chat {
   external = $state<string | null>(null);
   /** That agent disconnected, or the sub-agent finished. */
   ended = $state(false);
-  /** The host a sub-agent of the fleet lead works on. */
-  subtaskOf = $state<string | null>(null);
+  parentId = $state<string | null>(null);
+  hostId = $state<string | null>(null);
+  hostLabel = $state<string | null>(null);
+  taskId = $state<string | null>(null);
+  subtaskId = $state<string | null>(null);
+  taskPrompt = $state('');
+  historical = $state(false);
+  historyStatus = $state<'idle' | 'loading' | 'loaded' | 'error'>('idle');
+  historyError = $state('');
+
+  async loadSubagentHistory(): Promise<void> {
+    const id = this.id;
+    if (!id || !this.historical || this.historyStatus === 'loading' || this.historyStatus === 'loaded') return;
+    this.historyStatus = 'loading';
+    this.historyError = '';
+    try {
+      const records = await aiRecords(id);
+      // A live start can reuse this chat while the history request is in flight.
+      if (!this.historical || ai.subagent(id) !== this) return;
+      this.items = itemsFromRecords(records, { asSubagent: true });
+      this.historyStatus = 'loaded';
+    } catch (error) {
+      if (!this.historical || ai.subagent(id) !== this) return;
+      this.historyError = errorText(error);
+      this.historyStatus = 'error';
+    }
+  }
+
+  finishSubagent(): void {
+    this.ended = true;
+    this.busy = false;
+    for (const item of this.items) {
+      if (item.kind === 'approval' && item.answer === undefined) item.answer = null;
+    }
+  }
 
   /** What the chat is called: the user's title, or its first question. */
   get name(): string | null {
@@ -159,7 +194,7 @@ export class Chat {
   private connection(): Extract<ChatItem, { kind: 'connection' }> | undefined {
     for (let at = this.items.length - 1; at >= 0; at -= 1) {
       const item = this.items[at];
-      if (item?.kind === 'user') return undefined;
+      if (item?.kind === 'user' || item?.kind === 'delegation') return undefined;
       if (item?.kind === 'connection') return item;
     }
     return undefined;
@@ -526,6 +561,9 @@ class AiStore {
   /** Not reactive itself, so looking up a chat from a derived value may create it; `version`
    *  changes when a chat is replaced. */
   private chats = new Map<string, Chat>();
+  private subagents = new Map<string, Chat>();
+  private subagentVersion = $state(0);
+  requestedSubagent = $state<SubagentSelection | null>(null);
   version = $state(0);
   /** Chats by backend session id, for routing events. */
   byId: Record<string, Chat> = {};
@@ -536,16 +574,22 @@ class AiStore {
   /** Approvals waiting for the user, across all conversations. */
   get waiting(): number {
     void this.version;
-    let count = 0;
-    for (const chat of this.chats.values()) count += chat.waiting;
-    return count;
+    void this.subagentVersion;
+    return waitingCount(this.chats.values()) + waitingCount(this.subagents.values());
   }
 
   /** The first conversation with an approval waiting for the user. */
   firstWaiting(): Chat | null {
     void this.version;
-    for (const chat of this.chats.values()) if (chat.waiting > 0) return chat;
-    return null;
+    void this.subagentVersion;
+    return firstWaitingChat(this.subagents.values()) ?? firstWaitingChat(this.chats.values());
+  }
+
+  private clearSubagents(...ids: (string | null | undefined)[]): void {
+    const parents = new Set(ids.filter((id): id is string => !!id));
+    if (!parents.size) return;
+    this.requestedSubagent = purgeSubagents(this.subagents, this.byId, parents, this.requestedSubagent);
+    this.subagentVersion += 1;
   }
 
   chat(context: AiContext): Chat {
@@ -561,8 +605,10 @@ class AiStore {
 
   /** Starts a new conversation for `chat`'s context, with `agent` when given. */
   async reset(chat: Chat, agent: string | null = chat.agent): Promise<void> {
+    const id = chat.id;
     await chat.stop();
     if (this.chats.get(chat.key) !== chat) return;
+    if (chat.context.kind === 'fleet') this.clearSubagents(id, chat.resumeId);
     const next = new Chat(chat.key, chat.context);
     next.agent = agent;
     next.mode = chat.mode;
@@ -574,11 +620,20 @@ class AiStore {
   /** Opens earlier session `summary` (with its `records`) as the chat of its host: it is shown
    *  again and goes on with the same agent at the next message. */
   async resume(summary: AiSessionSummary, records: AiRecord[]): Promise<void> {
-    if (!summary.context || !summary.agent_ref) return;
+    if (!summary.context || !summary.agent_ref || summary.role === 'subagent') return;
     const key = contextKey(summary.context);
     const current = this.chats.get(key);
-    if (current?.id === summary.id) return;
+    if (current?.id === summary.id || current?.resumeId === summary.id) return;
+    const oldId = current?.id;
+    const oldResumeId = current?.resumeId;
     if (current) await current.stop();
+    if (this.chats.get(key) !== current) return;
+    if (summary.context.kind === 'fleet') {
+      this.clearSubagents(oldId, oldResumeId);
+      for (const child of summary.children) {
+        this.rememberSubagent(summary.id, child.id, child.host ?? child.title ?? t('ai.role.subagent'), child.context?.kind === 'host' ? child.context.host_id : null);
+      }
+    }
     const chat = new Chat(key, summary.context);
     chat.agent = summary.agent_ref;
     chat.selectedModel = summary.model;
@@ -591,10 +646,11 @@ class AiStore {
 
   /** Deletes conversation `id`; a panel showing it starts a new conversation. */
   async delete(id: string): Promise<void> {
+    await aiDelete(id);
     for (const chat of [...this.chats.values()]) {
       if (chat.id === id || chat.resumeId === id) await this.reset(chat);
     }
-    await aiDelete(id);
+    this.clearSubagents(id);
   }
 
   /** Switches `chat` to `agent`: the conversation starts over when an agent was already talking. */
@@ -656,36 +712,53 @@ class AiStore {
     this.version += 1;
   }
 
-  /** Takes a sub-agent the fleet lead started, or its end: its conversation is its own chat
-   *  (approvals, records), shown inside the lead's. */
   private subtask(event: SubtaskEvent): void {
     if ('ended' in event) {
-      const chat = this.byId[event.id];
-      if (chat) {
-        chat.ended = true;
-        chat.busy = false;
-      }
-      this.version += 1;
+      const chat = this.subagents.get(event.id);
+      if (chat && (!event.parent || event.parent === chat.parentId)) chat.finishSubagent();
       return;
     }
-    const lead = this.byId[event.parent];
+    const fleetLead = this.chats.get('fleet');
+    const lead = this.byId[event.parent] ?? (fleetLead?.resumeId === event.parent ? fleetLead : undefined);
     if (!lead) return;
-    const chat = new Chat(`sub:${event.id}`, { kind: 'fleet' });
-    chat.id = event.id;
-    chat.title = event.host;
-    chat.subtaskOf = event.host;
-    chat.busy = true;
-    chat.items.push({ kind: 'user', text: event.task });
-    this.chats.set(chat.key, chat);
+    const chat = startSubagent(this.subagents, event, () => {
+      const sub = new Chat(`sub:${event.id}`, { kind: 'fleet' });
+      sub.id = event.id;
+      return sub;
+    }, lead.items);
     this.byId[event.id] = chat;
-    lead.items.push({ kind: 'subtask', id: event.id, host: event.host, task: event.task });
-    this.version += 1;
+    this.subagentVersion += 1;
   }
 
-  /** A sub-agent's conversation, by id. */
-  subtaskChat(id: string): Chat | undefined {
-    void this.version;
-    return this.byId[id];
+  /** Adds an archived worker from the parent's history or task list. */
+  rememberSubagent(parentId: string, id: string, hostLabel: string, hostId: string | null = null): Chat {
+    const existing = this.subagents.get(id);
+    if (existing) return existing;
+    const chat = new Chat(`sub:${id}`, { kind: 'fleet' });
+    chat.id = id;
+    chat.parentId = parentId;
+    chat.hostLabel = hostLabel;
+    chat.hostId = hostId;
+    chat.historical = true;
+    chat.ended = true;
+    this.subagents.set(id, chat);
+    this.subagentVersion += 1;
+    return chat;
+  }
+
+  subagent(id: string): Chat | undefined {
+    void this.subagentVersion;
+    return this.subagents.get(id);
+  }
+
+  subagentsOf(parentId: string | null): Chat[] {
+    void this.subagentVersion;
+    if (!parentId) return [];
+    return [...this.subagents.values()].filter((chat) => chat.parentId === parentId);
+  }
+
+  openSubagent(parentId: string, id: string): void {
+    if (this.subagent(id)?.parentId === parentId) this.requestedSubagent = { parentId, id };
   }
 
   /** Forgets an ended conversation of an agent the user runs (it stays in the history). */

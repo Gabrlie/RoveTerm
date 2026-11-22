@@ -330,9 +330,11 @@
   }
   /* The fleet lead's conversation, as wide as reads well. */
   .fleet {
+    transition: max-width var(--dur) var(--ease);
     height: 100%;
     max-width: 920px;
     margin: 0 auto;
     padding-top: var(--space-3);
   }
+  .fleet:has(:global(.has-subagent)) { max-width: 1440px; }
 </style>

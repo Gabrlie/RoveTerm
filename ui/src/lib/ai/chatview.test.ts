@@ -143,3 +143,28 @@ test('a sub-agent stays a row of its own between reads', () => {
   const laid = rows([read('/a'), { kind: 'subtask', id: 'ai-2', host: 'web', task: 'check' }, read('/b')]);
   assert.deepEqual(laid.map((row) => (row.kind === 'item' ? row.item.kind : row.kind)), ['operation', 'subtask', 'operation']);
 });
+
+test('a sub-agent history shows each prompt as a delegated task', () => {
+  const records = [
+    { ts: 1, kind: 'ai/prompt', payload: { text: 'Check the disk' } },
+    { ts: 2, kind: 'ai/message', payload: { text: 'The disk is healthy.' } },
+    { ts: 3, kind: 'ai/prompt', payload: { text: 'Check free inodes' } },
+  ];
+  assert.deepEqual(itemsFromRecords(records, { asSubagent: true }), [
+    { kind: 'delegation', task: 'Check the disk' },
+    { kind: 'agent', text: 'The disk is healthy.', messageId: null },
+    { kind: 'delegation', task: 'Check free inodes' },
+  ]);
+  assert.equal(itemsFromRecords(records)[0]?.kind, 'user');
+});
+
+test('repeated approval IDs in worker history are answered in their own turns', () => {
+  const asked = (path: string) => ({ request_id: 1, asked: { op: 'write_file', path }, risk: 'modify' });
+  const items = itemsFromRecords([
+    { ts: 1, kind: 'ai/approval', payload: asked('/a') },
+    { ts: 2, kind: 'ai/approval', payload: { request_id: 1, answer: 'deny' } },
+    { ts: 3, kind: 'ai/approval', payload: asked('/b') },
+    { ts: 4, kind: 'ai/approval', payload: { request_id: 1, answer: 'allow_once' } },
+  ], { asSubagent: true });
+  assert.deepEqual(items.map((item) => item.kind === 'approval' && item.answer), ['deny', 'allow_once']);
+});

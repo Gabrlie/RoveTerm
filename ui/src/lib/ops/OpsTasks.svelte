@@ -11,7 +11,7 @@
   import { canAppend, canCancel, canRetry, evidenceText, isUncertain, OpsRefreshGate, reconcileTasks, selectedTargets, selectedUncertain, subtaskFor, targetChoice, type TargetChoices } from './taskview';
   import type { OpsTask, PrivateRef } from './types';
 
-  let { conversation }: { conversation: string } = $props();
+  let { conversation, onselectsubagent }: { conversation: string; onselectsubagent?: (sessionId: string, hostName: string) => void } = $props();
   let tasks = $state<OpsTask[]>([]);
   let refreshing = $state(false);
   let error = $state('');
@@ -205,8 +205,12 @@
           <legend>{t('ops.targets')}</legend>
           {#each task.scope.targets as target (target.host_id)}
             {@const subtask = subtaskFor(task, target.host_id)}
+            {@const session = subtask?.session}
             <div class="target">
               <label class="check"><input type="checkbox" checked={selectedTargets(task, choices[task.id]).includes(target.host_id)} disabled={busy[task.id] || !canAppend(task)} onchange={(event) => choices[task.id] = { ...choices[task.id], [target.host_id]: targetChoice(task, target.host_id, event.currentTarget.checked) }} /><span>{hostName(target.host_id)}</span><span class="state {subtask?.state ?? 'queued'}">{t(`ops.state.${subtask?.state ?? 'queued'}` as MessageKey)}</span></label>
+              {#if session && onselectsubagent}
+                <button type="button" class="link" onclick={() => onselectsubagent?.(session, hostName(target.host_id))}>{t('ai.subagents.view')}</button>
+              {/if}
               {#if subtask?.state === 'completed'}<p class="muted">{t('ops.completedTarget')}</p>{/if}
               {#if subtask?.reason}<p class="muted">{t(`ops.reason.${subtask.reason}` as MessageKey)}</p>{/if}
               {#if subtask?.error_code}<code class="error-code">{subtask.error_code}</code>{/if}

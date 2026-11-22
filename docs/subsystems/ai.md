@@ -120,7 +120,7 @@ AI 设置分为模型与智能体、默认与安全、外部接入三页。服�
 | `ai_set_key(agent, key)` | 密封保存或删除某个 Agent 的 API key |
 | `ai_reveal_key(agent)` / `ai_reveal_review_key()` | 解锁 vault 后按需读取 Agent 或 Jev 的 API key，缺省时返回空值 |
 | `ai_acp_auth_methods(agent)` / `ai_acp_authenticate` / `ai_acp_cancel_auth` / `ai_acp_login_terminal` | 探测 ACP 智能体声明的登录方式（含 `_meta["terminal-auth"]`、`type: "terminal"`、协议 `authenticate` 与本机 CLI 兜底），在后端缓存校验后的登录方案，供界面发起协议认证或内嵌 PTY 终端交互登录 |
-| `ai_delete(id)` | 删除一段对话：运行中先停止，等 Journal 写完排队的记录后移除该会话的 `ai/*` 记录，并追加一条不属于任何会话的 `ai/conversation_deleted`（`payload.session`），同步据此删除其他设备上的同一对话（见 [sync](sync.md#应用中的同步)） |
+| `ai_delete(id)` | 删除一段对话：运行中先停止，等 Journal 写完排队的记录后，一并移除该会话及其子代理的 `ai/*`、`ops/*` 和私有正文，并写删除标记供其他设备应用（见 [sync](sync.md#应用中的同步)） |
 | `ai_provider_models(provider, key)` | 列出服务商提供的模型及其上下文窗口（列表给出时：`context_length`、`context_window`、`max_model_len`、`max_input_tokens` 等，超过 1 亿的不采信；`GET /models`；OpenAI 兼容用 Bearer，Anthropic 用 x-api-key 并按 `after_id` 翻页，最多 20 页），排序去重后返回 id；key 未给出时用已保存的，vault 未解锁时不带 key |
 | `ai_provider_test(provider, key)` | 用一次最小请求检查服务商的地址、模型和 key（未给出时用已保存的），返回模型的回复 |
 | `ai_start(context, agent, terminal, resume)` | 在 `local`、已保存主机或快速连接上启动 `agent`；内置助手直接构造 `Assistant`，ACP 智能体按检测结果启动并附带内置 MCP server；`terminal` 为用户在该主机的终端会话，供 `terminal_snapshot` 读取。返回会话设置（`config_options`，见下文）。`resume` 为之前的会话 id 时继续那段对话：须是同一 Agent、当前未打开，沿用同一 id |
@@ -146,7 +146,7 @@ ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次
 
 - 会话设置采用 ACP 的 session config options（`configOptions`、`session/set_config_option`、`config_option_update` 通知），保留单选项（分组的选项展平）与开关项（`type: "boolean"`，如 Claude Code 的快速模式，设置时传布尔值）；类别为 `mode` 的项不交给界面，审批由 RoveTerm 的模式管理。只在较旧的 `models` 字段（`availableModels`、`currentModelId`）报告模型的智能体，合成一个 `model` 设置，改用 `session/set_model`。智能体对修改不回报设置列表时，按已接受的值更新。Codex 以此提供模型与推理强度。内置助手和总管按服务商分组显示模型。空闲时切换会保留消息、工具结果与会话 ID；下一轮、新委派的助手及选择“对话所用的模型”的审阅器使用新选择。重新打开历史时恢复最后选择的模型。
 - 只启动 Agent、没有发过消息的会话不留记录：`Auditor::started` 暂存开始信息，随第一条记录（通常是第一条提示）写入，什么都没记录过的会话结束时也不写结束记录。
-- 历史默认显示打开它的角色；“全部”包括角色未知的旧记录。总管的定时报告列在总管历史中，选择父对话可以查看委派记录。
+- 历史默认显示打开它的角色；“全部”包括角色未知的旧记录。总管的定时报告列在总管历史中，子代理以 `subagent` 角色归入总管历史，独立记录保留在本机。
 - `ai/session_started` 记录 `SessionInfo`：Agent 名称与版本、审批模式、`agent_ref`、主机上下文、Agent 自己的会话 id、是否为继续。会话的第一条提示写一条自动的 `ai/renamed`（第一行，最多 60 个字符），用户改名再写一条，最新的为准；继续时已有标题则不再自动命名。
 - 继续 ACP 会话：Agent 声明 `loadSession` 能力时用 `session/load` 重开它自己的会话，期间 Agent 回放的旧对话不再上报（界面从 Journal 还原）；重开失败则开新会话。继续内置助手：用 `audit::transcript` 从记录还原提示与回复（执行过的操作以一行说明附在回复中，不含工具输出）作为历史。
 
@@ -154,7 +154,7 @@ ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次
 
 总管是所有已保存主机上的内置助手（`AiContext::Fleet`），通过 `ops_tools::OpsTools` 创建和跟进[持久运维任务](ops.md)。它使用 `list_hosts`、`read_notes` 获取主机资料，以 `start_tasks` 派发带验收项的主机任务，再通过 `task_status`、`task_input`、`cancel_task`、`retry_task` 查询、追加输入、取消或重试。派发返回任务标识后，总管告知排队情况并结束回合。Supervisor 在主机执行结束后启动汇总回合。`task_status` 返回按状态统计与主机名，`task_report` 按任务或主机读取解密的验收结果。汇总输入以本机加密事件 `ai/ops_wakeup` 记录。
 
-每个主机子任务使用内置 `Assistant`，操作继续经过 `AiSession` 的 Policy、审阅者与审计。交互新任务默认只读，用户显式允许本次请求修改后才可创建可修改任务；定时任务沿用 `schedule.allow_changes`。子会话关联总管会话，开始与结束经 `ai-subtask` 通知界面。各总管与定时入口共享 worker 调度预算；任务状态、授权范围和跟进规则见 [ops](ops.md)。总管只使用内置助手，模型选择沿用现有服务商设置。
+每个主机子任务使用内置 `Assistant`，操作继续经过 `AiSession` 的 Policy、审阅者与审计。交互新任务默认只读，用户显式允许本次请求修改后才可创建可修改任务；定时任务沿用 `schedule.allow_changes`。子会话关联总管会话。开始事件 `ai-subtask` 带父会话、主机、任务及子任务标识，结束事件带子会话与已知父会话标识。各总管与定时入口共享 worker 调度预算；任务状态、授权范围和跟进规则见 [ops](ops.md)。总管只使用内置助手，模型选择沿用现有服务商设置。
 
 主机助手必须调用 `submit_result`，为每个验收项提交非空结论，并引用本轮真实成功操作返回的证据 ID；缺项、旧证据或失败操作不能形成有效验收。提交后继续调用主机工具会使该次验收失效，需要重新提交。普通文字回复和 `end_turn` 只表示模型回合结束；验收未通过、存在失败或拒绝操作时，子任务保持待核验，达到请求上限则受阻。
 

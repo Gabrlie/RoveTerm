@@ -273,7 +273,7 @@ fn imported_versions(
 }
 
 /// Recent AI conversations as sync records; arriving ones are merged into the journal (records
-/// it lacks are added with their own time). The journal only appends, so deletions are ignored.
+/// it lacks are added with their own time, and deletion tombstones are applied).
 struct ConversationStore(Arc<dyn rove_journal::JournalStore>);
 
 fn journal_error(error: rove_journal::JournalError) -> SyncError {
@@ -296,7 +296,7 @@ impl ConversationStore {
             .0
             .read(&rove_journal::JournalQuery {
                 kind: Some(rove_ai::audit::KIND_STARTED.to_owned()),
-                limit: Some(1000),
+                limit: Some(u32::MAX),
                 newest_first: true,
                 ..rove_journal::JournalQuery::default()
             })
@@ -305,20 +305,25 @@ impl ConversationStore {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_millis() as i64);
         let cutoff = now - CONVERSATION_AGE_MS;
-        let mut ids: Vec<String> = Vec::new();
+        let deleted =
+            crate::commands::ai::deleted_conversations(self.0.as_ref()).map_err(journal_error)?;
+        let mut seen = std::collections::HashSet::new();
+        let mut ids = Vec::new();
         for start in starts {
             let Some(id) = start.session_id.filter(|_| start.ts >= cutoff) else {
                 continue;
             };
-            if !ids.contains(&id) {
-                ids.push(id);
+            if !seen.insert(id.clone())
+                || start.payload["parent"].as_str().is_some()
+                || deleted.contains(&id)
+            {
+                continue;
             }
+            ids.push(id);
             if ids.len() >= MAX_CONVERSATIONS {
                 break;
             }
         }
-        let deleted =
-            crate::commands::ai::deleted_conversations(self.0.as_ref()).map_err(journal_error)?;
         let mut records = Vec::new();
         // A deleted conversation is passed on as deleted (a removed record is not: conversations
         // also leave the synced set by age, and that must not delete them elsewhere).
@@ -346,7 +351,7 @@ impl ConversationStore {
                 });
             }
         }
-        for id in ids.into_iter().filter(|id| !deleted.contains(id)) {
+        for id in ids {
             let entries: Vec<(i64, String, serde_json::Value)> = self
                 .session(&id)?
                 .into_iter()
@@ -381,7 +386,14 @@ impl ConversationStore {
                 continue;
             }
             // Deleted here: what another device still has does not bring it back.
-            if deleted.contains(&change.id) {
+            if deleted.contains(&change.id)
+                || body["records"].as_array().is_some_and(|records| {
+                    records.iter().any(|record| {
+                        record["kind"] == rove_ai::audit::KIND_STARTED
+                            && record["payload"]["parent"].as_str().is_some()
+                    })
+                })
+            {
                 continue;
             }
             let local: Vec<(i64, String)> = self
@@ -1060,6 +1072,80 @@ mod tests {
             assert_ne!(fresh.device, "device-1");
             assert!(key.is_none());
         }
+    }
+
+    #[test]
+    fn workers_do_not_consume_the_synced_conversation_limit() {
+        use rove_journal::{JournalStore, NewRecord, SqliteJournal};
+
+        let journal = Arc::new(SqliteJournal::open_in_memory().unwrap());
+        let start = |id, parent| {
+            journal
+                .append(NewRecord {
+                    kind: rove_ai::audit::KIND_STARTED.into(),
+                    session_id: Some(id),
+                    payload: serde_json::json!({ "parent": parent }),
+                })
+                .unwrap();
+        };
+        for index in 0..=MAX_CONVERSATIONS {
+            start(format!("ai-lead-{index}"), None);
+        }
+        for index in 0..1024 {
+            start(format!("ai-worker-{index}"), Some("ai-lead-1"));
+        }
+        let store = ConversationStore(journal);
+        let records = store.records().unwrap();
+        assert_eq!(records.len(), MAX_CONVERSATIONS);
+        assert!(
+            records
+                .iter()
+                .all(|record| record.id.starts_with("ai-lead-"))
+        );
+        assert!(!records.iter().any(|record| record.id == "ai-lead-0"));
+    }
+
+    #[test]
+    fn legacy_worker_uploads_are_ignored_and_their_tombstones_apply() {
+        use rove_journal::{JournalStore, NewRecord, SqliteJournal};
+        use serde_json::json;
+
+        let journal = Arc::new(SqliteJournal::open_in_memory().unwrap());
+        let store = ConversationStore(journal.clone());
+        let id = "ai-worker";
+        let payload = json!({ "parent": "ai-lead" });
+        let mut change = Change {
+            kind: CONVERSATION_KIND.into(),
+            id: id.into(),
+            hlc: rove_sync::Hlc {
+                wall: 1,
+                counter: 0,
+                device: "other".into(),
+            },
+            body: Some(json!({ "records": [{
+                "ts": 1, "kind": rove_ai::audit::KIND_STARTED, "payload": payload,
+            }] })),
+        };
+        store.apply(std::slice::from_ref(&change)).unwrap();
+        assert!(store.session(id).unwrap().is_empty());
+
+        journal
+            .append(NewRecord {
+                kind: rove_ai::audit::KIND_STARTED.into(),
+                session_id: Some(id.into()),
+                payload,
+            })
+            .unwrap();
+        change.body = Some(json!({ "deleted": true }));
+        store.apply(&[change]).unwrap();
+        assert!(store.session(id).unwrap().is_empty());
+        assert!(
+            store
+                .records()
+                .unwrap()
+                .iter()
+                .any(|record| record.id == id && record.body["deleted"] == true)
+        );
     }
 
     /// A conversation recorded on one device shows up on another, continues there, and the

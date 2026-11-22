@@ -2121,7 +2121,10 @@ pub(crate) async fn start_ops_worker(
     );
     if let Err(error) = app.emit(
         AI_SUBTASK_EVENT,
-        serde_json::json!({ "parent": parent, "id": id, "host": host.label(), "task": spec.task }),
+        serde_json::json!({
+            "parent": parent, "id": id, "host": host.label(), "host_id": host_id.to_string(),
+            "task": spec.task, "task_id": spec.task_id.to_string(), "subtask_id": spec.subtask_id.to_string(),
+        }),
     ) {
         tracing::warn!(%error, "announcing a sub-agent failed");
     }
@@ -2496,12 +2499,15 @@ pub(crate) async fn run_scheduled(
 /// Ends sub-agent `id` (its task is done, failed or was cancelled).
 pub(crate) async fn end_subagent(app: &AppHandle, state: &AppState, id: &str) {
     let entry = state.ai.entries.lock().await.remove(id);
-    if let Some(entry) = entry {
+    let parent = if let Some(entry) = entry {
         stop(&entry).await;
-    }
+        entry.parent.clone()
+    } else {
+        None
+    };
     if let Err(error) = app.emit(
         AI_SUBTASK_EVENT,
-        serde_json::json!({ "id": id, "ended": true }),
+        serde_json::json!({ "id": id, "parent": parent, "ended": true }),
     ) {
         tracing::warn!(%error, "announcing the end of a sub-agent failed");
     }
@@ -2684,7 +2690,11 @@ pub async fn ai_stop(state: State<'_, AppState>, id: String) -> Result<(), Comma
 /// records from the journal and leaves an [`audit::KIND_DELETED`] record, which sync passes on
 /// so the other devices delete it too.
 #[tauri::command]
-pub async fn ai_delete(state: State<'_, AppState>, id: String) -> Result<(), CommandError> {
+pub async fn ai_delete(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), CommandError> {
     check_session_id(&id)?;
     let entry = state.ai.entries.lock().await.remove(&id);
     if let Some(entry) = entry {
@@ -2699,36 +2709,68 @@ pub async fn ai_delete(state: State<'_, AppState>, id: String) -> Result<(), Com
         .wait_conversation_idle(&id)
         .await
         .map_err(|e| CommandError::new("ops.store", e.to_string()))?;
-    let tasks = state
+    let live_children: Vec<_> = state
+        .ai
+        .entries
+        .lock()
+        .await
+        .iter()
+        .filter(|(_, entry)| entry.parent.as_deref() == Some(id.as_str()))
+        .map(|(session, _)| session.clone())
+        .collect();
+    for session in &live_children {
+        end_subagent(&app, &state, session).await;
+    }
+    let mut children: std::collections::BTreeSet<_> = state
         .ops
         .list()
-        .map_err(|e| CommandError::new("ops.store", e.to_string()))?;
+        .map_err(|e| CommandError::new("ops.store", e.to_string()))?
+        .into_iter()
+        .filter(|task| task.conversation == id)
+        .flat_map(|task| task.subtasks.into_iter().filter_map(|sub| sub.session))
+        .collect();
+    children.extend(live_children);
     state
         .ops
         .forget_conversation(&id)
         .map_err(|e| CommandError::new("ops.store", e.to_string()))?;
-    for task in tasks.into_iter().filter(|task| task.conversation == id) {
-        for session in task.subtasks.into_iter().filter_map(|sub| sub.session) {
-            state
-                .journal
-                .delete_session(&session, "ops/")
-                .map_err(|e| CommandError::new("journal.io", e.to_string()))?;
-        }
-    }
-    state
-        .journal
-        .delete_session(&id, "ops/")
-        .map_err(|e| CommandError::new("journal.io", e.to_string()))?;
     let recorder = state.ai.recorder.clone();
     let journal = state.journal.clone();
     tauri::async_runtime::spawn_blocking(move || {
         // Records still queued for it are written first, then removed with the rest.
         recorder.flush();
-        journal.transaction(&mut || delete_conversation(journal.as_ref(), &id))
+        journal.transaction(&mut || delete_conversation_tree(journal.as_ref(), &id, &children))
     })
     .await
     .map_err(|error| CommandError::new("app.task", error.to_string()))?
     .map_err(|error| CommandError::new("journal.io", error.to_string()))
+}
+
+/// Removes the lead and its known worker sessions in the caller's journal transaction.
+fn delete_conversation_tree(
+    journal: &dyn rove_journal::JournalStore,
+    id: &str,
+    task_children: &std::collections::BTreeSet<String>,
+) -> Result<(), rove_journal::JournalError> {
+    let mut sessions = task_children.clone();
+    sessions.insert(id.to_owned());
+    sessions.extend(
+        journal
+            .read(&rove_journal::JournalQuery {
+                kind: Some(audit::KIND_STARTED.to_owned()),
+                limit: Some(u32::MAX),
+                ..rove_journal::JournalQuery::default()
+            })?
+            .into_iter()
+            .filter(|start| start.payload["parent"].as_str() == Some(id))
+            .filter_map(|start| start.session_id),
+    );
+    let deleted = deleted_conversations(journal)?;
+    for session in sessions {
+        journal.delete_session(&session, "ops/")?;
+        remove_conversation(journal, &session, deleted.contains(&session))?;
+    }
+    Ok(())
 }
 
 /// Removes conversation `id`'s records and marks it deleted (once).
@@ -2736,8 +2778,16 @@ pub(crate) fn delete_conversation(
     journal: &dyn rove_journal::JournalStore,
     id: &str,
 ) -> Result<(), rove_journal::JournalError> {
+    remove_conversation(journal, id, deleted_conversations(journal)?.contains(id))
+}
+
+fn remove_conversation(
+    journal: &dyn rove_journal::JournalStore,
+    id: &str,
+    already_deleted: bool,
+) -> Result<(), rove_journal::JournalError> {
     journal.delete_session(id, "ai/")?;
-    if !deleted_conversations(journal)?.contains(id) {
+    if !already_deleted {
         journal.append(rove_journal::NewRecord {
             kind: audit::KIND_DELETED.to_owned(),
             session_id: None,
@@ -2935,9 +2985,12 @@ fn history_summaries(
                 Some("host" | "local" | "quick") => "assistant",
                 _ => "unknown",
             };
+            let parent = record.payload["parent"]
+                .as_str()
+                .filter(|parent| !parent.is_empty());
             let summary = AiSessionSummary {
                 children: Vec::new(),
-                role: kind,
+                role: if parent.is_some() { "subagent" } else { kind },
                 model: text("agent_version"),
                 title: titles.remove(&id),
                 started: record.ts,
@@ -2951,7 +3004,7 @@ fn history_summaries(
                     .cloned(),
                 id,
             };
-            if let Some(parent) = record.payload["parent"].as_str() {
+            if let Some(parent) = parent {
                 children.entry(parent.to_owned()).or_default().push(summary);
                 return None;
             }
@@ -2960,7 +3013,9 @@ fn history_summaries(
         .collect();
     sessions.truncate(MAX_SESSIONS as usize);
     for session in &mut sessions {
-        session.children = children.remove(&session.id).unwrap_or_default();
+        if session.role == "fleet" {
+            session.children = children.remove(&session.id).unwrap_or_default();
+        }
     }
     sessions
 }
@@ -3359,11 +3414,42 @@ mod history_tests {
             start("ai-fleet", 1, Some("fleet"), None, "before"),
             start("ai-fleet", 2, Some("fleet"), None, "after"),
             start("ai-child", 3, Some("host"), Some("ai-fleet"), "after"),
+            start(
+                "ai-child-newer",
+                1000,
+                Some("host"),
+                Some("ai-fleet"),
+                "after",
+            ),
+            start("ai-orphan", 1001, Some("host"), Some("ai-deleted"), "after"),
         ]);
         let fleet = history_summaries(rows.clone(), vec![], Some("fleet"));
         assert_eq!(fleet.len(), 1);
         assert_eq!(fleet[0].model.as_deref(), Some("after"));
-        assert_eq!(fleet[0].children[0].id, "ai-child");
+        let children: Vec<_> = fleet[0]
+            .children
+            .iter()
+            .map(|child| (child.id.as_str(), child.role))
+            .collect();
+        assert_eq!(
+            children,
+            [("ai-child-newer", "subagent"), ("ai-child", "subagent")]
+        );
+        for role in [None, Some("assistant"), Some("subagent")] {
+            let top_level = history_summaries(rows.clone(), vec![], role);
+            assert!(top_level.iter().all(|session| !matches!(
+                session.id.as_str(),
+                "ai-child" | "ai-child-newer" | "ai-orphan"
+            )));
+            assert_eq!(
+                top_level.len(),
+                if role == Some("subagent") {
+                    0
+                } else {
+                    MAX_SESSIONS as usize
+                }
+            );
+        }
         assert_eq!(
             history_summaries(rows.clone(), vec![], Some("assistant")).len(),
             100
@@ -3372,6 +3458,80 @@ mod history_tests {
             history_summaries(rows, vec![], Some("unknown"))[0].id,
             "ai-old"
         );
+    }
+
+    #[test]
+    fn deleting_a_lead_removes_task_and_journal_children_with_private_bodies() {
+        let journal = SqliteJournal::open_in_memory().unwrap();
+        let id = "ai-lead";
+        let add = |session: &str, kind: &str, payload| {
+            journal
+                .append(NewRecord {
+                    kind: kind.into(),
+                    session_id: Some(session.into()),
+                    payload,
+                })
+                .unwrap();
+        };
+        add(
+            id,
+            audit::KIND_STARTED,
+            json!({"context": {"kind": "fleet"}}),
+        );
+        add("ai-old-worker", audit::KIND_STARTED, json!({"parent": id}));
+        add(
+            "ai-unrelated",
+            audit::KIND_STARTED,
+            json!({"context": {"kind": "local"}}),
+        );
+        let removed = [id, "ai-old-worker", "ai-task-worker"];
+        for session in removed {
+            journal
+                .append_private(
+                    NewRecord {
+                        kind: "ops/private".into(),
+                        session_id: Some(session.into()),
+                        payload: json!({}),
+                    },
+                    session,
+                    "body",
+                    &[1, 2, 3],
+                )
+                .unwrap();
+            add(session, audit::KIND_PROMPT, json!({"text": "check"}));
+        }
+        let task_children = ["ai-task-worker".to_owned()].into_iter().collect();
+        for _ in 0..2 {
+            journal
+                .transaction(&mut || delete_conversation_tree(&journal, id, &task_children))
+                .unwrap();
+        }
+        let records = journal.read(&JournalQuery::default()).unwrap();
+        for session in removed {
+            assert!(
+                records
+                    .iter()
+                    .all(|record| record.session_id.as_deref() != Some(session))
+            );
+            assert!(journal.private_body(session, "body").is_err());
+        }
+        let deleted = deleted_conversations(&journal).unwrap();
+        assert_eq!(deleted.len(), removed.len());
+        assert!(removed.iter().all(|session| deleted.contains(*session)));
+        assert_eq!(
+            records
+                .iter()
+                .filter(|row| row.kind == audit::KIND_DELETED)
+                .count(),
+            removed.len()
+        );
+        let starts = records
+            .into_iter()
+            .filter(|row| row.kind == audit::KIND_STARTED)
+            .collect();
+        let history = history_summaries(starts, vec![], None);
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, "ai-unrelated");
     }
 
     #[test]

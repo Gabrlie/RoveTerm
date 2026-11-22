@@ -26,6 +26,8 @@ const MAX_TASK_TEXT: usize = 100_000;
 const MAX_DISPATCH: usize = 16;
 
 pub struct WorkerSpec {
+    pub task_id: OpsTaskId,
+    pub subtask_id: OpsSubtaskId,
     pub task: String,
     pub session: String,
     pub checkpoint: Option<AssistantCheckpoint>,
@@ -867,6 +869,8 @@ async fn execute_worker(
         mode,
         bundle.unattended,
         WorkerSpec {
+            task_id: id,
+            subtask_id: sub_id,
             task: text.clone(),
             session,
             checkpoint,
@@ -887,6 +891,7 @@ async fn execute_worker(
         result = worker.assistant.prompt(&text) => result,
     };
     let reply = worker.assistant.last_reply().await;
+    end.close().await;
     let reason = result.as_deref().unwrap_or("failed");
     let report = save_private(
         &state,
@@ -903,7 +908,6 @@ async fn execute_worker(
         .ops
         .record_evidence(id, sub_id, report.clone())
         .map_err(error)?;
-    end.close().await;
     if counts.storage_failed.load(Ordering::Acquire) {
         return Ok(WorkerOutcome::Blocked {
             reason: BlockReason::NeedsVerification,

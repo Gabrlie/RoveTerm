@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
   import Icon from '../ui/Icon.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import Markdown from './Markdown.svelte';
@@ -22,6 +23,8 @@
   import { notify } from '../ui/toast.svelte';
   import type { IconName } from '../ui/icons';
   import OpsTasks from '../ops/OpsTasks.svelte';
+  import SubagentPanel from './SubagentPanel.svelte';
+  import { firstWaitingChat, subagentStatus, waitingCount } from './subagent';
 
   /** `fleet`: the fleet lead's conversation on all saved hosts, shown as a page of its own
    *  (a tab), with RoveTerm's assistant only. */
@@ -48,6 +51,33 @@
   let viewing = $state<Chat | null>(null);
   const chat = $derived(viewing && externals.includes(viewing) ? viewing : own);
   const opsConversation = $derived(chat.id ?? chat.resumeId);
+  const subagents = $derived(fleet ? ai.subagentsOf(opsConversation) : []);
+  const subSelection = $derived(fleet && opsConversation && ai.requestedSubagent?.parentId === opsConversation ? ai.requestedSubagent : null);
+  const selectedSubagent = $derived(subSelection ? ai.subagent(subSelection.id) : undefined);
+  const waitingSubagents = $derived(subagents.filter((sub) => sub.waiting > 0));
+  const waitingElsewhere = $derived(waitingSubagents.filter((sub) => sub !== selectedSubagent));
+
+  function inspectSubagent(id: string, host: string): void {
+    if (!opsConversation) return;
+    ai.rememberSubagent(opsConversation, id, host);
+    ai.openSubagent(opsConversation, id);
+  }
+
+  function selectSubagent(sub: Chat): void {
+    if (sub.parentId && sub.id) ai.openSubagent(sub.parentId, sub.id);
+  }
+
+  function closeSubagents(): void {
+    ai.requestedSubagent = null;
+  }
+
+  function toggleSubagents(): void {
+    if (selectedSubagent) closeSubagents();
+    else {
+      const sub = firstWaitingChat(subagents) ?? subagents[0];
+      if (sub) selectSubagent(sub);
+    }
+  }
   // Another host shows its own conversation.
   $effect(() => {
     void contextKey(context);
@@ -107,8 +137,7 @@
   let slashAt = $state(0);
   /** The input the `/` menu was closed on (Escape), until it changes. */
   let slashClosed = $state<string | null>(null);
-  /** Dangerous approvals the user acknowledged, by request id. */
-  let acknowledged = $state<Record<string, boolean>>({});
+  const acknowledged = new SvelteSet<ApprovalItem>();
   /** Rows the user expanded, by key. */
   let expanded = $state<Record<string, boolean>>({});
 
@@ -156,6 +185,7 @@
   }
 
   function answer(target: Chat, item: ApprovalItem, choice: AiAnswer): void {
+    acknowledged.delete(item);
     void target.answer(item.requestId, choice);
   }
 
@@ -435,6 +465,11 @@
         {@const key = `${target.key}:i${row.key}`}
         {#if item.kind === 'user'}
           <div class="user selectable">{item.text}</div>
+        {:else if item.kind === 'delegation'}
+          <div class="delegation">
+            <span>{t('ai.subagents.delegatedTask')}</span>
+            <p class="selectable">{item.task}</p>
+          </div>
         {:else if item.kind === 'agent'}
           <div class="agent"><Markdown text={item.text} oninsert={terminalPane ? insert : undefined} /></div>
         {:else if item.kind === 'thought'}
@@ -466,7 +501,7 @@
               {#if item.operation.op === 'edit_file' || item.operation.op === 'update_notes'}
                 <pre class="diff selectable">{#each item.operation.diff.split('\n') as line, at (at)}<span class:removed={line.startsWith('- ')} class:added={line.startsWith('+ ')}>{line}{'\n'}</span>{/each}</pre>
               {/if}
-              <p class="approval-where">{item.agentTool ? t('ai.agentTool') : t('ai.on', { host: target.subtaskOf ?? hostInText })}</p>
+              <p class="approval-where">{item.agentTool ? t('ai.agentTool') : t('ai.on', { host: target.hostLabel ?? hostInText })}</p>
               {#if item.review}<p class="approval-why">{reviewText(item.review)}</p>{/if}
               {#if item.assessment.reasons.length > 0}
                 <ul class="reasons">
@@ -474,14 +509,14 @@
                 </ul>
               {/if}
               {#if dangerous}
-                <label class="ack"><input type="checkbox" bind:checked={acknowledged[`${target.key}:${item.requestId}`]} />{t('ai.acknowledge')}</label>
+                <label class="ack"><input type="checkbox" bind:checked={() => acknowledged.has(item), (checked) => { if (checked) acknowledged.add(item); else acknowledged.delete(item); }} />{t('ai.acknowledge')}</label>
               {/if}
               <div class="approval-buttons">
                 <button type="button" class="secondary" onclick={() => answer(target, item, 'deny')}>{t('ai.answer.deny')}</button>
                 {#if item.rememberable}
                   <button type="button" class="secondary" onclick={() => answer(target, item, 'allow_session')}>{t('ai.answer.allow_session')}</button>
                 {/if}
-                <button type="button" class="primary" class:danger={dangerous} disabled={dangerous && !acknowledged[`${target.key}:${item.requestId}`]} onclick={() => answer(target, item, 'allow_once')}>{t('ai.answer.allow_once')}</button>
+                <button type="button" class="primary" class:danger={dangerous} disabled={dangerous && !acknowledged.has(item)} onclick={() => answer(target, item, 'allow_once')}>{t('ai.answer.allow_once')}</button>
               </div>
             </div>
           {:else}
@@ -499,26 +534,21 @@
               <span class="op-icon"><Icon name={item.state === 'recovered' ? 'check' : 'warning'} size={13} /></span>
               <span class="op-verb">{item.state === 'retrying' ? t('ai.connection.retrying', { n: item.retries }) : item.state === 'failed' ? t('ai.connection.failed') : t('ai.connection.recovered')}</span>
             </button>
-            {#if item.state === 'failed'}
+            {#if item.state === 'failed' && !target.parentId}
               <button type="button" class="link" disabled={target.busy || target.starting} onclick={() => void target.retry(terminalPane?.sessionId ?? null)}>{t('ai.connection.retry')}</button>
             {/if}
           </div>
           {#if expanded[key]}<pre class="op-output selectable">{item.detail}</pre>{/if}
         {:else if item.kind === 'subtask'}
-          {@const sub = ai.subtaskChat(item.id)}
-          {@const subWaiting = sub?.waiting ?? 0}
-          <div class="subtask">
-            <button type="button" class="op {sub?.ended ? 'done' : subWaiting > 0 ? 'waiting' : 'running'}" aria-expanded={!!expanded[key] || subWaiting > 0} onclick={() => toggle(key)}>
-              <span class="op-icon"><Icon name="server" size={13} /></span>
-              <span class="op-verb">{item.host}</span>
-              <code class="op-subject" title={item.task}>{item.task}</code>
-              {#if subWaiting > 0}<span class="sub-badge">{subWaiting}</span>{/if}
-              <span class="op-state"><Icon name={sub?.ended ? 'check' : 'more'} size={12} /></span>
-            </button>
-            {#if sub && (expanded[key] || subWaiting > 0)}
-              <div class="subtask-items">{@render chatItems(sub)}</div>
-            {/if}
-          </div>
+          {@const sub = ai.subagent(item.id)}
+          {@const status = sub ? subagentStatus(sub) : 'finished'}
+          <button type="button" class="dispatch {status}" class:active={selectedSubagent?.id === item.id} aria-pressed={selectedSubagent?.id === item.id} onclick={() => inspectSubagent(item.id, item.host)}>
+            <span class="dispatch-host"><Icon name="server" size={13} /><strong>{item.host}</strong></span>
+            <span class="dispatch-task" title={item.task}>{item.task}</span>
+            <span class="dispatch-status">{t(`ai.subagents.status.${status}`)}</span>
+            {#if sub && sub.waiting > 0}<span class="sub-badge" aria-label={t('ai.subagents.waitingCount', { n: sub.waiting })}>{sub.waiting}</span>{/if}
+            <span class="inspect">{t('ai.subagents.inspect')}<Icon name="chevron" size={12} /></span>
+          </button>
         {:else if item.kind === 'notice'}
           <div class="notice">
             <Icon name="warning" size={13} />
@@ -540,6 +570,18 @@
     {/each}
 {/snippet}
 
+{#snippet pendingSubagents(waitingChats: Chat[])}
+  {#if waitingChats[0]}
+    {@const next = waitingChats[0]}
+    <div class="sub-attention" role="status">
+      <Icon name="warning" size={14} />
+      <span>{t('ai.subagents.pending', { hosts: [...new Set(waitingChats.map((sub) => sub.hostLabel))].join(', ') })}</span>
+      <button type="button" class="secondary" onclick={() => selectSubagent(next)}>{t('ai.subagents.review')}</button>
+    </div>
+  {/if}
+{/snippet}
+
+<div class="ai-split" class:has-subagent={!!selectedSubagent}>
 <div class="ai">
   {#if chat.external}
     <div class="toolbar">
@@ -597,6 +639,12 @@
         {#if ai.unreadReports > 0}<span class="dot" aria-label={t('fleet.newReports', { n: ai.unreadReports })}></span>{/if}
       </span>
     {/if}
+    {#if fleet && subagents.length > 0}
+      <button type="button" class="pick sub-toggle" aria-expanded={!!selectedSubagent} aria-label={t('ai.subagents.count', { n: subagents.length })} title={t('ai.subagents.count', { n: subagents.length })} onclick={toggleSubagents}>
+        <Icon name="server" size={13} />{subagents.length}
+        {#if waitingSubagents.length > 0}<span class="sub-badge" aria-label={t('ai.subagents.waitingCount', { n: waitingCount(waitingSubagents) })}>{waitingCount(waitingSubagents)}</span>{/if}
+      </button>
+    {/if}
     <IconButton icon="history" small label={t('ai.history')} onclick={() => (historyOpen = true)} />
     <IconButton icon="settings" small label={t('ai.openSettings')} onclick={onsettings} />
   </div>
@@ -626,7 +674,7 @@
     </details>
   {/if}
 
-  {#if fleet && opsConversation}<OpsTasks conversation={opsConversation} />{/if}
+  {#if fleet && opsConversation}<OpsTasks conversation={opsConversation} onselectsubagent={inspectSubagent} />{/if}
 
   <div class="list" bind:this={list} onscroll={onScroll}>
     {#if chat.items.length === 0}
@@ -653,6 +701,7 @@
   {#if chat.external}
     <p class="external-note">{chat.ended ? t('ai.externalEndedNote', { agent: chat.external }) : t('ai.externalNote', { agent: chat.external })}</p>
   {:else}
+  {@render pendingSubagents(waitingElsewhere)}
   <div class="composer">
     {#if fleet && chat.recoveryRequired}
       <div class="recovery" role="status">
@@ -780,6 +829,18 @@
   {/if}
 </div>
 
+  {#if selectedSubagent && subSelection}
+    {@const siblings = ai.subagentsOf(subSelection.parentId)}
+    <div class="subagent-side">
+      <SubagentPanel chats={siblings} selected={selectedSubagent} transcript={chatItems} onselect={selectSubagent} onclose={closeSubagents}>
+        {#snippet attention()}
+          <div class="overlay-attention">{@render pendingSubagents(siblings.filter((sub) => sub !== selectedSubagent && sub.waiting > 0))}</div>
+        {/snippet}
+      </SubagentPanel>
+    </div>
+  {/if}
+</div>
+
 {#if historyOpen}
   <AuditDialog role={fleet ? 'fleet' : 'assistant'} initial={chat.id ?? chat.resumeId} onclose={() => (historyOpen = false)} onresume={(summary, records) => void resume(summary, records)} />
 {/if}
@@ -800,7 +861,32 @@
 <style>
   .recovery { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); margin-bottom: var(--space-2); font-size: var(--text-footnote); }
   .recovery p { margin: 0; color: var(--fg-muted); }
+  .ai-split {
+    position: relative;
+    container: ai-split / inline-size;
+    display: flex;
+    height: 100%;
+    min-width: 0;
+  }
+  .subagent-side {
+    flex: 0 0 clamp(340px, 42%, 520px);
+    min-width: 0;
+    border-inline-start: 1px solid var(--separator);
+  }
+  .overlay-attention { display: none; }
+  @container ai-split (width < 960px) {
+    .overlay-attention { display: block; padding-top: var(--space-2); }
+    .overlay-attention:empty { display: none; }
+    .has-subagent > .ai { visibility: hidden; }
+    .subagent-side {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      border-inline-start: 0;
+    }
+  }
   .ai {
+    flex: 1;
     container: ai / inline-size;
     height: 100%;
     display: flex;
@@ -1274,17 +1360,63 @@
   .primary.danger {
     background: var(--danger);
   }
-  .subtask-items {
+  .dispatch {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    align-items: center;
+    gap: var(--space-1) var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--separator);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    color: var(--fg);
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+  }
+  .dispatch:hover, .dispatch.active { background: var(--accent-soft); }
+  .dispatch.active { border-color: var(--accent); }
+  .dispatch-host, .inspect { display: flex; align-items: center; gap: var(--space-1); }
+  .dispatch-host strong, .dispatch-task {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .dispatch-task {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    color: var(--fg-muted);
+    font-size: var(--text-footnote);
+  }
+  .dispatch-status { font-size: var(--text-footnote); color: var(--fg-muted); }
+  .dispatch.running .dispatch-status, .inspect { color: var(--accent); }
+  .dispatch.waiting .dispatch-status { color: var(--warning); }
+  .dispatch.finished .dispatch-status { color: var(--success); }
+  .inspect { grid-column: 4; font-size: var(--text-footnote); }
+  .delegation {
+    padding: var(--space-2) var(--space-3);
+    border-inline-start: 2px solid var(--accent);
+    border-radius: var(--radius-sm);
+    background: var(--fill);
+    overflow-wrap: anywhere;
+  }
+  .delegation span { font-size: var(--text-footnote); color: var(--fg-muted); }
+  .delegation p { margin: var(--space-1) 0 0; white-space: pre-wrap; }
+  .sub-attention {
     display: flex;
-    flex-direction: column;
+    align-items: center;
+    flex-wrap: wrap;
     gap: var(--space-2);
-    margin: var(--space-1) 0 0 var(--space-3);
-    padding-left: var(--space-3);
-    box-shadow: inset 2px 0 0 var(--separator);
+    margin: 0 var(--space-3) var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    background: var(--warning-soft);
+    color: var(--fg);
+    font-size: var(--text-footnote);
   }
-  .subtask-items > :global(*) {
-    flex: none;
-  }
+  .sub-attention span { flex: 1; overflow-wrap: anywhere; }
+  .sub-attention button { flex: none; }
+  .sub-toggle { flex: none; }
   .sub-badge {
     flex: none;
     min-width: 16px;
