@@ -1145,4 +1145,18 @@ export const zhCN: Messages = {
   'forward.confirmDelete': '删除转发规则"{rule}"吗？',
   'forward.activeCount': '{count} 个转发运行中',
   'forward.noHost': '当前面板没有连接已保存的主机',
+
+  // AI sidebar
+  'ai.sidebar.terminal': '读终端',
+  'ai.sidebar.mode.ask_all': '逐项询问',
+  'ai.sidebar.mode.ask_by_risk': '按风险',
+  'ai.sidebar.mode.auto': '自动执行',
+  'ai.sidebar.modelOptions': '模型与参数',
+  'ai.sidebar.searchModels': '搜索模型',
+  'ai.sidebar.noModelsFound': '没有匹配的模型',
+  'ai.sidebar.effort.minimal': '最低',
+  'ai.sidebar.effort.medium': '中',
+  'ai.sidebar.retryStartup': '重试',
+  'ai.sidebar.planLimits': '套餐额度',
+  'ai.sidebar.usageLabel': '用量：{usage}',
 };

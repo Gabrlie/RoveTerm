@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { choiceKey, effortIndex, optionKey, slashItems, slashQuery, speedToggle, splitOptions } from './composer.ts';
+import { canChangeTerminal, canPrestart, choiceKey, currentChoice, effortPill, fastIndicator, modelGroups, optionKey, slashItems, slashQuery, speedToggle, splitOptions } from './composer.ts';
 import type { ConfigOption } from '../ipc.ts';
 
 const option = (id: string, category: string | null, kind: 'select' | 'boolean', values: string[] = []): ConfigOption => ({
@@ -22,8 +22,6 @@ test('settings split between the model popover and the slash menu', () => {
   assert.equal(split.effort, effort);
   assert.deepEqual(split.toggles, [fast]);
   assert.deepEqual(split.others, [agent]);
-  assert.equal(effortIndex(effort, 'high'), 1);
-  assert.equal(effortIndex(effort, 'unknown'), 0);
 });
 
 test('the slash menu follows what is typed after the slash', () => {
@@ -64,4 +62,62 @@ test('known settings and choices are named from the dictionary', () => {
   assert.equal(choiceKey(option('model', 'model', 'select', ['max']), 'max'), null);
   assert.equal(choiceKey(option('sandbox', null, 'select'), 'workspace-write'), 'ai.sandbox.workspaceWrite');
   assert.equal(optionKey(option('custom', null, 'select')), null);
+});
+
+test('the model trigger uses display names and falls back for unlisted settings', () => {
+  const model = option('model', 'model', 'select');
+  model.choices = [{ value: 'gpt', name: 'GPT', description: null, group: 'OpenAI' }];
+  assert.equal(currentChoice(model, () => 'gpt')?.name, 'GPT');
+  assert.equal(currentChoice(model, () => 'gpt')?.group, 'OpenAI');
+  assert.equal(currentChoice(model, () => 'custom/model')?.name, 'custom/model');
+  assert.equal(currentChoice(model, () => ''), null);
+  assert.equal(currentChoice(null, () => 'gpt'), null);
+  assert.equal(effortPill('High'), '· High');
+  assert.equal(effortPill('高'), '· 高');
+  assert.equal(effortPill(null), '');
+});
+
+test('the fast indicator reflects speed tiers and fast boolean settings', () => {
+  const tier = option('service_tier', null, 'select', ['standard', 'fast']);
+  const fast = option('fast_mode', null, 'boolean');
+  const other = option('verbose', null, 'boolean');
+  assert.equal(fastIndicator(tier, [], () => 'fast'), 'on');
+  assert.equal(fastIndicator(tier, [], () => 'standard'), 'off');
+  assert.equal(fastIndicator(null, [fast], () => 'true'), 'on');
+  assert.equal(fastIndicator(null, [fast], () => 'false'), 'off');
+  assert.equal(fastIndicator(null, [other], () => 'true'), null);
+});
+
+test('model search matches display names and provider groups and keeps group order', () => {
+  const gpt = { value: 'gpt', name: 'GPT Mini', description: null, group: 'OpenAI' };
+  const opus = { value: 'opus', name: 'Opus', description: null, group: 'Anthropic' };
+  const other = { value: 'other', name: 'GPT Large', description: null, group: 'OpenAI' };
+  const choices = [gpt, opus, other];
+  assert.deepEqual(modelGroups(choices, ''), [['OpenAI', [gpt, other]], ['Anthropic', [opus]]]);
+  assert.deepEqual(modelGroups(choices, '  MINI  '), [['OpenAI', [gpt]]]);
+  assert.deepEqual(modelGroups(choices, 'aNTHropic'), [['Anthropic', [opus]]]);
+  assert.deepEqual(modelGroups(choices, 'missing'), []);
+});
+
+test('eligible ACP chats prestart once per agent, including chats about remote hosts', () => {
+  const chat = { external: null, context: { kind: 'host' }, id: null, starting: false, prestartedAgent: null };
+  assert.equal(canPrestart('acp:codex', true, chat), true);
+  assert.equal(canPrestart('acp:codex', false, chat), false);
+  assert.equal(canPrestart('builtin:openai', true, chat), false);
+  assert.equal(canPrestart(null, true, chat), false);
+  assert.equal(canPrestart('acp:codex', true, { ...chat, external: 'Codex' }), false);
+  assert.equal(canPrestart('acp:codex', true, { ...chat, context: { kind: 'fleet' } }), false);
+  assert.equal(canPrestart('acp:codex', true, { ...chat, starting: true }), false);
+  assert.equal(canPrestart('acp:codex', true, { ...chat, id: 'session' }), false);
+  const failed = { ...chat, prestartedAgent: 'acp:codex' };
+  assert.equal(canPrestart('acp:codex', true, failed), false);
+  assert.equal(canPrestart('acp:claude', true, failed), true);
+});
+
+test('terminal access stays editable for empty chats through prestart and locks after the first message', () => {
+  const idle = { id: 'prepared', starting: false, hasUserMessage: false, busy: false };
+  assert.equal(canChangeTerminal(idle), true);
+  assert.equal(canChangeTerminal({ ...idle, id: null, starting: true }), true);
+  assert.equal(canChangeTerminal({ ...idle, id: null, hasUserMessage: true }), false);
+  assert.equal(canChangeTerminal({ ...idle, busy: true }), false);
 });

@@ -17,6 +17,26 @@ export function contextPercent(usage: { used: number; size: number } | null): nu
   return Math.min(100, Math.max(0, (usage.used / usage.size) * 100));
 }
 
+export function usageTone(percent: number | null): 'normal' | 'warning' | 'danger' {
+  if (percent !== null && percent >= 95) return 'danger';
+  if (percent !== null && percent >= 80) return 'warning';
+  return 'normal';
+}
+
+/** Use reported context first, then estimate from the last request and configured window. */
+export function contextMeter(
+  usage: { used: number; size: number } | null,
+  windowSize: number | null,
+  stats: Parameters<typeof contextTokens>[0],
+) {
+  const filled = usage?.used ?? contextTokens(stats);
+  const context = usage && usage.size > 0 ? usage
+    : windowSize !== null && windowSize > 0 ? { used: filled ?? 0, size: windowSize }
+    : null;
+  const percent = contextPercent(context);
+  return { context, percent, filled: percent === null ? filled : null, tone: usageTone(percent) };
+}
+
 /** `123456` as `123k`. */
 export function tokens(count: number): string {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;

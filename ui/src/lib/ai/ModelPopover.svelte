@@ -1,152 +1,189 @@
 <script lang="ts">
-  // The model button of the input card (a brain) and its popover, after Codex: switches such as
-  // fast mode at the top, the current model (which opens the list of models), and a slider for
-  // the reasoning effort. The list of models hides the slider until a model is picked.
+  import { tick } from 'svelte';
   import Icon from '../ui/Icon.svelte';
-  import { t } from '../i18n';
+  import Switch from '../ui/Switch.svelte';
+  import { t, type MessageKey } from '../i18n';
   import type { ConfigOption } from '../ipc';
-  import { effortIndex, fastValue, speedToggle } from './composer';
+  import { currentChoice, effortPill, fastIndicator, fastValue, modelGroups, optionKey, speedToggle } from './composer';
 
   interface Props {
     model: ConfigOption | null;
     effort: ConfigOption | null;
     toggles: ConfigOption[];
-    /** A speed setting with a fast tier, shown as the fast switch. */
     speed: ConfigOption | null;
-    /** A setting's title as shown. */
     title: (option: ConfigOption) => string;
-    /** The value in effect for `option` (changes the user made before the agent started too). */
     value: (option: ConfigOption) => string;
-    /** A choice's name as shown. */
     label: (option: ConfigOption, choice: { value: string; name: string }) => string;
     onset: (option: string, value: string) => void;
-    /** Runs before the popover opens (an agent that has not started starts, to list its models). */
     onopen: () => Promise<boolean>;
+    starting: boolean;
     busy: boolean;
   }
 
-  let { model, effort, toggles, speed, title, value, label, onset, onopen, busy }: Props = $props();
+  let { model, effort, toggles, speed, title, value, label, onset, onopen, starting, busy }: Props = $props();
   let open = $state(false);
+  let opening = false;
   let view = $state<'main' | 'models'>('main');
+  let query = $state('');
   let root = $state<HTMLDivElement>();
-  /** The slider's position while it is dragged. */
-  let dragging = $state<number | null>(null);
+  let trigger = $state<HTMLButtonElement>();
+  let selector = $state<HTMLButtonElement>();
+  let back = $state<HTMLButtonElement>();
+  let search = $state<HTMLInputElement>();
 
-  const modelName = $derived.by(() => {
-    if (!model) return '';
-    const current = value(model);
-    return label(model, model.choices.find((choice) => choice.value === current) ?? { value: current, name: current });
-  });
-  const effortAt = $derived(effort ? (dragging ?? effortIndex(effort, value(effort))) : 0);
-  const effortChoice = $derived(effort?.choices[effortAt] ?? null);
+  const chosenModel = $derived(currentChoice(model, value));
+  const modelName = $derived(model && chosenModel ? label(model, chosenModel) : t('ai.model'));
+  const chosenEffort = $derived(currentChoice(effort, value));
+  const effortLabel = $derived(effort && chosenEffort ? effortPill(shortEffort(effort, chosenEffort)) : '');
+  const fast = $derived(fastIndicator(speed, toggles, value));
+  const groups = $derived(modelGroups(model?.choices ?? [], query));
+
+  const SHORT_EFFORT: Record<string, MessageKey> = {
+    minimal: 'ai.sidebar.effort.minimal',
+    medium: 'ai.sidebar.effort.medium',
+  };
+
+  function shortEffort(option: ConfigOption, choice: { value: string; name: string }): string {
+    const key = SHORT_EFFORT[choice.value.toLowerCase()];
+    return key ? t(key) : label(option, choice);
+  }
 
   async function toggle(): Promise<void> {
     if (open) {
       open = false;
       return;
     }
-    if (!(await onopen())) return;
+    opening = true;
+    const ready = await onopen();
+    if (!opening) return;
+    opening = false;
+    if (!ready) return;
     view = 'main';
     open = true;
   }
 
-  function pickModel(choice: string): void {
-    if (model) onset(model.id, choice);
-    view = 'main';
+  async function showModels(): Promise<void> {
+    query = '';
+    view = 'models';
+    await tick();
+    (search ?? back)?.focus();
   }
 
-  function commitEffort(): void {
-    if (!effort || dragging === null) return;
-    const choice = effort.choices[dragging];
-    dragging = null;
-    if (choice && choice.value !== value(effort)) onset(effort.id, choice.value);
+  async function showMain(): Promise<void> {
+    view = 'main';
+    await tick();
+    selector?.focus();
+  }
+
+  function pickModel(choice: string): void {
+    if (model && choice !== value(model)) onset(model.id, choice);
+    void showMain();
   }
 
   function onWindowPointer(event: PointerEvent): void {
-    if (open && root && !root.contains(event.target as Node)) open = false;
+    if (root && !root.contains(event.target as Node)) {
+      opening = false;
+      open = false;
+    }
   }
 
   function onKey(event: KeyboardEvent): void {
-    if (event.key !== 'Escape' || !open) return;
-    event.stopPropagation();
-    if (view === 'models') view = 'main';
-    else open = false;
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    opening = false;
+    if (!open) return;
+    event.preventDefault();
+    if (view === 'models' && query) query = '';
+    else if (view === 'models') void showMain();
+    else {
+      open = false;
+      trigger?.focus();
+    }
   }
 </script>
 
-<svelte:window onpointerdown={onWindowPointer} />
+<svelte:window onpointerdown={onWindowPointer} onkeydown={onKey} />
 
-<div class="holder" bind:this={root} onkeydown={onKey} role="presentation">
-  <button type="button" class="icon-button" class:active={open} onclick={() => void toggle()} disabled={busy} aria-expanded={open} title={busy ? t('ai.loadingModels') : modelName ? `${t('ai.model')}: ${modelName}` : t('ai.modelSettings')} aria-label={t('ai.modelSettings')}>
-    <Icon name="brain" size={14} />
+<div class="holder" bind:this={root}>
+  <button type="button" class="trigger" class:starting bind:this={trigger} onclick={() => void toggle()} disabled={starting || busy} aria-expanded={open} aria-haspopup="dialog" title={starting ? t('ai.loadingModels') : modelName}>
+    <Icon name="brain" size={13} />
+    <span class="trigger-name">{modelName}</span>
+    {#if effortLabel}<span class="effort-pill">{effortLabel}</span>{/if}
+    {#if fast}
+      <span class:fast-on={fast === 'on'} class="fast" title={t('ai.fastMode')}><Icon name="quickConnect" size={12} /></span>
+    {/if}
+    <span class="chevron"><Icon name="chevronDown" size={11} /></span>
   </button>
   {#if open}
-    <div class="popover" role="dialog" aria-label={t('ai.modelSettings')}>
+    <div class="popover" role="dialog" aria-label={t('ai.sidebar.modelOptions')}>
       {#if view === 'main'}
-        {#if !model && !effort && toggles.length === 0 && !speed}
-          <p class="empty">{t('ai.noModelSettings')}</p>
+        <p class="section-title">{t('ai.sidebar.modelOptions')}</p>
+        {#if model}
+          <button type="button" class="model-row selector" bind:this={selector} onclick={() => void showModels()} disabled={model.choices.length === 0 || starting || busy} title={t('ai.chooseModel')}>
+            <span class="row-copy">
+              <span class="model-name">{modelName}</span>
+              {#if chosenModel?.group}<span class="detail">{chosenModel.group}</span>{/if}
+            </span>
+            {#if model.choices.length > 0}<Icon name="chevron" size={13} />{/if}
+          </button>
         {/if}
-        {#if toggles.length > 0 || speed}
+        {#if effort && effort.choices.length > 0}
+          {@const option = effort}
+          <div class="effort">
+            <p class="section-title">{title(option)}</p>
+            <div class="segmented" role="group" aria-label={title(option)}>
+              {#each option.choices as choice (choice.value)}
+                {@const selected = choice.value === value(option)}
+                <button type="button" class:current={selected} aria-pressed={selected} title={label(option, choice)} disabled={starting || busy} onclick={() => onset(option.id, choice.value)}>{shortEffort(option, choice)}</button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+        {#if speed || toggles.length > 0}
           <div class="toggles">
             {#if speed}
               {@const option = speed}
-              {@const on = value(option) === fastValue(option)}
-              <button type="button" class="chip" class:on role="switch" aria-checked={on} title={title(option)} onclick={() => onset(option.id, speedToggle(option, value(option)))}>
-                <Icon name="quickConnect" size={11} />{t('ai.fastMode')}
-              </button>
+              <div class="toggle-row">
+                <span><Icon name="quickConnect" size={13} />{t('ai.fastMode')}</span>
+                <Switch checked={value(option) === fastValue(option)} disabled={starting || busy} label={t('ai.fastMode')} onchange={() => onset(option.id, speedToggle(option, value(option)))} />
+              </div>
             {/if}
             {#each toggles as option (option.id)}
-              {@const on = value(option) === 'true'}
-              <button type="button" class="chip" class:on role="switch" aria-checked={on} title={title(option)} onclick={() => onset(option.id, on ? 'false' : 'true')}>
-                <Icon name="quickConnect" size={11} />{title(option)}
-              </button>
+              <div class="toggle-row">
+                <span><Icon name={optionKey(option) === 'ai.fastMode' ? 'quickConnect' : 'settings'} size={13} />{title(option)}</span>
+                <Switch checked={value(option) === 'true'} disabled={starting || busy} label={title(option)} onchange={(checked) => onset(option.id, String(checked))} />
+              </div>
             {/each}
           </div>
         {/if}
-        {#if model}
-          <button type="button" class="model" onclick={() => (view = 'models')} disabled={model.choices.length === 0} title={t('ai.chooseModel')}>
-            <span class="model-name">{modelName}</span>
-            {#if model.choices.length > 0}<Icon name="chevron" size={12} />{/if}
-          </button>
-        {/if}
-        {#if effort && effort.choices.length > 1}
-          <div class="effort">
-            <div class="effort-head">
-              <span>{title(effort)}</span>
-              <span class="effort-value">{effortChoice ? label(effort, effortChoice) : ''}</span>
-            </div>
-            <input
-              type="range"
-              min="0"
-              max={effort.choices.length - 1}
-              step="1"
-              value={effortAt}
-              aria-label={t('ai.effort')}
-              aria-valuetext={effortChoice ? label(effort, effortChoice) : ''}
-              oninput={(event) => (dragging = Number(event.currentTarget.value))}
-              onchange={commitEffort}
-            />
-            <div class="ends">
-              <span>{label(effort, effort.choices[0]!)}</span>
-              <span>{label(effort, effort.choices[effort.choices.length - 1]!)}</span>
-            </div>
-          </div>
+        {#if !model && !effort && !speed && toggles.length === 0}
+          <p class="empty">{t('ai.noModelSettings')}</p>
         {/if}
       {:else if model}
         <div class="list-head">
-          <button type="button" class="back" onclick={() => (view = 'main')} aria-label={t('ai.back')} title={t('ai.back')}><Icon name="back" size={13} /></button>
+          <button type="button" class="back" bind:this={back} onclick={() => void showMain()} aria-label={t('ai.back')} title={t('ai.back')}><Icon name="back" size={14} /></button>
           <span>{t('ai.model')}</span>
         </div>
-        <div class="models" role="listbox" aria-label={t('ai.model')}>
-          {#each model.choices as choice, index (choice.value)}
-            {@const current = choice.value === value(model)}
-            {#if choice.group && choice.group !== model.choices[index - 1]?.group}
-              <div class="list-head">{choice.group}</div>
-            {/if}
-            <button type="button" role="option" aria-selected={current} class="choice" class:current onclick={() => pickModel(choice.value)}>
-              <span class="choice-name">{label(model, choice)}{#if current}<Icon name="check" size={12} />{/if}</span>
-              {#if choice.description}<span class="choice-detail">{choice.description}</span>{/if}
-            </button>
+        {#if model.choices.length > 5}
+          <label class="search">
+            <Icon name="search" size={12} />
+            <input bind:this={search} bind:value={query} placeholder={t('ai.sidebar.searchModels')} aria-label={t('ai.sidebar.searchModels')} />
+          </label>
+        {/if}
+        <div class="models">
+          {#each groups as [group, choices] (group)}
+            {#if group}<p class="section-title group-title">{group}</p>{/if}
+            {#each choices as choice (choice.value)}
+              {@const selected = choice.value === value(model)}
+              <button type="button" class="model-row" class:current={selected} aria-pressed={selected} disabled={starting || busy} onclick={() => pickModel(choice.value)}>
+                <span class="row-copy">
+                  <span class="model-name">{label(model, choice)}</span>
+                  {#if choice.description}<span class="detail">{choice.description}</span>{/if}
+                </span>
+                {#if selected}<span class="check"><Icon name="check" size={13} /></span>{/if}
+              </button>
+            {/each}
+          {:else}
+            <p class="empty">{t('ai.sidebar.noModelsFound')}</p>
           {/each}
         </div>
       {/if}
@@ -155,189 +192,245 @@
 </div>
 
 <style>
-  /* The popover spans the input card, which is the positioned ancestor. */
   .holder {
+    min-width: 0;
+  }
+  .trigger {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+    height: 26px;
+    padding: 0 7px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--fill);
+    color: var(--fg-muted);
+    font: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+  }
+  .trigger:not(:disabled):hover,
+  .trigger[aria-expanded='true'] {
+    background: var(--fill-hover);
+    color: var(--fg);
+  }
+  .trigger:disabled {
+    cursor: default;
+  }
+  .trigger.starting .trigger-name {
+    animation: loading 1.3s ease-in-out infinite;
+  }
+  @keyframes loading {
+    50% { opacity: 0.45; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .trigger.starting .trigger-name {
+      animation: none;
+    }
+  }
+  .trigger :global(svg),
+  .effort-pill,
+  .fast,
+  .chevron,
+  .check {
     flex: none;
   }
-  .icon-button {
-    display: grid;
-    place-items: center;
-    width: 24px;
-    height: 24px;
-    padding: 0;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--fg-muted);
-    cursor: pointer;
-  }
-  .icon-button:hover:not(:disabled),
-  .icon-button.active {
-    background: var(--fill-hover);
-    color: var(--fg);
-  }
-  .icon-button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-  .popover {
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: calc(100% + 6px);
-    z-index: 20;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    max-height: 340px;
-    padding: var(--space-2);
-    border-radius: var(--radius-md);
-    background: var(--material-popover);
-    box-shadow: var(--glass-edge), var(--shadow-md);
-    font-size: var(--text-footnote);
-  }
-  .empty {
-    margin: var(--space-1);
-    color: var(--fg-muted);
-  }
-  .toggles {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    height: 22px;
-    padding: 0 8px;
-    border: none;
-    border-radius: var(--radius-pill);
-    background: var(--fill);
-    color: var(--fg-muted);
-    font: inherit;
-    font-size: 11px;
-    cursor: pointer;
-  }
-  .chip.on {
-    background: var(--accent-soft);
-    color: var(--accent);
-    font-weight: 600;
-  }
-  .model {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    width: 100%;
-    min-height: 30px;
-    padding: 0 var(--space-2);
-    border: none;
-    border-radius: var(--radius-sm);
-    background: var(--fill);
-    color: var(--fg);
-    font: inherit;
-    font-weight: 600;
-    text-align: left;
-    cursor: pointer;
-  }
-  .model:hover:not(:disabled) {
-    background: var(--fill-hover);
-  }
-  .model:disabled {
-    cursor: default;
-  }
-  .model-name {
-    flex: 1;
+  .trigger-name {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .effort {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 0 var(--space-1);
-  }
-  .effort-head,
-  .ends {
-    display: flex;
-    justify-content: space-between;
-    gap: var(--space-2);
-  }
-  .effort-head {
-    color: var(--fg-muted);
-  }
-  .effort-value {
     color: var(--fg);
     font-weight: 600;
   }
-  .ends {
-    color: var(--fg-subtle);
-    font-size: 10.5px;
+  .effort-pill {
+    white-space: nowrap;
   }
-  input[type='range'] {
-    width: 100%;
+  .fast,
+  .chevron,
+  .check {
+    display: flex;
+  }
+  .chevron {
+    opacity: 0.7;
+  }
+  .fast-on,
+  .check {
+    color: var(--accent);
+  }
+  .popover {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 8px);
+    left: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    max-height: min(360px, 55vh);
+    overflow: auto;
+    padding: var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--material-popover);
+    box-shadow: var(--shadow-lg);
+    font-size: var(--text-footnote);
+    overscroll-behavior: contain;
+  }
+  .section-title,
+  .empty {
     margin: 0;
-    accent-color: var(--accent);
+    padding: 3px var(--space-2);
+    color: var(--fg-muted);
+    font-size: 11px;
+  }
+  .section-title {
+    font-weight: 600;
+  }
+  .model-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    width: 100%;
+    padding: 7px var(--space-2);
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--fg);
+    font: inherit;
+    text-align: left;
     cursor: pointer;
   }
+  .model-row:hover,
+  .model-row:focus-visible,
+  .back:hover {
+    background: var(--fill-hover);
+  }
+  .model-row:disabled {
+    cursor: default;
+  }
+  .model-row.selector {
+    background: var(--fill);
+  }
+  .model-row.selector:not(:disabled):hover {
+    background: var(--fill-hover);
+  }
+  .model-row.current {
+    background: var(--accent-soft);
+  }
+  .model-row.current .model-name,
+  .model-row.selector .model-name {
+    font-weight: 600;
+  }
+  .model-row :global(svg) {
+    flex: none;
+  }
+  .row-copy {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .detail {
+    color: var(--fg-muted);
+    font-size: 11px;
+  }
+  .effort,
+  .toggles {
+    padding-top: var(--space-1);
+  }
+  .segmented {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    margin: 2px var(--space-1) 0;
+    padding: 3px;
+    border-radius: var(--radius-sm);
+    background: var(--fill);
+  }
+  .segmented button {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    padding: 4px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--fg-muted);
+    font: inherit;
+    font-size: 11px;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+  }
+  .segmented button:hover {
+    background: var(--fill-hover);
+  }
+  .segmented button.current {
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-sm);
+    color: var(--fg);
+    font-weight: 600;
+  }
+  .toggle-row,
+  .toggle-row > span,
   .list-head {
     display: flex;
     align-items: center;
-    gap: 4px;
-    color: var(--fg-muted);
-    font-size: 11px;
+    gap: var(--space-2);
+  }
+  .toggle-row {
+    justify-content: space-between;
+    padding: var(--space-1) var(--space-2);
+  }
+  .list-head {
+    color: var(--fg);
     font-weight: 600;
   }
   .back {
     display: grid;
     place-items: center;
-    width: 22px;
-    height: 22px;
+    width: 26px;
+    height: 26px;
     padding: 0;
-    border: none;
+    border: 0;
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--fg-muted);
     cursor: pointer;
   }
-  .back:hover {
-    background: var(--fill-hover);
+  .search {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--fg-muted);
+  }
+  .search:focus-within {
+    border-color: var(--accent);
+  }
+  .search input {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 6px 0;
+    border: 0;
+    background: transparent;
+    outline: none;
+    box-shadow: none;
     color: var(--fg);
+    font: inherit;
   }
   .models {
     min-height: 0;
     overflow-y: auto;
+    overscroll-behavior: contain;
   }
-  .choice {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    width: 100%;
-    padding: var(--space-1) var(--space-2);
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--fg);
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-  .choice:hover {
-    background: var(--accent);
-    color: var(--accent-fg);
-  }
-  .choice-name {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .choice.current .choice-name {
-    font-weight: 600;
-  }
-  .choice-detail {
-    opacity: 0.7;
-    font-size: 11px;
+  .group-title {
+    padding-top: var(--space-2);
   }
 </style>

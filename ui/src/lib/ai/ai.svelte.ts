@@ -1,5 +1,5 @@
 // AI chats, one per host context (this machine, a saved host, a quick-connect address). A chat
-// starts its agent on the first message and keeps the conversation while the panel is closed.
+// keeps the conversation while the panel is closed.
 import {
   aiAnswer,
   aiCancel,
@@ -41,6 +41,7 @@ import { addCache, type CacheTotals } from './quota';
 import { approvalFor, connectionProblem, itemsFromRecords, titleOf, waitingApproval, type ChatItem } from './chatview';
 import { prefs } from '../settings/prefs.svelte';
 import { canSendPrompt, requestForSend, type PromptRequest } from './requests';
+import { canChangeTerminal } from './composer';
 
 export type { ChatItem } from './chatview';
 
@@ -73,7 +74,15 @@ export class Chat {
   agentName = $state<string | null>(null);
   items = $state<ChatItem[]>([]);
   plan = $state<PlanEntry[]>([]);
-  starting = $state(false);
+  private launching = $state(false);
+  private preparing = $state(false);
+  private stopping = $state(false);
+  private preparation: Promise<void> | null = null;
+  private stopTask: Promise<void> | null = null;
+  private prepareTerminal: SessionId | null = null;
+  /** Last agent attempted automatically for this chat. */
+  prestartedAgent = $state<string | null>(null);
+  prepareErrorAt = $state<number | null>(null);
   /** A turn is running. */
   busy = $state(false);
   mode = $state<AiMode>('ask_by_risk');
@@ -125,6 +134,18 @@ export class Chat {
 
   get canSend(): boolean {
     return canSendPrompt(this.busy, this.starting, this.recoveryRequired, this.recoveryConfirmed);
+  }
+
+  get starting(): boolean {
+    return this.launching || this.preparing || this.stopping;
+  }
+
+  get hasUserMessage(): boolean {
+    return this.items.some((item) => item.kind === 'user');
+  }
+
+  get canAttachTerminal(): boolean {
+    return !this.stopping && canChangeTerminal(this);
   }
 
   private last(): ChatItem | undefined {
@@ -241,9 +262,9 @@ export class Chat {
     }
   }
 
-  private notice(error: unknown): void {
+  private notice(error: unknown, preparing = false): void {
     const text = errorText(error);
-    if (connectionProblem(text)) {
+    if (!preparing && connectionProblem(text)) {
       const open = this.connection();
       if (open) {
         open.state = 'failed';
@@ -254,6 +275,7 @@ export class Chat {
       return;
     }
     const code = typeof error === 'object' && error !== null && 'code' in error ? String((error as { code: unknown }).code) : null;
+    if (preparing) this.prepareErrorAt = this.items.length;
     this.items.push({ kind: 'notice', text, code });
   }
 
@@ -283,20 +305,64 @@ export class Chat {
     await this.submit(request, terminal);
   }
 
-  /** Sends `text`, starting the agent first when needed. `terminal` is the user's terminal on the
-   *  host; `again` sends the last message once more without repeating it in the conversation. */
   /** Starts the agent without sending anything (to list its models before the first message). */
   async prepare(terminal: SessionId | null): Promise<void> {
+    if (this.preparation) return this.preparation;
     if (this.id || this.starting) return;
-    await this.start(terminal);
+    await this.prepareSession(terminal);
+  }
+
+  /** Restarts an idle session to apply a change to its terminal source. */
+  async setAttachTerminal(enabled: boolean, terminal: SessionId | null): Promise<void> {
+    if (!this.canAttachTerminal || this.attachTerminal === enabled) return;
+    this.attachTerminal = enabled;
+    this.prepareTerminal = terminal;
+    if (this.preparation) return this.preparation;
+    if (this.id) await this.prepareSession(terminal);
+  }
+
+  private async prepareSession(terminal: SessionId | null): Promise<void> {
+    this.prepareTerminal = terminal;
+    this.preparing = true;
+    this.preparation = this.openPreparedSession();
+    try {
+      await this.preparation;
+    } finally {
+      this.preparation = null;
+      this.preparing = false;
+    }
+  }
+
+  private async openPreparedSession(): Promise<void> {
+    try {
+      while (!this.stopping) {
+        if (this.id) {
+          this.wanted = { ...Object.fromEntries(this.options.map((option) => [option.id, option.current])), ...this.wanted };
+          this.options = [];
+          this.commands = [];
+          this.usage = null;
+          await this.closeSession();
+          if (this.stopping) return;
+        }
+        const attachTerminal = this.attachTerminal;
+        await this.start(this.prepareTerminal);
+        if (!this.id || attachTerminal === this.attachTerminal) return;
+      }
+    } catch (error) {
+      this.notice(error, true);
+    }
   }
 
   /** Starts the agent; `false` when it could not (a notice says why). */
   private async start(terminal: SessionId | null): Promise<boolean> {
     if (this.id) return true;
     {
-      this.starting = true;
+      this.launching = true;
       try {
+        if (this.prepareErrorAt !== null) {
+          this.items.splice(this.prepareErrorAt, 1);
+          this.prepareErrorAt = null;
+        }
         const agent = this.agent ?? (this.context.kind === 'fleet' ? ai.fleetAgent : ai.defaultAgent);
         if (!agent) throw { code: 'ai.no_agent', message: 'no agent' };
         this.agent = agent;
@@ -320,15 +386,16 @@ export class Chat {
           this.recoveryRequired = true;
           this.recoveryConfirmed = false;
         }
-        this.notice(error);
+        this.notice(error, this.preparing && !this.id);
         return false;
       } finally {
-        this.starting = false;
+        this.launching = false;
       }
     }
     return true;
   }
 
+  /** Sends the message, starting the agent if needed. A retry keeps the original user row. */
   async send(text: string, terminal: SessionId | null, again = false): Promise<void> {
     if (!this.canSend || !text.trim()) return;
     const request = requestForSend(this.request, text, again, () => crypto.randomUUID());
@@ -376,15 +443,18 @@ export class Chat {
   selectedModel = $state<string | null>(null);
   async selectModel(provider: string, model: string): Promise<void> {
     if (this.busy || this.starting) return;
-    this.starting = true;
+    this.launching = true;
     try {
-      if (this.id) this.options = await aiSelectModel(this.id, provider, model);
+      if (this.id) {
+        this.options = await aiSelectModel(this.id, provider, model);
+        this.usage = null;
+      }
       this.agent = `builtin:${provider}`;
       this.selectedModel = model;
     } catch (error) {
       this.notice(error);
     } finally {
-      this.starting = false;
+      this.launching = false;
     }
   }
 
@@ -417,14 +487,25 @@ export class Chat {
     if (this.id) await aiSetMode(this.id, mode).catch((error: unknown) => this.notice(error));
   }
 
-  /** Ends the agent; the chat can start again. */
+  /** Ends the agent before the store replaces the chat. */
   async stop(): Promise<void> {
+    this.stopping = true;
+    this.stopTask ??= this.finishStop();
+    await this.stopTask;
+  }
+
+  private async finishStop(): Promise<void> {
+    await this.preparation;
+    await this.closeSession().catch((error: unknown) => console.warn('stopping the agent failed', error));
+  }
+
+  private async closeSession(): Promise<void> {
     const id = this.id;
     this.id = null;
     this.busy = false;
     if (id) {
       delete ai.byId[id];
-      await aiStop(id).catch((error: unknown) => console.warn('stopping the agent failed', error));
+      await aiStop(id);
     }
   }
 }
@@ -469,6 +550,7 @@ class AiStore {
   /** Starts a new conversation for `chat`'s context, with `agent` when given. */
   async reset(chat: Chat, agent: string | null = chat.agent): Promise<void> {
     await chat.stop();
+    if (this.chats.get(chat.key) !== chat) return;
     const next = new Chat(chat.key, chat.context);
     next.agent = agent;
     next.mode = chat.mode;
@@ -506,8 +588,11 @@ class AiStore {
   /** Switches `chat` to `agent`: the conversation starts over when an agent was already talking. */
   async switchAgent(chat: Chat, agent: string): Promise<void> {
     if (chat.agent === agent) return;
-    if (chat.id || chat.items.length > 0) await this.reset(chat, agent);
-    else chat.agent = agent;
+    if (chat.id || chat.starting || chat.items.length > 0) await this.reset(chat, agent);
+    else {
+      chat.prestartedAgent = null;
+      chat.agent = agent;
+    }
   }
 
   async refreshAgents(): Promise<void> {

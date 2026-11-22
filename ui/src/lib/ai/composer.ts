@@ -113,7 +113,51 @@ export function slashItems(query: string, commands: readonly AgentCommand[], set
   return [...found, ...matching];
 }
 
-/** Position on the effort slider of `value` among `option`'s choices (0 when unknown). */
-export function effortIndex(option: ConfigOption, value: string): number {
-  return Math.max(0, option.choices.findIndex((choice) => choice.value === value));
+type Choice = ConfigOption['choices'][number];
+type OptionValue = (option: ConfigOption) => string;
+
+/** The current choice, keeping an agent's reported value when it has no matching choice. */
+export function currentChoice(option: ConfigOption | null, value: OptionValue): Choice | null {
+  if (!option) return null;
+  const current = value(option).trim();
+  if (!current) return null;
+  return option.choices.find((choice) => choice.value === current) ?? { value: current, name: current, description: null };
+}
+
+export function effortPill(label: string | null): string {
+  return label ? `· ${label}` : '';
+}
+
+export function fastIndicator(speed: ConfigOption | null, toggles: readonly ConfigOption[], value: OptionValue): 'on' | 'off' | null {
+  const fastToggles = toggles.filter((option) => optionKey(option) === 'ai.fastMode');
+  if (speed && value(speed) === fastValue(speed)) return 'on';
+  if (fastToggles.some((option) => value(option) === 'true')) return 'on';
+  return speed || fastToggles.length > 0 ? 'off' : null;
+}
+
+/** Groups matching models by provider in the order each group was introduced. */
+export function modelGroups(choices: readonly Choice[], query: string): [string, Choice[]][] {
+  const wanted = query.trim().toLowerCase();
+  const groups = new Map<string, Choice[]>();
+  for (const choice of choices) {
+    const group = choice.group ?? '';
+    if (!`${choice.name} ${group}`.toLowerCase().includes(wanted)) continue;
+    const entries = groups.get(group);
+    if (entries) entries.push(choice);
+    else groups.set(group, [choice]);
+  }
+  return [...groups];
+}
+
+export function canPrestart(
+  agent: string | null,
+  enabled: boolean,
+  chat: { external: string | null; context: { kind: string }; id: string | null; starting: boolean; prestartedAgent: string | null },
+): agent is string {
+  return enabled && !!agent?.startsWith('acp:') && !chat.external && chat.context.kind !== 'fleet' &&
+    !chat.id && !chat.starting && chat.prestartedAgent !== agent;
+}
+
+export function canChangeTerminal(chat: { hasUserMessage: boolean; busy: boolean }): boolean {
+  return !chat.hasUserMessage && !chat.busy;
 }

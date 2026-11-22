@@ -1142,7 +1142,21 @@ export const en = {
   'error.fs.edit_unsupported': 'The file system cannot safely stage this edit.',
   'error.fs.edit_error': 'The text file could not be read or saved.',
   'error.fs.edit_missing': 'The local working copy could not be found.',
-  'error.fs.edit_recovered': 'Recovered local editor copy.'
+  'error.fs.edit_recovered': 'Recovered local editor copy.',
+
+  // AI sidebar
+  'ai.sidebar.terminal': 'Terminal',
+  'ai.sidebar.mode.ask_all': 'Ask all',
+  'ai.sidebar.mode.ask_by_risk': 'By risk',
+  'ai.sidebar.mode.auto': 'Auto',
+  'ai.sidebar.modelOptions': 'Model & options',
+  'ai.sidebar.searchModels': 'Search models',
+  'ai.sidebar.noModelsFound': 'No matching models',
+  'ai.sidebar.effort.minimal': 'Min',
+  'ai.sidebar.effort.medium': 'Med',
+  'ai.sidebar.retryStartup': 'Retry',
+  'ai.sidebar.planLimits': 'Plan limits',
+  'ai.sidebar.usageLabel': 'Usage: {usage}',
 } as const;
 
 export type MessageKey = keyof typeof en;

@@ -1,16 +1,12 @@
 <script lang="ts">
-  // The AI page of the right panel, laid out like VSCode's agent chat: the agent and the
-  // conversation's title at the top, the conversation about the focused tab's host (each
-  // operation as one line that expands, approvals inline), and an input card with the model,
-  // approval mode and usage at the bottom. Typing `/` lists the agent's commands and settings.
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import Icon from '../ui/Icon.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import Markdown from './Markdown.svelte';
   import AuditDialog from './AuditDialog.svelte';
   import UsageMeter from './UsageMeter.svelte';
   import ModelPopover from './ModelPopover.svelte';
-  import { builtinCommands, choiceKey, optionKey, slashItems, slashQuery, splitOptions, type SlashItem } from './composer';
+  import { builtinCommands, canPrestart, choiceKey, optionKey, slashItems, slashQuery, splitOptions, type SlashItem } from './composer';
   import { ai, contextKey, type Chat } from './ai.svelte';
   import { outcomeState, rows, subject, toolSubject, type ApprovalItem } from './chatview';
   import { hostOf, workspace } from '../workspace/workspace.svelte';
@@ -74,14 +70,31 @@
   const agentRef = $derived(chat.agent ?? (fleet ? ai.fleetAgent : ai.defaultAgent));
   const agent = $derived(agents.find((entry) => entry.agent === agentRef) ?? null);
   const waiting = $derived(chat.waiting);
+  const provider = $derived(prefs.value.ai.providers.find((entry) => `builtin:${entry.id}` === agentRef));
+  const currentModel = $derived(chat.options.find((entry) => entry.id === 'model')?.current ?? chat.selectedModel ?? provider?.model ?? null);
+  const windowSize = $derived(provider && currentModel ? provider.contexts[currentModel] ?? provider.context_window : null);
+
+  $effect(() => {
+    const target = chat;
+    const ref = agentRef;
+    if (!canPrestart(ref, !!agent, target)) return;
+    const terminal = terminalPane?.sessionId ?? null;
+    untrack(() => {
+      target.prestartedAgent = ref;
+      void target.prepare(terminal);
+    });
+  });
 
   let draft = $state('');
   let input = $state<HTMLTextAreaElement>();
   let list = $state<HTMLDivElement>();
   let pickerOpen = $state(false);
   let picker = $state<HTMLDivElement>();
+  let agentTrigger = $state<HTMLButtonElement>();
   let modeOpen = $state(false);
   let modePicker = $state<HTMLDivElement>();
+  let modeTrigger = $state<HTMLButtonElement>();
+  let slashMenu = $state<HTMLDivElement>();
   let historyOpen = $state(false);
   /** The title being typed, while renaming. */
   let renaming = $state<string | null>(null);
@@ -96,11 +109,7 @@
   /** Rows the user expanded, by key. */
   let expanded = $state<Record<string, boolean>>({});
 
-  const MODES: { value: AiMode; label: string }[] = [
-    { value: 'ask_all', label: t('ai.mode.ask_all') },
-    { value: 'ask_by_risk', label: t('ai.mode.ask_by_risk') },
-    { value: 'auto', label: t('ai.mode.auto') },
-  ];
+  const MODES: AiMode[] = ['ask_all', 'ask_by_risk', 'auto'];
   const MODE_ICONS: Record<AiMode, IconName> = { ask_all: 'lock', ask_by_risk: 'eye', auto: 'play' };
   const EXAMPLES: MessageKey[] = ['ai.example.health', 'ai.example.logs', 'ai.example.disk'];
   const FLEET_EXAMPLES: MessageKey[] = ['fleet.example.health', 'fleet.example.updates', 'fleet.example.certs'];
@@ -111,7 +120,7 @@
 
   function send(): void {
     const text = draft.trim();
-    if (!text || !chat.canSend) return;
+    if (!text || !chat.canSend || !agent) return;
     draft = '';
     following = true;
     void chat.send(text, terminalPane?.sessionId ?? null);
@@ -121,6 +130,7 @@
   function onKeydown(event: KeyboardEvent): void {
     if (!event.isComposing && slashKey(event)) {
       event.preventDefault();
+      event.stopPropagation();
       return;
     }
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -161,15 +171,12 @@
   /** The agent's settings: as it reports them, or, before the built-in assistant starts, its
    *  provider's models. */
   const settings = $derived.by((): ConfigOption[] => {
-    if (!agentRef?.startsWith('builtin:')) return chat.options;
-    const provider = prefs.value.ai.providers.find((entry) => `builtin:${entry.id}` === agentRef);
-    if (!provider) return [];
-    const modelChoices = prefs.value.ai.providers.flatMap((p) => [p.model, ...p.models].map((name) => ({
+    if (!provider || currentModel === null) return chat.options;
+    const modelChoices = prefs.value.ai.providers.flatMap((p) => [...new Set([p.model, ...p.models, ...(p.id === provider.id ? [currentModel] : [])])].map((name) => ({
       value: JSON.stringify([p.id, name]), name, description: null, group: p.name
     })));
-    const current = chat.options.find((entry) => entry.id === 'model')?.current ?? chat.selectedModel ?? provider.model;
     return [
-      { id: 'model', name: t('ai.model'), category: 'model', kind: 'select', current: JSON.stringify([provider.id, current]), choices: modelChoices },
+      { id: 'model', name: t('ai.model'), category: 'model', kind: 'select', current: JSON.stringify([provider.id, currentModel]), choices: modelChoices },
       { id: 'effort', name: t('ai.effort'), category: 'thought_level', kind: 'select', current: chat.options.find((entry) => entry.id === 'effort')?.current ?? provider.effort, choices: EFFORT_LEVELS.map((level) => ({ value: level, name: level, description: null })) },
     ];
   });
@@ -194,9 +201,11 @@
   /** Starts a local agent that has not started yet, without a message, so that it lists its
    *  models, settings and commands. Returns whether they can be shown. */
   async function prepareAgent(): Promise<boolean> {
-    if (!chat.id && agentRef?.startsWith('acp:')) {
-      await chat.prepare(terminalPane?.sessionId ?? null);
-      return !!chat.id;
+    const target = chat;
+    if (!target.id && agentRef?.startsWith('acp:')) {
+      if (!agent) return false;
+      await target.prepare(terminalPane?.sessionId ?? null);
+      return chat === target && !!target.id;
     }
     return true;
   }
@@ -361,8 +370,25 @@
   });
 
   function onWindowPointer(event: PointerEvent): void {
-    if (pickerOpen && picker && !picker.contains(event.target as Node)) pickerOpen = false;
-    if (modeOpen && modePicker && !modePicker.contains(event.target as Node)) modeOpen = false;
+    const target = event.target as Node;
+    if (pickerOpen && picker && !picker.contains(target)) pickerOpen = false;
+    if (modeOpen && modePicker && !modePicker.contains(target)) modeOpen = false;
+    if (slashOpen && target !== input && !slashMenu?.contains(target)) {
+      slashClosed = draft;
+      slashSetting = null;
+    }
+  }
+
+  function onPopoverKey(event: KeyboardEvent): void {
+    if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
+    if (pickerOpen) {
+      pickerOpen = false;
+      agentTrigger?.focus();
+    } else if (modeOpen) {
+      modeOpen = false;
+      modeTrigger?.focus();
+    } else if (!slashKey(event)) return;
+    event.preventDefault();
   }
 
   onMount(() => {
@@ -371,7 +397,7 @@
   });
 </script>
 
-<svelte:window onpointerdown={onWindowPointer} />
+<svelte:window onpointerdown={onWindowPointer} onkeydown={onPopoverKey} />
 
 {#snippet operationRow(key: string, operation: AiOperation, outcome: AiOutcome | null, state: RowState, reviewer?: string)}
   {@const output = outputOf(outcome)}
@@ -499,6 +525,9 @@
             {:else if item.code === 'vault.locked' && !vault.unlocked && !vault.keyLost}
               <button type="button" class="link" onclick={() => void vault.unlock().catch(() => undefined)}>{t('ai.unlock')}</button>
             {/if}
+            {#if row.key === target.prepareErrorAt && target === chat}
+              <button type="button" class="link" disabled={target.starting} onclick={() => void prepareAgent()}>{t('ai.sidebar.retryStartup')}</button>
+            {/if}
           </div>
         {/if}
       {/if}
@@ -519,24 +548,30 @@
       <span class="pick agent-pick fleet-title"><Icon name="bot" size={13} /><span class="pick-name">{t('fleet.title')}</span></span>
     {:else}
     <div class="picker" bind:this={picker}>
-      <button type="button" class="pick agent-pick" onclick={() => (pickerOpen = !pickerOpen)} aria-expanded={pickerOpen} title={agent ? `${t('ai.agent')}: ${agent.name}${agent.detail ? `\n${agent.detail}` : ''}` : t('ai.chooseAgent')}>
+      <button type="button" class="pick agent-pick" bind:this={agentTrigger} onclick={() => (pickerOpen = !pickerOpen)} aria-expanded={pickerOpen} aria-haspopup="menu" title={agent ? `${t('ai.agent')}: ${agent.name}${agent.detail ? `\n${agent.detail}` : ''}` : t('ai.chooseAgent')}>
         <Icon name="bot" size={13} /><span class="pick-name">{agent?.name ?? t('ai.chooseAgent')}</span>
+        <span class="pick-arrow"><Icon name="chevronDown" size={11} /></span>
       </button>
       {#if pickerOpen}
-        <div class="menu down" role="menu">
+        <div class="menu down" role="menu" aria-label={t('ai.agent')}>
           {#each GROUPS as group (group.kind)}
             {@const entries = agents.filter((entry) => entry.kind === group.kind)}
             {#if entries.length > 0}
               <p class="menu-title">{t(group.title)}</p>
               {#each entries as entry (entry.agent)}
-                <button type="button" role="menuitem" class="menu-item" class:current={entry.agent === agentRef} onclick={() => chooseAgent(entry)}>
-                  <span class="menu-name">{entry.name}</span>
-                  <span class="menu-detail">{entry.via_npx ? t('ai.viaNpx') : entry.detail}</span>
+                <button type="button" role="menuitemradio" aria-checked={entry.agent === agentRef} class="menu-item" class:current={entry.agent === agentRef} onclick={() => chooseAgent(entry)}>
+                  <span class="menu-copy">
+                    <span class="menu-name">{entry.name}</span>
+                    {#if entry.via_npx || entry.detail}<span class="menu-detail">{entry.via_npx ? t('ai.viaNpx') : entry.detail}</span>{/if}
+                  </span>
+                  {#if entry.agent === agentRef}<span class="menu-check"><Icon name="check" size={13} /></span>{/if}
                 </button>
               {/each}
             {/if}
           {/each}
-          <button type="button" role="menuitem" class="menu-item manage" onclick={() => ((pickerOpen = false), onsettings())}>{t('ai.manageAgents')}</button>
+          <div class="menu-footer">
+            <button type="button" role="menuitem" class="menu-item manage" onclick={() => ((pickerOpen = false), onsettings())}><Icon name="settings" size={13} />{t('ai.manageAgents')}</button>
+          </div>
         </div>
       {/if}
     </div>
@@ -631,23 +666,30 @@
     {/if}
     <div class="card">
       <div class="context">
-        <span class="chip"><Icon name={context.kind === 'local' ? 'terminal' : 'server'} size={11} />{hostName}</span>
+        <span class="chip host" title={hostName}><Icon name={context.kind === 'local' ? 'terminal' : 'server'} size={11} /><span>{hostName}</span></span>
         {#if !fleet}
-        <label class="chip toggle icon-only" class:on={chat.attachTerminal} title={`${t('ai.terminalHint')}${chat.id ? `\n${t('ai.terminalFixed')}` : ''}`}>
-          <input type="checkbox" bind:checked={chat.attachTerminal} disabled={!!chat.id} aria-label={t('ai.terminalHint')} />
-          <Icon name="terminal" size={12} />
-        </label>
+          <span class="terminal-toggle" title={chat.hasUserMessage ? t('ai.terminalFixed') : t('ai.terminalHint')}>
+            <button type="button" class="chip toggle" class:on={chat.attachTerminal} aria-pressed={chat.attachTerminal} disabled={!chat.canAttachTerminal} onclick={() => void chat.setAttachTerminal(!chat.attachTerminal, terminalPane?.sessionId ?? null)}>
+              <Icon name="terminal" size={12} />{t('ai.sidebar.terminal')}
+            </button>
+          </span>
         {/if}
+        {#key chat}
+          <UsageMeter agent={agentRef} usage={chat.usage} {windowSize} stats={chat.stats} cache={chat.cache} busy={chat.busy} />
+        {/key}
       </div>
       {#if slashOpen}
-        <div class="menu slash" role="listbox" aria-label={t('ai.slash.title')}>
+        <div class="menu slash" bind:this={slashMenu} role="listbox" aria-label={t('ai.slash.title')}>
           {#if slashSetting}
             {@const option = slashSetting}
             <p class="menu-title">{optionName(option)}</p>
             {#each option.choices as choice, at (choice.value)}
               <button type="button" role="option" aria-selected={at === slashAt} class="menu-item" class:active={at === slashAt} class:current={choice.value === chat.optionValue(option)} onpointerenter={() => (slashAt = at)} onclick={() => pickSettingChoice(option, choice.value)}>
-                <span class="menu-name">{entryName(option, choice)}</span>
-                {#if choice.description}<span class="menu-detail wrap">{choice.description}</span>{/if}
+                <span class="menu-copy">
+                  <span class="menu-name">{entryName(option, choice)}</span>
+                  {#if choice.description}<span class="menu-detail wrap">{choice.description}</span>{/if}
+                </span>
+                {#if choice.value === chat.optionValue(option)}<span class="menu-check"><Icon name="check" size={13} /></span>{/if}
               </button>
             {/each}
           {:else if chat.starting}
@@ -660,13 +702,15 @@
                 <p class="menu-title">{item.kind === 'command' ? t('ai.slash.commands') : t('ai.slash.settings')}</p>
               {/if}
               <button type="button" role="option" aria-selected={at === slashAt} class="menu-item" class:active={at === slashAt} onpointerenter={() => (slashAt = at)} onclick={() => pickSlash(item)}>
-                {#if item.kind === 'command'}
-                  <span class="menu-name"><span class="mono">/{item.command.name}</span>{#if item.command.hint}<span class="hint">{item.command.hint}</span>{/if}</span>
-                  {#if item.command.description}<span class="menu-detail wrap">{item.command.description}</span>{/if}
-                {:else}
-                  <span class="menu-name">{optionName(item.option)}</span>
-                  <span class="menu-detail">{entryName(item.option, item.option.choices.find((choice) => choice.value === chat.optionValue(item.option)) ?? { value: '', name: chat.optionValue(item.option) })}</span>
-                {/if}
+                <span class="menu-copy">
+                  {#if item.kind === 'command'}
+                    <span class="menu-name"><span class="mono">/{item.command.name}</span>{#if item.command.hint}<span class="hint">{item.command.hint}</span>{/if}</span>
+                    {#if item.command.description}<span class="menu-detail wrap">{item.command.description}</span>{/if}
+                  {:else}
+                    <span class="menu-name">{optionName(item.option)}</span>
+                    <span class="menu-detail">{entryName(item.option, item.option.choices.find((choice) => choice.value === chat.optionValue(item.option)) ?? { value: '', name: chat.optionValue(item.option) })}</span>
+                  {/if}
+                </span>
               </button>
             {/each}
           {/if}
@@ -674,42 +718,46 @@
       {/if}
       <textarea bind:this={input} bind:value={draft} rows="1" placeholder={fleet ? t('fleet.placeholder') : t('ai.placeholder', { host: hostInText })} aria-label={fleet ? t('fleet.placeholder') : t('ai.placeholder', { host: hostInText })} oninput={onInput} onkeydown={onKeydown}></textarea>
       <div class="card-foot">
-        <ModelPopover
-          model={split.model}
-          effort={split.effort}
-          toggles={split.toggles}
-          speed={split.speed}
-          title={optionName}
-          value={(option) => chat.optionValue(option)}
-          label={entryName}
-          onset={(option, value) => {
-            if (option === 'model' && agentRef?.startsWith('builtin:')) {
-              const [provider, model] = JSON.parse(value) as [string, string];
-              void chat.selectModel(provider, model);
-            } else void chat.setOption(option, value);
-          }}
-          onopen={prepareAgent}
-          busy={chat.starting || chat.busy}
-        />
+        {#key chat}
+          <ModelPopover
+            model={split.model}
+            effort={split.effort}
+            toggles={split.toggles}
+            speed={split.speed}
+            title={optionName}
+            value={(option) => chat.optionValue(option)}
+            label={entryName}
+            onset={(option, value) => {
+              if (option === 'model' && agentRef?.startsWith('builtin:')) {
+                const [provider, model] = JSON.parse(value) as [string, string];
+                void chat.selectModel(provider, model);
+              } else void chat.setOption(option, value);
+            }}
+            onopen={prepareAgent}
+            starting={chat.starting}
+            busy={chat.busy}
+          />
+        {/key}
         <div class="picker spread" bind:this={modePicker}>
-          <button type="button" class="pick icon" onclick={() => (modeOpen = !modeOpen)} aria-expanded={modeOpen} title={`${t('ai.mode')}: ${t(`ai.mode.${chat.mode}`)}`} aria-label={`${t('ai.mode')}: ${t(`ai.mode.${chat.mode}`)}`}>
-            <Icon name={MODE_ICONS[chat.mode]} size={14} />
+          <button type="button" class="pick mode-tone {chat.mode}" bind:this={modeTrigger} onclick={() => (modeOpen = !modeOpen)} aria-expanded={modeOpen} aria-haspopup="menu" aria-label={`${t('ai.mode')} · ${t(`ai.sidebar.mode.${chat.mode}`)}`} title={t(`ai.modeHint.${chat.mode}`)}>
+            <Icon name={MODE_ICONS[chat.mode]} size={13} />{t(`ai.sidebar.mode.${chat.mode}`)}
           </button>
           {#if modeOpen}
             <div class="menu" role="menu" aria-label={t('ai.mode')}>
               <p class="menu-title">{t('ai.mode')}</p>
-              {#each MODES as entry (entry.value)}
-                <button type="button" role="menuitemradio" aria-checked={entry.value === chat.mode} class="menu-item" class:current={entry.value === chat.mode} onclick={() => ((modeOpen = false), void chat.setMode(entry.value))}>
-                  <span class="menu-name with-icon"><Icon name={MODE_ICONS[entry.value]} size={12} />{entry.label}</span>
-                  <span class="menu-detail wrap">{t(`ai.modeHint.${entry.value}`)}</span>
+              {#each MODES as mode (mode)}
+                <button type="button" role="menuitemradio" aria-checked={mode === chat.mode} class="menu-item" class:current={mode === chat.mode} onclick={() => ((modeOpen = false), void chat.setMode(mode), modeTrigger?.focus())}>
+                  <span class="mode-badge mode-tone {mode}"><Icon name={MODE_ICONS[mode]} size={15} /></span>
+                  <span class="menu-copy">
+                    <span class="menu-name">{t(`ai.sidebar.mode.${mode}`)}</span>
+                    <span class="menu-detail wrap">{t(`ai.modeHint.${mode}`)}</span>
+                  </span>
+                  {#if mode === chat.mode}<span class="menu-check"><Icon name="check" size={13} /></span>{/if}
                 </button>
               {/each}
             </div>
           {/if}
         </div>
-        <span class="spacer"></span>
-        <UsageMeter agent={agentRef} usage={chat.usage} stats={chat.stats} cache={chat.cache} busy={chat.busy} />
-        <span class="gap" aria-hidden="true"></span>
         {#if chat.busy}
           <button type="button" class="send stop" title={t('ai.stop')} aria-label={t('ai.stop')} onclick={() => void chat.cancel()}><Icon name="stop" size={12} /></button>
         {:else}
@@ -1270,45 +1318,47 @@
   }
   .context {
     display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
   }
   .chip {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    max-width: 100%;
-    height: 20px;
+    height: 22px;
     padding: 0 6px;
+    border: 0;
     border-radius: var(--radius-sm);
     background: var(--fill);
     color: var(--fg-muted);
+    font: inherit;
     font-size: 11px;
     white-space: nowrap;
+  }
+  .host {
+    min-width: 0;
+  }
+  .host span {
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .chip :global(svg),
+  .terminal-toggle {
+    flex: none;
+  }
   .chip.toggle {
     cursor: pointer;
-    opacity: 0.6;
+  }
+  .chip.toggle:not(:disabled):not(.on):hover {
+    background: var(--fill-hover);
   }
   .chip.toggle.on {
-    opacity: 1;
-    color: var(--fg);
+    background: var(--accent-soft);
+    color: var(--accent);
   }
-  .chip.toggle input {
-    position: absolute;
-    opacity: 0;
-    pointer-events: none;
-  }
-  .chip.icon-only {
-    position: relative;
-    width: 22px;
-    justify-content: center;
-    padding: 0;
-  }
-  .chip.toggle:not(.on) :global(svg) {
-    opacity: 0.45;
+  .chip.toggle:disabled {
+    cursor: default;
   }
   textarea {
     width: 100%;
@@ -1326,10 +1376,7 @@
   .card-foot {
     display: flex;
     align-items: center;
-    gap: 2px;
-    min-width: 0;
-  }
-  .card-foot .spacer {
+    gap: 5px;
     min-width: 0;
   }
   .picker {
@@ -1361,31 +1408,39 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .pick-arrow {
+    display: flex;
+    flex: none;
+    color: var(--fg-muted);
+  }
   .menu {
     position: absolute;
-    bottom: calc(100% + 6px);
+    bottom: calc(100% + 8px);
     left: 0;
     z-index: 20;
     width: 240px;
-    max-height: 320px;
+    max-height: min(340px, 55vh);
     overflow-y: auto;
-    padding: var(--space-1);
+    overscroll-behavior: contain;
+    padding: var(--space-2);
+    border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--material-popover);
-    box-shadow: var(--glass-edge), var(--shadow-md);
+    box-shadow: var(--shadow-lg);
+    font-size: var(--text-footnote);
   }
   .menu-title {
-    margin: var(--space-1) var(--space-2) 2px;
+    margin: 3px var(--space-2) 4px;
     color: var(--fg-muted);
     font-size: 11px;
     font-weight: 600;
   }
   .menu-item {
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
+    align-items: center;
+    gap: var(--space-2);
     width: 100%;
-    padding: var(--space-1) var(--space-2);
+    padding: 7px var(--space-2);
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;
@@ -1394,59 +1449,96 @@
     text-align: left;
     cursor: pointer;
   }
-  .menu-item:hover {
-    background: var(--accent);
-    color: var(--accent-fg);
+  .menu-item:hover,
+  .menu-item:focus-visible,
+  .menu-item.active {
+    background: var(--fill-hover);
   }
-  .menu-item.current .menu-name::after {
-    content: ' ✓';
+  .menu-item.current {
+    background: var(--accent-soft);
+  }
+  .menu-item.current .menu-name {
+    font-weight: 600;
+  }
+  .menu-copy {
+    display: grid;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .menu-check {
+    display: flex;
+    flex: none;
+    color: var(--accent);
   }
   .menu-detail {
-    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    opacity: 0.7;
+    color: var(--fg-muted);
     font-size: 11px;
   }
-  /* Spans the input card rather than starting at its button. */
+  .menu-detail.wrap {
+    white-space: normal;
+  }
   .picker.spread {
     position: static;
+    flex: none;
   }
   .picker.spread .menu,
   .menu.slash {
     right: 0;
     width: auto;
-    bottom: calc(100% + 6px);
-  }
-  .menu.slash {
-    left: 0;
   }
   .menu.down {
     top: calc(100% + 4px);
     bottom: auto;
-  }
-  .menu-item.active {
-    background: var(--fill-hover);
-  }
-  .menu-item.active:hover {
-    background: var(--accent);
   }
   .menu-name .mono {
     font-family: var(--font-mono);
   }
   .menu-name .hint {
     margin-left: 6px;
-    opacity: 0.6;
+    color: var(--fg-muted);
   }
-  .pick.icon {
-    width: 24px;
-    justify-content: center;
-    padding: 0;
+  .mode-tone {
+    --mode-bg: var(--fill);
+    --mode-fg: var(--fg-muted);
+    background: var(--mode-bg);
+    color: var(--mode-fg);
   }
-  .gap {
+  .mode-tone.ask_by_risk {
+    --mode-bg: var(--accent-soft);
+    --mode-fg: var(--accent);
+  }
+  .mode-tone.auto {
+    --mode-bg: var(--warning-soft);
+    --mode-fg: var(--warning);
+  }
+  .pick.mode-tone {
+    height: 26px;
+    padding: 0 7px;
+    white-space: nowrap;
+    font-weight: 600;
+  }
+  .pick.mode-tone:hover,
+  .pick.mode-tone[aria-expanded='true'] {
+    background: color-mix(in srgb, var(--mode-bg), var(--mode-fg) 8%);
+    color: var(--mode-fg);
+  }
+  .mode-badge {
+    display: grid;
+    place-items: center;
     flex: none;
-    width: var(--space-2);
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-sm);
+  }
+  .menu-footer {
+    margin-top: var(--space-1);
+    padding-top: var(--space-1);
+    border-top: 1px solid var(--separator);
   }
   .agent-pick {
     max-width: 160px;
@@ -1464,56 +1556,13 @@
     margin: 0 2px;
     background: var(--separator);
   }
-  .toggle-row {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .switch-mark {
-    position: relative;
-    width: 26px;
-    height: 15px;
-    border-radius: 8px;
-    background: var(--fill-hover);
-    transition: background var(--dur-fast) var(--ease-out);
-  }
-  .switch-mark::after {
-    content: '';
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    background: #fff;
-    box-shadow: 0 0.5px 1px rgb(0 0 0 / 0.25);
-    transition: transform var(--dur-fast) var(--ease-out);
-  }
-  .switch-mark.on {
-    background: var(--success);
-  }
-  .switch-mark.on::after {
-    transform: translateX(11px);
-  }
-  .menu-detail.wrap {
-    white-space: normal;
-  }
-  .with-icon {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .menu-item.manage {
-    margin-top: var(--space-1);
-    box-shadow: inset 0 1px 0 var(--separator);
-    font-size: var(--text-footnote);
-  }
   .send {
     display: grid;
     place-items: center;
     flex: none;
     width: 26px;
     height: 26px;
+    margin-left: auto;
     border: none;
     border-radius: 50%;
     background: var(--accent);
