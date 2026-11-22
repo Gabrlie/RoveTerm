@@ -11,7 +11,7 @@
 [![Rust](https://img.shields.io/badge/Rust-1.92%2B-F97316?logo=rust&logoColor=white)](Cargo.toml)
 [![Tauri 2](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](src-tauri/tauri.conf.json)
 [![Svelte 5](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)](package.json)
-[![License: MIT](https://img.shields.io/badge/License-MIT-16A34A)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-16A34A)](LICENSE)
 
 [🇨🇳 简体中文](README.md) • [🇺🇸 English](README.en.md) • [📝 更新日志](CHANGELOG.md) • [📖 开发文档](docs/development.md) • [🏗️ 架构设计](docs/architecture.md) • [🐛 问题反馈](https://github.com/Gabrlie/RoveTerm/issues)
 
@@ -210,7 +210,7 @@ RoveTerm/
 
 ## 📄 开源协议
 
-本项目基于 **MIT License** 开源（声明见 [Cargo.toml](Cargo.toml)）。
+本项目基于 **MIT License** 开源，详见 [LICENSE](LICENSE)。
 
 ---
 
