@@ -15,11 +15,11 @@
   --window: #e3e3e8;
   --material-sidebar: rgb(247 247 249 / 0.84);
   --material-bar: rgb(248 248 250 / 0.9);
-  --material-popover: rgb(246 246 248 / 0.93);
+  --material-popover: rgb(246 246 248 / 0.78);
   --material-blur: blur(24px) saturate(180%);
   --surface: #ffffff;
   --surface-raised: #ffffff;
-  --overlay: rgb(0 0 0 / 0.28);
+  --overlay: rgb(0 0 0 / 0.22);
   --fill: rgb(0 0 0 / 0.045);
   --fill-hover: rgb(0 0 0 / 0.06);
   --fill-pressed: rgb(0 0 0 / 0.1);
@@ -123,10 +123,10 @@
     --window: #1b1b1d;
     --material-sidebar: rgb(38 38 42 / 0.74);
     --material-bar: rgb(34 34 37 / 0.82);
-    --material-popover: rgb(44 44 48 / 0.92);
+    --material-popover: rgb(40 40 44 / 0.76);
     --surface: #1e1e20;
     --surface-raised: #2a2a2d;
-    --overlay: rgb(0 0 0 / 0.5);
+    --overlay: rgb(0 0 0 / 0.4);
     --fill: rgb(255 255 255 / 0.06);
     --fill-hover: rgb(255 255 255 / 0.08);
     --fill-pressed: rgb(255 255 255 / 0.13);
@@ -162,10 +162,10 @@
   --window: #1b1b1d;
   --material-sidebar: rgb(38 38 42 / 0.74);
   --material-bar: rgb(34 34 37 / 0.82);
-  --material-popover: rgb(44 44 48 / 0.92);
+  --material-popover: rgb(40 40 44 / 0.76);
   --surface: #1e1e20;
   --surface-raised: #2a2a2d;
-  --overlay: rgb(0 0 0 / 0.5);
+  --overlay: rgb(0 0 0 / 0.4);
   --fill: rgb(255 255 255 / 0.06);
   --fill-hover: rgb(255 255 255 / 0.08);
   --fill-pressed: rgb(255 255 255 / 0.13);
@@ -202,16 +202,19 @@
   --window: transparent;
   --material-sidebar: rgb(246 246 248 / 0.32);
   --material-bar: rgb(250 250 252 / 0.5);
+  --material-popover: rgb(246 246 248 / 0.68);
 }
 @media (prefers-color-scheme: dark) {
   :root[data-material='on']:not([data-theme='light']) {
     --material-sidebar: rgb(30 30 33 / 0.32);
     --material-bar: rgb(32 32 35 / 0.5);
+    --material-popover: rgb(36 36 40 / 0.68);
   }
 }
 :root[data-material='on'][data-theme='dark'] {
   --material-sidebar: rgb(30 30 33 / 0.32);
   --material-bar: rgb(32 32 35 / 0.5);
+  --material-popover: rgb(36 36 40 / 0.68);
 }
 /* On macOS the material only tints the window: a mostly opaque background keeps what is behind
    the window from showing through. */

@@ -73,6 +73,7 @@
     max-height: 88vh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
     border-radius: var(--radius-lg);
     background: var(--material-popover);
     backdrop-filter: var(--material-blur);

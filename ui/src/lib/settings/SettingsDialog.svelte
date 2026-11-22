@@ -142,7 +142,13 @@
     gap: var(--space-2);
     padding: var(--space-4) var(--space-5) var(--space-6);
     overflow-y: auto;
-    background: color-mix(in srgb, var(--fill) 50%, transparent);
+    background: color-mix(in srgb, var(--fill) 36%, transparent);
+  }
+  .pane :global(.form-group) {
+    background: color-mix(in srgb, var(--surface-raised) 76%, transparent);
+  }
+  :global(:root[data-blur='off']) .pane :global(.form-group) {
+    background: var(--surface-raised);
   }
   h2 {
     margin: 0 0 var(--space-2);
