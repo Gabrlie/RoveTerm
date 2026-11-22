@@ -195,10 +195,10 @@ RoveTerm/
 
 | 平台 | 点击图标获取安装包 | 自动更新支持 |
 |---|---|---|
-| **macOS** | [![macOS Apple Silicon](https://img.shields.io/badge/macOS-Apple%20Silicon%20.dmg-111827?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![macOS Intel](https://img.shields.io/badge/macOS-Intel%20.dmg-374151?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | ✅ 应用内签名更新（`.app.tar.gz`） |
-| **Windows** | [![Windows x64](https://img.shields.io/badge/Windows-x64%20NSIS%20.exe-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | ✅ 应用内签名更新（NSIS `.exe`） |
-| **Linux** | [![Linux AppImage](https://img.shields.io/badge/Linux-AppImage-D97706?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![Linux Debian](https://img.shields.io/badge/Linux-.deb%20%2F%20.rpm-A81D33?style=for-the-badge&logo=debian&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | ✅ AppImage 应用内签名更新 |
-| **Android** | [![Android APK](https://img.shields.io/badge/Android-arm64--v8a%20.apk-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | 🚧 检测与校验清单已就绪（见路线图） |
+| **macOS** | [![macOS Apple Silicon](https://img.shields.io/badge/DMG-Apple%20Silicon-000000.svg?logo=apple&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![macOS Universal](https://img.shields.io/badge/DMG-Universal-00A9E0.svg?logo=apple&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | ✅ 应用内签名更新（`.app.tar.gz`） |
+| **Windows** | [![Windows x64](https://img.shields.io/badge/Setup-x64-2d7d9a.svg?logo=windows&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![Windows ARM64](https://img.shields.io/badge/Setup-ARM64-67b7d1.svg?logo=windows&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | ✅ 应用内签名更新（NSIS `.exe`） |
+| **Linux** | [![Linux AppImage](https://img.shields.io/badge/AppImage-x64%20%2F%20ARM64-f84e29.svg?logo=linux&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![Linux Debian](https://img.shields.io/badge/DebPackage-x64%20%2F%20ARM64-FF9966.svg?logo=debian&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![Linux RPM](https://img.shields.io/badge/RpmPackage-x64%20%2F%20ARM64-F1B42F.svg?logo=redhat&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | ✅ AppImage 应用内签名更新 |
+| **Android** | [![Android APK](https://img.shields.io/badge/APK-ARMv8-168039.svg?logo=android&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | 🚧 检测与校验清单已就绪（见路线图） |
 
 </div>
 

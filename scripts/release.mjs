@@ -171,14 +171,19 @@ export function classifyArtifact(filePath) {
         ? 'Universal'
         : arch === 'aarch64'
           ? 'Apple Silicon'
-          : 'Intel';
+          : 'Intel x64';
+    const badgeColor =
+      arch === 'universal' ? '00A9E0' : arch === 'aarch64' ? '000000' : '374151';
     return {
       role: 'installer',
       os: 'macos',
       arch,
       format: 'dmg',
       label,
-      badgeMessage: `${label} .dmg`,
+      badgeLabel: 'DMG',
+      badgeMessage: label,
+      badgeColor,
+      badgeLogo: 'apple',
       name,
       path: filePath,
     };
@@ -195,7 +200,10 @@ export function classifyArtifact(filePath) {
       targets: [target],
       format: 'exe',
       label: `${archLabel} NSIS`,
-      badgeMessage: `${archLabel} .exe`,
+      badgeLabel: 'Setup',
+      badgeMessage: archLabel,
+      badgeColor: arch === 'aarch64' ? '67b7d1' : '2d7d9a',
+      badgeLogo: 'windows',
       name,
       path: filePath,
     };
@@ -212,7 +220,10 @@ export function classifyArtifact(filePath) {
       targets: [target],
       format: 'msi',
       label: `${archLabel} MSI`,
-      badgeMessage: `${archLabel} .msi`,
+      badgeLabel: 'MSI',
+      badgeMessage: archLabel,
+      badgeColor: arch === 'aarch64' ? '4ba3e3' : '0078D4',
+      badgeLogo: 'windows',
       name,
       path: filePath,
     };
@@ -241,7 +252,10 @@ export function classifyArtifact(filePath) {
       targets: [`linux-${arch === 'aarch64' ? 'aarch64' : 'x86_64'}`],
       format: 'AppImage',
       label: `${archLabel} AppImage`,
-      badgeMessage: `${archLabel} .AppImage`,
+      badgeLabel: 'AppImage',
+      badgeMessage: archLabel,
+      badgeColor: arch === 'aarch64' ? 'd94826' : 'f84e29',
+      badgeLogo: 'linux',
       name,
       path: filePath,
     };
@@ -251,13 +265,23 @@ export function classifyArtifact(filePath) {
     const arch = detectArch(`${name} ${context}`, 'x86_64');
     const archLabel = arch === 'aarch64' ? 'ARM64' : 'x64';
     const ext = extname(name).slice(1).toLowerCase();
+    const isDeb = ext === 'deb';
     return {
       role: 'installer',
       os: 'linux',
       arch,
       format: ext,
       label: `${archLabel} .${ext}`,
-      badgeMessage: `${archLabel} .${ext}`,
+      badgeLabel: isDeb ? 'DebPackage' : 'RpmPackage',
+      badgeMessage: archLabel,
+      badgeColor: isDeb
+        ? arch === 'aarch64'
+          ? 'e07a5f'
+          : 'FF9966'
+        : arch === 'aarch64'
+          ? 'd4961a'
+          : 'F1B42F',
+      badgeLogo: isDeb ? 'debian' : 'redhat',
       name,
       path: filePath,
     };
@@ -273,6 +297,20 @@ export function classifyArtifact(filePath) {
           : rawArch === 'x86_64'
             ? 'x86_64'
             : 'universal';
+    const badgeMessage =
+      abi === 'arm64-v8a'
+        ? 'ARMv8'
+        : abi === 'armeabi-v7a'
+          ? 'ARMv7'
+          : abi === 'x86_64'
+            ? 'x64'
+            : 'Universal';
+    const badgeColor =
+      abi === 'arm64-v8a' || abi === 'universal'
+        ? '168039'
+        : abi === 'armeabi-v7a'
+          ? '45bf55'
+          : '96ed89';
     return {
       role: 'android',
       os: 'android',
@@ -280,7 +318,10 @@ export function classifyArtifact(filePath) {
       abi,
       format: 'apk',
       label: abi === 'universal' ? 'Universal APK' : `${abi} APK`,
-      badgeMessage: `${abi} .apk`,
+      badgeLabel: 'APK',
+      badgeMessage,
+      badgeColor,
+      badgeLogo: 'android',
       name,
       path: filePath,
     };
@@ -335,9 +376,23 @@ export function collectArtifacts(dirs) {
   }
 
   const osOrder = { macos: 0, windows: 1, linux: 2, android: 3 };
+  const formatOrder = { dmg: 0, exe: 0, msi: 1, AppImage: 0, deb: 1, rpm: 2, apk: 0 };
+  const archOrder = {
+    x86_64: 0,
+    aarch64: 1,
+    universal: 2,
+    'arm64-v8a': 0,
+    'armeabi-v7a': 1,
+  };
+  const macArchOrder = { aarch64: 0, universal: 1, x86_64: 2 };
   installers.sort((a, b) => {
     const byOs = (osOrder[a.os] ?? 9) - (osOrder[b.os] ?? 9);
-    return byOs !== 0 ? byOs : a.name.localeCompare(b.name);
+    if (byOs !== 0) return byOs;
+    const byFmt = (formatOrder[a.format] ?? 9) - (formatOrder[b.format] ?? 9);
+    if (byFmt !== 0) return byFmt;
+    const map = a.os === 'macos' ? macArchOrder : archOrder;
+    const byArch = (map[a.arch] ?? 9) - (map[b.arch] ?? 9);
+    return byArch !== 0 ? byArch : a.name.localeCompare(b.name);
   });
 
   return {
@@ -439,18 +494,18 @@ export function buildAndroidManifest({
 }
 
 const OS_META = {
-  macos: { title: 'macOS', badgeLabel: 'macOS', color: '111827', logo: 'apple' },
-  windows: { title: 'Windows', badgeLabel: 'Windows', color: '0078D4', logo: 'windows' },
-  linux: { title: 'Linux', badgeLabel: 'Linux', color: 'D97706', logo: 'linux' },
-  android: { title: 'Android', badgeLabel: 'Android', color: '3DDC84', logo: 'android' },
+  macos: { title: 'macOS', badgeLabel: 'DMG', color: '000000', logo: 'apple' },
+  windows: { title: 'Windows', badgeLabel: 'Setup', color: '2d7d9a', logo: 'windows' },
+  linux: { title: 'Linux', badgeLabel: 'Linux', color: 'f84e29', logo: 'linux' },
+  android: { title: 'Android', badgeLabel: 'APK', color: '168039', logo: 'android' },
 };
 
 function shieldsBadge(label, message, color, logo) {
   const esc = (text) => encodeURIComponent(text).replace(/-/g, '--').replace(/_/g, '__');
-  return `https://img.shields.io/badge/${esc(label)}-${esc(message)}-${color}?style=for-the-badge&logo=${logo}&logoColor=white`;
+  return `https://img.shields.io/badge/${esc(label)}-${esc(message)}-${color}.svg?logo=${logo}&logoColor=white`;
 }
 
-/** Renders FlClash-style clickable icon download section + bilingual changelog + SHA-256 table. */
+/** Renders FlClash-style compact clickable icon download table + bilingual changelog + SHA-256 table. */
 export function renderReleaseNotes({
   version,
   tag,
@@ -463,9 +518,13 @@ export function renderReleaseNotes({
   const lines = [
     `# RoveTerm v${normalized}`,
     '',
-    '## 📦 下载安装 / Downloads',
+    '<div align="center">',
     '',
-    '> 点击下方对应平台图标即可直接下载安装包 / Click a platform badge below to download directly.',
+    `[![Release Downloads](https://img.shields.io/github/downloads/${repo}/${tag}/total?style=flat-square&logo=github)](https://github.com/${repo}/releases/tag/${tag})`,
+    '',
+    '</div>',
+    '',
+    '**按操作系统点击图标下载 / Download based on your OS:**',
     '',
   ];
 
@@ -475,25 +534,41 @@ export function renderReleaseNotes({
       '',
     );
   } else {
-    lines.push('| 平台 / Platform | 点击图标下载 / Direct Download | 包体信息 / Package |');
-    lines.push('|---|---|---|');
+    lines.push(
+      '<div align="left">',
+      '<table>',
+      '  <thead align="left">',
+      '    <tr>',
+      '      <th>OS</th>',
+      '      <th>Download</th>',
+      '    </tr>',
+      '  </thead>',
+      '  <tbody align="left">',
+    );
     for (const osKey of ['macos', 'windows', 'linux', 'android']) {
       const group = installers.filter((item) => item.os === osKey);
       if (group.length === 0) continue;
       const meta = OS_META[osKey];
-      const badges = group
-        .map((item) => {
-          const url = `https://github.com/${repo}/releases/download/${tag}/${encodeURIComponent(item.name)}`;
-          const img = shieldsBadge(meta.badgeLabel, item.badgeMessage, meta.color, meta.logo);
-          return `[![${meta.title} ${item.label}](${img})](${url})`;
-        })
-        .join(' ');
-      const files = group
-        .map((item) => `\`${item.name}\` (${formatBytes(item.size)})`)
-        .join('<br>');
-      lines.push(`| **${meta.title}** | ${badges} | ${files} |`);
+      const badgeLines = group.map((item) => {
+        const url = `https://github.com/${repo}/releases/download/${tag}/${encodeURIComponent(item.name)}`;
+        const img = shieldsBadge(
+          item.badgeLabel ?? meta.badgeLabel,
+          item.badgeMessage,
+          item.badgeColor ?? meta.color,
+          item.badgeLogo ?? meta.logo,
+        );
+        return `        <a href="${url}"><img src="${img}" alt="${meta.title} ${item.label}"></a>`;
+      });
+      lines.push(
+        '    <tr>',
+        `      <td>${meta.title}</td>`,
+        '      <td>',
+        badgeLines.join('<br>\n'),
+        '      </td>',
+        '    </tr>',
+      );
     }
-    lines.push('');
+    lines.push('  </tbody>', '</table>', '</div>', '');
   }
 
   lines.push('---', '', '## 📝 更新日志 / Changelog', '', changelogSection.trim(), '');

@@ -18,9 +18,9 @@
 
 ### 从 Linux 交叉构建 Windows 安装包
 
-1. 安装工具：`sudo apt install nsis lld llvm clang`、`rustup target add x86_64-pc-windows-msvc`、`cargo install --locked cargo-xwin`。
-2. 构建：`pnpm build:windows`。首次运行会下载 MSVC CRT 与 Windows SDK（需同意其许可，脚本已设置 `XWIN_ACCEPT_LICENSE=1`）。
-3. 产物位于 `target/x86_64-pc-windows-msvc/release/bundle/nsis/RoveTerm_<版本>_x64-setup.exe`，未签名，首次运行时 SmartScreen 会提示。
+1. 安装工具：`sudo apt install nsis lld llvm clang`、`rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc`、`cargo install --locked cargo-xwin`。
+2. 构建：`pnpm build:windows`（x64）或 `pnpm build:windows:arm64`（ARM64）。首次运行会下载 MSVC CRT 与 Windows SDK（需同意其许可，脚本已设置 `XWIN_ACCEPT_LICENSE=1`）。
+3. 产物位于 `target/<target>/release/bundle/nsis/RoveTerm_<版本>_<arch>-setup.exe`，未签名，首次运行时 SmartScreen 会提示。
 
 交叉构建只产出 NSIS 安装包；MSI 和代码签名需要在 Windows 上构建。链接时 `LNK4099` 缺少 pdb 的警告可以忽略。
 

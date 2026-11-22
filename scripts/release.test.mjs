@@ -61,16 +61,22 @@ describe('scripts/release.mjs', () => {
 
       writeFileSync(join(winDir, 'RoveTerm_0.2.0_x64-setup.exe'), 'win-nsis');
       writeFileSync(join(winDir, 'RoveTerm_0.2.0_x64-setup.exe.sig'), 'SIG-WIN-X64\n');
+      writeFileSync(join(winDir, 'RoveTerm_0.2.0_arm64-setup.exe'), 'win-nsis-arm64');
+      writeFileSync(join(winDir, 'RoveTerm_0.2.0_arm64-setup.exe.sig'), 'SIG-WIN-ARM64\n');
 
       writeFileSync(join(linuxDir, 'RoveTerm_0.2.0_amd64.AppImage'), 'linux-appimage');
       writeFileSync(join(linuxDir, 'RoveTerm_0.2.0_amd64.AppImage.sig'), 'SIG-LINUX-X64\n');
+      writeFileSync(join(linuxDir, 'RoveTerm_0.2.0_aarch64.AppImage'), 'linux-appimage-arm64');
+      writeFileSync(join(linuxDir, 'RoveTerm_0.2.0_aarch64.AppImage.sig'), 'SIG-LINUX-ARM64\n');
       writeFileSync(join(linuxDir, 'roveterm_0.2.0_amd64.deb'), 'linux-deb');
+      writeFileSync(join(linuxDir, 'roveterm_0.2.0_arm64.deb'), 'linux-deb-arm64');
+      writeFileSync(join(linuxDir, 'RoveTerm-0.2.0-1.aarch64.rpm'), 'linux-rpm-arm64');
 
       writeFileSync(join(androidDir, 'RoveTerm_0.2.0_arm64-v8a.apk'), 'android-apk');
 
       const collected = collectArtifacts([macDir, winDir, linuxDir, androidDir]);
-      assert.equal(collected.installers.length, 5);
-      assert.equal(collected.updaterPackages.length, 3);
+      assert.equal(collected.installers.length, 9);
+      assert.equal(collected.updaterPackages.length, 5);
       assert.equal(collected.androidApks.length, 1);
 
       const latest = buildLatestManifest({
@@ -79,14 +85,6 @@ describe('scripts/release.mjs', () => {
         notes: 'Plain notes',
         pubDate: '2026-11-22T09:00:00Z',
         updaterPackages: collected.updaterPackages,
-        existing: {
-          platforms: {
-            'linux-aarch64': {
-              signature: 'SIG-EXISTING-ARM64',
-              url: 'https://github.com/Gabrlie/RoveTerm/releases/download/v0.2.0/RoveTerm_0.2.0_aarch64.AppImage',
-            },
-          },
-        },
       });
 
       // Strictly Tauri v2 fields only (no unknown keys that would break tauri-plugin-updater).
@@ -94,8 +92,9 @@ describe('scripts/release.mjs', () => {
       assert.equal(latest.platforms['darwin-aarch64'].signature, 'SIG-MAC-UNIVERSAL');
       assert.equal(latest.platforms['darwin-x86_64'].signature, 'SIG-MAC-UNIVERSAL');
       assert.equal(latest.platforms['windows-x86_64'].signature, 'SIG-WIN-X64');
+      assert.equal(latest.platforms['windows-aarch64'].signature, 'SIG-WIN-ARM64');
       assert.equal(latest.platforms['linux-x86_64'].signature, 'SIG-LINUX-X64');
-      assert.equal(latest.platforms['linux-aarch64'].signature, 'SIG-EXISTING-ARM64');
+      assert.equal(latest.platforms['linux-aarch64'].signature, 'SIG-LINUX-ARM64');
 
       const android = buildAndroidManifest({
         version: '0.2.0',
@@ -115,10 +114,14 @@ describe('scripts/release.mjs', () => {
         changelogSection: '### 中文更新日志\n- 新特性\n\n### English Changelog\n- New feature',
         installers: collected.installers,
       });
-      assert.match(notes, /img\.shields\.io\/badge\/macOS-/);
-      assert.match(notes, /img\.shields\.io\/badge\/Windows-/);
-      assert.match(notes, /img\.shields\.io\/badge\/Linux-/);
-      assert.match(notes, /img\.shields\.io\/badge\/Android-/);
+      assert.doesNotMatch(notes, /style=for-the-badge/);
+      assert.match(notes, /img\.shields\.io\/badge\/DMG-Apple%20Silicon-000000\.svg\?logo=apple/);
+      assert.match(notes, /img\.shields\.io\/badge\/Setup-x64-2d7d9a\.svg\?logo=windows/);
+      assert.match(notes, /img\.shields\.io\/badge\/Setup-ARM64-67b7d1\.svg\?logo=windows/);
+      assert.match(notes, /img\.shields\.io\/badge\/AppImage-ARM64-d94826\.svg\?logo=linux/);
+      assert.match(notes, /img\.shields\.io\/badge\/DebPackage-ARM64-e07a5f\.svg\?logo=debian/);
+      assert.match(notes, /img\.shields\.io\/badge\/RpmPackage-ARM64-d4961a\.svg\?logo=redhat/);
+      assert.match(notes, /img\.shields\.io\/badge\/APK-ARMv8-168039\.svg\?logo=android/);
       assert.match(notes, /SHA-256 校验和/);
       assert.match(notes, /compare\/v0\.1\.0\.\.\.v0\.2\.0/);
     });

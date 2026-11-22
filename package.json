@@ -22,6 +22,7 @@
     "check:docs": "node scripts/check-docs.mjs",
     "test:ui": "node --experimental-strip-types --no-warnings --test \"ui/src/lib/**/*.test.ts\"",
     "build:windows": "XWIN_ACCEPT_LICENSE=1 tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis",
+    "build:windows:arm64": "XWIN_ACCEPT_LICENSE=1 tauri build --runner cargo-xwin --target aarch64-pc-windows-msvc --bundles nsis",
     "tauri": "tauri"
   },
   "dependencies": {
