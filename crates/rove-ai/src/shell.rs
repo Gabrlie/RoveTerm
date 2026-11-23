@@ -37,6 +37,8 @@ pub struct Redirect {
 pub struct Segment {
     pub words: Vec<Word>,
     pub redirects: Vec<Redirect>,
+    /// Standard input comes from an inline here-document (`<<`) or here-string (`<<<`).
+    pub inline_stdin: bool,
 }
 
 /// The structure of a command line.
@@ -305,6 +307,7 @@ impl Lexer<'_> {
                     // Here-string: the word is data, not a file.
                     self.pos += 2;
                     self.pending_redirect = None;
+                    self.segment.inline_stdin = true;
                     self.skip_blanks();
                     self.discard_word();
                     return;
@@ -314,6 +317,7 @@ impl Lexer<'_> {
                     if self.peek(0) == Some('-') {
                         self.pos += 1;
                     }
+                    self.segment.inline_stdin = true;
                     self.skip_blanks();
                     let delimiter = self.discard_word();
                     self.heredocs.push(delimiter);
@@ -549,6 +553,10 @@ mod tests {
         let parsed = parse("cat <<EOF > f\nrm -rf /\nEOF\nls # rm -rf /");
         assert_eq!(parsed.pipelines.len(), 2);
         assert_eq!(words(&parsed.pipelines[0][0]), ["cat"]);
+        assert!(parsed.pipelines[0][0].inline_stdin);
         assert_eq!(words(&parsed.pipelines[1][0]), ["ls"]);
+        assert!(!parsed.pipelines[1][0].inline_stdin);
+        let here_string = parse("python3 - <<< 'print(1)'");
+        assert!(here_string.pipelines[0][0].inline_stdin);
     }
 }

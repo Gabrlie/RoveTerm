@@ -5,7 +5,7 @@ RoveTerm 中的 AI Agent：内置助手（主力）、ACP 客户端（兼容通�
 ## 契约
 
 - `shell::parse(line)` 把命令行拆成流水线、简单命令、去掉引号的词、重定向和嵌套命令文本（`$(…)`、反引号、子 shell）。不执行也不展开任何内容；无法静态确定的词标为 `dynamic`。
-- `risk::assess_command(line, rules)` 给出 `Assessment { risk, programs, opaque, reasons }`，取各命令段的最高风险（`ReadOnly` < `Modify` < `Dangerous`）。未知程序为 `Modify`。执行内容无法检查时标记 `opaque`，普通参数展开按程序规则分级。动态输出重定向和软件包管理变更分别给出 `dynamic_target` 和 `package` 原因，供自动与无人值守模式的审阅者判断。
+- `risk::assess_command(line, rules)` 给出 `Assessment { risk, programs, opaque, reasons }`，取各命令段的最高风险（`ReadOnly` < `Modify` < `Dangerous`）。静态规则仅用于直接放行明确只读的命令、标注风险原因与约束会话级记住权限，不在自动/无人值守模式下先于 AI 审阅拦截。执行内容无法静态查看（外部脚本、动态程序名、嵌套过深等）时标记 `opaque`，命令行内联脚本（如 `python3 -c`、`python3 - <<'PY'`、`python3 - <<<`）与普通参数展开按可见命令评估。动态输出重定向和软件包管理变更分别给出 `dynamic_target` 和 `package` 原因，与危险/不透明标注一并交给审阅者判断。
 - `assess_read(path)`：读取秘密文件（私钥、`/etc/shadow`、云凭据、`.env` 等）为 `Modify`，其他为 `ReadOnly`。`assess_write(path)`：写系统路径和设备为 `Dangerous`，其他为 `Modify`。
 - `Policy::decide(operation, assessment)` 按 `Mode` 返回 `Allow` 或 `Ask { rememberable }`。`Policy::answer` 记录用户的回答，`AllowSession` 按程序名记住命令、按目录记住写入、按文件记住读取、按种类记住 Agent 自带工具。危险或不透明操作、可见内联脚本、动态输出重定向与通过 shell 读取秘密文件逐次判断。
 - `Rules` 是用户追加的只读程序名和危险文本，由 `validate()` 校验。

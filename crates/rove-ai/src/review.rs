@@ -1,7 +1,9 @@
-//! The judge of the auto mode: an ordinary modification (not a dangerous or an opaque one) is
-//! first shown to a reviewer, and runs when the reviewer allows it with enough confidence;
-//! otherwise the user is asked. (In the review mode the user decides every modification.) The reviewer sees what the
-//! operation does and why it was flagged, never file contents beyond the change or credentials.
+//! The judge of the auto mode: any operation that static read-only rules and session grants do
+//! not automatically allow is shown to the reviewer with its full command/change and static risk
+//! annotations, and runs when the reviewer allows it with enough confidence; otherwise the user is
+//! asked (or the operation is refused in unattended mode). (In the review mode the user decides
+//! every modification.) The reviewer sees what the operation does and why it was flagged, never
+//! file contents beyond the change or credentials.
 
 use std::time::Duration;
 
@@ -11,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::llm::{Client, Message};
 use crate::policy::Operation;
-use crate::risk::Assessment;
+use crate::risk::{Assessment, Risk};
 
 /// Longest the reviewer may take; a slow one counts as "ask the user".
 pub const TIMEOUT: Duration = Duration::from_secs(20);
@@ -44,25 +46,35 @@ impl ReviewRequest {
             Operation::UpdateNotes { diff } => {
                 format!("change RoveTerm's notes about the host:\n{diff}")
             }
-            Operation::AgentTool { title, command, .. } => match command {
-                Some(command) => format!("{title}: run {command}"),
-                None => title.clone(),
+            Operation::AgentTool {
+                title,
+                command,
+                detail,
+                ..
+            } => match (command, detail) {
+                (Some(command), _) => format!("{title}: run {command}"),
+                (None, Some(detail)) => format!("{title}: {detail}"),
+                (None, None) => title.clone(),
             },
         };
+        let mut reasons = Vec::new();
+        if assessment.risk == Risk::Dangerous {
+            reasons.push("risk: dangerous".to_owned());
+        }
+        if assessment.opaque {
+            reasons.push("opaque".to_owned());
+        }
+        reasons.extend(assessment.reasons.iter().map(|reason| {
+            if reason.detail.is_empty() {
+                reason.code.to_owned()
+            } else {
+                format!("{}: {}", reason.code, reason.detail)
+            }
+        }));
         Self {
             host: host.to_owned(),
             operation: clip(&text),
-            reasons: assessment
-                .reasons
-                .iter()
-                .map(|reason| {
-                    if reason.detail.is_empty() {
-                        reason.code.to_owned()
-                    } else {
-                        format!("{}: {}", reason.code, reason.detail)
-                    }
-                })
-                .collect(),
+            reasons,
         }
     }
 
@@ -109,7 +121,7 @@ pub trait Reviewer: Send + Sync {
     async fn review(&self, request: &ReviewRequest) -> Result<Verdict, String>;
 }
 
-const INSTRUCTIONS: &str = "An AI assistant wants to do this on a server the user manages. Allow only ordinary, expected maintenance that preserves data, service availability, security and secrecy. For dynamic_target, allow only if the command makes the target's origin and purpose clear. For package operations, check the scope and effects on installed packages, repositories and services. Ask the user about uncertain effects or changes outside the evident purpose.";
+const INSTRUCTIONS: &str = "An AI assistant wants to do this on a server the user manages. Allow only ordinary, expected inspection or maintenance that preserves data, service availability, security and secrecy. Inline scripts (such as python3 -c or heredocs) and sourcing standard system metadata files like /etc/os-release may be allowed when their full visible effect is clearly safe. For dynamic_target, allow only if the command makes the target's origin and purpose clear. For package operations, check the scope and effects on installed packages, repositories and services. Ask the user for destructive or high-risk operations (risk: dangerous, recursive deletion, disk/power/firewall changes, custom_rule), reading private keys or credentials (read_secret), or uninspectable external scripts/commands (opaque) unless the visible command is unmistakably safe.";
 
 /// The session's own model as reviewer: one request without tools, answered `allow` or `ask`.
 pub struct ModelReviewer {

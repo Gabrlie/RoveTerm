@@ -19,7 +19,8 @@
 - 引号与转义会先去掉，`r''m`、`\rm`、`"rm"`、`/bin/rm` 都按 `rm` 判断。
 - `$(…)`、反引号、子 shell 中的命令单独评估；`bash -c`、`su -c`、`eval`、`watch`、`ssh host cmd`、`find -exec` 中的命令也会被评估。
 - `sudo`、`env`、`nohup`、`timeout`、`xargs` 等包装器会被跳过，评估真正运行的程序；`sudo` 和 `doas` 至少为 `Modify`。
-- 展开决定程序名或脚本内容、执行外部脚本、解释器从标准输入执行代码或嵌套超过检查深度时，标为 `opaque`，至少为 `Modify`。普通参数和输入路径的展开按命令本身评估。
+- 展开决定程序名或整段脚本内容、执行外部脚本、从非内联标准输入执行代码或嵌套超过检查深度时，标为 `opaque`，至少为 `Modify`。命令行内联代码（如 `python3 -c`、here-doc `python3 - <<'PY'`、here-string `<<<`）和普通参数/输入路径的展开不标为 `opaque`。
+- 静态规则仅用于直接放行明确只读的命令、标注风险原因并约束“本次对话允许”；自动与无人值守模式下，凡静态规则未直接放行的操作均交由 AI 审阅器判断，静态规则不抢先拦截。
 - 写普通文件为 `Modify`，写系统路径或磁盘设备为 `Dangerous`，`/dev/null` 等不计。动态输出路径为 `Modify`（`dynamic_target`），可交给审阅者逐次判断。here-document 的正文按数据处理。
 - `sed` 解析脚本（`-e`、`--expression` 或第一个操作数）：`w`/`W`/`e` 命令与 `s` 的 `w`/`e` 标志、无法识别的命令为 `Modify`；`awk` 去掉字符串字面量后检查 `system(…)`（允许空格）、`print`/`printf` 重定向到文件或命令（写标准输出、标准错误、`/dev/null` 不计）、`cmd | getline` 与 `|&`。两者的脚本来自文件（`-f`）或展开时为 opaque。
 
@@ -193,7 +194,7 @@ ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次
 
 对话以统一的 `Message`（用户、助手含工具调用、工具结果）传给客户端，由它转换成各格式的请求；Anthropic 的同一轮工具结果合并进一条用户消息，签名的思考块在下一轮原样回传。
 
-自动模式的判断者（`review.rs`）：自动模式（`Auto`）下，策略要询问用户的普通修改（风险为 modify、非 opaque、非 Agent 自己的工具）先交给审阅者，审阅者放行且置信度不低于 `ai.review_confidence` 时直接执行，否则照常询问；危险操作始终询问用户。审阅者看到主机名、操作描述（命令，或文件路径与改动，最多 8 KiB）与被标记的原因，看不到文件全文与凭据；20 秒内无结论、出错或未配置时询问用户。判断者三选一（`ai.reviewer`）：`model` 用会话的服务商模型（本机智能体用默认服务商，没有时用第一个）；`chosen` 用指定的服务商与模型（`ai.review_model`，可选更便宜的）；`jev` 见下。`ModelReviewer`发一次不带工具、不带推理的请求，只认 `allow` 一个词；`JevReviewer` 向 TypeSafe 的 `/v1/systemone` 发一个 Choice 问题（`allow` / `ask`），取其置信度，key 存为 `ai_key` 的 `review:jev`（`ai_set_review_key`，随同步）。结论发出 `AiEvent::Reviewed`，Journal 记 `ai/reviewed`（审阅者、是否放行、置信度、操作），放行的操作在对话中带"已审阅"标记，只读操作以外的行不再并入"已执行 N 个只读操作"。自动与无人值守模式下询问用户时，`AiEvent::Approval.review`（`ReviewNote`，同记入 `ai/approval`）说明判断者为何没有放行：没把握（附置信度）、没有判断者、判断者出错或超时、内容不能完整展示（opaque）、危险操作；审批卡片显示这一行。
+自动模式的判断者（`review.rs`）：自动模式（`Auto`）与可修改的无人值守模式下，静态规则未直接放行的全部操作都先交给审阅者（附带主机名、完整命令/改动文本及静态风险标注，包括 `risk: dangerous`、`opaque`、`read_secret` 等，最多 8 KiB，不含文件全文与凭据），审阅者放行且置信度不低于 `ai.review_confidence` 时直接执行，否则转人工审批（无人值守时拒绝并列入报告）；20 秒内无结论、出错或未配置时同样询问用户。判断者三选一（`ai.reviewer`）：`model` 用会话的服务商模型（本机智能体用默认服务商，没有时用第一个）；`chosen` 用指定的服务商与模型（`ai.review_model`，可选更便宜的）；`jev` 见下。`ModelReviewer` 发一次不带工具、不带推理的请求，只认 `allow` 一个词；`JevReviewer` 向 TypeSafe 的 `/v1/systemone` 发一个 Choice 问题（`allow` / `ask`），取其置信度，key 存为 `ai_key` 的 `review:jev`（`ai_set_review_key`，随同步）。结论发出 `AiEvent::Reviewed`，Journal 记 `ai/reviewed`（审阅者、是否放行、置信度、操作），放行的操作在对话中带"已审阅"标记，只读操作以外的行不再并入"已执行 N 个只读操作"。自动与无人值守模式下询问用户时，`AiEvent::Approval.review`（`ReviewNote`，同记入 `ai/approval`）说明判断者为何没有放行：没把握或拒绝（附置信度）、没有判断者、判断者出错或超时；历史记录中的 `opaque` / `dangerous` 仍兼容展示。
 
 上下文压缩：知道模型的上下文窗口时，若上一次请求（输入加输出）已超过窗口的 80%，下一次请求前把当前回合之前的对话用同一模型总结（不带工具的一次请求，各消息截到 2000 字节，提示中说明对话是数据），摘要放在当前回合的用户消息开头（`<summary-of-earlier-conversation>`），不拆开工具调用与结果；只有当前一个回合时不压缩；总结失败时照常继续。压缩发出 `SessionUpdate::Compacted`，Journal 记 `ai/compacted`（摘要），对话中显示为可展开的"已压缩较早的对话"，继续历史对话时按记录还原该行。
 

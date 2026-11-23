@@ -10,7 +10,8 @@ use rove_ai::session::{AiEvent, AiSession, SessionSettings};
 use rove_ai::{Answer, Mode};
 use tokio::sync::mpsc;
 
-/// Allows everything with a fixed confidence, counting what it is shown.
+/// Allows non-dangerous operations with a fixed confidence, declines dangerous ones,
+/// and counts everything it is shown.
 struct Agreeable {
     confidence: f64,
     seen: Arc<AtomicUsize>,
@@ -22,10 +23,11 @@ impl Reviewer for Agreeable {
         "test"
     }
 
-    async fn review(&self, _request: &ReviewRequest) -> Result<Verdict, String> {
+    async fn review(&self, request: &ReviewRequest) -> Result<Verdict, String> {
         self.seen.fetch_add(1, Ordering::SeqCst);
+        let dangerous = request.reasons.iter().any(|r| r == "risk: dangerous");
         Ok(Verdict {
-            allow: true,
+            allow: !dangerous,
             confidence: self.confidence,
         })
     }
@@ -86,11 +88,12 @@ async fn a_sure_reviewer_lets_ordinary_changes_run() {
         (0, 1)
     );
 
-    // Dangerous operations always go to the user; the reviewer is not asked.
+    // Static rules do not block before review: dangerous operations reach the reviewer with
+    // `risk: dangerous`, and when declined fall back to the user.
     assert!(session.run_command("rm -rf /", None, None).await.is_err());
     assert_eq!(
         (asked.load(Ordering::SeqCst), seen.load(Ordering::SeqCst)),
-        (1, 1)
+        (1, 2)
     );
 }
 
@@ -198,7 +201,7 @@ async fn unattended_runs_never_wait_and_note_what_they_refused() {
     assert!(session.run_command("rm -rf /", None, None).await.is_err());
     assert_eq!(
         (asked.load(Ordering::SeqCst), seen.load(Ordering::SeqCst)),
-        (0, 1)
+        (0, 2)
     );
     let deferred = session.take_deferred();
     assert_eq!(deferred.len(), 2);
@@ -281,7 +284,10 @@ async fn approvals_say_why_the_judge_did_not_decide() {
             let _ = session.run_command("rm -rf /", None, None).await;
         })
         .await,
-        [Some(ReviewNote::Dangerous)]
+        [Some(ReviewNote::Declined {
+            reviewer: "test".into(),
+            confidence: 0.9
+        })]
     );
     // The review mode leaves every change to the user: nothing to explain.
     assert_eq!(

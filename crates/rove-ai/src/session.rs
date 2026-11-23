@@ -365,32 +365,26 @@ impl AiSession {
         }
     }
 
-    /// The reviewer's word on an operation the policy would ask about, when one applies: only in
-    /// the auto mode, for ordinary modifications the agent showed in full (not dangerous, not
-    /// opaque, not its own tools). `None` when no reviewer applies or it failed.
+    /// The reviewer's word on an operation the policy would ask about, when one applies: in the
+    /// auto and unattended modes, every non-read-only operation that static rules did not
+    /// auto-allow is sent to the reviewer with its static risk annotations. Static rules never
+    /// short-circuit the reviewer. `None` when not in an automatic mode or the operation is
+    /// read-only.
     async fn review(
         &self,
         operation: &Operation,
         assessment: &Assessment,
-        agent_tool: bool,
+        _agent_tool: bool,
     ) -> Result<(), Option<ReviewNote>> {
-        if agent_tool
-            || assessment.reasons.iter().any(|r| r.code == "read_secret")
-            || !matches!(
-                self.policy.lock().await.mode(),
-                Mode::Auto | Mode::Unattended
-            )
-        {
+        if !matches!(
+            self.policy.lock().await.mode(),
+            Mode::Auto | Mode::Unattended
+        ) {
             return Err(None);
         }
-        match assessment.risk {
-            risk::Risk::Dangerous => return Err(Some(ReviewNote::Dangerous)),
-            risk::Risk::Modify => {}
+        if assessment.risk == risk::Risk::ReadOnly {
             // Asked about although read-only: a rule or grant decides, not the judge.
-            risk::Risk::ReadOnly => return Err(None),
-        }
-        if assessment.opaque {
-            return Err(Some(ReviewNote::Opaque));
+            return Err(None);
         }
         let Some((reviewer, threshold)) = self.reviewer.read().ok().and_then(|slot| slot.clone())
         else {
@@ -1282,7 +1276,10 @@ mod tests {
     use crate::review::{ReviewRequest, Reviewer, Verdict};
     use serde_json::json;
 
-    struct RecordingReviewer(tokio::sync::mpsc::UnboundedSender<ReviewRequest>);
+    struct RecordingReviewer {
+        requests: tokio::sync::mpsc::UnboundedSender<ReviewRequest>,
+        allow: bool,
+    }
 
     #[async_trait]
     impl Reviewer for RecordingReviewer {
@@ -1291,16 +1288,16 @@ mod tests {
         }
 
         async fn review(&self, request: &ReviewRequest) -> Result<Verdict, String> {
-            self.0.send(request.clone()).unwrap();
+            self.requests.send(request.clone()).unwrap();
             Ok(Verdict {
-                allow: true,
-                confidence: 1.0,
+                allow: self.allow,
+                confidence: if self.allow { 1.0 } else { 0.4 },
             })
         }
     }
 
     #[tokio::test]
-    async fn automatic_modes_review_visible_modifications_and_defer_hidden_commands() {
+    async fn automatic_modes_send_all_non_readonly_commands_to_reviewer() {
         for mode in [Mode::Auto, Mode::Unattended] {
             let (events, mut emitted) = tokio::sync::mpsc::unbounded_channel();
             let session = AiSession::new(
@@ -1312,16 +1309,35 @@ mod tests {
                 Arc::new(move |event| events.send(event).unwrap()),
             );
             let (requests, mut reviewed) = tokio::sync::mpsc::unbounded_channel();
-            session.set_reviewer(Some((Arc::new(RecordingReviewer(requests)), 0.9)));
-            for (command, reason) in [
+            session.set_reviewer(Some((
+                Arc::new(RecordingReviewer {
+                    requests: requests.clone(),
+                    allow: true,
+                }),
+                0.9,
+            )));
+            for (command, expected_reasons) in [
+                (
+                    r#"id -un; hostname; . /etc/os-release && printf 'OS=%s VERSION=%s CODENAME=%s\n' "$NAME" "$VERSION_ID" "$VERSION_CODENAME""#,
+                    vec!["opaque", "script: ."],
+                ),
                 (
                     r#"apt-get update && update_status=$?; printf 'exit=%s\n' "$update_status""#,
-                    "package: apt-get",
+                    vec!["package: apt-get"],
                 ),
-                (r#"echo hi > "$OUT""#, "dynamic_target"),
-                ("python3 -c 'print(1)'", "script: python3"),
-                ("sed --in-place 's/a/b/' config.yml", "write_file: sed"),
-                ("awk --lint '{print $1}' app.log", "modify: awk"),
+                (r#"echo hi > "$OUT""#, vec!["dynamic_target"]),
+                ("python3 -c 'print(1)'", vec!["script: python3"]),
+                (r#"python3 -c "print('$HOME')""#, vec!["script: python3"]),
+                (
+                    "python3 - <<'PY'\nimport json\nprint(json.dumps({'ok': True}))\nPY",
+                    vec!["script: python3"],
+                ),
+                ("sed --in-place 's/a/b/' config.yml", vec!["write_file: sed"]),
+                ("awk --lint '{print $1}' app.log", vec!["modify: awk"]),
+                ("bash deploy.sh", vec!["opaque", "script: bash"]),
+                ("$CMD", vec!["opaque", "unknown_program"]),
+                ("cat ~/.ssh/id_rsa", vec!["read_secret: ~/.ssh/id_rsa"]),
+                ("rm -rf /", vec!["risk: dangerous", "recursive_delete: /"]),
             ] {
                 let operation = Operation::Command {
                     command: command.into(),
@@ -1339,14 +1355,29 @@ mod tests {
                     request.operation,
                     format!("run the shell command: {command}")
                 );
-                assert!(request.reasons.iter().any(|actual| actual == reason));
+                for reason in expected_reasons {
+                    assert!(
+                        request.reasons.iter().any(|actual| actual == reason),
+                        "{command}: missing {reason} in {:?}",
+                        request.reasons
+                    );
+                }
                 assert!(matches!(
                     emitted.try_recv().unwrap(),
                     AiEvent::Reviewed { allowed: true, .. }
                 ));
             }
 
-            for command in ["bash deploy.sh", "$CMD"] {
+            // When the reviewer declines, Auto asks the user (non-rememberable for opaque/dangerous)
+            // and Unattended refuses and records the operation in deferred.
+            session.set_reviewer(Some((
+                Arc::new(RecordingReviewer {
+                    requests,
+                    allow: false,
+                }),
+                0.9,
+            )));
+            for command in ["bash deploy.sh", "rm -rf /"] {
                 let operation = Operation::Command {
                     command: command.into(),
                 };
@@ -1354,15 +1385,17 @@ mod tests {
                 let authorization = session.authorize(&operation, &assessed, false);
                 let allowed = if mode == Mode::Auto {
                     let respond = async {
+                        let first = emitted.recv().await.unwrap();
+                        assert!(matches!(first, AiEvent::Reviewed { allowed: false, .. }));
                         let event = emitted.recv().await.unwrap();
                         let AiEvent::Approval {
                             request_id,
                             rememberable: false,
-                            review: Some(ReviewNote::Opaque),
+                            review: Some(ReviewNote::Declined { .. }),
                             ..
                         } = event
                         else {
-                            panic!("expected approval for opaque command, got {event:?}");
+                            panic!("expected declined approval, got {event:?}");
                         };
                         assert!(session.answer(request_id, Answer::Deny).await);
                     };
@@ -1378,11 +1411,11 @@ mod tests {
                     ));
                     allowed
                 } else {
-                    assert_eq!(
-                        session.review(&operation, &assessed, false).await,
-                        Err(Some(ReviewNote::Opaque)),
-                    );
                     let allowed = authorization.await;
+                    assert!(matches!(
+                        emitted.try_recv().unwrap(),
+                        AiEvent::Reviewed { allowed: false, .. }
+                    ));
                     assert_eq!(
                         session.take_deferred(),
                         [format!("run the shell command: {command}")]
@@ -1390,7 +1423,11 @@ mod tests {
                     allowed
                 };
                 assert_eq!(allowed, (false, false), "{mode:?}: {command}");
-                assert!(reviewed.try_recv().is_err());
+                let request = reviewed.try_recv().unwrap();
+                assert_eq!(
+                    request.operation,
+                    format!("run the shell command: {command}")
+                );
             }
         }
     }

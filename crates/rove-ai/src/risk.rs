@@ -1153,7 +1153,15 @@ fn assess_segment(
             assessment.raise(Risk::Modify, "read_secret", path.to_owned());
         }
     }
-    program(&mut assessment, &name, args, previous, rules, depth);
+    program(
+        &mut assessment,
+        &name,
+        args,
+        segment.inline_stdin,
+        previous,
+        rules,
+        depth,
+    );
     assessment
 }
 
@@ -1162,6 +1170,7 @@ fn program(
     assessment: &mut Assessment,
     name: &str,
     args: &[Word],
+    inline_stdin: bool,
     previous: Option<&Segment>,
     rules: &Rules,
     depth: usize,
@@ -1345,6 +1354,7 @@ fn program(
                 let inner = Segment {
                     words: args[at + 1..end].to_vec(),
                     redirects: Vec::new(),
+                    inline_stdin: false,
                 };
                 assessment.merge(assess_segment(
                     &inner,
@@ -1494,7 +1504,7 @@ fn program(
             modify(assessment, "script");
         }
         _ if INTERPRETERS.contains(&name) => {
-            interpreter(assessment, name, args, previous, rules, depth)
+            interpreter(assessment, name, args, inline_stdin, previous, rules, depth)
         }
         _ if READ_ONLY.contains(&name) || rules.read_only.iter().any(|entry| entry == name) => {}
         _ => {
@@ -1989,6 +1999,7 @@ fn interpreter(
     assessment: &mut Assessment,
     name: &str,
     args: &[Word],
+    inline_stdin: bool,
     previous: Option<&Segment>,
     rules: &Rules,
     depth: usize,
@@ -2029,7 +2040,9 @@ fn interpreter(
                 if shell_command {
                     assess_command_string(assessment, [code], name, rules, depth);
                 } else {
-                    assessment.opaque |= code.dynamic;
+                    if code.dynamic && code.text.trim().is_empty() {
+                        assessment.opaque = true;
+                    }
                     assessment.raise(Risk::Modify, "script", name);
                 }
                 return;
@@ -2048,12 +2061,12 @@ fn interpreter(
             .is_some_and(|arg| !arg.dynamic && arg.text == "eval")
         && let Some(code) = args.get(1).filter(|arg| !arg.text.starts_with('-'))
     {
-        assessment.opaque |= code.dynamic;
+        if code.dynamic && code.text.trim().is_empty() {
+            assessment.opaque = true;
+        }
         assessment.raise(Risk::Modify, "script", name);
         return;
     }
-    // An external script or code from stdin must be approved without automatic review.
-    assessment.opaque = true;
     let reads_stdin = operands(args).next().is_none() || has_any(args, &["-", "-s"]);
     let downloaded = previous
         .and_then(|segment| {
@@ -2068,8 +2081,13 @@ fn interpreter(
             )
         });
     if reads_stdin && downloaded {
+        assessment.opaque = true;
         assessment.raise(Risk::Dangerous, "pipe_to_shell", name.to_owned());
+    } else if reads_stdin && inline_stdin && previous.is_none() {
+        // Inline heredoc / here-string code is visible in the command line.
+        assessment.raise(Risk::Modify, "script", name.to_owned());
     } else {
+        assessment.opaque = true;
         assessment.raise(Risk::Modify, "script", name.to_owned());
     }
 }
@@ -2557,6 +2575,11 @@ mod tests {
         }
         for line in [
             "python3 -c 'print(1)'",
+            r#"python3 -c "print('$HOME')""#,
+            "python3 - <<'PY'\nimport json\nprint(json.dumps({'ok': True}))\nPY",
+            "python3 <<EOF\nprint(1)\nEOF",
+            "python3 - <<< 'print(1)'",
+            "bash <<'EOF'\necho hi\nEOF",
             "node -e 'console.log(1)'",
             "sed --in-place 's/a/b/' config.yml",
             "sed --debug 's/a/b/' config.yml",
