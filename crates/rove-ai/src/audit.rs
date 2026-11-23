@@ -126,7 +126,7 @@ pub fn tool_summary(payload: &mut Value) -> bool {
     fields.remove("body_ref");
     let mut private = fields.remove("input").is_some();
     if fields.get("private_text") == Some(&Value::Bool(true)) {
-        for key in ["text", "summary"] {
+        for key in ["text", "summary", "title"] {
             private |= fields.remove(key).is_some();
         }
     }
@@ -307,8 +307,8 @@ pub struct Auditor {
     /// The reply and reasoning being streamed, written out when something else happens.
     message: Mutex<String>,
     thought: Mutex<String>,
-    /// The session has a title (written from the first prompt unless it had one).
-    titled: std::sync::atomic::AtomicBool,
+    /// Serializes the first automatic title with `set_titled` before a manual rename.
+    titled: Mutex<bool>,
     /// The start, kept until the session records something else: an agent started and left
     /// without a message leaves no history.
     pending_start: Mutex<Option<SessionInfo>>,
@@ -325,7 +325,7 @@ impl Auditor {
             host: host.into(),
             message: Mutex::new(String::new()),
             thought: Mutex::new(String::new()),
-            titled: std::sync::atomic::AtomicBool::new(false),
+            titled: Mutex::new(false),
             pending_start: Mutex::new(None),
             private_text: Default::default(),
             written: std::sync::atomic::AtomicBool::new(false),
@@ -338,9 +338,12 @@ impl Auditor {
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// The session already has a title (it is resumed), so the first prompt does not give one.
+    /// Prevents automatic naming and waits for any automatic title write already in progress.
     pub fn set_titled(&self) {
-        self.titled.store(true, std::sync::atomic::Ordering::SeqCst);
+        *self
+            .titled
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
     }
 
     fn write(&self, kind: &str, mut payload: Value) {
@@ -427,13 +430,17 @@ impl Auditor {
 
     pub fn prompt(&self, text: &str) {
         self.turn_input(KIND_PROMPT, text);
-        if !self.titled.swap(true, std::sync::atomic::Ordering::SeqCst)
-            && !self.private_text.load(std::sync::atomic::Ordering::SeqCst)
-        {
-            self.write(
-                KIND_RENAMED,
-                json!({ "title": title_of(text), "auto": true }),
-            );
+        let mut titled = self
+            .titled
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *titled {
+            return;
+        }
+        *titled = true;
+        let title = title_of(text);
+        if !title.is_empty() {
+            self.write(KIND_RENAMED, json!({ "title": title, "auto": true }));
         }
     }
 
@@ -591,15 +598,33 @@ mod tests {
         let (audit, records) = auditor();
         let private = "private-operations-request-marker";
         audit.protect_text();
+        audit.started(&SessionInfo::default());
         audit.prompt(private);
         audit.turn_ended("end_turn");
         let records = records.lock().unwrap();
-        assert!(!records.iter().any(|record| record.kind == KIND_RENAMED));
+        let rename = records
+            .iter()
+            .find(|record| record.kind == KIND_RENAMED)
+            .unwrap();
+        assert_eq!(rename.payload["title"], private);
+        assert_eq!(rename.payload["private_text"], true);
+        assert_eq!(rename.payload["auto"], true);
+        let mut summary = rename.payload.clone();
+        assert!(tool_summary(&mut summary));
+        assert!(summary.get("title").is_none());
+        assert!(!summary.to_string().contains(private));
         for record in records.iter() {
             let mut summary = record.payload.clone();
             tool_summary(&mut summary);
             assert!(!summary.to_string().contains(private));
         }
+        let records: Vec<_> = records
+            .iter()
+            .enumerate()
+            .map(|(index, record)| (index as i64, record.kind.clone(), record.payload.clone()))
+            .collect();
+        let body = conversation_body(&records).unwrap();
+        assert!(!body.to_string().contains(private));
     }
 
     #[test]

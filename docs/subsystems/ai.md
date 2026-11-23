@@ -127,7 +127,7 @@ AI 设置分为模型与智能体、默认与安全、外部接入三页。服�
 | `ai_start(context, agent, terminal, resume)` | 在 `local`、已保存主机或快速连接上启动 `agent`；内置助手直接构造 `Assistant`，ACP 智能体按检测结果启动并附带内置 MCP server；`terminal` 为用户在该主机的终端会话，供 `terminal_snapshot` 读取。返回会话设置（`config_options`，见下文）。`resume` 为之前的会话 id 时继续那段对话：须是同一 Agent、当前未打开，沿用同一 id |
 | `ai_set_option(id, option, value)` | 修改会话设置（如 `model`），返回修改后的全部设置 |
 | `ai_quota(agent, refresh)` | 本机智能体的套餐额度（各限额窗口的已用百分比、窗口长度、重置时间）：Codex 读 `$CODEX_HOME`（默认 `~/.codex`）下 `sessions/` 中最新会话日志末尾的 `token_count` 事件的 `rate_limits`，并从最新日志的最后一个 `token_count` 读出上下文占用（`info.last_token_usage` 对 `info.model_context_window`，`context`），每次都重读不复用；Claude Code 单独启动一个不带工具的短会话，发送其本地命令 `/usage`（不经过模型），按报告中的 `**名称** — **N%**` 行解析，启动与应答各限时 30 秒。Claude Code 的结果复用 5 分钟，`refresh` 时重读；其他智能体返回空。RoveTerm 不读取任何登录令牌（`rove_ai::quota`，有单元测试） |
-| `ai_rename(id, title)` | 给会话起名（1–120 个字符，运行中或已结束均可），写入 `ai/renamed` 记录 |
+| `ai_rename(id, title)` | 给会话起名（1–120 个字符，运行中或已结束均可），返回前将 `ai/renamed` 写入 Journal |
 | `ai_prompt(id, text)` | 发出提示并等待回合结束，返回结束原因 |
 | `ai_cancel` / `ai_answer` / `ai_set_mode` / `ai_stop` | 取消回合、回答审批、切换审批模式、结束会话 |
 | `ai_sessions()` / `ai_records(id)` | 从 Journal 读出最近 100 个 AI 会话（含从其他设备同步来的，见 [sync](sync.md#应用中的同步)；列表按开始时间、记录按发生时间排序；同一 id 继续过的只列一次，按最近一次开始；附标题、`agent_ref` 与主机上下文），以及某个会话的全部 `ai/*` 记录（最多 5000 条），供审计回看与继续对话 |
@@ -148,7 +148,7 @@ ACP 的 `available_commands_update` 解析为 `SessionUpdate::Commands`（每次
 - 会话设置采用 ACP 的 session config options（`configOptions`、`session/set_config_option`、`config_option_update` 通知），保留单选项（分组的选项展平）与开关项（`type: "boolean"`，如 Claude Code 的快速模式，设置时传布尔值）；类别为 `mode` 的项不交给界面，审批由 RoveTerm 的模式管理。只在较旧的 `models` 字段（`availableModels`、`currentModelId`）报告模型的智能体，合成一个 `model` 设置，改用 `session/set_model`。智能体对修改不回报设置列表时，按已接受的值更新。Codex 以此提供模型与推理强度。内置助手和总管按服务商分组显示模型。空闲时切换会保留消息、工具结果与会话 ID；下一轮、新委派的助手及选择“对话所用的模型”的审阅器使用新选择。重新打开历史时恢复最后选择的模型。
 - 只启动 Agent、没有发过消息的会话不留记录：`Auditor::started` 暂存开始信息，随第一条记录（通常是第一条提示）写入，什么都没记录过的会话结束时也不写结束记录。
 - 历史默认显示打开它的角色；“全部”包括角色未知的旧记录。总管的定时报告列在总管历史中，子代理以 `subagent` 角色归入总管历史，独立记录保留在本机。
-- `ai/session_started` 记录 `SessionInfo`：Agent 名称与版本、审批模式、`agent_ref`、主机上下文、Agent 自己的会话 id、是否为继续。会话的第一条提示写一条自动的 `ai/renamed`（第一行，最多 60 个字符），用户改名再写一条，最新的为准；继续时已有标题则不再自动命名。
+- `ai/session_started` 记录 `SessionInfo`：Agent 名称与版本、审批模式、`agent_ref`、主机上下文、Agent 自己的会话 id、是否为继续。首条提示的首个非空行生成 `ai/renamed` 自动标题，超过 60 字符时加省略号。受保护会话的自动标题仅在本机加密保存。手动改名在 `ai_rename` 返回前写入，列表取最新可读的标题。缺少可读标题时，列表用首条提示生成标题，前提是能读到该提示。继续时已有标题则沿用。
 - 继续 ACP 会话：Agent 声明 `loadSession` 能力时用 `session/load` 重开它自己的会话，期间 Agent 回放的旧对话不再上报（界面从 Journal 还原）；重开失败则开新会话。继续内置助手：用 `audit::transcript` 从记录还原提示与回复（执行过的操作以一行说明附在回复中，不含工具输出）作为历史。
 
 ## 运维总管

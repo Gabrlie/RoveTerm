@@ -20,6 +20,7 @@ use rove_ai::mcp::McpListener;
 use rove_ai::runner::{self, AgentSpec};
 use rove_ai::session::{AiEvent, AiSession, SessionSettings, TerminalSource};
 use rove_ai::{Answer, Mode, Rules};
+use rove_journal::{JournalError, JournalQuery, JournalRecord, JournalStore};
 use rove_ops::{OpsTaskId, TaskSource};
 use rove_session::{SessionId, SessionManager, TermSize};
 use rove_ssh::{SshConnection, SshConnector, SshTarget};
@@ -2870,6 +2871,8 @@ pub struct AiRecord {
 const MAX_SESSIONS: u32 = 100;
 /// Most records read of one session.
 const MAX_RECORDS: u32 = u32::MAX;
+/// Maximum size in bytes of an inline diff or serialized tool input.
+const INLINE_AUDIT_BYTES: usize = 4096;
 
 /// Refuses anything but an AI session id.
 fn check_session_id(id: &str) -> Result<(), CommandError> {
@@ -2881,75 +2884,125 @@ fn check_session_id(id: &str) -> Result<(), CommandError> {
 
 /// The `ai/*` records of session `id`, oldest first (by time: records synced from another
 /// device are appended later but keep their own time).
-async fn session_records(
-    state: &AppState,
-    id: String,
-) -> Result<Vec<rove_journal::JournalRecord>, CommandError> {
+async fn session_records(state: &AppState, id: String) -> Result<Vec<JournalRecord>, CommandError> {
     let journal = state.journal.clone();
-    let records = tauri::async_runtime::spawn_blocking(move || {
-        journal.read(&rove_journal::JournalQuery {
-            session_id: Some(id),
-            limit: Some(MAX_RECORDS),
-            ..rove_journal::JournalQuery::default()
-        })
+    let vault = state.vault.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut records = journal
+            .read(&JournalQuery {
+                session_id: Some(id),
+                limit: Some(MAX_RECORDS),
+                ..JournalQuery::default()
+            })
+            .map_err(|error| CommandError::new("journal.read", error.to_string()))?;
+        records.retain(|record| record.kind.starts_with("ai/"));
+        if vault.lock_state() != rove_vault::LockState::Unlocked
+            && records.iter().any(|record| {
+                matches!(
+                    record.kind.as_str(),
+                    audit::KIND_MESSAGE
+                        | audit::KIND_PROMPT
+                        | audit::KIND_WAKEUP
+                        | audit::KIND_THOUGHT
+                        | audit::KIND_COMPACTED
+                ) && record.payload["body_ref"].is_string()
+            })
+        {
+            return Err(CommandError::from(rove_vault::VaultError::Locked(format!(
+                "{:?}",
+                vault.lock_state()
+            ))));
+        }
+        open_private_records(&vault, journal.as_ref(), &mut records);
+        records.sort_by_key(|record| record.ts);
+        Ok::<_, CommandError>(records)
     })
     .await
     .map_err(|error| CommandError::new("app.task", error.to_string()))?
-    .map_err(|error| CommandError::new("journal.read", error.to_string()))?;
-    let mut records: Vec<rove_journal::JournalRecord> = records
-        .into_iter()
-        .filter(|record| record.kind.starts_with("ai/"))
-        .collect();
-    open_private_text_records(state.vault.as_ref(), state.journal.as_ref(), &mut records)?;
-    records.sort_by_key(|record| record.ts);
-    Ok(records)
 }
 
-fn open_private_text_records(
+/// Returns the local body if available. Locked vaults and unavailable bodies leave the summary usable.
+fn open_private_record(
     vault: &rove_vault::Vault,
-    journal: &dyn rove_journal::JournalStore,
-    records: &mut [rove_journal::JournalRecord],
-) -> Result<(), CommandError> {
+    journal: &dyn JournalStore,
+    record: &JournalRecord,
+) -> Option<Value> {
+    let reference = record.payload["body_ref"]
+        .as_str()?
+        .parse::<uuid::Uuid>()
+        .ok()?;
+    let session = record.session_id.as_deref()?;
+    let sealed = journal.private_body(session, &reference.to_string()).ok()?;
+    vault.open_audit(session, reference, &sealed).ok()
+}
+
+fn open_private_records(
+    vault: &rove_vault::Vault,
+    journal: &dyn JournalStore,
+    records: &mut [JournalRecord],
+) {
+    if vault.lock_state() != rove_vault::LockState::Unlocked {
+        return;
+    }
     for record in records {
-        if matches!(
-            record.kind.as_str(),
+        let open_full = match record.kind.as_str() {
             audit::KIND_MESSAGE
-                | audit::KIND_PROMPT
-                | audit::KIND_WAKEUP
-                | audit::KIND_THOUGHT
-                | audit::KIND_COMPACTED
-        ) && let Some(reference) = record.payload["body_ref"].as_str()
-            && let Ok(reference) = reference.parse::<uuid::Uuid>()
-            && let Some(session) = &record.session_id
-        {
-            let sealed = journal
-                .private_body(session, &reference.to_string())
-                .map_err(|e| CommandError::new("journal.read", e.to_string()))?;
-            record.payload = vault.open_audit(session, reference, &sealed)?;
+            | audit::KIND_PROMPT
+            | audit::KIND_WAKEUP
+            | audit::KIND_THOUGHT
+            | audit::KIND_COMPACTED
+            | audit::KIND_RENAMED => true,
+            audit::KIND_COMMAND
+            | audit::KIND_APPROVAL
+            | audit::KIND_REVIEWED
+            | audit::KIND_FILE_READ
+            | audit::KIND_FILE_WRITE
+            | audit::KIND_LIST_DIR
+            | audit::KIND_TERMINAL_READ
+            | audit::KIND_NOTES_READ
+            | audit::KIND_NOTES_WRITE
+            | audit::KIND_TOOL_CALL => false,
+            _ => continue,
+        };
+        let Some(opened) = open_private_record(vault, journal, record) else {
+            continue;
+        };
+        if open_full {
+            record.payload = opened;
+        } else {
+            restore_audit_fields(record, &opened);
         }
     }
-    Ok(())
 }
 
-/// The newest records of `kind`.
-async fn newest(
-    state: &AppState,
-    kind: &str,
-    limit: u32,
-) -> Result<Vec<rove_journal::JournalRecord>, CommandError> {
-    let journal = state.journal.clone();
-    let kind = kind.to_owned();
-    tauri::async_runtime::spawn_blocking(move || {
-        journal.read(&rove_journal::JournalQuery {
-            kind: Some(kind),
-            limit: Some(limit),
-            newest_first: true,
-            ..rove_journal::JournalQuery::default()
-        })
-    })
-    .await
-    .map_err(|error| CommandError::new("app.task", error.to_string()))?
-    .map_err(|error| CommandError::new("journal.read", error.to_string()))
+/// Restores display fields while retaining the reference for on-demand access to the full body.
+fn restore_audit_fields(record: &mut JournalRecord, opened: &Value) {
+    for field in ["operation", "asked"] {
+        if let (Some(summary), Some(full)) = (
+            record.payload.get_mut(field).and_then(Value::as_object_mut),
+            opened[field].as_object(),
+        ) {
+            for key in ["command", "detail"] {
+                if let Some(value) = full.get(key) {
+                    summary.insert(key.into(), value.clone());
+                }
+            }
+            if let Some(diff) = full.get("diff").and_then(Value::as_str)
+                && diff.len() <= INLINE_AUDIT_BYTES
+            {
+                summary.insert("diff".into(), diff.into());
+            }
+        }
+    }
+    if record.kind == audit::KIND_TOOL_CALL
+        && let Some(input) = opened.get("input")
+        && input.to_string().len() <= INLINE_AUDIT_BYTES
+    {
+        record.payload["input"] = input.clone();
+    }
+    if let Some(reasons) = opened["reasons"].as_array() {
+        record.payload["reasons"] = Value::Array(reasons.clone());
+    }
 }
 
 /// Lists recent AI sessions, newest first; a resumed session is listed once, by its latest start.
@@ -2958,9 +3011,51 @@ pub async fn ai_sessions(
     state: State<'_, AppState>,
     role: Option<String>,
 ) -> Result<Vec<AiSessionSummary>, CommandError> {
-    let starts = newest(state.inner(), audit::KIND_STARTED, u32::MAX).await?;
-    let names = newest(state.inner(), audit::KIND_RENAMED, u32::MAX).await?;
-    Ok(history_summaries(starts, names, role.as_deref()))
+    let journal = state.journal.clone();
+    let vault = state.vault.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        read_history(journal.as_ref(), &vault, role.as_deref())
+    })
+    .await
+    .map_err(|error| CommandError::new("app.task", error.to_string()))?
+    .map_err(|error| CommandError::new("journal.read", error.to_string()))
+}
+
+fn read_history(
+    journal: &dyn JournalStore,
+    vault: &rove_vault::Vault,
+    role: Option<&str>,
+) -> Result<Vec<AiSessionSummary>, JournalError> {
+    let read_kind = |kind: &str| {
+        journal.read(&JournalQuery {
+            kind: Some(kind.into()),
+            limit: Some(u32::MAX),
+            ..JournalQuery::default()
+        })
+    };
+    let starts = read_kind(audit::KIND_STARTED)?;
+    let mut names = read_kind(audit::KIND_RENAMED)?;
+    open_private_records(vault, journal, &mut names);
+    let mut sessions = history_summaries(starts, names, role);
+    for session in sessions
+        .iter_mut()
+        .filter(|session| session.title.is_none())
+    {
+        let mut records = journal.read(&JournalQuery {
+            session_id: Some(session.id.clone()),
+            kind: Some(audit::KIND_PROMPT.into()),
+            limit: Some(1),
+            ..JournalQuery::default()
+        })?;
+        open_private_records(vault, journal, &mut records);
+        if let Some(text) = records.first().and_then(|row| row.payload["text"].as_str()) {
+            let title = audit::title_of(text);
+            if !title.is_empty() {
+                session.title = Some(title);
+            }
+        }
+    }
+    Ok(sessions)
 }
 
 fn history_summaries(
@@ -3080,8 +3175,21 @@ pub async fn ai_rename(
     if let Ok(entry) = state.ai.get(&id).await {
         entry.auditor.set_titled();
     }
-    state.ai.recorder.record(audit::renamed(&id, &title, false));
+    persist_rename(state.journal.clone(), &id, &title).await?;
     Ok(title)
+}
+
+async fn persist_rename(
+    journal: Arc<dyn JournalStore>,
+    id: &str,
+    title: &str,
+) -> Result<(), CommandError> {
+    let record = audit::renamed(id, title, false);
+    tauri::async_runtime::spawn_blocking(move || journal.append(record))
+        .await
+        .map_err(|error| CommandError::new("app.task", error.to_string()))?
+        .map_err(|error| CommandError::new("journal.write", error.to_string()))?;
+    Ok(())
 }
 
 fn select_model(provider: &mut ProviderPrefs, model: &str) -> Result<(), CommandError> {
@@ -3371,7 +3479,7 @@ mod key_tests {
 #[cfg(test)]
 mod history_tests {
     use super::*;
-    use rove_journal::{JournalQuery, JournalRecord, JournalStore, NewRecord, SqliteJournal};
+    use rove_journal::{NewRecord, SqliteJournal};
     use serde_json::json;
 
     fn interrupted_lead() -> rove_ai::assistant::AssistantCheckpoint {
@@ -3663,12 +3771,177 @@ mod history_tests {
         .to_string();
         assert!(!projection.contains("secret-host-report") && !projection.contains("body_ref"));
 
-        open_private_text_records(vault.as_ref(), journal.as_ref(), &mut rows).unwrap();
+        open_private_records(vault.as_ref(), journal.as_ref(), &mut rows);
         let opened = rows
             .iter()
             .find(|row| row.kind == audit::KIND_WAKEUP)
             .unwrap();
         assert_eq!(opened.payload["text"].as_str(), Some(prompt));
+    }
+
+    #[test]
+    fn private_tool_records_restore_display_fields_and_keep_full_body_reference() {
+        let journal = Arc::new(SqliteJournal::open_in_memory().unwrap());
+        let vault = || {
+            Arc::new(
+                rove_vault::Vault::open_in_memory(Arc::new(rove_vault::MemoryKeyCache::default()))
+                    .unwrap(),
+            )
+        };
+        let locked = vault();
+        let unlocked = vault();
+        assert_eq!(unlocked.try_unlock(), rove_vault::LockState::Unlocked);
+        let sink = audit_sink(unlocked.clone(), journal.clone());
+        let diff = "é".repeat(INLINE_AUDIT_BYTES / 2);
+        let input = json!({"host":"tool-input-marker"});
+        let reasons = json!([{"detail":"approval-reason-marker"}]);
+        for (kind, payload) in [
+            (audit::KIND_STARTED, json!({})),
+            (
+                audit::KIND_COMMAND,
+                json!({
+                    "operation":{"command":"command-marker","detail":"operation-detail-marker","diff":diff},
+                    "outcome":{"stdout":"stdout-marker","stderr":"stderr-marker","content":"content-marker"}
+                }),
+            ),
+            (
+                audit::KIND_APPROVAL,
+                json!({"asked":{"command":"asked-command-marker","diff":format!("{diff}é")},"reasons":reasons}),
+            ),
+            (audit::KIND_TOOL_CALL, json!({"input":input})),
+            (
+                audit::KIND_TOOL_CALL,
+                // Quoting and escaping put this input over the serialized byte limit.
+                json!({"input":"\"".repeat(INLINE_AUDIT_BYTES / 2)}),
+            ),
+        ] {
+            sink(NewRecord {
+                kind: kind.into(),
+                session_id: Some("ai-tools".into()),
+                payload,
+            });
+        }
+        let missing_ref = uuid::Uuid::now_v7();
+        journal
+            .append(NewRecord {
+                kind: audit::KIND_COMMAND.into(),
+                session_id: Some("ai-tools".into()),
+                payload: json!({"body_ref":missing_ref,"operation":{"kind":"command"}}),
+            })
+            .unwrap();
+
+        let summaries = journal.read(&JournalQuery::default()).unwrap();
+        let mut rows = summaries.clone();
+        open_private_records(&locked, journal.as_ref(), &mut rows);
+        assert_eq!(rows, summaries);
+        open_private_records(&unlocked, journal.as_ref(), &mut rows);
+        assert_eq!(rows[1].payload["operation"]["command"], "command-marker");
+        assert_eq!(
+            rows[1].payload["operation"]["detail"],
+            "operation-detail-marker"
+        );
+        assert_eq!(rows[1].payload["operation"]["diff"], diff);
+        assert_eq!(rows[1].payload["outcome"], json!({}));
+        assert_eq!(rows[2].payload["asked"]["command"], "asked-command-marker");
+        assert!(rows[2].payload["asked"].get("diff").is_none());
+        assert_eq!(rows[2].payload["reasons"], reasons);
+        assert_eq!(rows[3].payload["input"], input);
+        assert_eq!(&rows[4..], &summaries[4..]);
+        for (row, summary) in rows[1..5].iter().zip(&summaries[1..5]) {
+            assert!(summary.payload["body_ref"].is_string());
+            assert_eq!(row.payload["body_ref"], summary.payload["body_ref"]);
+        }
+        let projection = |rows: Vec<JournalRecord>| {
+            audit::conversation_body(
+                &rows
+                    .into_iter()
+                    .map(|row| (row.ts, row.kind, row.payload))
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap()
+        };
+        let synced = projection(summaries);
+        assert_eq!(projection(rows), synced);
+        assert!(!synced.to_string().contains("-marker"));
+    }
+
+    #[test]
+    fn fleet_history_reads_sealed_titles_legacy_prompts_and_immediate_renames() {
+        let journal = Arc::new(SqliteJournal::open_in_memory().unwrap());
+        let vault = Arc::new(
+            rove_vault::Vault::open_in_memory(Arc::new(rove_vault::MemoryKeyCache::default()))
+                .unwrap(),
+        );
+        assert_eq!(vault.try_unlock(), rove_vault::LockState::Unlocked);
+        let sink = audit_sink(vault.clone(), journal.clone());
+        let fleet = "ai-fleet";
+        let legacy = "ai-legacy";
+        let prompt = "private-fleet-prompt-marker";
+        let legacy_prompt = "  private-legacy-fleet-marker\nMore context";
+        for id in [fleet, legacy] {
+            let auditor = Auditor::new(sink.clone(), id, "All hosts");
+            auditor.protect_text();
+            if id == legacy {
+                auditor.set_titled();
+            }
+            auditor.started(&SessionInfo {
+                context: Some(json!({"kind":"fleet"})),
+                ..SessionInfo::default()
+            });
+            auditor.prompt(if id == fleet { prompt } else { legacy_prompt });
+            auditor.prompt("a later prompt");
+        }
+
+        let mut rows = journal.read(&JournalQuery::default()).unwrap();
+        let renames: Vec<_> = rows
+            .iter()
+            .filter(|row| row.kind == audit::KIND_RENAMED)
+            .collect();
+        assert_eq!(renames.len(), 1);
+        let rename = &renames[0].payload;
+        assert_eq!(rename["auto"], true);
+        assert_eq!(rename["private_text"], true);
+        assert!(rename["body_ref"].is_string());
+        assert!(rename.get("title").is_none());
+        let records: Vec<_> = rows
+            .iter()
+            .map(|row| (row.ts, row.kind.clone(), row.payload.clone()))
+            .collect();
+        let projection = audit::conversation_body(&records).unwrap().to_string();
+        for marker in [prompt, "private-legacy-fleet-marker"] {
+            assert!(!serde_json::to_string(&rows).unwrap().contains(marker));
+            assert!(!projection.contains(marker));
+        }
+        assert!(!projection.contains("body_ref"));
+        open_private_records(&vault, journal.as_ref(), &mut rows);
+        assert_eq!(
+            rows.iter()
+                .find(|row| row.kind == audit::KIND_RENAMED)
+                .unwrap()
+                .payload["title"],
+            prompt
+        );
+
+        let title = |vault: &rove_vault::Vault, id| {
+            read_history(journal.as_ref(), vault, Some("fleet"))
+                .unwrap()
+                .into_iter()
+                .find(|session| session.id == id)
+                .unwrap()
+                .title
+        };
+        assert_eq!(title(&vault, fleet).as_deref(), Some(prompt));
+        assert_eq!(title(&vault, legacy), Some(audit::title_of(legacy_prompt)));
+        let locked =
+            rove_vault::Vault::open_in_memory(Arc::new(rove_vault::MemoryKeyCache::default()))
+                .unwrap();
+        assert_eq!(title(&locked, fleet), None);
+        assert_eq!(title(&locked, legacy), None);
+
+        let manual = "My fleet review";
+        tauri::async_runtime::block_on(persist_rename(journal.clone(), fleet, manual)).unwrap();
+        assert_eq!(title(&vault, fleet).as_deref(), Some(manual));
+        assert_eq!(title(&locked, fleet).as_deref(), Some(manual));
     }
 
     #[test]
@@ -3715,7 +3988,11 @@ mod history_tests {
             Some("codex login")
         );
 
-        let claude_name = if cfg!(windows) { "claude.exe" } else { "claude" };
+        let claude_name = if cfg!(windows) {
+            "claude.exe"
+        } else {
+            "claude"
+        };
         std::fs::write(dir.path().join(claude_name), b"").unwrap();
         let claude = AcpAgent {
             name: "Claude Code".into(),
