@@ -319,6 +319,37 @@ impl OpsSupervisor {
         })
     }
 
+    pub fn retry_subtask(&self, id: OpsTaskId, subtask: OpsSubtaskId) -> Result<OpsTask, OpsError> {
+        if self.workers.lock().contains_key(&(id, subtask)) {
+            return Err(OpsError::Busy);
+        }
+        self.change(id, |task| {
+            if task.state == OpsTaskState::Cancelled {
+                return Err(OpsError::Forbidden);
+            }
+            let sub = task.subtask_mut(subtask)?;
+            if sub.uncertain_effect || sub.reason == Some(BlockReason::UnresolvedEffect) {
+                return Err(OpsError::UncertainEffect);
+            }
+            match sub.state {
+                OpsTaskState::Running | OpsTaskState::WaitingApproval => {
+                    return Err(OpsError::Busy);
+                }
+                OpsTaskState::Completed => return Err(OpsError::NoNewInput),
+                OpsTaskState::Queued => return Ok(()),
+                OpsTaskState::Cancelled => return Err(OpsError::Forbidden),
+                OpsTaskState::Failed | OpsTaskState::Blocked | OpsTaskState::Interrupted => {
+                    sub.state = OpsTaskState::Queued;
+                    sub.reason = None;
+                    sub.error_code = None;
+                    sub.evidence.clear();
+                }
+            }
+            task.aggregate();
+            Ok(())
+        })
+    }
+
     /// Prevents duplicate task routers while allowing that router to dispatch distinct hosts concurrently.
     pub fn claim_task(self: &Arc<Self>, id: OpsTaskId) -> Result<TaskRunGuard, OpsError> {
         self.ensure_open()?;
@@ -364,7 +395,10 @@ impl OpsSupervisor {
             key: (id, subtask),
             armed: true,
         };
-        if self.get(id)?.state == OpsTaskState::Cancelled {
+        let task = self.get(id)?;
+        if task.state == OpsTaskState::Cancelled
+            || task.subtask(subtask)?.state != OpsTaskState::Queued
+        {
             return Err(OpsError::Forbidden);
         }
         let permit = tokio::select! {
@@ -625,7 +659,29 @@ impl OpsSupervisor {
         Ok(task)
     }
 
-    pub fn cancel_conversation(&self, conversation: &str) -> Result<(), OpsError> {
+    pub fn cancel_subtask(
+        &self,
+        id: OpsTaskId,
+        subtask: OpsSubtaskId,
+    ) -> Result<OpsTask, OpsError> {
+        let task = self.change(id, |task| {
+            let sub = task.subtask_mut(subtask)?;
+            if !matches!(sub.state, OpsTaskState::Completed | OpsTaskState::Cancelled) {
+                sub.state = OpsTaskState::Cancelled;
+                sub.reason = None;
+                sub.error_code = None;
+                task.aggregate();
+            }
+            Ok(())
+        })?;
+        if let Some(token) = self.workers.lock().get(&(id, subtask)) {
+            token.cancel();
+        }
+        Ok(task)
+    }
+
+    pub fn cancel_conversation(&self, conversation: &str) -> Result<Vec<OpsTask>, OpsError> {
+        let mut cancelled = Vec::new();
         for task in self.list()? {
             if task.conversation == conversation
                 && !matches!(
@@ -633,10 +689,10 @@ impl OpsSupervisor {
                     OpsTaskState::Completed | OpsTaskState::Failed | OpsTaskState::Cancelled
                 )
             {
-                self.cancel(task.id)?;
+                cancelled.push(self.cancel(task.id)?);
             }
         }
-        Ok(())
+        Ok(cancelled)
     }
 
     /// Tombstones task metadata after its parent conversation was deleted by the user.

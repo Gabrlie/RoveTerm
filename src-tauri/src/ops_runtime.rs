@@ -28,20 +28,18 @@ const MAX_DISPATCH: usize = 16;
 pub struct WorkerSpec {
     pub task_id: OpsTaskId,
     pub subtask_id: OpsSubtaskId,
-    pub task: String,
+    pub display_task: String,
     pub session: String,
     pub checkpoint: Option<AssistantCheckpoint>,
     pub persist: CheckpointSink,
     pub can_modify: bool,
     pub on_event: Arc<dyn Fn(&AiEvent) + Send + Sync>,
-    pub acceptance: Vec<String>,
 }
 
 #[derive(Clone)]
 pub struct OpsWorker {
     pub id: String,
     pub assistant: Arc<Assistant>,
-    pub verification: Arc<crate::ops_verifier::Verification>,
 }
 
 struct WorkerEnd {
@@ -49,10 +47,30 @@ struct WorkerEnd {
     id: Option<String>,
 }
 impl WorkerEnd {
-    async fn close(&mut self) {
-        if let Some(id) = self.id.take() {
+    async fn close(&mut self, subtask: Option<&rove_ops::OpsSubtask>) {
+        if let Some(id) = &self.id {
             let state = self.app.state::<AppState>();
-            ai::end_subagent(&self.app, &state, &id).await;
+            let status = match subtask.map(|sub| &sub.state) {
+                Some(OpsTaskState::Completed) => "completed",
+                Some(OpsTaskState::Failed) => "failed",
+                Some(OpsTaskState::Blocked) => "blocked",
+                Some(OpsTaskState::Cancelled) => "cancelled",
+                _ => "interrupted",
+            };
+            let details = subtask
+                .and_then(|sub| sub.evidence.last())
+                .and_then(|reference| read_private::<Value>(&state, reference).ok())
+                .map(|body| HostReport::from_body(&body));
+            let summary = details.as_ref().and_then(|report| {
+                report.summary.clone().or_else(|| {
+                    report
+                        .error
+                        .as_deref()
+                        .and_then(|error| first_line(error, 100))
+                })
+            });
+            ai::end_subagent(&self.app, &state, id, Some(status), summary.as_deref()).await;
+            self.id = None;
         }
     }
 }
@@ -62,7 +80,7 @@ impl Drop for WorkerEnd {
             let app = self.app.clone();
             tauri::async_runtime::spawn(async move {
                 let state = app.state::<AppState>();
-                ai::end_subagent(&app, &state, &id).await;
+                ai::end_subagent(&app, &state, &id, Some("interrupted"), None).await;
             });
         }
     }
@@ -72,10 +90,12 @@ impl Drop for WorkerEnd {
 pub struct DispatchInput {
     pub host_id: HostId,
     pub task: String,
+    #[serde(default)]
     pub acceptance: Vec<String>,
 }
 
 pub struct DispatchRequest {
+    pub title: Option<String>,
     pub provider: ProviderPrefs,
     pub lead_mode: Mode,
     pub unattended: Option<bool>,
@@ -91,6 +111,8 @@ struct DispatchBundle {
     provider: ProviderPrefs,
     mode: Mode,
     unattended: Option<bool>,
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -105,16 +127,6 @@ struct SavedCheckpoint {
     version: u32,
     checkpoint: AssistantCheckpoint,
     input_count: usize,
-}
-
-fn conservative_mode(initial: Mode, current: Mode) -> Mode {
-    if matches!(initial, Mode::AskAll) || matches!(current, Mode::AskAll) {
-        Mode::AskAll
-    } else if matches!(initial, Mode::AskByRisk) || matches!(current, Mode::AskByRisk) {
-        Mode::AskByRisk
-    } else {
-        Mode::Auto
-    }
 }
 
 #[derive(Default)]
@@ -194,6 +206,246 @@ pub(crate) fn host_name(state: &AppState, id: HostId) -> String {
         .vault
         .host(id)
         .map_or_else(|_| id.to_string(), |host| host.name)
+}
+
+#[derive(Serialize, Default)]
+pub struct OpsTaskCounts {
+    total: usize,
+    queued: usize,
+    running: usize,
+    waiting_approval: usize,
+    completed: usize,
+    blocked: usize,
+    failed: usize,
+    cancelled: usize,
+    interrupted: usize,
+}
+
+impl OpsTaskCounts {
+    fn add(&mut self, state: &OpsTaskState) {
+        self.total += 1;
+        *match state {
+            OpsTaskState::Queued => &mut self.queued,
+            OpsTaskState::Running => &mut self.running,
+            OpsTaskState::WaitingApproval => &mut self.waiting_approval,
+            OpsTaskState::Completed => &mut self.completed,
+            OpsTaskState::Blocked => &mut self.blocked,
+            OpsTaskState::Failed => &mut self.failed,
+            OpsTaskState::Cancelled => &mut self.cancelled,
+            OpsTaskState::Interrupted => &mut self.interrupted,
+        } += 1;
+    }
+}
+
+#[derive(Serialize)]
+pub struct OpsCheckView {
+    criterion: String,
+    summary: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct OpsSubtaskView {
+    id: Option<OpsSubtaskId>,
+    host_id: HostId,
+    host_name: String,
+    state: OpsTaskState,
+    session: Option<String>,
+    task: String,
+    summary: Option<String>,
+    reply: Option<String>,
+    checks: Vec<OpsCheckView>,
+    reason: Option<BlockReason>,
+    error: Option<String>,
+    uncertain_effect: bool,
+    attempts: u32,
+}
+
+#[derive(Serialize)]
+pub struct OpsTaskView {
+    id: OpsTaskId,
+    revision: u64,
+    conversation: String,
+    title: String,
+    source: TaskSource,
+    state: OpsTaskState,
+    read_only: bool,
+    created_at: i64,
+    updated_at: i64,
+    counts: OpsTaskCounts,
+    subtasks: Vec<OpsSubtaskView>,
+}
+
+fn nonempty(text: &str) -> Option<&str> {
+    let text = text.trim();
+    (!text.is_empty()).then_some(text)
+}
+
+fn truncate(text: &str, max: usize) -> String {
+    match text.char_indices().nth(max) {
+        Some(_) => text.chars().take(max - 1).chain(['…']).collect(),
+        None => text.to_owned(),
+    }
+}
+
+fn first_line(text: &str, max: usize) -> Option<String> {
+    text.lines()
+        .find_map(|line| {
+            nonempty(line.trim_start_matches(|ch: char| {
+                ch.is_whitespace() || matches!(ch, '#' | '-' | '*' | '>')
+            }))
+        })
+        .map(|line| truncate(line, max))
+}
+
+fn legacy_checks(body: &Value) -> Vec<OpsCheckView> {
+    let verification = &body["verification"];
+    verification["criteria"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, criterion)| {
+            let check = verification["checks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|check| check["criterion_index"].as_u64() == Some(index as u64));
+            Some(OpsCheckView {
+                criterion: criterion.as_str()?.to_owned(),
+                summary: check
+                    .and_then(|check| check["summary"].as_str())
+                    .and_then(nonempty)
+                    .map(str::to_owned),
+            })
+        })
+        .collect()
+}
+
+#[derive(Default)]
+struct HostReport {
+    summary: Option<String>,
+    reply: Option<String>,
+    checks: Vec<OpsCheckView>,
+    error: Option<String>,
+}
+
+impl HostReport {
+    fn from_body(body: &Value) -> Self {
+        match body["kind"].as_str() {
+            Some("host_report") => {
+                let reply = body["reply"].as_str().and_then(nonempty);
+                let error = body["error"]
+                    .as_str()
+                    .and_then(nonempty)
+                    .map(str::to_owned);
+                let checks = legacy_checks(body);
+                let summary = reply.and_then(|reply| first_line(reply, 100)).or_else(|| {
+                    checks.iter().find_map(|check| {
+                        check
+                            .summary
+                            .as_deref()
+                            .and_then(|text| first_line(text, 100))
+                    })
+                });
+                Self {
+                    summary,
+                    reply: reply.map(str::to_owned),
+                    checks,
+                    error,
+                }
+            }
+            Some("worker_failure") => Self {
+                error: body["message"]
+                    .as_str()
+                    .and_then(nonempty)
+                    .map(str::to_owned),
+                ..Self::default()
+            },
+            _ => Self::default(),
+        }
+    }
+}
+
+pub(crate) fn task_view(state: &AppState, task: &OpsTask) -> OpsTaskView {
+    let mut counts = OpsTaskCounts::default();
+    let subtasks = task
+        .scope
+        .targets
+        .iter()
+        .map(|target| {
+            let sub = task
+                .subtasks
+                .iter()
+                .find(|sub| sub.host_id == target.host_id);
+            let status = sub.map_or_else(|| task.state.clone(), |sub| sub.state.clone());
+            counts.add(&status);
+            let input = target
+                .input
+                .iter()
+                .chain(sub.and_then(|sub| sub.inputs.first()))
+                .find_map(|reference| read_private::<DispatchInput>(state, reference).ok());
+            let report = sub
+                .and_then(|sub| sub.evidence.last())
+                .and_then(|reference| read_private::<Value>(state, reference).ok())
+                .map_or_else(HostReport::default, |body| HostReport::from_body(&body));
+            OpsSubtaskView {
+                id: sub.map(|sub| sub.id),
+                host_id: target.host_id,
+                host_name: host_name(state, target.host_id),
+                state: status,
+                session: sub.and_then(|sub| sub.session.clone()),
+                task: input.map_or_else(String::new, |input| input.task),
+                summary: report.summary,
+                reply: report.reply,
+                checks: report.checks,
+                reason: sub.and_then(|sub| sub.reason.clone()),
+                error: report.error,
+                uncertain_effect: sub.is_some_and(|sub| {
+                    sub.uncertain_effect || sub.reason == Some(BlockReason::UnresolvedEffect)
+                }),
+                attempts: sub.map_or(0, |sub| sub.attempts),
+            }
+        })
+        .collect::<Vec<_>>();
+    let title = task
+        .inputs
+        .first()
+        .and_then(|reference| read_private::<DispatchBundle>(state, reference).ok())
+        .and_then(|bundle| bundle.title)
+        .and_then(|title| nonempty(&title).map(str::to_owned))
+        .or_else(|| {
+            subtasks
+                .first()?
+                .task
+                .lines()
+                .find_map(nonempty)
+                .map(|line| truncate(line, 60))
+        })
+        .unwrap_or_else(|| {
+            let mut title = subtasks
+                .iter()
+                .take(2)
+                .map(|sub| sub.host_name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            if subtasks.len() > 2 {
+                let _ = write!(title, " +{}", subtasks.len() - 2);
+            }
+            title
+        });
+    OpsTaskView {
+        id: task.id,
+        revision: task.revision,
+        conversation: task.conversation.clone(),
+        title,
+        source: task.source.clone(),
+        state: task.state.clone(),
+        read_only: !task.scope.can_modify,
+        created_at: task.created_at,
+        updated_at: task.updated_at,
+        counts,
+        subtasks,
+    }
 }
 
 pub(crate) fn active_state(state: &OpsTaskState) -> bool {
@@ -302,22 +554,21 @@ const MAX_REPORT_REPLY: usize = 8 * 1024;
 fn add_host_report(summary: &mut Value, body: &Value) {
     match body["kind"].as_str() {
         Some("host_report") => {
-            let verification = &body["verification"];
-            let checks = verification["criteria"].as_array().into_iter().flatten()
-                .enumerate().map(|(index, criterion)| {
-                    let check = verification["checks"].as_array().into_iter().flatten()
-                        .find(|check| check["criterion_index"].as_u64() == Some(index as u64));
-                    json!({"criterion":criterion, "summary":check.and_then(|check| check["summary"].as_str())})
-                }).collect::<Vec<_>>();
             let reply = body["reply"].as_str().unwrap_or_default();
             let end = reply.floor_char_boundary(MAX_REPORT_REPLY);
             summary["report"] = json!({
                 "kind":"host_report", "stop_reason":body["stop_reason"],
-                "verified":verification["verified"] == true, "checks":checks,
+                "checks":legacy_checks(body),
                 "successful_operations":body["successful_operations"],
                 "failed_operations":body["failed_operations"], "denied_operations":body["denied_operations"],
                 "reply":&reply[..end], "reply_clipped":end < reply.len(),
             });
+            if let Some(error) = body["error"].as_str().and_then(nonempty) {
+                summary["report"]["error"] = json!(error);
+            }
+            if let Some(verified) = body["verification"]["verified"].as_bool() {
+                summary["report"]["verified"] = json!(verified);
+            }
         }
         Some("worker_failure") => {
             summary["report"] = json!({
@@ -331,19 +582,18 @@ fn add_host_report(summary: &mut Value, body: &Value) {
 /// Renders report fields as Markdown text, escaping formatting in untrusted evidence.
 pub(crate) fn format_report_fallback(summaries: &[Value]) -> String {
     fn plain(value: &str) -> String {
-        let mut text = String::new();
-        for ch in value
+        let text = value
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")
-            .chars()
-        {
-            if ch.is_ascii_punctuation() {
-                text.push('\\');
-            }
-            text.push(ch);
+            .replace(char::is_control, "")
+            .replace('<', "\\<")
+            .replace('>', "\\>");
+        if text.starts_with(['#', '-', '*', '+']) {
+            format!("\\{text}")
+        } else {
+            text
         }
-        text
     }
 
     let mut markdown = String::from("# Operations report\n");
@@ -380,12 +630,10 @@ pub(crate) fn format_report_fallback(summaries: &[Value]) -> String {
             }
             let report = &sub["report"];
             if report["kind"] == "host_report" {
-                let verification = if report["verified"] == true {
-                    "Verified"
-                } else {
-                    "Unverified"
-                };
-                let _ = writeln!(markdown, "- {verification}");
+                if let Some(verified) = report["verified"].as_bool() {
+                    let verification = if verified { "Verified" } else { "Unverified" };
+                    let _ = writeln!(markdown, "- {verification}");
+                }
                 for check in report["checks"].as_array().into_iter().flatten() {
                     let criterion = plain(check["criterion"].as_str().unwrap_or_default());
                     let result = plain(check["summary"].as_str().unwrap_or("No result submitted"));
@@ -441,8 +689,8 @@ fn target_fingerprint(
     .map_err(|_| store_error())
 }
 
-fn emit(app: &AppHandle, task: &OpsTask) {
-    if let Err(error) = app.emit("ops-update", task) {
+pub(crate) fn emit(app: &AppHandle, task: &OpsTask) {
+    if let Err(error) = app.emit("ops-update", &task_view(&app.state::<AppState>(), task)) {
         tracing::debug!(%error, "operations update unavailable");
     }
 }
@@ -460,6 +708,7 @@ pub async fn dispatch(
     request: DispatchRequest,
 ) -> Result<OpsTask, CommandError> {
     let DispatchRequest {
+        title,
         provider,
         lead_mode,
         unattended,
@@ -481,7 +730,6 @@ pub async fn dispatch(
         if !seen.insert(task.host_id)
             || task.task.trim().is_empty()
             || task.task.len() > MAX_TASK_TEXT
-            || task.acceptance.is_empty()
             || task.acceptance.len() > 32
             || task
                 .acceptance
@@ -514,6 +762,7 @@ pub async fn dispatch(
             provider,
             mode: lead_mode,
             unattended,
+            title,
         })
         .map_err(|_| store_error())?,
     )?;
@@ -616,8 +865,7 @@ fn pending_modifies(checkpoint: &AssistantCheckpoint) -> bool {
         return true;
     };
     match call.name.as_str() {
-        "read_file" | "list_dir" | "read_notes" | "terminal_snapshot" | "read_terminal"
-        | "submit_result" => false,
+        "read_file" | "list_dir" | "read_notes" | "terminal_snapshot" | "read_terminal" => false,
         "run_command" => serde_json::from_str::<Value>(&call.arguments)
             .ok()
             .and_then(|args| {
@@ -684,7 +932,11 @@ async fn run_worker(app: AppHandle, id: OpsTaskId, sub_id: OpsSubtaskId) {
     if let Ok(task) = ops.get(id) {
         emit(&app, &task);
     }
-    let result = execute_worker(&app, id, sub_id, lease.cancellation.clone()).await;
+    let mut end = WorkerEnd {
+        app: app.clone(),
+        id: None,
+    };
+    let result = execute_worker(&app, id, sub_id, lease.cancellation.clone(), &mut end).await;
     let outcome = match result {
         Ok(outcome) => outcome,
         Err(error) => {
@@ -713,10 +965,18 @@ async fn run_worker(app: AppHandle, id: OpsTaskId, sub_id: OpsSubtaskId) {
             }
         }
     };
-    match ops.finish_subtask(id, sub_id, outcome) {
-        Ok(task) => emit(&app, &task),
-        Err(error) => tracing::warn!(%error, "operations worker outcome was not recorded"),
-    }
+    let finished = match ops.finish_subtask(id, sub_id, outcome) {
+        Ok(task) => {
+            emit(&app, &task);
+            Some(task)
+        }
+        Err(error) => {
+            tracing::warn!(%error, "operations worker outcome was not recorded");
+            None
+        }
+    };
+    end.close(finished.as_ref().and_then(|task| task.subtask(sub_id).ok()))
+        .await;
     drop(lease);
     if let Err(error) = publish_report(&app, id) {
         tracing::warn!(code = error.code, "operations report could not be stored");
@@ -746,6 +1006,7 @@ async fn execute_worker(
     id: OpsTaskId,
     sub_id: OpsSubtaskId,
     cancellation: tokio_util::sync::CancellationToken,
+    end: &mut WorkerEnd,
 ) -> Result<WorkerOutcome, CommandError> {
     let state = app.state::<AppState>();
     let task = state.ops.get(id).map_err(error)?;
@@ -787,18 +1048,15 @@ async fn execute_worker(
     let mut text = if checkpoint.is_some() {
         "Continue this operations task from its saved history. Do not repeat completed changes; verify current state before doing more.".to_owned()
     } else {
-        format!(
-            "{}\n\nAcceptance checks:\n{}\n\nVerify these checks with host tools before reporting success. State any unresolved checks explicitly.",
-            initial.task,
-            initial
-                .acceptance
-                .iter()
-                .map(|item| format!("- {item}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
+        let mut text = initial.task.clone();
+        if !initial.acceptance.is_empty() {
+            text.push_str("\n\nPlease check and report on:");
+            for item in &initial.acceptance {
+                let _ = write!(text, "\n- {item}");
+            }
+        }
+        text
     };
-    let mut acceptance = initial.acceptance.clone();
     let mut followup_index = 0;
     for reference in sub.inputs.iter().skip(consumed) {
         let followup: Followup = read_private(&state, reference)?;
@@ -807,9 +1065,6 @@ async fn execute_worker(
             text.push_str(&format!(
                 "\n\nUser follow-up {followup_index}:\n{}",
                 followup.text
-            ));
-            acceptance.push(format!(
-                "Address user follow-up {followup_index} shown in this turn."
             ));
         }
     }
@@ -856,11 +1111,13 @@ async fn execute_worker(
         Ok(())
     });
     let counts = Arc::new(EvidenceCounts::default());
-    let current_mode = match ai::ops_live_mode(app, &task.conversation).await {
-        Some(mode) => mode,
-        None => ai::mode(state.vault.preferences()?.ai.mode),
+    let mode = if bundle.unattended.is_some() {
+        Mode::Unattended
+    } else {
+        ai::ops_live_mode(app, &task.conversation)
+            .await
+            .unwrap_or(bundle.mode)
     };
-    let mode = conservative_mode(bundle.mode, current_mode);
     let worker = ai::start_ops_worker(
         app,
         &task.conversation,
@@ -871,56 +1128,54 @@ async fn execute_worker(
         WorkerSpec {
             task_id: id,
             subtask_id: sub_id,
-            task: text.clone(),
+            display_task: initial.task,
             session,
             checkpoint,
             persist,
             can_modify,
             on_event: observe(app.clone(), id, sub_id, counts.clone()),
-            acceptance: acceptance.clone(),
         },
     )
     .await?;
-    let mut end = WorkerEnd {
-        app: app.clone(),
-        id: Some(worker.id.clone()),
-    };
+    end.id = Some(worker.id.clone());
     let result = tokio::select! {
         biased;
         _ = cancellation.cancelled() => { worker.assistant.cancel().await; Ok("cancelled".to_owned()) },
         result = worker.assistant.prompt(&text) => result,
     };
     let reply = worker.assistant.last_reply().await;
-    end.close().await;
+    let error_message = result.as_ref().err().map(ToString::to_string);
     let reason = result.as_deref().unwrap_or("failed");
+    let successful = counts.successful.load(Ordering::Acquire);
+    let failed = counts.failed.load(Ordering::Acquire);
+    let denied = counts.denied.load(Ordering::Acquire);
     let report = save_private(
         &state,
         &task.conversation,
         &json!({
             "kind":"host_report", "host_id":sub.host_id, "worker_session":worker.id,
-            "acceptance":acceptance, "reply":reply, "stop_reason":reason,
-            "verification":worker.verification.evidence(),
-            "successful_operations":counts.successful.load(Ordering::Acquire),
-            "failed_operations":counts.failed.load(Ordering::Acquire), "denied_operations":counts.denied.load(Ordering::Acquire),
+            "acceptance":initial.acceptance, "reply":reply, "error":error_message, "stop_reason":reason,
+            "successful_operations":successful, "failed_operations":failed, "denied_operations":denied,
         }),
     )?;
     state
         .ops
         .record_evidence(id, sub_id, report.clone())
         .map_err(error)?;
-    if counts.storage_failed.load(Ordering::Acquire) {
-        return Ok(WorkerOutcome::Blocked {
+    Ok(match reason {
+        "end_turn" if counts.storage_failed.load(Ordering::Acquire) => WorkerOutcome::Blocked {
             reason: BlockReason::NeedsVerification,
-        });
-    }
-    if reason == "end_turn"
-        && (!worker.verification.is_verified() || counts.successful.load(Ordering::Acquire) == 0)
-    {
-        return Ok(WorkerOutcome::Blocked {
-            reason: BlockReason::NeedsVerification,
-        });
-    }
-    Ok(WorkerOutcome::from_stop_reason(reason, Some(report)))
+        },
+        "end_turn" if successful == 0 && denied > 0 => WorkerOutcome::Blocked {
+            reason: BlockReason::UserDecision,
+        },
+        "end_turn" if successful == 0 && failed > 0 && reply.trim().is_empty() => {
+            WorkerOutcome::Failed {
+                code: "worker.failed".into(),
+            }
+        }
+        _ => WorkerOutcome::from_stop_reason(reason, Some(report)),
+    })
 }
 
 fn publish_report(app: &AppHandle, id: OpsTaskId) -> Result<(), CommandError> {
@@ -1009,19 +1264,7 @@ pub async fn append_input(
             if !resolve_uncertain {
                 continue;
             }
-            if let Some(saved) = &sub.checkpoint {
-                let mut checkpoint: SavedCheckpoint = read_private(&state, saved)?;
-                checkpoint.checkpoint.resolve_interrupted();
-                let updated = save_private(
-                    &state,
-                    &saved.session,
-                    &serde_json::to_value(checkpoint).map_err(|_| store_error())?,
-                )?;
-                state
-                    .ops
-                    .update_checkpoint(id, sub.id, updated)
-                    .map_err(error)?;
-            }
+            resolve_interrupted_checkpoint(&state, id, sub)?;
             state
                 .ops
                 .resolve_effect(id, sub.id, reference.clone())
@@ -1038,6 +1281,84 @@ pub async fn append_input(
     emit(app, &task);
     kick(app, id);
     Ok(task)
+}
+
+fn resolve_interrupted_checkpoint(
+    state: &AppState,
+    id: OpsTaskId,
+    sub: &rove_ops::OpsSubtask,
+) -> Result<(), CommandError> {
+    if let Some(saved) = &sub.checkpoint {
+        let mut checkpoint: SavedCheckpoint = read_private(state, saved)?;
+        checkpoint.checkpoint.resolve_interrupted();
+        let updated = save_private(
+            state,
+            &saved.session,
+            &serde_json::to_value(checkpoint).map_err(|_| store_error())?,
+        )?;
+        state
+            .ops
+            .update_checkpoint(id, sub.id, updated)
+            .map_err(error)?;
+    }
+    Ok(())
+}
+
+pub async fn retry_task(
+    app: &AppHandle,
+    id: OpsTaskId,
+    host_id: Option<HostId>,
+    confirm_uncertain: bool,
+) -> Result<OpsTaskView, CommandError> {
+    let state = app.state::<AppState>();
+    if confirm_uncertain {
+        state.ensure_unlocked().await?;
+    }
+    let task = state.ops.get(id).map_err(error)?;
+    let host_subtask = host_id
+        .map(|host_id| {
+            task.subtasks
+                .iter()
+                .find(|sub| sub.host_id == host_id)
+                .ok_or_else(|| {
+                    CommandError::new("input.invalid", "host has no subtask in this task")
+                })
+        })
+        .transpose()?;
+    if confirm_uncertain && task.state != OpsTaskState::Cancelled {
+        for sub in task.subtasks.iter().filter(|sub| {
+            host_id.is_none_or(|host| sub.host_id == host)
+                && (sub.uncertain_effect || sub.reason == Some(BlockReason::UnresolvedEffect))
+        }) {
+            if active_state(&sub.state) {
+                if host_id.is_some() {
+                    return Err(error(rove_ops::OpsError::Busy));
+                }
+                continue;
+            }
+            if sub.state == OpsTaskState::Cancelled {
+                continue;
+            }
+            resolve_interrupted_checkpoint(&state, id, sub)?;
+            let reference = save_private(
+                &state,
+                &task.conversation,
+                &json!({"kind":"retry_confirmed","host_id":sub.host_id}),
+            )?;
+            state
+                .ops
+                .resolve_effect(id, sub.id, reference)
+                .map_err(error)?;
+        }
+    }
+    let task = match host_subtask {
+        Some(sub) => state.ops.retry_subtask(id, sub.id),
+        None => state.ops.retry_failed(id),
+    }
+    .map_err(error)?;
+    emit(app, &task);
+    kick(app, id);
+    Ok(task_view(&state, &task))
 }
 
 pub fn reference_belongs(task: &OpsTask, reference: &PrivateRef) -> bool {
@@ -1083,14 +1404,13 @@ mod tests {
     }
 
     #[test]
-    fn pending_tools_distinguish_read_only_work_and_submission_from_modifications() {
+    fn pending_tools_distinguish_read_only_work_from_modifications() {
         for name in [
             "read_file",
             "list_dir",
             "read_notes",
             "read_terminal",
             "terminal_snapshot",
-            "submit_result",
         ] {
             assert!(!pending_modifies(&checkpoint(name, json!({}))));
         }
@@ -1126,21 +1446,6 @@ mod tests {
             assert_eq!(scope.targets, vec![target.clone()]);
             assert_eq!(scope.can_modify, expected);
         }
-    }
-
-    #[test]
-    fn task_mode_cannot_widen_either_the_original_or_current_interactive_policy() {
-        assert_eq!(conservative_mode(Mode::AskAll, Mode::Auto), Mode::AskAll);
-        assert_eq!(conservative_mode(Mode::Auto, Mode::AskAll), Mode::AskAll);
-        assert_eq!(
-            conservative_mode(Mode::Auto, Mode::AskByRisk),
-            Mode::AskByRisk
-        );
-        assert_eq!(
-            conservative_mode(Mode::AskByRisk, Mode::Auto),
-            Mode::AskByRisk
-        );
-        assert_eq!(conservative_mode(Mode::Auto, Mode::Auto), Mode::Auto);
     }
 
     #[test]
@@ -1335,7 +1640,7 @@ mod tests {
             "subtasks":[
                 {"host_name":"web", "state":"completed", "report":{
                     "kind":"host_report", "verified":true, "checks":[{"criterion":"Health","summary":"Probe passed"}],
-                    "reply":"<script>\n# found it"
+                    "reply":"<script>\n# found it at 10.0.0.1:22 /var/log/app_log"
                 }},
                 {"host_name":"db", "state":"blocked", "uncertain_effect":true,
                  "report":{"kind":"worker_failure","failure_message":"Disconnected"}}
@@ -1343,11 +1648,28 @@ mod tests {
         })]);
         assert!(markdown.starts_with("# Operations report\n\n1 of 2 host tasks completed."));
         assert!(markdown.contains("### web — completed\n\n- Verified\n- Health — Probe passed"));
-        assert!(markdown.contains(r"\<script\> \# found it"));
+        assert!(markdown.contains(r"\<script\> # found it at 10.0.0.1:22 /var/log/app_log"));
         assert!(markdown.contains("### db — blocked"));
         assert!(markdown.contains("Confirm the remote outcome"));
         assert!(markdown.contains("Worker failure — Disconnected"));
         assert!(!markdown.contains("host_name"));
+    }
+
+    #[test]
+    fn ops_reports_without_verification_render_worker_findings() {
+        let body = json!({
+            "kind":"host_report","reply":"\n#\n> **Service healthy\nChecked /var/log",
+            "acceptance":["Check the service"],"stop_reason":"end_turn",
+        });
+        let view = HostReport::from_body(&body);
+        assert_eq!(view.summary.as_deref(), Some("Service healthy"));
+        assert!(view.checks.is_empty());
+        let mut sub = json!({"host_name":"web","state":"completed"});
+        add_host_report(&mut sub, &body);
+        assert!(sub["report"].get("verified").is_none());
+        let markdown = format_report_fallback(&[json!({"subtasks":[sub]})]);
+        assert!(markdown.contains("Worker findings"));
+        assert!(!markdown.contains("Unverified"));
     }
 
     #[test]
@@ -1378,5 +1700,385 @@ mod tests {
             target_fingerprint(&host, &rove_ssh::SshTarget::from_host(&host, &[])).unwrap(),
             first
         );
+    }
+
+    #[cfg(unix)]
+    mod ssh_recovery {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        };
+        use std::time::Duration;
+
+        use devsshd::{DevConfig, DevServer};
+        use rove_ai::assistant::{Assistant, AssistantCheckpoint, AssistantError, HostMeta};
+        use rove_ai::audit::{Auditor, KIND_COMMAND};
+        use rove_ai::host::{ConnectionSource, RemoteHost};
+        use rove_ai::llm::{Client, Endpoint, Format};
+        use rove_ai::session::{AiEvent, AiSession, SessionSettings};
+        use rove_ai::{Answer, Mode};
+        use rove_journal::{JournalQuery, JournalStore, NewRecord, SqliteJournal};
+        use rove_kernel::EventBus;
+        use rove_ops::{
+            BlockReason, JournalTaskStore, OpsConfig, OpsRequestId, OpsSupervisor, OpsTaskState,
+            PrivateRef, Target, TaskDraft, TaskScope, TaskSource,
+        };
+        use rove_ssh::{
+            AuthSpec, HostKeyAnswer, HostKeyPrompt, HostKeyPrompts, SshConfig, SshConnection,
+            SshConnector, SshTarget, VaultVerifier,
+        };
+        use rove_vault::{HostId, MemoryKeyCache, Vault};
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::TcpListener;
+        use tokio::sync::mpsc;
+        use zeroize::Zeroizing;
+
+        use async_trait::async_trait;
+        use serde_json::{Value, json};
+
+        struct Source(Arc<SshConnection>);
+
+        #[async_trait]
+        impl ConnectionSource for Source {
+            async fn connection(&self) -> Result<Arc<SshConnection>, String> {
+                Ok(self.0.clone())
+            }
+        }
+
+        fn seal(
+            vault: &Vault,
+            journal: &dyn JournalStore,
+            session: &str,
+            body: &Value,
+        ) -> PrivateRef {
+            let reference = uuid::Uuid::now_v7();
+            let sealed = vault.seal_audit(session, reference, body).unwrap();
+            journal
+                .append_private(
+                    NewRecord {
+                        kind: "ops/private".into(),
+                        session_id: Some(session.into()),
+                        payload: json!({"reference":reference}),
+                    },
+                    session,
+                    &reference.to_string(),
+                    &sealed,
+                )
+                .unwrap();
+            PrivateRef::new(session, reference.to_string()).unwrap()
+        }
+
+        fn open(vault: &Vault, journal: &dyn JournalStore, reference: &PrivateRef) -> Value {
+            let sealed = journal
+                .private_body(&reference.session, &reference.reference.to_string())
+                .unwrap();
+            vault
+                .open_audit(&reference.session, reference.reference, &sealed)
+                .unwrap()
+        }
+
+        async fn scripted_write_model(cwd: &str) -> (String, Arc<AtomicUsize>) {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}/v1", listener.local_addr().unwrap());
+            let calls = Arc::new(AtomicUsize::new(0));
+            let seen = calls.clone();
+            let arguments = json!({
+                "command":"printf 'applied\\n' >> apply.log; printf 'ssh-write-receipt\\n'",
+                "cwd":cwd,
+            });
+            tokio::spawn(async move {
+                while let Ok((stream, _)) = listener.accept().await {
+                    let (read, mut write) = stream.into_split();
+                    let mut reader = BufReader::new(read);
+                    let mut length = 0;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).await.unwrap() == 0 {
+                            return;
+                        }
+                        if line == "\r\n" {
+                            break;
+                        }
+                        if let Some(value) =
+                            line.to_ascii_lowercase().strip_prefix("content-length:")
+                        {
+                            length = value.trim().parse().unwrap();
+                        }
+                    }
+                    let mut raw = vec![0; length];
+                    reader.read_exact(&mut raw).await.unwrap();
+                    let request: Value = serde_json::from_slice(&raw).unwrap();
+                    assert_eq!(request["model"], "scripted");
+                    let index = seen.fetch_add(1, Ordering::SeqCst);
+                    let delta = if index == 0 {
+                        json!({"tool_calls":[{"index":0,"id":"write-1","function":{
+                            "name":"run_command","arguments":arguments.to_string(),
+                        }}]})
+                    } else {
+                        json!({"content":"unexpected continuation"})
+                    };
+                    let chunk = json!({"choices":[{"delta":delta,"finish_reason":"stop"}]});
+                    let body = format!("data: {chunk}\n\ndata: [DONE]\n\n");
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    write.write_all(header.as_bytes()).await.unwrap();
+                    write.write_all(body.as_bytes()).await.unwrap();
+                }
+            });
+            (base, calls)
+        }
+
+        #[tokio::test]
+        async fn lost_checkpoint_after_real_ssh_write_stays_unknown_and_is_not_replayed() {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().canonicalize().unwrap();
+            let server = DevServer::start(
+                "127.0.0.1:0",
+                DevConfig {
+                    sftp_root: Some(root.clone()),
+                    ..DevConfig::demo()
+                },
+            )
+            .await
+            .unwrap();
+            let vault =
+                Arc::new(Vault::open_in_memory(Arc::new(MemoryKeyCache::default())).unwrap());
+            assert_eq!(vault.try_unlock(), rove_vault::LockState::Unlocked);
+            let events = EventBus::default();
+            let prompts = Arc::new(HostKeyPrompts::new(events.clone(), Duration::from_secs(5)));
+            let responder = prompts.clone();
+            let _listener = events.on::<HostKeyPrompt>(move |prompt| {
+                responder.respond(&prompt.request_id, HostKeyAnswer::Trust);
+            });
+            let connector = SshConnector::new(
+                &SshConfig::default(),
+                Arc::new(VaultVerifier::new(vault.clone(), prompts)),
+            );
+            let target = SshTarget {
+                hostname: "127.0.0.1".into(),
+                port: server.addr().port(),
+                username: "demo".into(),
+                host_id: None,
+                title: None,
+                route: String::new(),
+            };
+            let connection = connector
+                .connect(&target, &AuthSpec::Password(Zeroizing::new("demo".into())))
+                .await
+                .unwrap();
+            let host = Arc::new(RemoteHost::new("SSH fixture", Arc::new(Source(connection))));
+            let journal: Arc<dyn JournalStore> =
+                Arc::new(SqliteJournal::open(&root.join("journal.db")).unwrap());
+            let ops = Arc::new(
+                OpsSupervisor::new(
+                    Arc::new(JournalTaskStore::new(journal.clone()).unwrap()),
+                    OpsConfig::default(),
+                )
+                .unwrap(),
+            );
+            let session_id = "ai-ssh-recovery";
+            let host_id = HostId::new();
+            let input = seal(
+                &vault,
+                journal.as_ref(),
+                session_id,
+                &json!({"task":"apply once"}),
+            );
+            let task = ops
+                .create(TaskDraft {
+                    request_id: OpsRequestId::new("ssh-recovery-request").unwrap(),
+                    conversation: session_id.into(),
+                    source: TaskSource::User,
+                    input,
+                    acceptance: None,
+                    scope: TaskScope {
+                        targets: vec![Target {
+                            host_id,
+                            fingerprint: "loopback-ssh-fixture".into(),
+                            input: None,
+                        }],
+                        can_modify: true,
+                    },
+                })
+                .unwrap();
+            let sub = ops
+                .ensure_subtask(task.id, host_id, "loopback-ssh-fixture")
+                .unwrap();
+            let lease = ops.lease_worker(task.id, sub.id).await.unwrap();
+            let auditor = {
+                let vault = vault.clone();
+                let journal = journal.clone();
+                let ops = ops.clone();
+                Arc::new(Auditor::new(
+                    Arc::new(move |record| {
+                        let reference = seal(&vault, journal.as_ref(), session_id, &record.payload);
+                        journal
+                            .append(NewRecord {
+                                payload: json!({"body_ref":reference.reference}),
+                                ..record
+                            })
+                            .unwrap();
+                        ops.record_evidence(task.id, sub.id, reference).unwrap();
+                    }),
+                    session_id,
+                    "SSH fixture",
+                ))
+            };
+            auditor.protect_text();
+            let (approvals, mut asked) = mpsc::unbounded_channel();
+            let session = Arc::new(AiSession::new(
+                host.clone(),
+                SessionSettings::default(),
+                Arc::new(move |event| {
+                    if let AiEvent::Approval { request_id, .. } = &event {
+                        approvals.send(*request_id).unwrap();
+                    }
+                    auditor.event(&event);
+                }),
+            ));
+            let weak = Arc::downgrade(&session);
+            tokio::spawn(async move {
+                while let Some(request_id) = asked.recv().await {
+                    let Some(session) = weak.upgrade() else { break };
+                    session.answer(request_id, Answer::AllowOnce).await;
+                }
+            });
+            let (base, model_calls) = scripted_write_model(root.to_str().unwrap()).await;
+            let client = Client::new(
+                Endpoint {
+                    format: Format::Chat,
+                    base_url: base,
+                    model: "scripted".into(),
+                    max_tokens: None,
+                    effort: None,
+                },
+                "",
+                Duration::from_secs(5),
+            )
+            .unwrap();
+            let lost_result = Arc::new(AtomicBool::new(false));
+            let sink = {
+                let vault = vault.clone();
+                let journal = journal.clone();
+                let ops = ops.clone();
+                let lost = lost_result.clone();
+                Arc::new(move |checkpoint: AssistantCheckpoint| {
+                    if matches!(
+                        checkpoint.messages.last(),
+                        Some(rove_ai::llm::Message::Tool { .. })
+                    ) {
+                        lost.store(true, Ordering::SeqCst);
+                        return Err("injected loss of the result checkpoint".into());
+                    }
+                    let pending = checkpoint.pending_tool.is_some();
+                    let reference = seal(
+                        &vault,
+                        journal.as_ref(),
+                        session_id,
+                        &serde_json::to_value(checkpoint).unwrap(),
+                    );
+                    if pending {
+                        ops.mark_effect_started(task.id, sub.id).unwrap();
+                    }
+                    ops.update_checkpoint(task.id, sub.id, reference).unwrap();
+                    Ok(())
+                })
+            };
+            let assistant = Assistant::new(client.clone(), session, &HostMeta::default())
+                .with_checkpoint_sink(sink);
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(10), assistant.prompt("apply once"))
+                    .await
+                    .unwrap(),
+                Err(AssistantError::Checkpoint(_))
+            ));
+            assert!(lost_result.load(Ordering::SeqCst));
+            assert_eq!(
+                std::fs::read_to_string(root.join("apply.log")).unwrap(),
+                "applied\n"
+            );
+            assert_eq!(model_calls.load(Ordering::SeqCst), 1);
+            let before = ops.get(task.id).unwrap();
+            let saved = before.subtask(sub.id).unwrap().checkpoint.clone().unwrap();
+            let checkpoint: AssistantCheckpoint =
+                serde_json::from_value(open(&vault, journal.as_ref(), &saved)).unwrap();
+            assert_eq!(checkpoint.pending_tool.as_deref(), Some("write-1"));
+            assert!(before.subtask(sub.id).unwrap().uncertain_effect);
+            let command = journal
+                .read(&JournalQuery {
+                    session_id: Some(session_id.into()),
+                    kind: Some(KIND_COMMAND.into()),
+                    ..JournalQuery::default()
+                })
+                .unwrap();
+            assert_eq!(command.len(), 1);
+            let reference =
+                PrivateRef::new(session_id, command[0].payload["body_ref"].as_str().unwrap())
+                    .unwrap();
+            let audit = open(&vault, journal.as_ref(), &reference);
+            assert_eq!(audit["outcome"]["stdout"], "ssh-write-receipt\n");
+            assert_eq!(audit["approved"], true);
+            assert!(
+                before
+                    .subtask(sub.id)
+                    .unwrap()
+                    .evidence
+                    .contains(&reference)
+            );
+            let sealed = journal
+                .private_body(session_id, &reference.reference.to_string())
+                .unwrap();
+            assert!(
+                !sealed
+                    .windows(17)
+                    .any(|window| window == b"ssh-write-receipt")
+            );
+            assert!(!command[0].payload.to_string().contains("printf"));
+            drop(assistant);
+            drop(lease);
+            drop(ops);
+
+            let restarted = Arc::new(
+                OpsSupervisor::new(
+                    Arc::new(JournalTaskStore::new(journal.clone()).unwrap()),
+                    OpsConfig::default(),
+                )
+                .unwrap(),
+            );
+            let retry = restarted.retry_failed(task.id).unwrap();
+            let worker = retry.subtask(sub.id).unwrap();
+            assert_eq!(worker.state, OpsTaskState::Blocked);
+            assert_eq!(worker.reason, Some(BlockReason::UnresolvedEffect));
+            assert!(worker.uncertain_effect);
+            assert_eq!(worker.attempts, 1);
+            assert!(worker.evidence.contains(&reference));
+            assert!(restarted.lease_worker(task.id, sub.id).await.is_err());
+            let read_only = Arc::new(AiSession::new(
+                host,
+                SessionSettings::default(),
+                Arc::new(|event| assert!(!matches!(event, AiEvent::Approval { .. }))),
+            ));
+            read_only.restrict_read_only();
+            read_only.set_mode(Mode::Auto).await;
+            let restored = Assistant::new(client, read_only.clone(), &HostMeta::default());
+            assert!(matches!(
+                restored.restore_checkpoint(checkpoint).await,
+                Err(AssistantError::Checkpoint(_))
+            ));
+            assert!(
+                read_only
+                    .run_command("printf replayed >> apply.log", root.to_str(), None)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(read_only.take_deferred().len(), 1);
+            assert_eq!(model_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                std::fs::read_to_string(root.join("apply.log")).unwrap(),
+                "applied\n"
+            );
+        }
     }
 }

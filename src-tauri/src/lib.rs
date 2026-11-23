@@ -7,7 +7,6 @@ mod external_edit;
 mod logs;
 mod ops_runtime;
 mod ops_tools;
-mod ops_verifier;
 mod profile;
 mod reveal;
 mod schedule;
@@ -297,6 +296,7 @@ pub fn run() {
             commands::ops::ops_task_get,
             commands::ops::ops_task_input,
             commands::ops::ops_task_cancel,
+            commands::ops::ops_subtask_cancel,
             commands::ops::ops_task_retry,
             commands::ops::ops_task_evidence,
             commands::session::session_open_ssh,

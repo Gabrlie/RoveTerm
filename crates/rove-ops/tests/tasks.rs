@@ -238,7 +238,29 @@ async fn conversation_idle_waits_for_both_worker_and_router_leases() {
     let router = supervisor.claim_task(task.id).unwrap();
     let worker = sub(&supervisor, &task, host);
     let lease = supervisor.lease_worker(task.id, worker.id).await.unwrap();
-    supervisor.cancel_conversation(&task.conversation).unwrap();
+    let queued = supervisor.create(draft(&[host])).unwrap();
+    let mut other = draft(&[host]);
+    other.conversation = "ai-other".into();
+    other.input = PrivateRef::new("ai-other", other.input.reference.to_string()).unwrap();
+    other.acceptance = None;
+    let other = supervisor.create(other).unwrap();
+    let cancelled = supervisor.cancel_conversation(&task.conversation).unwrap();
+    assert_eq!(cancelled.len(), 2);
+    for id in [task.id, queued.id] {
+        let cancelled = cancelled.iter().find(|task| task.id == id).unwrap();
+        assert_eq!(cancelled.state, OpsTaskState::Cancelled);
+        assert_eq!(supervisor.get(id).unwrap(), *cancelled);
+    }
+    assert_eq!(
+        supervisor.get(other.id).unwrap().state,
+        OpsTaskState::Queued
+    );
+    assert!(
+        supervisor
+            .cancel_conversation(&task.conversation)
+            .unwrap()
+            .is_empty()
+    );
     let idle = supervisor.wait_conversation_idle(&task.conversation);
     tokio::pin!(idle);
     assert!(
@@ -262,7 +284,107 @@ async fn conversation_idle_waits_for_both_worker_and_router_leases() {
         .unwrap()
         .unwrap();
     supervisor.forget_conversation(&task.conversation).unwrap();
-    assert!(supervisor.list().unwrap().is_empty());
+    assert_eq!(supervisor.list().unwrap(), vec![other]);
+}
+
+#[tokio::test]
+async fn cancelling_one_subtask_only_stops_its_own_worker() {
+    let (_, _, supervisor) = setup(2);
+    let hosts = [HostId::new(), HostId::new()];
+    let task = supervisor.create(draft(&hosts)).unwrap();
+    let [first, second] = hosts.map(|host| sub(&supervisor, &task, host));
+    let first_lease = supervisor.lease_worker(task.id, first.id).await.unwrap();
+    let second_lease = supervisor.lease_worker(task.id, second.id).await.unwrap();
+    let task = supervisor.cancel_subtask(task.id, first.id).unwrap();
+    assert_eq!(task.state, OpsTaskState::Running);
+    assert_eq!(
+        task.subtask(first.id).unwrap().state,
+        OpsTaskState::Cancelled
+    );
+    assert_eq!(
+        task.subtask(second.id).unwrap().state,
+        OpsTaskState::Running
+    );
+    assert!(first_lease.cancellation.is_cancelled());
+    assert!(!second_lease.cancellation.is_cancelled());
+    assert_eq!(
+        supervisor
+            .finish_subtask(task.id, first.id, WorkerOutcome::Interrupted)
+            .unwrap(),
+        task
+    );
+}
+
+#[tokio::test]
+async fn retrying_one_subtask_only_requeues_that_host() {
+    let (_, _, supervisor) = setup(1);
+    let hosts = [HostId::new(), HostId::new(), HostId::new()];
+    let task = supervisor.create(draft(&hosts)).unwrap();
+    let [first, second, third] = hosts.map(|host| sub(&supervisor, &task, host));
+    let lease = supervisor.lease_worker(task.id, first.id).await.unwrap();
+    assert!(matches!(
+        supervisor.retry_subtask(task.id, first.id),
+        Err(OpsError::Busy)
+    ));
+    supervisor
+        .record_evidence(task.id, first.id, body())
+        .unwrap();
+    supervisor
+        .finish_subtask(
+            task.id,
+            first.id,
+            WorkerOutcome::Failed {
+                code: "worker.failed".into(),
+            },
+        )
+        .unwrap();
+    drop(lease);
+    let lease = supervisor.lease_worker(task.id, second.id).await.unwrap();
+    supervisor.mark_effect_started(task.id, second.id).unwrap();
+    supervisor
+        .finish_subtask(task.id, second.id, WorkerOutcome::Interrupted)
+        .unwrap();
+    drop(lease);
+    let lease = supervisor.lease_worker(task.id, third.id).await.unwrap();
+    supervisor
+        .finish_subtask(
+            task.id,
+            third.id,
+            WorkerOutcome::Completed { evidence: body() },
+        )
+        .unwrap();
+    drop(lease);
+    assert!(matches!(
+        supervisor.retry_subtask(task.id, second.id),
+        Err(OpsError::UncertainEffect)
+    ));
+    assert!(matches!(
+        supervisor.retry_subtask(task.id, third.id),
+        Err(OpsError::NoNewInput)
+    ));
+    let retried = supervisor.retry_subtask(task.id, first.id).unwrap();
+    let sub = retried.subtask(first.id).unwrap();
+    assert_eq!(sub.state, OpsTaskState::Queued);
+    assert_eq!(sub.attempts, 1);
+    assert!(sub.error_code.is_none());
+    assert!(sub.evidence.is_empty());
+    assert_eq!(
+        retried.subtask(second.id).unwrap().state,
+        OpsTaskState::Blocked
+    );
+    assert_eq!(
+        retried.subtask(third.id).unwrap().state,
+        OpsTaskState::Completed
+    );
+    assert_eq!(
+        supervisor.retry_subtask(task.id, first.id).unwrap(),
+        retried
+    );
+    supervisor.cancel_subtask(task.id, first.id).unwrap();
+    assert!(matches!(
+        supervisor.retry_subtask(task.id, first.id),
+        Err(OpsError::Forbidden)
+    ));
 }
 
 #[test]
