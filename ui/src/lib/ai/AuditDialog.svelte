@@ -3,8 +3,11 @@
   import Dialog from '../ui/Dialog.svelte';
   import { errorText, t, type MessageKey } from '../i18n';
   import { aiAuditDetail, aiRecords, aiRename, aiSessions, type AiRecord, type AiSessionSummary } from '../ipc';
+  import Icon from '../ui/Icon.svelte';
   import IconButton from '../ui/IconButton.svelte';
+  import { shortHostName } from '../ops/taskview';
   import { auditLine, type AuditLine } from './audit';
+  import { formatToolOutput, isLeadTool } from './chatview';
   import { ai } from './ai.svelte';
   import { ask } from '../ui/confirm.svelte';
 
@@ -45,8 +48,8 @@
     try {
       const payload = await aiAuditDetail(id, row.reference);
       if (revision !== loadRevision) return;
-      const outcome = payload.outcome as Record<string, unknown> | undefined;
-      row.line.detail = typeof outcome?.content === 'string' ? outcome.content : JSON.stringify(payload, null, 2);
+      const outcome = typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>).outcome as Record<string, unknown> | undefined : undefined;
+      row.line.detail = typeof payload === 'string' ? payload : typeof outcome?.content === 'string' ? outcome.content : JSON.stringify(payload);
     } catch (caught) { if (revision === loadRevision) error = errorText(caught); }
   }
   let error = $state('');
@@ -127,8 +130,9 @@
     return text === key ? kind : text;
   }
 
+  const filters = ['all', 'fleet', 'assistant'] as const;
   // svelte-ignore state_referenced_locally
-  let filter = $state<'fleet' | 'assistant' | 'all'>(role ?? 'all');
+  let filter = $state<(typeof filters)[number]>(role ?? 'all');
   $effect(() => {
     let active = true;
     aiSessions(filter === 'all' ? null : filter).then((found) => {
@@ -145,15 +149,16 @@
 <Dialog title={t('ai.history')} {onclose} width={820}>
   <div class="audit">
     <nav aria-label={t('ai.history')}>
-      <select bind:value={filter} aria-label={t('ai.history')}>
-        <option value="all">{t('ai.role.all')}</option>
-        <option value="fleet">{t('ai.role.fleet')}</option>
-        <option value="assistant">{t('ai.role.assistant')}</option>
-      </select>
+      <div class="segmented" role="tablist" aria-label={t('ai.history')}>
+        {#each filters as kind (kind)}
+          <button type="button" role="tab" aria-selected={filter === kind} onclick={() => (filter = kind)}>{t(`ai.role.${kind}`)}</button>
+        {/each}
+      </div>
       {#each sessions as session (session.id)}
-        <button type="button" class:active={session.id === parent?.id} onclick={() => void load(session.id)}>
-          <span class="host">{session.title ?? session.host ?? '–'}</span>
-          <small>{t(`ai.role.${session.role}`)} · {session.title && session.host ? `${session.host} · ` : ''}{time(session.started)}{session.agent ? ` · ${session.agent}` : ''}</small>
+        {@const host = shortHostName(session.host)}
+        <button type="button" class="session" class:active={session.id === parent?.id} onclick={() => void load(session.id)}>
+          <span class="host">{session.title ?? (host || '–')}</span>
+          <small>{filter === 'all' ? `${t(`ai.role.${session.role}`)} · ` : ''}{session.title && host ? `${host} · ` : ''}{time(session.started)}{session.agent ? ` · ${session.agent}` : ''}</small>
         </button>
       {:else}
         <p class="empty">{t('ai.historyEmpty')}</p>
@@ -180,7 +185,10 @@
           <div class="switcher" role="group" aria-label={t('ai.subagents.auditViews')}>
             <button type="button" aria-pressed={current === parent} onclick={() => parent && void load(parent.id)}>{t('ai.subagents.lead')}</button>
             {#each parent.children as child (child.id)}
-              <button type="button" aria-pressed={current === child} title={time(child.started)} onclick={() => void load(child.id)}><span>{t('ai.role.subagent')}{child.host ? ` · ${child.host}` : ''}</span></button>
+              <button type="button" aria-pressed={current === child} title={child.host ? `${child.host} · ${time(child.started)}` : time(child.started)} onclick={() => void load(child.id)}>
+                <Icon name="server" size={12} />
+                <span>{child.host ? shortHostName(child.host) : t('ai.role.subagent')}</span>
+              </button>
             {/each}
           </div>
         {/if}
@@ -192,10 +200,10 @@
           <span class="time">{new Date(ts).toLocaleTimeString()}</span>
           <span class="kind">{current?.role === 'subagent' && line.kind === 'prompt' ? t('ai.subagents.delegatedTask') : label(line.kind)}</span>
           <div class="body">
-            {#if line.text}<span class="text selectable">{line.text}</span>{/if}
+            {#if line.text}<span class="text selectable">{line.kind === 'tool_call' && isLeadTool(line.text) ? t(`ai.tool.${line.text}`) : line.text}</span>{/if}
             {#if line.note}<span class="note">{noteText(line)}</span>{/if}
             {#if line.detail || row.reference}
-              <details ontoggle={(event) => void detail(event, row)}><summary>{t('ai.historyDetail')}</summary><pre class="selectable">{line.detail.includes('could not confirm that the remote command stopped') && line.tone === 'danger' ? t('ai.remoteExitUnknown') : line.detail}</pre></details>
+              <details ontoggle={(event) => void detail(event, row)}><summary>{t('ai.historyDetail')}</summary><pre class="selectable">{line.detail.includes('could not confirm that the remote command stopped') && line.tone === 'danger' ? t('ai.remoteExitUnknown') : formatToolOutput(line.detail)}</pre></details>
             {/if}
           </div>
         </div>
@@ -225,7 +233,21 @@
     overflow-y: auto;
     box-shadow: inset -1px 0 0 var(--separator);
   }
-  nav button {
+  .segmented {
+    flex: none;
+    display: flex;
+    width: 100%;
+    margin-bottom: var(--space-1);
+  }
+  .segmented > button {
+    flex: 1 1 0;
+    align-self: stretch;
+    min-width: 0;
+    min-height: 22px;
+    height: auto;
+    padding-inline: var(--space-1);
+  }
+  .session {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
@@ -238,14 +260,14 @@
     font: inherit;
     text-align: left;
   }
-  nav button:hover:not(.active) {
+  .session:hover:not(.active) {
     background: var(--fill-hover);
   }
-  nav button.active {
+  .session.active {
     background: var(--accent);
     color: var(--accent-fg);
   }
-  nav small {
+  .session small {
     opacity: 0.75;
     font-size: var(--text-caption, 11px);
   }
@@ -274,6 +296,9 @@
     padding: var(--space-2) 0;
   }
   .switcher button {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
     flex: none;
     border: 1px solid transparent;
     border-radius: var(--radius-pill);

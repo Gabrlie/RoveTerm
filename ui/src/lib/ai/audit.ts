@@ -75,8 +75,10 @@ export function auditLine(entry: AiRecord): AuditLine | null {
       // An edit shows its change.
       const diff = str(record(payload.operation).diff);
       if (diff && !detail) detail = diff;
-      // Agent tools report themselves when finished, without an operation.
-      const text = subject(payload.operation) || str(payload.title) || str(payload.input);
+      const text = subject(payload.operation) || str(payload.title);
+      if (!detail && kind === 'tool_call' && payload.input != null) {
+        detail = typeof payload.input === 'string' ? payload.input : JSON.stringify(payload.input);
+      }
       if (!result && payload.status) note = str(payload.status);
       return { kind, text, note, detail, tone };
     }

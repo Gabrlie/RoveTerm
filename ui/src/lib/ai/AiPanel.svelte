@@ -11,14 +11,14 @@
   import { isMobile } from '../platform';
   import { builtinCommands, canPrestart, choiceKey, optionKey, slashItems, slashQuery, splitOptions, type SlashItem } from './composer';
   import { ai, contextKey, type Chat } from './ai.svelte';
-  import { outcomeState, rows, subject, toolSubject, type ApprovalItem } from './chatview';
+  import { formatToolOutput, isLeadTool, outcomeState, rows, subject, toolSubject, type ApprovalItem, type LeadToolName } from './chatview';
   import { hostOf, workspace } from '../workspace/workspace.svelte';
   import { hosts } from '../hosts/hosts.svelte';
   import { terminals } from '../terminal/registry';
   import { vault } from '../vault/vault.svelte';
   import { t, type MessageKey } from '../i18n';
   import { aiCancel } from '../ipc';
-  import type { AgentChoice, AiAnswer, AiContext, AiMode, AiOperation, AiOutcome, AiRecord, AiSessionSummary, ConfigOption, ReviewNote, Risk } from '../ipc';
+  import type { AgentChoice, AiAnswer, AiContext, AiMode, AiOperation, AiOutcome, AiRecord, AiSessionSummary, ConfigOption, ReviewNote, Risk, ToolCall } from '../ipc';
   import { prefs } from '../settings/prefs.svelte';
   import { EFFORT_LEVELS } from '../settings/providers';
   import { notify } from '../ui/toast.svelte';
@@ -229,6 +229,16 @@
 
   const MODES: AiMode[] = ['ask_all', 'ask_by_risk', 'auto'];
   const MODE_ICONS: Record<AiMode, IconName> = { ask_all: 'shieldLock', ask_by_risk: 'shieldCheck', auto: 'shieldAlert' };
+  const LEAD_TOOL_ICONS: Record<LeadToolName, IconName> = {
+    list_hosts: 'server',
+    read_notes: 'snippets',
+    start_tasks: 'bot',
+    task_status: 'file',
+    task_report: 'file',
+    task_input: 'edit',
+    retry_task: 'refresh',
+    cancel_task: 'stop',
+  };
   const EXAMPLES: MessageKey[] = ['ai.example.health', 'ai.example.logs', 'ai.example.disk'];
   const FLEET_EXAMPLES: MessageKey[] = ['fleet.example.health', 'fleet.example.updates', 'fleet.example.certs'];
   const GROUPS: { kind: AgentChoice['kind']; title: MessageKey }[] = [
@@ -530,6 +540,21 @@
   {#if expanded[key] && output}<pre class="op-output selectable">{output}</pre>{/if}
 {/snippet}
 
+{#snippet toolRow(key: string, call: ToolCall)}
+  {@const state = call.status === 'completed' ? 'done' : call.status === 'failed' ? 'failed' : 'running'}
+  {@const leadTool = isLeadTool(call.title) ? call.title : null}
+  {@const label = leadTool ? t(`ai.tool.${leadTool}`) : call.title ?? call.kind ?? call.id}
+  {@const what = toolSubject(call)}
+  {@const text = call.content.map((part) => (part.type === 'text' ? part.text : part.type === 'diff' ? `${part.path}\n${part.new_text}` : '')).join('\n')}
+  <button type="button" class="op {state}" aria-expanded={!!expanded[key]} disabled={!text} onclick={() => toggle(key)}>
+    <span class="op-icon"><Icon name={leadTool ? LEAD_TOOL_ICONS[leadTool] : 'command'} size={13} /></span>
+    <span class="op-verb" title={label}>{label}</span>
+    {#if what && what !== call.title}<code class="op-subject" title={what}>{what}</code>{/if}
+    <span class="op-state" title={t(`ai.state.${state}` as MessageKey)}><Icon name={stateIcon(state)} size={12} /></span>
+  </button>
+  {#if expanded[key] && text}<pre class="op-output selectable">{formatToolOutput(text)}</pre>{/if}
+{/snippet}
+
 {#snippet chatItems(target: Chat)}
     {#each rows(target.items) as row (row.key)}
       {#if row.kind === 'group'}
@@ -542,7 +567,11 @@
         {#if expanded[key]}
           <div class="group-items">
             {#each row.items as item, at (at)}
-              {@render operationRow(`${key}-${at}`, item.operation, item.outcome, outcomeState(item.outcome), item.reviewer)}
+              {#if item.kind === 'operation'}
+                {@render operationRow(`${key}-${at}`, item.operation, item.outcome, outcomeState(item.outcome), item.reviewer)}
+              {:else}
+                {@render toolRow(`${key}-${at}`, item.call)}
+              {/if}
             {/each}
           </div>
         {/if}
@@ -561,16 +590,7 @@
         {:else if item.kind === 'thought'}
           <details class="thought"><summary>{t('ai.thought')}</summary><p class="selectable">{item.text}</p></details>
         {:else if item.kind === 'tool'}
-          {@const state = item.call.status === 'completed' ? 'done' : item.call.status === 'failed' ? 'failed' : 'running'}
-          {@const what = toolSubject(item.call)}
-          {@const text = item.call.content.map((part) => (part.type === 'text' ? part.text : part.type === 'diff' ? `${part.path}\n${part.new_text}` : '')).join('\n')}
-          <button type="button" class="op {state}" aria-expanded={!!expanded[key]} disabled={!text} onclick={() => toggle(key)}>
-            <span class="op-icon"><Icon name="command" size={13} /></span>
-            <span class="op-verb" title={item.call.title ?? ''}>{item.call.title ?? item.call.kind ?? item.call.id}</span>
-            {#if what && what !== item.call.title}<code class="op-subject" title={what}>{what}</code>{/if}
-            <span class="op-state"><Icon name={stateIcon(state)} size={12} /></span>
-          </button>
-          {#if expanded[key] && text}<pre class="op-output selectable">{text}</pre>{/if}
+          {@render toolRow(key, item.call)}
         {:else if item.kind === 'operation'}
           {@render operationRow(key, item.operation, item.outcome, outcomeState(item.outcome), item.reviewer)}
         {:else if item.kind === 'approval'}

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { itemsFromRecords, approvalFor, waitingApproval, commandOf, connectionProblem, outcomeState, rows, subject, toolSubject, type ChatItem } from './chatview.ts';
+import { itemsFromRecords, approvalFor, waitingApproval, commandOf, connectionProblem, formatToolOutput, outcomeState, rows, subject, toolSubject, type ChatItem, type LeadToolName, type ToolItem } from './chatview.ts';
 
 const readOnly = { risk: 'read_only' as const, programs: [], opaque: false, reasons: [] };
 const ran = (command: string, exit = 0): ChatItem => ({
@@ -9,6 +9,10 @@ const ran = (command: string, exit = 0): ChatItem => ({
   assessment: readOnly,
   approved: false,
   outcome: { result: 'command', output: { stdout: '', stderr: '', exit_code: exit, truncated: false } },
+});
+const leadTool = (title: LeadToolName, raw_input: unknown = null, status = 'completed'): ToolItem => ({
+  kind: 'tool',
+  call: { id: title, title, kind: 'other', status, content: [], locations: [], raw_input },
 });
 
 test('consecutive quiet operations fold into a group', () => {
@@ -22,6 +26,28 @@ test('failures and approved operations stay on their own', () => {
   const failed = ran('false', 1);
   const laid = rows([ran('uptime'), failed, ran('df')]);
   assert.deepEqual(laid.map((row) => row.kind), ['item', 'item', 'item']);
+});
+
+test('completed Lead reads fold together and with successful read-only operations', () => {
+  const first = leadTool('list_hosts');
+  const tools = [first, leadTool('read_notes'), leadTool('task_status'), leadTool('task_report')];
+  assert.deepEqual(rows(tools), [{ kind: 'group', items: tools, key: 0 }]);
+  const mixed = [ran('uptime'), first];
+  assert.deepEqual(rows(mixed), [{ kind: 'group', items: mixed, key: 0 }]);
+});
+
+test('unfinished, failed and mutating Lead tools interrupt read-only groups', () => {
+  for (const tool of [
+    leadTool('read_notes', null, 'failed'),
+    leadTool('task_report', null, 'in_progress'),
+    leadTool('start_tasks'),
+    leadTool('cancel_task'),
+    leadTool('retry_task'),
+    leadTool('task_input'),
+  ]) {
+    const items = [leadTool('list_hosts'), tool, leadTool('task_status')];
+    assert.deepEqual(rows(items), items.map((item, key) => ({ kind: 'item', item, key })), tool.call.title ?? undefined);
+  }
 });
 
 test('a result finds the approval it belongs to', () => {
@@ -55,8 +81,39 @@ test('agent tools show their command or file', () => {
   assert.equal(commandOf('ls'), null);
   const call = { id: 't', title: 'Read', kind: 'read', status: null, content: [], locations: ['/etc/hosts'], raw_input: null };
   assert.equal(toolSubject(call), '/etc/hosts');
+  assert.equal(toolSubject({ ...call, raw_input: { command: 'pwd' } }), 'pwd');
   assert.equal(subject({ op: 'agent_tool', kind: 'edit', title: 'Edit', command: null, path: '/a/b' }), '/a/b');
   assert.equal(subject({ op: 'agent_tool', kind: 'other', title: 'Approve x', command: null }), '');
+});
+
+test('Lead tools show readable hosts and task titles', () => {
+  const label = (name: LeadToolName, input: unknown) => toolSubject(leadTool(name, input).call);
+  assert.equal(label('read_notes', { host: ' edge ' }), 'edge');
+  assert.equal(label('task_report', { host: 'db', id: '0199abcd-1234-7000-8000-123456789abc' }), 'db');
+  assert.equal(label('task_report', { host: ' ', id: '0199abcd-1234-7000-8000-123456789abc' }), '');
+  assert.equal(label('start_tasks', { title: ' Check disks ', tasks: [{ host: 'edge' }] }), 'Check disks');
+  assert.equal(label('start_tasks', { title: ' ', tasks: [{ host: 'edge' }, { host: ' edge ' }, null, { host: ' ' }, { host: 'db' }] }), 'edge, db');
+  assert.equal(label('start_tasks', { tasks: ['a', 'b', 'c', 'd', 'e'].map((host) => ({ host })) }), 'a, b, c +2');
+  assert.equal(label('task_input', { hosts: ['edge', ' edge ', 'db', '', 1] }), 'edge, db');
+  assert.equal(label('task_input', { hosts: ['a', 'b', 'c', 'd'] }), 'a, b, c +1');
+  for (const name of ['list_hosts', 'task_status', 'retry_task', 'cancel_task'] as const) {
+    assert.equal(label(name, { id: '0199abcd-1234-7000-8000-123456789abc' }), '', name);
+  }
+});
+
+test('recorded Lead tools keep their subject when the input object is available', () => {
+  const [item] = itemsFromRecords([
+    { ts: 1, kind: 'ai/tool_call', payload: { title: 'start_tasks', status: 'completed', input: { title: 'Check disks' } } },
+  ]);
+  assert.ok(item?.kind === 'tool');
+  assert.equal(toolSubject(item.call), 'Check disks');
+});
+
+test('tool output indents JSON objects and arrays and preserves other text', () => {
+  assert.equal(formatToolOutput('  {"host":"edge"}\n'), '{\n  "host": "edge"\n}');
+  assert.equal(formatToolOutput('[1,2]'), '[\n  1,\n  2\n]');
+  assert.equal(formatToolOutput(' uptime\n'), ' uptime\n');
+  assert.equal(formatToolOutput(' {not JSON} '), ' {not JSON} ');
 });
 
 test('an allowed agent tool shows once, as its tool row', () => {

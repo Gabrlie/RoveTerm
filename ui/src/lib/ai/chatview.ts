@@ -30,9 +30,63 @@ export function commandOf(rawInput: unknown): string | null {
   return words.map((word) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`)).join(' ');
 }
 
-/** What an agent's own tool call acts on: its command, else the first file it named. */
+export const LEAD_TOOL_NAMES = [
+  'list_hosts', 'read_notes', 'start_tasks', 'task_status', 'task_report', 'task_input', 'retry_task', 'cancel_task',
+] as const;
+
+export type LeadToolName = (typeof LEAD_TOOL_NAMES)[number];
+
+export function isLeadTool(name: string | null | undefined): name is LeadToolName {
+  return LEAD_TOOL_NAMES.some((tool) => tool === name);
+}
+
+export function isReadOnlyLeadTool(call: ToolCall): boolean {
+  return call.title === 'list_hosts' || call.title === 'read_notes' || call.title === 'task_status' || call.title === 'task_report';
+}
+
+function trimmedString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function hostSummary(hosts: unknown[]): string {
+  const names = [...new Set(hosts.map(trimmedString).filter(Boolean))];
+  const first = names.slice(0, 3).join(', ');
+  return names.length > 3 ? `${first} +${names.length - 3}` : first;
+}
+
+/** The command, file, host or task title shown beside a tool's name. */
 export function toolSubject(call: ToolCall): string {
-  return commandOf(call.raw_input) ?? call.locations[0] ?? '';
+  const { title, raw_input: rawInput } = call;
+  if (!isLeadTool(title)) return commandOf(rawInput) ?? call.locations[0] ?? '';
+  if (typeof rawInput !== 'object' || rawInput === null) return '';
+
+  const input = rawInput as Record<string, unknown>;
+  switch (title) {
+    case 'read_notes':
+    case 'task_report':
+      return trimmedString(input.host);
+    case 'start_tasks': {
+      const title = trimmedString(input.title);
+      if (title || !Array.isArray(input.tasks)) return title;
+      return hostSummary(input.tasks.map((task: unknown) => (
+        typeof task === 'object' && task !== null && 'host' in task ? task.host : undefined
+      )));
+    }
+    case 'task_input':
+      return Array.isArray(input.hosts) ? hostSummary(input.hosts) : '';
+    default:
+      return '';
+  }
+}
+
+export function formatToolOutput(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return text;
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return text;
+  }
 }
 
 export type ChatItem =
@@ -68,12 +122,14 @@ export type ChatItem =
   | { kind: 'subtask'; id: string; host: string; task: string };
 
 export type OperationItem = Extract<ChatItem, { kind: 'operation' }>;
+export type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
+export type GroupItem = OperationItem | ToolItem;
 export type ApprovalItem = Extract<ChatItem, { kind: 'approval' }>;
 
 export type Row =
   | { kind: 'item'; item: ChatItem; key: number }
-  /** Two or more operations in a row that ran by themselves and succeeded. */
-  | { kind: 'group'; items: OperationItem[]; key: number };
+  /** Two or more consecutive read-only actions that ran by themselves and succeeded. */
+  | { kind: 'group'; items: GroupItem[]; key: number };
 
 function sameOperation(a: AiOperation, b: AiOperation): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -98,10 +154,9 @@ export function waitingApproval(items: ChatItem[], requestId: number): ApprovalI
   return undefined;
 }
 
-/** An operation that ran by itself and succeeded, which may fold with its neighbours. */
-function quiet(item: ChatItem): item is OperationItem {
-  // Only reads fold together: a change that ran without asking (auto mode, a reviewer) stays
-  // on its own row.
+/** A read-only action that ran by itself and succeeded, which may fold with its neighbours. */
+function quiet(item: ChatItem): item is GroupItem {
+  if (item.kind === 'tool') return item.call.status === 'completed' && isReadOnlyLeadTool(item.call);
   if (item.kind !== 'operation' || item.approved || item.reviewer || item.assessment.risk !== 'read_only') return false;
   const outcome = item.outcome;
   if (outcome.result === 'denied' || outcome.result === 'failed') return false;
@@ -117,11 +172,11 @@ function shownAsTool(item: ChatItem, titles: Set<string>): boolean {
 export function rows(items: ChatItem[]): Row[] {
   const titles = new Set(items.flatMap((item) => (item.kind === 'tool' && item.call.title ? [item.call.title] : [])));
   const out: Row[] = [];
-  let run: OperationItem[] = [];
+  let run: GroupItem[] = [];
   let runStart = 0;
   const flush = (): void => {
     if (run.length >= 2) out.push({ kind: 'group', items: run, key: runStart });
-    else if (run.length === 1) out.push({ kind: 'item', item: run[0] as OperationItem, key: runStart });
+    else if (run[0]) out.push({ kind: 'item', item: run[0], key: runStart });
     run = [];
   };
   items.forEach((item, at) => {
@@ -241,7 +296,7 @@ export function itemsFromRecords(records: AiRecord[], { asSubagent = false } = {
               status: typeof payload.status === 'string' ? payload.status : null,
               content: [],
               locations: Array.isArray(payload.locations) ? (payload.locations as string[]) : [],
-              raw_input: typeof payload.input === 'string' ? safeJson(payload.input) : null,
+              raw_input: typeof payload.input === 'string' ? safeJson(payload.input) : payload.input ?? null,
             };
             items.push({ kind: 'tool', call });
           }

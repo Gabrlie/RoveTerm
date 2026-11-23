@@ -26,3 +26,17 @@ test('an edit shows its change', () => {
   assert.equal(line?.text, '/etc/a');
   assert.equal(line?.detail, '- a\n+ b\n');
 });
+
+test('summary wakeups keep their input in the expandable detail', () => {
+  assert.deepEqual(at('ai/ops_wakeup', { text: 'Two hosts finished.' }), {
+    kind: 'ops_wakeup', text: '', note: '', detail: 'Two hosts finished.', tone: 'muted',
+  });
+});
+
+test('Lead tool audit rows keep their title and status with input in the detail', () => {
+  const input = { id: '0199abcd-1234-7000-8000-123456789abc' };
+  assert.deepEqual(at('ai/tool_call', { title: 'task_status', status: 'completed', input }), {
+    kind: 'tool_call', text: 'task_status', note: 'completed', detail: JSON.stringify(input), tone: 'normal',
+  });
+  assert.equal(at('ai/tool_call', { status: 'completed', input: JSON.stringify(input) })?.text, '');
+});
