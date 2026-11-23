@@ -5,6 +5,22 @@ This file documents notable changes to RoveTerm in both Simplified Chinese and E
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-23
+
+### 中文更新日志
+
+- 运维总管按主机显示任务进度、报告和审批。可停止或重试单台主机的任务，也可在独立子代理面板查看对话和执行记录。
+- 主机任务完成后，运维总管会读取报告并汇总结果。任务运行期间仍可向总管发送消息。
+- AI 历史支持搜索、角色筛选和日期分组，可在 Markdown 对话与审计时间线之间切换。展开操作即可查看命令输出、文件内容或彩色差异。
+- 对话更名会同步到已打开的面板和运维总管主页的最近列表。开发构建使用独立的数据目录和钥匙串服务。
+
+### English Changelog
+
+- Fleet Lead shows progress, reports, and approvals per host. Stop or retry work on an individual host, or open the sub-agent panel to inspect its conversation and actions.
+- Fleet Lead summarizes host reports as tasks complete. You can keep sending messages while tasks run.
+- Search AI history, filter by role, and browse by date. Switch between the rendered conversation and the audit timeline, and expand actions to see command output, file contents, or color-coded diffs.
+- Renames update open AI panels and Fleet Home's recent list. Development builds use a separate data directory and keychain service.
+
 ## [0.1.0] - 2026-11-22
 
 ### 中文更新日志
