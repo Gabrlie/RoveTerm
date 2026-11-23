@@ -2,6 +2,26 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { itemsFromRecords, approvalFor, waitingApproval, commandOf, connectionProblem, formatToolOutput, outcomeState, rows, subject, toolSubject, type ChatItem, type LeadToolName, type ToolItem } from './chatview.ts';
 
+test('history keeps body references and uses the execution reference on a completed approval', () => {
+  const command = { op: 'command', command: 'uptime' };
+  const outcome = { result: 'command', exit_code: 0 };
+  const items = itemsFromRecords([
+    { ts: 0, kind: 'ai/command', payload: { operation: command, outcome, body_ref: 'standalone' } },
+    { ts: 1, kind: 'ai/approval', payload: { request_id: 1, asked: command, body_ref: 'ask' } },
+    { ts: 2, kind: 'ai/approval', payload: { request_id: 1, answer: 'allow_once' } },
+    { ts: 3, kind: 'ai/command', payload: { operation: command, outcome, body_ref: 'execution' } },
+    { ts: 4, kind: 'ai/tool_call', payload: { id: 'one', title: 'list_hosts', body_ref: 'tool' } },
+    { ts: 5, kind: 'ai/approval', payload: { request_id: 2, asked: command, body_ref: 'withdrawn-ask' } },
+    { ts: 6, kind: 'ai/command', payload: { operation: command, outcome, body_ref: '' } },
+    { ts: 7, kind: 'ai/tool_call', payload: { id: 'two' } },
+    { ts: 8, kind: 'ai/approval', payload: { request_id: 3, asked: command, body_ref: false } },
+  ]);
+
+  assert.deepEqual(items.map((item) => item.kind), ['operation', 'approval', 'tool', 'approval', 'operation', 'tool', 'approval']);
+  assert.deepEqual(items.map((item) => 'bodyRef' in item ? item.bodyRef : null),
+    ['standalone', 'execution', 'tool', 'withdrawn-ask', null, null, null]);
+});
+
 const readOnly = { risk: 'read_only' as const, programs: [], opaque: false, reasons: [] };
 const ran = (command: string, exit = 0): ChatItem => ({
   kind: 'operation',

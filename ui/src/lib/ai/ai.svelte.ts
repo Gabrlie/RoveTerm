@@ -93,6 +93,8 @@ export class Chat {
   attachTerminal = $state(true);
   /** The title the user gave; otherwise the first question names the chat. */
   title = $state<string | null>(null);
+  private pendingTitle = false;
+  private unlistedSession = false;
   /** How much of the model's context the conversation fills, as the agent last reported it. */
   usage = $state<{ used: number; size: number } | null>(null);
   /** The built-in assistant's last request. */
@@ -364,6 +366,7 @@ export class Chat {
       while (!this.stopping) {
         if (this.id) {
           this.wanted = { ...Object.fromEntries(this.options.map((option) => [option.id, option.current])), ...this.wanted };
+          this.pendingTitle = !!this.title;
           this.options = [];
           this.commands = [];
           this.usage = null;
@@ -392,8 +395,10 @@ export class Chat {
         const agent = this.agent ?? (this.context.kind === 'fleet' ? ai.fleetAgent : ai.defaultAgent);
         if (!agent) throw { code: 'ai.no_agent', message: 'no agent' };
         this.agent = agent;
+        const wasResumed = this.resumeId !== null;
         const started = await aiStart(this.context, agent, this.attachTerminal ? terminal : null, this.resumeId, this.selectedModel);
         this.id = started.id;
+        this.unlistedSession = !wasResumed;
         this.resumeId = null;
         this.host = started.host;
         this.agentName = started.agent;
@@ -404,7 +409,10 @@ export class Chat {
           if (this.options.some((entry) => entry.id === option && entry.current !== value)) this.options = await aiSetOption(started.id, option, value);
         }
         this.wanted = {};
-        if (this.title) await aiRename(started.id, this.title);
+        if (this.pendingTitle && this.title) {
+          this.title = await ai.renameSession(started.id, this.title);
+          this.pendingTitle = false;
+        }
       } catch (error) {
         this.notice(error, this.preparing && !this.id);
         return false;
@@ -441,6 +449,10 @@ export class Chat {
     } finally {
       this.prompting = false;
       this.busy = this.waking;
+      if (this.id === id && this.unlistedSession) {
+        this.unlistedSession = false;
+        ai.notifySessionsChanged();
+      }
     }
   }
 
@@ -495,16 +507,24 @@ export class Chat {
     }
   }
 
-  /** Names the chat (an empty title goes back to the first question). */
+  /** Names the chat and persists the title once it has a session. */
   async rename(title: string): Promise<void> {
     const trimmed = title.trim();
-    if (!trimmed) {
-      this.title = null;
-      return;
-    }
-    this.title = trimmed;
+    if (!trimmed) return;
+    const previous = this.title;
     const id = this.id ?? this.resumeId;
-    if (id) this.title = await aiRename(id, trimmed).catch((error: unknown) => (this.notice(error), trimmed));
+    this.title = trimmed;
+    if (id) {
+      try {
+        this.title = await ai.renameSession(id, trimmed);
+        this.pendingTitle = false;
+      } catch (error) {
+        if (this.title === trimmed) this.title = previous;
+        this.notice(error);
+      }
+    } else {
+      this.pendingTitle = true;
+    }
   }
 
   async setMode(mode: AiMode): Promise<void> {
@@ -544,6 +564,7 @@ class AiStore {
   private subagentVersion = $state(0);
   requestedSubagent = $state<SubagentSelection | null>(null);
   version = $state(0);
+  sessionsVersion = $state(0);
   /** Chats by backend session id, for routing events. */
   byId: Record<string, Chat> = {};
   /** The agents of this device; `null` until listed. */
@@ -631,6 +652,20 @@ class AiStore {
       if (chat.id === id || chat.resumeId === id) await this.reset(chat);
     }
     this.clearSubagents(id);
+    this.notifySessionsChanged();
+  }
+
+  async renameSession(id: string, title: string): Promise<string> {
+    const saved = await aiRename(id, title);
+    for (const chat of this.chats.values()) {
+      if (chat.id === id || chat.resumeId === id) chat.title = saved;
+    }
+    this.notifySessionsChanged();
+    return saved;
+  }
+
+  notifySessionsChanged(): void {
+    this.sessionsVersion += 1;
   }
 
   /** Switches `chat` to `agent`: the conversation starts over when an agent was already talking. */

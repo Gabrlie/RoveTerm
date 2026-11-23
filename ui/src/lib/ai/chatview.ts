@@ -2,6 +2,7 @@
 // out — an approval and the result of the operation it allowed are one row, and operations that
 // ran by themselves (read-only, without approval) fold into one line when several follow each other.
 import type { AiAnswer, AiOperation, AiOutcome, AiRecord, Assessment, ReviewNote, Risk, ToolCall } from '../ipc';
+import type { IconName } from '../ui/icons';
 
 /** Text that reports a lost or refused connection to the model service (as Codex warns while it
  *  retries, or as a turn fails), rather than a reply. */
@@ -35,6 +36,29 @@ export const LEAD_TOOL_NAMES = [
 ] as const;
 
 export type LeadToolName = (typeof LEAD_TOOL_NAMES)[number];
+
+export const LEAD_TOOL_ICONS: Record<LeadToolName, IconName> = {
+  list_hosts: 'server',
+  read_notes: 'snippets',
+  start_tasks: 'bot',
+  task_status: 'file',
+  task_report: 'file',
+  task_input: 'edit',
+  retry_task: 'refresh',
+  cancel_task: 'stop',
+};
+
+export const OPERATION_ICONS: Record<AiOperation['op'], IconName> = {
+  command: 'terminal',
+  read_terminal: 'terminal',
+  read_file: 'file',
+  write_file: 'edit',
+  edit_file: 'edit',
+  list_dir: 'folder',
+  read_notes: 'snippets',
+  update_notes: 'snippets',
+  agent_tool: 'command',
+};
 
 export function isLeadTool(name: string | null | undefined): name is LeadToolName {
   return LEAD_TOOL_NAMES.some((tool) => tool === name);
@@ -95,7 +119,7 @@ export type ChatItem =
   | { kind: 'agent'; text: string; messageId: string | null }
   | { kind: 'thought'; text: string }
   /** One of an ACP agent's own tools, as it reported it. */
-  | { kind: 'tool'; call: ToolCall }
+  | { kind: 'tool'; call: ToolCall; bodyRef?: string }
   /** An operation that needed the user, and later its result. */
   | {
       kind: 'approval';
@@ -109,10 +133,11 @@ export type ChatItem =
       /** `undefined` while waiting; `null` when withdrawn. */
       answer: AiAnswer | null | undefined;
       outcome: AiOutcome | null;
+      bodyRef?: string;
     }
   /** An operation that ran (or was refused) without asking; `reviewer` names the reviewer that
    *  let it run. */
-  | { kind: 'operation'; operation: AiOperation; assessment: Assessment; approved: boolean; outcome: AiOutcome; reviewer?: string }
+  | { kind: 'operation'; operation: AiOperation; assessment: Assessment; approved: boolean; outcome: AiOutcome; reviewer?: string; bodyRef?: string }
   | { kind: 'notice'; text: string; code: string | null }
   /** The agent lost its connection to the model service: retrying, given up, or back. */
   | { kind: 'connection'; detail: string; retries: number; state: 'retrying' | 'failed' | 'recovered' }
@@ -244,6 +269,8 @@ function outcomeOf(value: unknown): AiOutcome {
 export function itemsFromRecords(records: AiRecord[], { asSubagent = false } = {}): ChatItem[] {
   const items: ChatItem[] = [];
   const text = (record: AiRecord): string => (typeof record.payload.text === 'string' ? record.payload.text : '');
+  const bodyRef = (payload: Record<string, unknown>): string | undefined =>
+    typeof payload.body_ref === 'string' && payload.body_ref.length > 0 ? payload.body_ref : undefined;
   /** The reviewer that let the next operation run. */
   let reviewed: { operation: string; reviewer: string } | null = null;
   for (const record of records) {
@@ -262,6 +289,7 @@ export function itemsFromRecords(records: AiRecord[], { asSubagent = false } = {
         break;
       case 'ai/approval':
         if ('asked' in payload) {
+          const ref = bodyRef(payload);
           items.push({
             kind: 'approval',
             requestId: Number(payload.request_id),
@@ -272,6 +300,7 @@ export function itemsFromRecords(records: AiRecord[], { asSubagent = false } = {
             review: (payload.review as ReviewNote | null | undefined) ?? null,
             answer: undefined,
             outcome: null,
+            ...(ref ? { bodyRef: ref } : {}),
           });
         } else {
           const asked = waitingApproval(items, Number(payload.request_id));
@@ -286,6 +315,7 @@ export function itemsFromRecords(records: AiRecord[], { asSubagent = false } = {
       case 'ai/notes_read':
       case 'ai/notes_write':
       case 'ai/tool_call': {
+        const ref = bodyRef(payload);
         if (!('operation' in payload)) {
           // One of the agent's own tools, as it reported it.
           if (record.kind === 'ai/tool_call') {
@@ -296,19 +326,26 @@ export function itemsFromRecords(records: AiRecord[], { asSubagent = false } = {
               status: typeof payload.status === 'string' ? payload.status : null,
               content: [],
               locations: Array.isArray(payload.locations) ? (payload.locations as string[]) : [],
-              raw_input: typeof payload.input === 'string' ? safeJson(payload.input) : payload.input ?? null,
+              raw_input: typeof payload.input === 'string' ? safeJson(payload.input) ?? payload.input : payload.input ?? null,
             };
-            items.push({ kind: 'tool', call });
+            const outcome = payload.outcome;
+            if (typeof outcome === 'object' && outcome !== null && 'content' in outcome && typeof outcome.content === 'string') {
+              call.content.push({ type: 'text', text: outcome.content });
+            }
+            items.push({ kind: 'tool', call, ...(ref ? { bodyRef: ref } : {}) });
           }
           break;
         }
         const operation = payload.operation as AiOperation;
         const outcome = outcomeOf(payload.outcome);
         const approval = approvalFor(items, operation);
-        if (approval) approval.outcome = outcome;
+        if (approval) {
+          approval.outcome = outcome;
+          if (ref) approval.bodyRef = ref;
+        }
         else if (operation.op !== 'agent_tool') {
           const reviewer = reviewed?.operation === JSON.stringify(operation) ? reviewed.reviewer : undefined;
-          items.push({ kind: 'operation', operation, assessment: assessed(payload.risk), approved: payload.approved === true, outcome, reviewer });
+          items.push({ kind: 'operation', operation, assessment: assessed(payload.risk), approved: payload.approved === true, outcome, reviewer, ...(ref ? { bodyRef: ref } : {}) });
         }
         reviewed = null;
         break;
@@ -347,7 +384,7 @@ export function itemsFromRecords(records: AiRecord[], { asSubagent = false } = {
   return items;
 }
 
-function safeJson(text: string): unknown {
+export function safeJson(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch {

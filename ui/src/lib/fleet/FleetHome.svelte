@@ -19,6 +19,7 @@
   let { onopen, onresume, onschedules }: Props = $props();
   let draft = $state('');
   let recent = $state<AiSessionSummary[]>([]);
+  let recentRevision = 0;
 
   function send(): void {
     const text = draft.trim();
@@ -35,17 +36,22 @@
     }
   }
 
-  function loadRecent(): void {
-    aiSessions()
-      .then((sessions) => (recent = sessions.filter((session) => session.context?.kind === 'fleet').slice(0, 5)))
-      .catch((error: unknown) => console.warn('AI history unavailable', error));
+  async function loadRecent(): Promise<void> {
+    const revision = ++recentRevision;
+    try {
+      const sessions = await aiSessions('fleet');
+      if (revision === recentRevision) recent = sessions.slice(0, 5);
+    } catch (error) {
+      if (revision === recentRevision) console.warn('AI history unavailable', error);
+    }
   }
 
-  onMount(() => {
-    loadRecent();
-    // A scheduled run's report is a new conversation.
-    return ai.onReport(() => loadRecent());
+  $effect(() => {
+    void ai.sessionsVersion;
+    void loadRecent();
   });
+
+  onMount(() => ai.onReport(() => void loadRecent()));
 </script>
 
 <section class="fleet">

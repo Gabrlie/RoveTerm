@@ -11,7 +11,7 @@
   import { isMobile } from '../platform';
   import { builtinCommands, canPrestart, choiceKey, optionKey, slashItems, slashQuery, splitOptions, type SlashItem } from './composer';
   import { ai, contextKey, type Chat } from './ai.svelte';
-  import { formatToolOutput, isLeadTool, outcomeState, rows, subject, toolSubject, type ApprovalItem, type LeadToolName } from './chatview';
+  import { formatToolOutput, isLeadTool, LEAD_TOOL_ICONS, OPERATION_ICONS, outcomeState, rows, subject, toolSubject, type ApprovalItem } from './chatview';
   import { hostOf, workspace } from '../workspace/workspace.svelte';
   import { hosts } from '../hosts/hosts.svelte';
   import { terminals } from '../terminal/registry';
@@ -217,6 +217,10 @@
   let loginTarget = $state<{ agent: string; name: string } | null>(null);
   /** The title being typed, while renaming. */
   let renaming = $state<string | null>(null);
+  $effect(() => {
+    void chat;
+    renaming = null;
+  });
   /** The setting whose choices the `/` menu lists, after it was picked there. */
   let slashSetting = $state<ConfigOption | null>(null);
   /** The highlighted entry of the `/` menu. */
@@ -229,16 +233,6 @@
 
   const MODES: AiMode[] = ['ask_all', 'ask_by_risk', 'auto'];
   const MODE_ICONS: Record<AiMode, IconName> = { ask_all: 'shieldLock', ask_by_risk: 'shieldCheck', auto: 'shieldAlert' };
-  const LEAD_TOOL_ICONS: Record<LeadToolName, IconName> = {
-    list_hosts: 'server',
-    read_notes: 'snippets',
-    start_tasks: 'bot',
-    task_status: 'file',
-    task_report: 'file',
-    task_input: 'edit',
-    retry_task: 'refresh',
-    cancel_task: 'stop',
-  };
   const EXAMPLES: MessageKey[] = ['ai.example.health', 'ai.example.logs', 'ai.example.disk'];
   const FLEET_EXAMPLES: MessageKey[] = ['fleet.example.health', 'fleet.example.updates', 'fleet.example.certs'];
   const GROUPS: { kind: AgentChoice['kind']; title: MessageKey }[] = [
@@ -287,14 +281,27 @@
 
   async function finishRename(): Promise<void> {
     if (renaming === null) return;
-    const title = renaming;
+    const title = renaming.trim();
     renaming = null;
-    if (title.trim() !== (chat.name ?? '')) await chat.rename(title);
+    if (title && title !== chat.name) await chat.rename(title);
+  }
+
+  function focusSelect(node: HTMLInputElement): void {
+    node.focus();
+    node.select();
   }
 
   function onRenameKey(event: KeyboardEvent): void {
-    if (event.key === 'Enter') void finishRename();
-    if (event.key === 'Escape') renaming = null;
+    if (event.isComposing) return;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void finishRename();
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      renaming = null;
+    }
   }
 
   /** The agent's settings: as it reports them, or, before the built-in assistant starts, its
@@ -405,26 +412,6 @@
     } else void ai.switchAgent(chat, choice.agent);
   }
 
-  function verbIcon(operation: AiOperation): IconName {
-    switch (operation.op) {
-      case 'command':
-      case 'read_terminal':
-        return 'terminal';
-      case 'read_file':
-        return 'file';
-      case 'write_file':
-      case 'edit_file':
-        return 'edit';
-      case 'list_dir':
-        return 'folder';
-      case 'read_notes':
-      case 'update_notes':
-        return 'snippets';
-      case 'agent_tool':
-        return 'command';
-    }
-  }
-
   function verb(operation: AiOperation): string {
     if (operation.op === 'agent_tool' && operation.title.trim()) return operation.title.trim();
     return t(`ai.verb.${operation.op}` as MessageKey);
@@ -531,7 +518,7 @@
 {#snippet operationRow(key: string, operation: AiOperation, outcome: AiOutcome | null, state: RowState, reviewer?: string)}
   {@const output = outputOf(outcome)}
   <button type="button" class="op {state}" aria-expanded={!!expanded[key]} disabled={!output} onclick={() => toggle(key)}>
-    <span class="op-icon"><Icon name={verbIcon(operation)} size={13} /></span>
+    <span class="op-icon"><Icon name={OPERATION_ICONS[operation.op]} size={13} /></span>
     <span class="op-verb" title={verb(operation)}>{verb(operation)}</span>
     {#if subject(operation)}<code class="op-subject" title={subject(operation)}>{subject(operation)}</code>{/if}
     {#if reviewer}<span class="reviewed" title={t('ai.reviewedBy', { reviewer: t(`ai.reviewer.${reviewer}` as MessageKey) })}>{t('ai.reviewed')}</span>{/if}
@@ -734,12 +721,11 @@
     {/if}
     <span class="divider" aria-hidden="true"></span>
     {#if renaming !== null}
-      <!-- svelte-ignore a11y_autofocus -->
-      <input class="rename" bind:value={renaming} autofocus aria-label={t('ai.rename')} maxlength="120" onkeydown={onRenameKey} onblur={() => void finishRename()} />
+      <input class="rename" use:focusSelect bind:value={renaming} aria-label={t('ai.rename')} maxlength="120" onkeydown={onRenameKey} onblur={() => void finishRename()} />
     {:else}
       <button type="button" class="title" title={t('ai.renameHint')} onclick={() => (renaming = chat.name ?? '')}>{chat.name ?? t('ai.newChatTitle')}</button>
+      <span class="spacer"></span>
     {/if}
-    <span class="spacer"></span>
     <IconButton icon="add" small label={t('ai.newChat')} disabled={chat.starting || (chat.busy && !hasActiveWork) || cancelling || creatingChat} onclick={() => void newChat()} />
     {#if fleet && onschedules}
       <span class="schedules">
@@ -1029,6 +1015,10 @@
   }
   .rename {
     flex: 1;
+    min-height: 0;
+    height: 24px;
+    padding: 0 6px;
+    box-sizing: border-box;
     background: var(--surface);
     box-shadow: 0 0 0 1px var(--accent);
     outline: none;
