@@ -11,10 +11,11 @@ test('uses the Proxmox VE mark for both Proxmox identifiers', () => {
   }
 });
 
-test('uses the blue NAS glyph for fnOS and its trim alias', () => {
+test('uses the fnOS brand mark for fnOS and its trim alias', () => {
   const fnos = osIcon({ id: 'fnos', name: 'fnOS', like: ['debian'] });
   assert.ok(fnos);
-  assert.equal(fnos.color, '#1677ff');
+  assert.equal(fnos.color, '#3374db');
+  assert.equal(fnos.light, false);
   assert.ok(fnos.path.startsWith('M'));
   assert.notEqual(fnos.path, siDebian.path);
   assert.deepEqual(osIcon({ id: 'trim', name: 'fnOS', like: ['debian'] }), fnos);
