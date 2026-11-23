@@ -17,32 +17,26 @@
 
 </div>
 
----
-
 ## 📋 Overview
 
 **RoveTerm** is a lightweight, cross-platform smart terminal built on a **Rust static-plugin kernel + Tauri 2 + Svelte 5**, targeting Windows, macOS, Linux, and Android (mobile adaptation in progress).
 
 Instead of bouncing across separate terminal windows, SFTP apps, VPN clients, monitoring dashboards, and AI chats, RoveTerm unifies **multiplexed SSH, an embedded Tailscale engine, SFTP with a workspace code editor, port forwarding, live server telemetry, an encrypted credential vault with E2EE sync, and policy-gated AI & Fleet Ops** inside a single crisp native window.
 
----
-
 ## ✨ Key Features
 
 - 🚀 **Lightweight Native Architecture** - Powered by a Rust plugin core, Tauri 2, and Svelte 5 with zero heavy Electron overhead and optional WebGL terminal rendering
-- 🪟 **VSCode-Style Workspace** - Multi-tab groups, arbitrary horizontal/vertical splits, drag-and-drop tab transfers without dropping live sessions, workspace restore, and auto-collapsing panels on Home
+- 🪟 **VSCode-Style Workspace** - Multi-tab groups, arbitrary horizontal/vertical splits, drag-and-drop tab transfers without dropping live sessions, and automatic workspace restore
 - 🔌 **Multiplexed SSH Engine** - Terminals, SFTP, and live telemetry share one SSH connection per host; supports multi-hop jump hosts (`ProxyJump` import), HTTP/SOCKS5 proxies, and strict host-key verification
 - 🌐 **Embedded Tailscale Engine** - Built-in `tailscale-rs` on desktop with no external daemon required: peer device dialog, batch latency probes, **Direct vs. DERP relay region** badges, and one-click host route conversion
-- 📂 **SFTP & Workspace Code Editor** - Directory loading states, drag-and-drop transfer queue, conflict prompts; double-click text/config files to open CodeMirror tabs beside terminals, or launch external edits via the OS native opener with conflict-checked auto-upload
+- 📂 **SFTP & Workspace Code Editor** - Drag-and-drop transfer queue with conflict prompts; double-click text/config files to edit in built-in CodeMirror 6 tabs beside terminals, or edit externally via the OS default app with auto-upload on save
 - 🔀 **Port Forwarding Manager** - Saved local (`-L`), remote (`-R`), and dynamic SOCKS5 (`-D`) rules per host with auto-start on connect and live active connection counts
-- 📊 **Live Server Status & Terminal Mini Bar** - Per-core CPU charts, memory/swap, interface throughput, disk usage, a customizable bottom status bar on remote terminals, and native OS detection + brand icons for **fnOS** and **Proxmox VE**
-- 🤖 **AI Assistant & Local ACP Agents** - Built-in providers (OpenAI, Anthropic, DeepSeek, OpenRouter, Ollama, and compatible APIs) alongside local ACP agents (Codex, Claude Code, custom commands with interactive sign-in dialogs), plus an opt-in MCP server bridge
-- 🧭 **Fleet Ops Lead & Scheduled Checks** - Concurrent multi-host task orchestration with durable checkpoints, encrypted audit evidence, scheduled runs, retries, and local risk-gated approvals (dangerous commands always require manual confirmation)
-- 🔐 **Per-Field Encryption & E2EE Sync** - OS Keychain master keys with XChaCha20-Poly1305 per-field encryption, a redesigned Key Library with filtered public-key installation, and encrypted multi-device sync (local folder / WebDAV with OpenList & Aliyun Drive compatibility)
-- 📜 **In-App Log Viewer** - Filter daily rolling logs by level or keyword in a structured, freely selectable viewer inside Settings
-- 🔄 **Signed In-App Updater** - Delayed quiet startup checks, minisign signature verification, live progress bars, and draft-safe application restart
-
----
+- 📊 **Live Server Status & Terminal Mini Bar** - Per-core CPU charts, memory/swap, interface throughput, disk usage, and a customizable bottom status bar on remote terminals
+- 🤖 **AI Assistant & Local ACP Agents** - Built-in providers (OpenAI, Anthropic, DeepSeek, OpenRouter, Ollama, and compatible APIs) alongside local ACP agents (Codex, Claude Code, custom commands), plus an opt-in MCP server bridge
+- 🧭 **Fleet Ops Lead & Scheduled Checks** - Concurrent multi-host task orchestration with a dedicated sub-agent panel, durable checkpoints, automatic result summaries, scheduled runs, and local risk-based approvals
+- 🔐 **Per-Field Encryption & E2EE Sync** - OS Keychain master keys with XChaCha20-Poly1305 per-field encryption, a built-in Key Library, and end-to-end encrypted multi-device sync via local folder or WebDAV
+- 📜 **In-App Log Viewer** - Filter and search runtime logs by severity level and keyword directly inside Settings
+- 🔄 **Signed In-App Updater** - Quiet update checks, minisign signature verification, and one-click in-app installation
 
 ## 🗺️ Roadmap / TODO List
 
@@ -51,8 +45,6 @@ Instead of bouncing across separate terminal windows, SFTP apps, VPN clients, mo
 - [ ] 🧵 **Process & Network / Port Thread Inspector** - Live process tree, per-thread CPU & memory breakdown, listening port lookup, and active TCP/UDP socket tracing
 - [ ] 📱 **Android & iOS Mobile Polish** - Touch shortcut toolbar, gesture navigation & splits, Android Keystore / iOS Keychain unlock, Android in-app APK SHA-256 verification & native `PackageInstaller`, and adaptive mobile layouts
 - [ ] ☁️ **More Sync Backends & Distribution Channels** - Graphical onboarding for S3 / Gist sync backends alongside Homebrew, Winget, AUR, and Flatpak packaging
-
----
 
 ## 🚀 Local Development & Builds
 
@@ -109,8 +101,6 @@ For a manual macOS release, add `APPLE_SIGNING_IDENTITY="-"` to the build comman
 
 > See [docs/development.md](docs/development.md) for multi-machine `--merge-latest` merging, platform notes, and test commands.
 
----
-
 ## 🏗️ Technical Architecture
 
 ### Frontend Stack
@@ -120,7 +110,7 @@ For a manual macOS release, add `APPLE_SIGNING_IDENTITY="-"` to the build comman
 - **xterm.js 6** - Full-featured terminal emulator (WebGL, Fit, Search, Unicode11, Web Links)
 - **CodeMirror 6** - Workspace-tab text & code editor with syntax highlighting and find/replace
 - **Marked** - Safe token-based Markdown rendering (plain elements only, never raw HTML)
-- **Lucide & Simple Icons** - Cohesive icon set plus OS/NAS/hypervisor brand marks
+- **Lucide & Simple Icons** - Cohesive icon set and operating system brand marks
 
 ### Backend & Core Stack
 - **Rust (2024 Edition) & Tauri 2** - Fast, memory-safe native application shell
@@ -135,9 +125,7 @@ For a manual macOS release, add `APPLE_SIGNING_IDENTITY="-"` to the build comman
 - **PTY / ConPTY** - Native cross-platform interactive local shells
 - **OS Keychain / Android Keystore** - Hardware/OS-backed device master keys with silent startup unlock
 - **ACP & MCP** - Native integration with local AI agents and external MCP clients
-- **WebDAV / Folder Sync** - Ciphertext-only sync segments with OpenList / Aliyun Drive compatibility
-
----
+- **WebDAV / Folder Sync** - Ciphertext-only sync segments over local folders or standard WebDAV servers
 
 ## 📁 Project Structure
 
@@ -172,8 +160,6 @@ RoveTerm/
 └── Cargo.toml                  # Rust workspace and single source of truth for versioning
 ```
 
----
-
 ## ⌨️ Common Shortcuts
 
 > `App` maps to `⌘` on macOS and `Ctrl+Shift` on Windows/Linux, keeping plain `Ctrl+<letter>` free for your shell.
@@ -187,8 +173,6 @@ RoveTerm/
 | `App+O` | Open SFTP beside terminal | `App+I` | Open AI assistant panel |
 | `App+S` / `App+F` | Editor save / Find & replace | `App+W` | Close active tab or pane |
 
----
-
 ## 📦 Quick Download
 
 > Click a platform badge below to jump to the latest GitHub Release. Every release ships with **per-architecture direct download badges** and **SHA-256 checksums**; desktop builds support **minisign-verified in-app auto-updates**.
@@ -199,14 +183,12 @@ RoveTerm/
 |---|---|---|
 | **macOS** | [![macOS Apple Silicon](https://img.shields.io/badge/DMG-Apple%20Silicon-000000.svg?logo=apple&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![macOS Intel x64](https://img.shields.io/badge/DMG-Intel%20x64-374151.svg?logo=apple&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![macOS Universal](https://img.shields.io/badge/DMG-Universal-00A9E0.svg?logo=apple&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | ✅ Signed in-app updates (`.app.tar.gz`) |
 | **Windows** | [![Windows x64](https://img.shields.io/badge/Setup-x64-2d7d9a.svg?logo=windows&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![Windows ARM64](https://img.shields.io/badge/Setup-ARM64-67b7d1.svg?logo=windows&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | ✅ Signed in-app updates (NSIS `.exe`) |
-| **Linux** | [![Linux AppImage](https://img.shields.io/badge/AppImage-x64%20%2F%20ARM64-f84e29.svg?logo=linux&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![Linux Debian](https://img.shields.io/badge/DebPackage-x64%20%2F%20ARM64-FF9966.svg?logo=debian&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![Linux RPM](https://img.shields.io/badge/RpmPackage-x64%20%2F%20ARM64-F1B42F.svg?logo=redhat&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | ✅ Signed in-app updates (AppImage) |
+| **Linux** | [![Linux AppImage](https://img.shields.io/badge/AppImage-x64%20%2F%20ARM64-f84e29.svg?logo=linux&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![Linux Debian](https://img.shields.io/badge/DebPackage-x64%20%2F%20ARM64-FF9966.svg?logo=debian&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) [![Linux RPM](https://img.shields.io/badge/RpmPackage-x64%20%2F%20ARM64-F1B42F.svg?logo=redhat&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | ✅ AppImage in-app signed updates |
 | **Android** | [![Android APK](https://img.shields.io/badge/APK-ARMv8-168039.svg?logo=android&logoColor=white)](https://github.com/Gabrlie/RoveTerm/releases/latest) | 🚧 Manifest & SHA-256 check ready (see Roadmap) |
 
 </div>
 
 > See [**CHANGELOG.md**](CHANGELOG.md) for the full bilingual version history.
-
----
 
 ## 📄 License
 
