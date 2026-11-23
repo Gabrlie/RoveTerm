@@ -60,10 +60,15 @@ pub fn init() {
     let filter =
         || tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_filter(filter()))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
+                .with_filter(filter()),
+        )
         .with(
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
+                .fmt_fields(PlainFields::default())
                 .with_writer(Files)
                 .with_filter(filter()),
         )
@@ -226,6 +231,21 @@ pub fn read_tail_in(
     })
 }
 
+/// Distinct field formatter type so the plain-text file layer never reuses ANSI-styled
+/// `FormattedFields<DefaultFields>` cached by the terminal layer on shared spans.
+#[derive(Default)]
+struct PlainFields(tracing_subscriber::fmt::format::DefaultFields);
+
+impl<'writer> tracing_subscriber::fmt::FormatFields<'writer> for PlainFields {
+    fn format_fields<R: tracing_subscriber::field::RecordFields>(
+        &self,
+        writer: tracing_subscriber::fmt::format::Writer<'writer>,
+        fields: R,
+    ) -> std::fmt::Result {
+        self.0.format_fields(writer, fields)
+    }
+}
+
 /// Writes to the current log file, or nowhere before there is one.
 struct Files;
 
@@ -320,5 +340,66 @@ mod tests {
         assert!(read.truncated);
         assert_eq!(read.content.lines().count(), 5);
         assert!(read.content.contains(&format!("{:05}", repeats - 1)));
+    }
+
+    #[test]
+    fn file_layer_never_inherits_ansi_span_fields_from_terminal_layer() {
+        use std::sync::Arc;
+
+        #[derive(Clone, Default)]
+        struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+        struct GuardWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl Write for GuardWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> MakeWriter<'a> for SharedBuf {
+            type Writer = GuardWriter;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                GuardWriter(self.0.clone())
+            }
+        }
+
+        let tty_buf = SharedBuf::default();
+        let file_buf = SharedBuf::default();
+        let subscriber = tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(true)
+                    .with_writer(tty_buf.clone()),
+            )
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .fmt_fields(PlainFields::default())
+                    .with_writer(file_buf.clone()),
+            );
+
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!(
+                "actor.lifecycle",
+                actor.name = "ts_runtime::derp_latency::DerpLatencyMeasurer",
+                actor.id = 23
+            );
+            let _entered = span.enter();
+            tracing::info!(region_id = 10, latency_ms = 395, "selected home DERP");
+        });
+
+        let tty_out = String::from_utf8(tty_buf.0.lock().unwrap().clone()).unwrap();
+        let file_out = String::from_utf8(file_buf.0.lock().unwrap().clone()).unwrap();
+        assert!(tty_out.contains('\x1b'));
+        assert!(!file_out.contains('\x1b'), "unexpected ANSI escape in file log: {file_out:?}");
+        assert!(file_out.contains("actor.lifecycle{actor.name=\"ts_runtime::derp_latency::DerpLatencyMeasurer\" actor.id=23}"));
+        assert!(file_out.contains("selected home DERP"));
     }
 }

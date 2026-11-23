@@ -89,6 +89,19 @@ test('keeps plain and blank lines intact and ends severity inheritance at blank 
   assert.deepEqual(parseLogLines(''), []);
 });
 
+test('strips stray ANSI CSI escape sequences from older log files', () => {
+  const polluted = '2026-11-23T08:57:23.368Z  INFO actor.lifecycle{\u001b[3mactor.name\u001b[0m\u001b[2m=\u001b[0m"ts_runtime::derp_latency::DerpLatencyMeasurer" \u001b[3mactor.id\u001b[0m\u001b[2m=\u001b[0m#23}: ts_runtime::derp_latency: selected home DERP region_id=10 latency_ms=395';
+  const [entry] = parseLogLines(polluted);
+  assert.ok(entry);
+  assert.equal(entry.level, 'INFO');
+  assert.equal(entry.shortTime, '08:57:23.368');
+  assert.equal(entry.raw.includes('\u001b'), false);
+  assert.equal(
+    entry.message,
+    'actor.lifecycle{actor.name="ts_runtime::derp_latency::DerpLatencyMeasurer" actor.id=#23}: ts_runtime::derp_latency: selected home DERP region_id=10 latency_ms=395',
+  );
+});
+
 test('formats byte sizes cleanly', () => {
   assert.equal(formatLogSize(512), '512 B');
   assert.equal(formatLogSize(2048), '2.0 KB');

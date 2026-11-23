@@ -14,6 +14,7 @@ export interface LogEntry {
   continuation: boolean;
 }
 
+const ANSI_CSI_RE = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 const TIMESTAMP_RE = /^\s*(\d{4}-\d{2}-\d{2}[T ](\d{2}:\d{2}:\d{2})(?:[.,](\d+))?(?:Z|[+-]\d{2}(?::?\d{2})?)?)(?:\s+|$)/;
 const LEVEL_RE = /^\s*(ERROR|WARN|INFO|DEBUG|TRACE)\b[ \t]*/;
 const TARGET_RE = /^([\w.-]+(?:::[\w.-]+)*):(?:[ \t]+|$)/;
@@ -26,7 +27,7 @@ export function parseLogLines(content: string): LogEntry[] {
   const entries: LogEntry[] = [];
   let current: LogSeverity = 'OTHER';
   for (let i = 0; i < lines.length; i += 1) {
-    const raw = lines[i] ?? '';
+    const raw = (lines[i] ?? '').replace(ANSI_CSI_RE, '');
     if (i === lines.length - 1 && raw === '') continue;
     const time = TIMESTAMP_RE.exec(raw);
     const body = time ? raw.slice(time[0].length) : raw;
