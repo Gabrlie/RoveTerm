@@ -1,61 +1,65 @@
-import type { OpsSubtask, OpsTask } from './types';
+import type { OpsSubtaskView, OpsTaskState, OpsTaskView } from './types';
 
-/** A completed host is selected only by a click made after it completed. */
-export type TargetChoice = 'pending' | 'completed' | 'excluded';
-export type TargetChoices = Record<string, TargetChoice>;
+type TaskActivity = Pick<OpsTaskView, 'state' | 'subtasks'>;
 
-export function subtaskFor(task: OpsTask, hostId: string): OpsSubtask | undefined {
-  return task.subtasks.find((subtask) => subtask.host_id === hostId);
+export function isActiveState(state: OpsTaskState): boolean {
+  return state === 'queued' || state === 'running' || state === 'waiting_approval';
 }
 
-export function selectedTargets(task: OpsTask, choices: TargetChoices = {}): string[] {
-  return task.scope.targets.filter((target) => {
-    const completed = subtaskFor(task, target.host_id)?.state === 'completed';
-    return completed ? choices[target.host_id] === 'completed' : choices[target.host_id] !== 'excluded';
-  }).map((target) => target.host_id);
+export function isTaskActive(task: TaskActivity): boolean {
+  return isActiveState(task.state) || task.subtasks.some(isSubtaskActive);
 }
 
-export function targetChoice(task: OpsTask, hostId: string, checked: boolean): TargetChoice {
-  return checked ? (subtaskFor(task, hostId)?.state === 'completed' ? 'completed' : 'pending') : 'excluded';
+export function isSubtaskActive(sub: Pick<OpsSubtaskView, 'state'>): boolean {
+  return isActiveState(sub.state);
 }
 
-export function isUncertain(subtask?: Pick<OpsSubtask, 'uncertain_effect' | 'reason'>): boolean {
-  return subtask?.uncertain_effect === true || subtask?.reason === 'unresolved_effect';
+export function canRetrySubtask(sub: Pick<OpsSubtaskView, 'state'>): boolean {
+  return sub.state === 'failed' || sub.state === 'blocked' || sub.state === 'interrupted';
 }
 
-export function selectedUncertain(task: OpsTask, hostIds: string[]): boolean {
-  return task.subtasks.some((subtask) => hostIds.includes(subtask.host_id) && isUncertain(subtask));
+export function canRetryTask(task: TaskActivity): boolean {
+  return task.state !== 'cancelled' && task.subtasks.some(canRetrySubtask);
 }
 
-export function canRetry(task: OpsTask): boolean {
-  return task.state !== 'cancelled' && task.subtasks.some((subtask) => ['failed', 'blocked', 'interrupted'].includes(subtask.state) && !isUncertain(subtask));
+export function canCancelTask(task: TaskActivity): boolean {
+  return isTaskActive(task);
 }
 
-export function canCancel(task: OpsTask): boolean {
-  return ['queued', 'running', 'waiting_approval', 'blocked', 'interrupted'].includes(task.state);
+export function uncertainHosts(task: OpsTaskView, hostId?: string | null): string[] {
+  return task.subtasks
+    .filter((sub) => (hostId == null || sub.host_id === hostId) && canRetrySubtask(sub) && sub.uncertain_effect)
+    .map((sub) => sub.host_name);
 }
 
-export function canAppend(task: OpsTask): boolean {
-  return task.state !== 'cancelled' && task.scope.targets.length > 0;
+export function activeWorkerCount(tasks: readonly OpsTaskView[]): number {
+  return tasks.reduce((count, task) => count + task.subtasks.filter(isSubtaskActive).length, 0);
 }
 
-/** An older snapshot cannot roll an already observed task back to an earlier revision. */
-export function reconcileTasks(current: OpsTask[], incoming: OpsTask[], conversation: string): OpsTask[] {
-  const existing = new Map(current.filter((task) => task.conversation === conversation).map((task) => [task.id, task]));
-  return incoming.filter((task) => task.conversation === conversation).map((task) => {
-    const previous = existing.get(task.id);
-    return previous && previous.revision > task.revision ? previous : task;
-  });
+function newestFirst(a: OpsTaskView, b: OpsTaskView): number {
+  return b.updated_at - a.updated_at;
 }
 
-export function evidenceText(value: unknown): string | null {
-  if (typeof value === 'string') return value;
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
-  const fields = value as Record<string, unknown>;
-  for (const key of ['text', 'report', 'reply']) {
-    if (typeof fields[key] === 'string') return fields[key];
+/** Keeps task events received while a snapshot was in flight. */
+export function reconcileTasks(current: OpsTaskView[], incoming: OpsTaskView[], conversation: string): OpsTaskView[] {
+  const tasks = new Map(current.filter((task) => task.conversation === conversation).map((task) => [task.id, task]));
+  for (const task of incoming) {
+    if (task.conversation !== conversation) continue;
+    const previous = tasks.get(task.id);
+    if (!previous || previous.revision <= task.revision) tasks.set(task.id, task);
   }
-  return null;
+  return [...tasks.values()].sort(newestFirst);
+}
+
+export function upsertTask(current: OpsTaskView[], incoming: OpsTaskView, conversation: string): OpsTaskView[] {
+  if (incoming.conversation !== conversation) return current;
+  const previous = current.find((task) => task.id === incoming.id);
+  if (previous && previous.revision > incoming.revision) return current;
+  return [incoming, ...current.filter((task) => task.id !== incoming.id)].sort(newestFirst);
+}
+
+export function shortHostName(label: string | null | undefined): string {
+  return label?.replace(/\s+\([^()\s@]+@[^()\s@]+\)$/, '') ?? '';
 }
 
 export class OpsRefreshGate {

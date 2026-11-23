@@ -3,45 +3,49 @@ export type OpsSubtaskId = string;
 export type OpsTaskState = 'queued' | 'running' | 'waiting_approval' | 'blocked' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
 export type OpsBlockReason = 'budget_exhausted' | 'needs_verification' | 'target_changed' | 'unresolved_effect' | 'worker_interrupted' | 'user_decision';
 
-export interface PrivateRef {
-  session: string;
-  reference: string;
+export interface OpsTaskCounts {
+  total: number;
+  queued: number;
+  running: number;
+  waiting_approval: number;
+  completed: number;
+  blocked: number;
+  failed: number;
+  cancelled: number;
+  interrupted: number;
 }
 
-export interface OpsTarget {
-  host_id: string;
-  fingerprint: string;
-  input?: PrivateRef | null;
+export interface OpsCheckView {
+  criterion: string;
+  summary: string | null;
 }
 
-export interface OpsSubtask {
-  id: OpsSubtaskId;
+export interface OpsSubtaskView {
+  id: OpsSubtaskId | null;
   host_id: string;
-  fingerprint: string;
+  host_name: string;
   state: OpsTaskState;
   session: string | null;
-  checkpoint: PrivateRef | null;
-  inputs: PrivateRef[];
-  input_version: number;
-  evidence: PrivateRef[];
+  task: string;
+  summary: string | null;
+  reply: string | null;
+  checks: OpsCheckView[];
   reason: OpsBlockReason | null;
-  error_code: string | null;
+  error: string | null;
   uncertain_effect: boolean;
   attempts: number;
 }
 
-export interface OpsTask {
+export interface OpsTaskView {
   id: OpsTaskId;
   revision: number;
-  request_id: string;
   conversation: string;
+  title: string;
   source: { kind: 'user' } | { kind: 'schedule'; schedule: string; due: number };
   state: OpsTaskState;
-  scope: { targets: OpsTarget[]; can_modify: boolean };
-  inputs: PrivateRef[];
-  acceptance: PrivateRef | null;
-  report: PrivateRef | null;
-  subtasks: OpsSubtask[];
+  read_only: boolean;
   created_at: number;
   updated_at: number;
+  counts: OpsTaskCounts;
+  subtasks: OpsSubtaskView[];
 }

@@ -8,7 +8,6 @@ export function requestForSend(previous: PromptRequest | null, text: string, aga
   return again && previous ? previous : { id: newId(), text };
 }
 
-/** An interrupted planner starts only after the user explicitly confirms recovery. */
-export function canSendPrompt(busy: boolean, starting: boolean, recoveryRequired: boolean, recoveryConfirmed: boolean): boolean {
-  return !busy && !starting && (!recoveryRequired || recoveryConfirmed);
+export function canSendPrompt(busy: boolean, starting: boolean): boolean {
+  return !busy && !starting;
 }

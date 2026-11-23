@@ -2,18 +2,22 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { TailscalePath as TailnetPath, TailscalePingResult, TailscaleSnapshot, TailscaleStatus } from './tailscale/types';
-import type { OpsTask, PrivateRef } from './ops/types';
+import type { OpsTaskView } from './ops/types';
 
-export function opsTasks(conversation?: string): Promise<OpsTask[]> {
+export function opsTasks(conversation?: string): Promise<OpsTaskView[]> {
   return invoke('ops_task_list', { conversation });
 }
-export function opsTaskInput(id: string, text: string, hostIds: string[], resolveUncertain = false): Promise<OpsTask> {
-  return invoke('ops_task_input', { id, text, hostIds, resolveUncertain });
+export function opsTaskCancel(id: string): Promise<OpsTaskView> {
+  return invoke('ops_task_cancel', { id });
 }
-export function opsTaskCancel(id: string): Promise<void> { return invoke('ops_task_cancel', { id }); }
-export function opsTaskRetry(id: string): Promise<OpsTask> { return invoke('ops_task_retry', { id }); }
-export function opsTaskEvidence(id: string, reference: PrivateRef): Promise<unknown> {
-  return invoke('ops_task_evidence', { id, reference });
+export function opsSubtaskCancel(id: string, subtaskId: string): Promise<OpsTaskView> {
+  return invoke('ops_subtask_cancel', { id, subtaskId });
+}
+export function opsTaskRetry(id: string, hostId: string | null = null, confirmUncertain = false): Promise<OpsTaskView> {
+  return invoke('ops_task_retry', { id, hostId, confirmUncertain });
+}
+export function onOpsUpdate(handler: (task: OpsTaskView) => void): Promise<UnlistenFn> {
+  return listen<OpsTaskView>('ops-update', (event) => handler(event.payload));
 }
 
 export function tailscaleSnapshot(): Promise<TailscaleSnapshot> {
@@ -1335,8 +1339,8 @@ export function aiAcpLoginTerminal(
 /** Starts `agent` on `context`; `terminal` is the user's terminal session there. */
 /** Starts `agent` on `context`; `terminal` is the user's terminal session there. `resume`
  *  continues an earlier conversation of that agent (same id). */
-export function aiStart(context: AiContext, agent: string, terminal: SessionId | null, resume: string | null = null, model: string | null = null, resumeConfirmed = false): Promise<AiStarted> {
-  return invoke('ai_start', { context, agent, terminal, resume, model, resumeConfirmed });
+export function aiStart(context: AiContext, agent: string, terminal: SessionId | null, resume: string | null = null, model: string | null = null): Promise<AiStarted> {
+  return invoke('ai_start', { context, agent, terminal, resume, model });
 }
 
 /** Sets setting `option` (such as `model`) of session `id`; returns the settings as they now are. */
@@ -1414,9 +1418,10 @@ export function onAiTurn(handler: (event: TurnEvent) => void): Promise<UnlistenF
 export type ExternalEvent = { id: string; context: AiContext; agent: string; host: string } | { id: string; ended: true };
 
 /** A sub-agent of the fleet lead started on a host, or one ended. */
+export type SubtaskEndState = 'completed' | 'failed' | 'blocked' | 'cancelled' | 'interrupted';
 export type SubtaskEvent =
   | { parent: string; id: string; host: string; host_id: string; task: string; task_id: string; subtask_id: string }
-  | { id: string; parent?: string | null; ended: true };
+  | { id: string; parent?: string | null; ended: true; state?: SubtaskEndState; summary?: string | null };
 
 export function onAiSubtask(handler: (event: SubtaskEvent) => void): Promise<UnlistenFn> {
   return listen<SubtaskEvent>('ai-subtask', (event) => handler(event.payload));

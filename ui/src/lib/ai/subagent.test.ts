@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import type { SubtaskEndState } from '../ipc.ts';
 import type { ChatItem } from './chatview.ts';
-import { firstWaitingChat, purgeSubagents, startSubagent, subagentStatus, waitingCount, type SubagentStart } from './subagent.ts';
+import { firstWaitingChat, isSubagentActive, latestActivity, purgeSubagents, startSubagent, subagentStatus, waitingCount, type SubagentStart } from './subagent.ts';
 
 function worker() {
   return {
@@ -13,6 +14,8 @@ function worker() {
     taskPrompt: '',
     historical: true,
     ended: true,
+    finalState: null as SubtaskEndState | null,
+    summary: null as string | null,
     busy: false,
     waiting: 0,
     items: [] as ChatItem[],
@@ -31,11 +34,15 @@ test('dispatch keeps the worker separate and retries update the original lead ca
   const first = startSubagent(subagents, dispatch, worker, lead.items);
   first.items.push({ kind: 'agent', text: 'Disk is healthy', messageId: null });
   first.ended = true;
+  first.finalState = 'failed';
+  first.summary = 'Connection lost';
   first.busy = false;
 
   const second = startSubagent(subagents, { ...dispatch, task: 'Check free inodes', host: 'DB' }, worker, lead.items);
   assert.equal(second, first);
   assert.equal(second.ended, false);
+  assert.equal(second.finalState, null);
+  assert.equal(second.summary, null);
   assert.equal(second.busy, true);
   assert.equal(second.historical, false);
   assert.equal(second.hostId, 'db');
@@ -71,6 +78,45 @@ test('waiting workers contribute to totals and the next approval targets a diffe
   assert.equal(firstWaitingChat(children), first);
   assert.equal(firstWaitingChat(children, first), next);
   assert.equal(subagentStatus(first), 'waiting');
-  assert.equal(subagentStatus(settled), 'finished');
+  assert.equal(subagentStatus(settled), 'completed');
   assert.equal(subagentStatus(worker()), 'history');
+});
+
+test('live work uses its current approval status even before a durable view catches up', () => {
+  const live = { ...worker(), historical: false, ended: false, finalState: 'failed' as const };
+  assert.equal(isSubagentActive(live), true);
+  assert.equal(subagentStatus(live, 'failed'), 'running');
+  assert.equal(subagentStatus({ ...live, waiting: 1 }, 'completed'), 'waiting');
+  assert.equal(isSubagentActive({ ...live, ended: true }), false);
+  assert.equal(isSubagentActive({ ...live, historical: true }), false);
+});
+
+test('ended workers and restored sessions retain their actual terminal results', () => {
+  const outcomes = [
+    ['completed', 'completed'],
+    ['failed', 'failed'],
+    ['blocked', 'blocked'],
+    ['cancelled', 'cancelled'],
+    ['interrupted', 'blocked'],
+  ] as const;
+  for (const [state, status] of outcomes) {
+    assert.equal(subagentStatus({ ...worker(), historical: false, finalState: state }), status);
+    assert.equal(subagentStatus(worker(), state), status);
+    assert.equal(subagentStatus({ ...worker(), historical: false, finalState: state }, 'running'), status);
+  }
+  assert.equal(subagentStatus(worker(), 'running'), 'history');
+  assert.equal(subagentStatus({ ...worker(), historical: false, finalState: 'completed' }, 'cancelled'), 'cancelled');
+});
+
+test('recent activity uses command or tool detail from the current delegation', () => {
+  const command: Extract<ChatItem, { kind: 'operation' }> = {
+    kind: 'operation', operation: { op: 'command', command: 'df -h\nmount' },
+    assessment: { risk: 'read_only', programs: ['df'], opaque: false, reasons: [] },
+    approved: false, outcome: { result: 'denied' },
+  };
+  const reply: ChatItem = { kind: 'agent', text: 'Disk is healthy', messageId: null };
+  assert.equal(latestActivity([]), null);
+  assert.equal(latestActivity([command, reply]), 'df -h');
+  assert.equal(latestActivity([command, { kind: 'delegation', task: 'Check inodes' }]), null);
+  assert.equal(latestActivity([command, { ...command, operation: { op: 'read_file', path: 'a'.repeat(70) } }]), `${'a'.repeat(59)}…`);
 });

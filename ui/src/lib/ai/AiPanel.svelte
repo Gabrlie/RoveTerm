@@ -17,14 +17,18 @@
   import { terminals } from '../terminal/registry';
   import { vault } from '../vault/vault.svelte';
   import { t, type MessageKey } from '../i18n';
+  import { aiCancel } from '../ipc';
   import type { AgentChoice, AiAnswer, AiContext, AiMode, AiOperation, AiOutcome, AiRecord, AiSessionSummary, ConfigOption, ReviewNote, Risk } from '../ipc';
   import { prefs } from '../settings/prefs.svelte';
   import { EFFORT_LEVELS } from '../settings/providers';
   import { notify } from '../ui/toast.svelte';
   import type { IconName } from '../ui/icons';
+  import { ask } from '../ui/confirm.svelte';
+  import { ops } from '../ops/ops.svelte';
+  import { isTaskActive, shortHostName } from '../ops/taskview';
   import OpsTasks from '../ops/OpsTasks.svelte';
   import SubagentPanel from './SubagentPanel.svelte';
-  import { firstWaitingChat, subagentStatus, waitingCount } from './subagent';
+  import { firstWaitingChat, isSubagentActive, latestActivity, subagentStatus, waitingCount } from './subagent';
 
   /** `fleet`: the fleet lead's conversation on all saved hosts, shown as a page of its own
    *  (a tab), with RoveTerm's assistant only. */
@@ -51,11 +55,44 @@
   let viewing = $state<Chat | null>(null);
   const chat = $derived(viewing && externals.includes(viewing) ? viewing : own);
   const opsConversation = $derived(chat.id ?? chat.resumeId);
+  const opsTasksList = $derived(fleet ? ops.tasksOf(opsConversation) : []);
   const subagents = $derived(fleet ? ai.subagentsOf(opsConversation) : []);
   const subSelection = $derived(fleet && opsConversation && ai.requestedSubagent?.parentId === opsConversation ? ai.requestedSubagent : null);
   const selectedSubagent = $derived(subSelection ? ai.subagent(subSelection.id) : undefined);
   const waitingSubagents = $derived(subagents.filter((sub) => sub.waiting > 0));
+  const activeSubagents = $derived(subagents.filter(isSubagentActive));
+  const hasActiveWork = $derived(fleet && (activeSubagents.length > 0 || ops.hasActive(opsConversation)));
+  const activeWorkerCount = $derived(Math.max(activeSubagents.length, ops.activeWorkers(opsConversation)));
+  const opsWaiting = $derived(opsTasksList.some((task) => task.counts.waiting_approval > 0));
   const waitingElsewhere = $derived(waitingSubagents.filter((sub) => sub !== selectedSubagent));
+
+  $effect(() => {
+    if (fleet && opsConversation) {
+      void ops.listen();
+      void ops.load(opsConversation);
+    }
+  });
+
+  function statusOf(sub: Chat) {
+    const scopedState = sub.id ? ops.subtaskBySession(sub.parentId, sub.id)?.state : undefined;
+    return subagentStatus(sub, scopedState);
+  }
+
+  const stoppingSubagents = new SvelteSet<Chat>();
+
+  async function stopSubagent(sub: Chat): Promise<void> {
+    if (!sub.id || !isSubagentActive(sub) || stoppingSubagents.has(sub)) return;
+    const { id, taskId, subtaskId } = sub;
+    stoppingSubagents.add(sub);
+    try {
+      if (taskId && subtaskId) await ops.cancelSubtask(taskId, subtaskId);
+      else await aiCancel(id);
+    } catch {
+      notify(t('error.ops.failed'), 'error');
+    } finally {
+      stoppingSubagents.delete(sub);
+    }
+  }
 
   function inspectSubagent(id: string, host: string): void {
     if (!opsConversation) return;
@@ -118,6 +155,55 @@
   });
 
   let draft = $state('');
+  let cancelling = $state(false);
+  let creatingChat = $state(false);
+  const showStop = $derived(chat.busy || (hasActiveWork && !draft.trim()));
+  const statusText = $derived.by(() => {
+    if (waiting > 0) return t('ai.waitingApproval', { n: waiting });
+    if (chat.starting) return t('ai.starting');
+    if (chat.waking) return t('ai.summarizing');
+    if (chat.busy) return t('ai.working');
+    if (waitingSubagents.length > 0) return t('ai.subagents.waitingSummary', { n: waitingCount(waitingSubagents) });
+    if (activeWorkerCount > 0) return t('ai.subagents.runningSummary', { n: activeWorkerCount });
+    return t('ai.subagents.tasksRunning');
+  });
+
+  async function stopAll(): Promise<void> {
+    if (cancelling) return;
+    const target = chat;
+    const conversation = opsConversation;
+    cancelling = true;
+    try {
+      if (target.id || target.resumeId) await target.cancel();
+      const tasks = fleet ? ops.tasksOf(conversation) : [];
+      for (const task of tasks) {
+        if (isTaskActive(task)) await ops.cancelTask(task.id).catch(() => undefined);
+      }
+    } finally {
+      cancelling = false;
+    }
+  }
+
+  async function newChat(): Promise<void> {
+    if (creatingChat || cancelling) return;
+    const target = chat;
+    creatingChat = true;
+    try {
+      if (fleet && hasActiveWork) {
+        if (!(await ask({
+          title: t('ai.newChat'),
+          message: t('ai.newChatConfirmStop'),
+          confirmLabel: t('ai.newChatConfirmAction'),
+          danger: true,
+        })) || target !== chat) return;
+        if (hasActiveWork) await stopAll();
+      }
+      await ai.reset(target);
+    } finally {
+      creatingChat = false;
+    }
+  }
+
   let input = $state<HTMLTextAreaElement>();
   let list = $state<HTMLDivElement>();
   let pickerOpen = $state(false);
@@ -541,11 +627,13 @@
           {#if expanded[key]}<pre class="op-output selectable">{item.detail}</pre>{/if}
         {:else if item.kind === 'subtask'}
           {@const sub = ai.subagent(item.id)}
-          {@const status = sub ? subagentStatus(sub) : 'finished'}
+          {@const opsSub = ops.subtaskBySession(target.id ?? target.resumeId, item.id)}
+          {@const status = sub ? statusOf(sub) : subagentStatus({ historical: true, ended: true, waiting: 0, finalState: null }, opsSub?.state)}
+          {@const detail = sub && isSubagentActive(sub) ? latestActivity(sub.items) ?? item.task : opsSub?.summary ?? opsSub?.error ?? sub?.summary ?? item.task}
           <button type="button" class="dispatch {status}" class:active={selectedSubagent?.id === item.id} aria-pressed={selectedSubagent?.id === item.id} onclick={() => inspectSubagent(item.id, item.host)}>
-            <span class="dispatch-host"><Icon name="server" size={13} /><strong>{item.host}</strong></span>
-            <span class="dispatch-task" title={item.task}>{item.task}</span>
-            <span class="dispatch-status">{t(`ai.subagents.status.${status}`)}</span>
+            <span class="dispatch-host" title={item.host}><Icon name="server" size={13} /><strong>{shortHostName(item.host)}</strong></span>
+            <span class="dispatch-task" title={detail}>{detail}</span>
+            <span class="dispatch-status"><span class="work-dot" class:pulsing={status === 'running'} aria-hidden="true"></span>{t(`ai.subagents.status.${status}`)}</span>
             {#if sub && sub.waiting > 0}<span class="sub-badge" aria-label={t('ai.subagents.waitingCount', { n: sub.waiting })}>{sub.waiting}</span>{/if}
             <span class="inspect">{t('ai.subagents.inspect')}<Icon name="chevron" size={12} /></span>
           </button>
@@ -575,7 +663,7 @@
     {@const next = waitingChats[0]}
     <div class="sub-attention" role="status">
       <Icon name="warning" size={14} />
-      <span>{t('ai.subagents.pending', { hosts: [...new Set(waitingChats.map((sub) => sub.hostLabel))].join(', ') })}</span>
+      <span>{t('ai.subagents.pending', { hosts: [...new Set(waitingChats.map((sub) => shortHostName(sub.hostLabel)))].join(', ') })}</span>
       <button type="button" class="secondary" onclick={() => selectSubagent(next)}>{t('ai.subagents.review')}</button>
     </div>
   {/if}
@@ -632,7 +720,7 @@
       <button type="button" class="title" title={t('ai.renameHint')} onclick={() => (renaming = chat.name ?? '')}>{chat.name ?? t('ai.newChatTitle')}</button>
     {/if}
     <span class="spacer"></span>
-    <IconButton icon="add" small label={t('ai.newChat')} disabled={chat.busy || chat.starting} onclick={() => void ai.reset(chat)} />
+    <IconButton icon="add" small label={t('ai.newChat')} disabled={chat.starting || (chat.busy && !hasActiveWork) || cancelling || creatingChat} onclick={() => void newChat()} />
     {#if fleet && onschedules}
       <span class="schedules">
         <IconButton icon="clock" small label={t('fleet.schedules')} onclick={onschedules} />
@@ -640,8 +728,9 @@
       </span>
     {/if}
     {#if fleet && subagents.length > 0}
-      <button type="button" class="pick sub-toggle" aria-expanded={!!selectedSubagent} aria-label={t('ai.subagents.count', { n: subagents.length })} title={t('ai.subagents.count', { n: subagents.length })} onclick={toggleSubagents}>
+      <button type="button" class="pick sub-toggle" class:active={!!selectedSubagent} aria-expanded={!!selectedSubagent} aria-label={t('ai.subagents.count', { n: subagents.length })} title={t('ai.subagents.count', { n: subagents.length })} onclick={toggleSubagents}>
         <Icon name="server" size={13} />{subagents.length}
+        {#if activeSubagents.length > 0}<span class="work-dot pulsing" aria-hidden="true"></span>{/if}
         {#if waitingSubagents.length > 0}<span class="sub-badge" aria-label={t('ai.subagents.waitingCount', { n: waitingCount(waitingSubagents) })}>{waitingCount(waitingSubagents)}</span>{/if}
       </button>
     {/if}
@@ -703,20 +792,9 @@
   {:else}
   {@render pendingSubagents(waitingElsewhere)}
   <div class="composer">
-    {#if fleet && chat.recoveryRequired}
-      <div class="recovery" role="status">
-        <p>{t('ops.recoveryHint')}</p>
-        <button type="button" class="secondary" disabled={chat.starting || chat.busy} onclick={() => void chat.confirmRecovery(terminalPane?.sessionId ?? null)}>{t('ops.confirmRecovery')}</button>
-      </div>
-    {:else if fleet && chat.recoveryRequest}
-      <div class="recovery" role="status">
-        <p>{t('ops.recoveryReady')}</p>
-        <button type="button" class="secondary" disabled={!chat.canSend} onclick={() => void chat.retryRecovery(terminalPane?.sessionId ?? null)}>{t('ops.retryRecoveryInput')}</button>
-      </div>
-    {/if}
-    {#if chat.starting || chat.busy}
-      <p class="status" class:attention={waiting > 0}>
-        {#if waiting > 0}{t('ai.waitingApproval', { n: waiting })}{:else if chat.starting}{t('ai.starting')}{:else}<span class="dots">{t(chat.waking ? 'ai.summarizing' : 'ai.working')}</span>{/if}
+    {#if chat.starting || chat.busy || hasActiveWork}
+      <p class="status" class:attention={waiting > 0 || waitingSubagents.length > 0 || opsWaiting} role="status">
+        <span class="work-dot pulsing" aria-hidden="true"></span>{statusText}
       </p>
     {/if}
     <div class="card">
@@ -818,8 +896,8 @@
             {/if}
           </div>
         </div>
-        {#if chat.busy}
-          <button type="button" class="send stop" title={t('ai.stop')} aria-label={t('ai.stop')} onclick={() => void chat.cancel()}><Icon name="stop" size={11} /></button>
+        {#if showStop}
+          <button type="button" class="send stop" disabled={cancelling} title={chat.busy ? t('ai.stop') : t('ai.stopAll')} aria-label={chat.busy ? t('ai.stop') : t('ai.stopAll')} onclick={() => void stopAll()}><Icon name="stop" size={11} /></button>
         {:else}
           <button type="button" class="send" title={t('ai.send')} aria-label={t('ai.send')} disabled={!draft.trim() || !chat.canSend || !agent} onclick={send}><Icon name="up" size={13} /></button>
         {/if}
@@ -832,7 +910,7 @@
   {#if selectedSubagent && subSelection}
     {@const siblings = ai.subagentsOf(subSelection.parentId)}
     <div class="subagent-side">
-      <SubagentPanel chats={siblings} selected={selectedSubagent} transcript={chatItems} onselect={selectSubagent} onclose={closeSubagents}>
+      <SubagentPanel chats={siblings} selected={selectedSubagent} transcript={chatItems} {statusOf} onstop={(sub) => void stopSubagent(sub)} onselect={selectSubagent} onclose={closeSubagents}>
         {#snippet attention()}
           <div class="overlay-attention">{@render pendingSubagents(siblings.filter((sub) => sub !== selectedSubagent && sub.waiting > 0))}</div>
         {/snippet}
@@ -859,8 +937,6 @@
 {/if}
 
 <style>
-  .recovery { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); margin-bottom: var(--space-2); font-size: var(--text-footnote); }
-  .recovery p { margin: 0; color: var(--fg-muted); }
   .ai-split {
     position: relative;
     container: ai-split / inline-size;
@@ -1388,10 +1464,18 @@
     color: var(--fg-muted);
     font-size: var(--text-footnote);
   }
-  .dispatch-status { font-size: var(--text-footnote); color: var(--fg-muted); }
+  .dispatch-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--text-footnote);
+    color: var(--fg-muted);
+  }
   .dispatch.running .dispatch-status, .inspect { color: var(--accent); }
-  .dispatch.waiting .dispatch-status { color: var(--warning); }
-  .dispatch.finished .dispatch-status { color: var(--success); }
+  .dispatch.waiting .dispatch-status, .dispatch.blocked .dispatch-status { color: var(--warning); }
+  .dispatch.completed .dispatch-status { color: var(--success); }
+  .dispatch.failed .dispatch-status { color: var(--danger); }
+  .dispatch-status .work-dot { background: currentColor; }
   .inspect { grid-column: 4; font-size: var(--text-footnote); }
   .delegation {
     padding: var(--space-2) var(--space-3);
@@ -1417,6 +1501,7 @@
   .sub-attention span { flex: 1; overflow-wrap: anywhere; }
   .sub-attention button { flex: none; }
   .sub-toggle { flex: none; }
+  .sub-toggle.active { background: var(--accent-soft); color: var(--accent); }
   .sub-badge {
     flex: none;
     min-width: 16px;
@@ -1459,17 +1544,24 @@
     padding: 0 var(--space-3) var(--space-3);
   }
   .status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
     margin: 0 0 var(--space-1);
     color: var(--fg-muted);
-    font-size: 11px;
+    font-size: var(--text-caption);
   }
-  .status.attention {
-    color: var(--warning);
-    font-weight: 600;
+  .status.attention { color: var(--warning); font-weight: 600; }
+  .work-dot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
   }
-  .dots {
-    animation: pulse 1.4s ease-in-out infinite;
-  }
+  .pulsing { animation: pulse 1.4s ease-in-out infinite; }
+  .attention .work-dot { background: var(--warning); animation: none; }
+  @media (prefers-reduced-motion: reduce) { .pulsing { animation: none; } }
   @keyframes pulse {
     50% {
       opacity: 0.4;

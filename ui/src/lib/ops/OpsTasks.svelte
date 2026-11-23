@@ -1,292 +1,399 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity';
   import Dialog from '../ui/Dialog.svelte';
   import Icon from '../ui/Icon.svelte';
+  import IconButton from '../ui/IconButton.svelte';
   import Markdown from '../ai/Markdown.svelte';
   import { ask } from '../ui/confirm.svelte';
-  import { hosts } from '../hosts/hosts.svelte';
-  import { errorText, t, type MessageKey } from '../i18n';
-  import { opsTaskCancel, opsTaskEvidence, opsTaskInput, opsTaskRetry, opsTasks } from '../ipc';
-  import { canAppend, canCancel, canRetry, evidenceText, isUncertain, OpsRefreshGate, reconcileTasks, selectedTargets, selectedUncertain, subtaskFor, targetChoice, type TargetChoices } from './taskview';
-  import type { OpsTask, PrivateRef } from './types';
+  import { t } from '../i18n';
+  import { ops } from './ops.svelte';
+  import { canCancelTask, canRetrySubtask, canRetryTask, isSubtaskActive, uncertainHosts } from './taskview';
+  import type { OpsSubtaskView, OpsTaskCounts, OpsTaskState, OpsTaskView } from './types';
 
   let { conversation, onselectsubagent }: { conversation: string; onselectsubagent?: (sessionId: string, hostName: string) => void } = $props();
-  let tasks = $state<OpsTask[]>([]);
-  let refreshing = $state(false);
-  let error = $state('');
-  let stale = $state(false);
-  let inputs = $state<Record<string, string>>({});
-  let choices = $state<Record<string, TargetChoices>>({});
-  let busy = $state<Record<string, boolean>>({});
-  let messages = $state<Record<string, string>>({});
-  let gate = new OpsRefreshGate();
-  let refreshTimer: ReturnType<typeof setTimeout> | undefined;
-  let evidence = $state<{ title: string; body: unknown; loading: boolean; error: string } | null>(null);
-  let evidenceRequest = 0;
+  const tasks = $derived(ops.tasksOf(conversation));
+  const primary = $derived(tasks[0]);
+  const expandedByConversation = new SvelteMap<string, boolean>();
+  const expanded = $derived(expandedByConversation.get(conversation) ?? tasks.some(canCancelTask));
+  const pending = new SvelteSet<string>();
+  const failedActions = new SvelteSet<string>();
+  const error = $derived(failedActions.has(conversation) ? t('error.ops.failed') : ops.errorOf(conversation));
+  let report = $state<{ taskId: string; hostId?: string } | null>(null);
+  const reportTask = $derived(tasks.find((task) => task.id === report?.taskId));
+  const reportHost = $derived(reportTask?.subtasks.find((sub) => sub.host_id === report?.hostId));
+  const waitingHost = $derived(
+    primary?.subtasks.find((sub) => sub.state === 'waiting_approval' && sub.session)
+    ?? tasks.flatMap((task) => task.subtasks).find((sub) => sub.state === 'waiting_approval' && sub.session),
+  );
+  const clock = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 
   $effect(() => {
-    const id = conversation;
-    const current = new OpsRefreshGate();
-    gate = current;
-    tasks = [];
-    inputs = {};
-    choices = {};
-    busy = {};
-    messages = {};
-    error = '';
-    stale = false;
-    evidence = null;
-    ++evidenceRequest;
-    if (id) void refresh();
-    return () => current.dispose();
+    void ops.load(conversation);
+    report = null;
   });
 
-  onMount(() => {
-    let disposed = false;
-    let unlisten: UnlistenFn | undefined;
-    void listen<{ conversation?: string }>('ops-update', (event) => {
-      if (event.payload?.conversation && event.payload.conversation !== conversation) return;
-      clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => void refresh(), 100);
-    }).then((stop) => {
-      if (disposed) stop();
-      else unlisten = stop;
-    }).catch((caught: unknown) => {
-      if (!disposed) error = errorText(caught);
+  function headerState(task: OpsTaskView): OpsTaskState {
+    const counts = task.counts;
+    if (counts.waiting_approval) return 'waiting_approval';
+    if (counts.running || counts.queued) return 'running';
+    return task.state;
+  }
+
+  function progress(counts: OpsTaskCounts): string {
+    const amounts = { done: counts.completed, total: counts.total };
+    if (counts.total > 0 && counts.completed === counts.total) return t('ops.allDone', amounts);
+    const parts = [t('ops.progress', amounts)];
+    const active = counts.running + counts.queued;
+    const blocked = counts.blocked + counts.interrupted;
+    if (active) parts.push(t('ops.runningCount', { n: active }));
+    if (counts.waiting_approval) parts.push(t('ops.waitingCount', { n: counts.waiting_approval }));
+    if (counts.failed) parts.push(t('ops.failedCount', { n: counts.failed }));
+    if (blocked) parts.push(t('ops.blockedCount', { n: blocked }));
+    if (counts.cancelled) parts.push(t('ops.stoppedCount', { n: counts.cancelled }));
+    return parts.join(' · ');
+  }
+
+  function hostStatus(sub: OpsSubtaskView): string {
+    switch (sub.state) {
+      case 'completed': return sub.summary ?? t('ops.state.completed');
+      case 'failed': return sub.error ?? t('ops.state.failed');
+      case 'blocked':
+      case 'interrupted': return sub.error ?? (sub.reason ? t(`ops.reason.${sub.reason}`) : t(`ops.state.${sub.state}`));
+      default: return t(`ops.state.${sub.state}`);
+    }
+  }
+
+  function hasDetails(sub: OpsSubtaskView): boolean {
+    return !!(sub.reply || sub.summary || sub.error || sub.reason || sub.checks.length);
+  }
+
+  function openLog(sub: OpsSubtaskView): void {
+    if (sub.session) onselectsubagent?.(sub.session, sub.host_name);
+    report = null;
+  }
+
+  async function perform(task: OpsTaskView, action: () => Promise<unknown>): Promise<void> {
+    if (pending.has(task.id)) return;
+    pending.add(task.id);
+    failedActions.delete(task.conversation);
+    try {
+      await action();
+    } catch {
+      failedActions.add(task.conversation);
+    } finally {
+      pending.delete(task.id);
+    }
+  }
+
+  function retry(task: OpsTaskView, hostId: string | null = null): Promise<void> {
+    return perform(task, async () => {
+      const names = uncertainHosts(task, hostId);
+      const confirmed = names.length > 0;
+      if (confirmed && !(await ask({
+        title: t('ops.confirmTitle'),
+        message: t('ops.confirmMessage', { hosts: names.join(', ') }),
+        confirmLabel: t('ops.confirmContinue'),
+        danger: true,
+      }))) return;
+      if (task.conversation === conversation) await ops.retryTask(task.id, hostId, confirmed);
     });
-    return () => {
-      disposed = true;
-      unlisten?.();
-      clearTimeout(refreshTimer);
-      gate.dispose();
-      ++evidenceRequest;
-    };
-  });
-
-  async function refresh(): Promise<void> {
-    const id = conversation;
-    if (!id) return;
-    const current = gate;
-    const request = current.begin();
-    refreshing = true;
-    try {
-      const incoming = await opsTasks(id);
-      if (!current.accepts(request) || conversation !== id) return;
-      tasks = reconcileTasks(tasks, incoming, id);
-      error = '';
-      stale = false;
-    } catch (caught) {
-      if (current.accepts(request) && conversation === id) {
-        error = errorText(caught);
-        stale = tasks.length > 0;
-      }
-    } finally {
-      if (current.accepts(request) && conversation === id) refreshing = false;
-    }
   }
-
-  function hostName(id: string): string { return hosts.find(id)?.name ?? id; }
-  function currentContext(current: OpsRefreshGate, id: string): boolean { return current === gate && current.live && conversation === id; }
-
-  function update(task: OpsTask): void {
-    if (task.conversation !== conversation) return;
-    const index = tasks.findIndex((row) => row.id === task.id);
-    if (index === -1) tasks = [task, ...tasks];
-    else if ((tasks[index]?.revision ?? -1) <= task.revision) tasks[index] = task;
-  }
-
-  async function append(task: OpsTask): Promise<void> {
-    const text = inputs[task.id]?.trim();
-    const hostIds = selectedTargets(task, choices[task.id]);
-    if (!text || hostIds.length === 0 || busy[task.id]) return;
-    const id = conversation;
-    const current = gate;
-    busy[task.id] = true;
-    error = '';
-    try {
-      let verified = false;
-      if (selectedUncertain(task, hostIds)) {
-        verified = await ask({
-          title: t('ops.confirmTitle'),
-          message: t('ops.confirmMessage', { hosts: hostIds.filter((host) => isUncertain(subtaskFor(task, host))).map(hostName).join(', ') }),
-          confirmLabel: t('ops.confirmContinue'),
-          danger: true,
-        });
-        if (!verified || !currentContext(current, id)) return;
-      }
-      const updated = await opsTaskInput(task.id, text, hostIds, verified);
-      if (!currentContext(current, id)) return;
-      update(updated);
-      inputs[task.id] = '';
-      choices[task.id] = {};
-      messages[task.id] = t('ops.queued');
-      void refresh();
-    } catch (caught) {
-      if (currentContext(current, id)) error = errorText(caught);
-    } finally {
-      if (currentContext(current, id)) busy[task.id] = false;
-    }
-  }
-
-  async function retry(task: OpsTask): Promise<void> {
-    if (!canRetry(task) || busy[task.id]) return;
-    const id = conversation;
-    const current = gate;
-    busy[task.id] = true;
-    error = '';
-    try {
-      const updated = await opsTaskRetry(task.id);
-      if (!currentContext(current, id)) return;
-      update(updated);
-      messages[task.id] = t('ops.retried');
-      void refresh();
-    } catch (caught) {
-      if (currentContext(current, id)) error = errorText(caught);
-    } finally {
-      if (currentContext(current, id)) busy[task.id] = false;
-    }
-  }
-
-  async function cancel(task: OpsTask): Promise<void> {
-    if (!canCancel(task) || busy[task.id]) return;
-    const id = conversation;
-    const current = gate;
-    busy[task.id] = true;
-    error = '';
-    try {
-      await opsTaskCancel(task.id);
-      if (!currentContext(current, id)) return;
-      messages[task.id] = t('ops.cancelled');
-      await refresh();
-    } catch (caught) {
-      if (currentContext(current, id)) error = errorText(caught);
-    } finally {
-      if (currentContext(current, id)) busy[task.id] = false;
-    }
-  }
-
-  async function showEvidence(task: OpsTask, reference: PrivateRef, title: string): Promise<void> {
-    const request = ++evidenceRequest;
-    const id = conversation;
-    evidence = { title, body: null, loading: true, error: '' };
-    try {
-      const body = await opsTaskEvidence(task.id, reference);
-      if (request === evidenceRequest && conversation === id) evidence = { title, body, loading: false, error: '' };
-    } catch (caught) {
-      if (request === evidenceRequest && conversation === id) evidence = { title, body: null, loading: false, error: errorText(caught) };
-    }
-  }
-
-  function closeEvidence(): void { ++evidenceRequest; evidence = null; }
 </script>
 
-<section class="tasks" aria-label={t('ops.title')}>
-  <header><span><Icon name="files" size={13} />{t('ops.title')}</span><button class="link" type="button" onclick={refresh} disabled={refreshing}>{t('ops.refresh')}</button></header>
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
-  {#if stale}<p class="muted" role="status">{t('ops.stale')}</p>{/if}
-  {#each tasks as task (task.id)}
-    <details class="task">
-      <summary><span>{t('ops.task', { id: task.id.slice(0, 8) })}</span><span class="state {task.state}">{t(`ops.state.${task.state}` as MessageKey)}</span></summary>
-      <div class="task-body">
-        <div class="metadata">
-          <span>{t(`ops.source.${task.source.kind}` as MessageKey)}</span>
-          {#if task.source.kind === 'schedule' || !task.scope.can_modify}
-            <span title={t('ops.scopeHint')}>{task.scope.can_modify ? t('ops.scope.modify') : t('ops.scope.read')}</span>
+{#if primary || error}
+  <section class="tasks" aria-label={t('ops.title')}>
+    {#if primary}
+      {@const counts = primary.counts}
+      {@const summary = progress(counts)}
+      <header class="summary">
+        <button type="button" class="toggle" aria-expanded={expanded} aria-label={t(expanded ? 'ops.collapse' : 'ops.expand')} onclick={() => expandedByConversation.set(conversation, !expanded)}>
+          <span class="dot {headerState(primary)}" aria-hidden="true"></span>
+          <strong class="ellipsis title" title={primary.title}>{primary.title}</strong>
+          {#if tasks.length > 1}<span class="tag task-count">{t('ops.count', { n: tasks.length })}</span>{/if}
+          <span class="progress ellipsis" title={summary}>{summary}</span>
+          {#if counts.total > 0}
+            <span class="track" aria-hidden="true">
+              <span class="done" style:width={`${100 * counts.completed / counts.total}%`}></span>
+              <span class="active-segment" style:width={`${100 * (counts.queued + counts.running + counts.waiting_approval) / counts.total}%`}></span>
+            </span>
           {/if}
-          <span>{t('ops.updated', { time: new Date(task.updated_at).toLocaleString() })}</span>
-        </div>
-        <div class="evidence-links">
-          {#if task.inputs[0]}<button class="link" type="button" onclick={() => task.inputs[0] && showEvidence(task, task.inputs[0], t('ops.request'))}>{t('ops.request')}</button>{/if}
-          {#if task.acceptance}<button class="link" type="button" onclick={() => task.acceptance && showEvidence(task, task.acceptance, t('ops.acceptance'))}>{t('ops.acceptance')}</button>{/if}
-          {#if task.report}<button class="link" type="button" onclick={() => task.report && showEvidence(task, task.report, t('ops.report'))}>{t('ops.report')}</button>{/if}
-        </div>
-        <fieldset>
-          <legend>{t('ops.targets')}</legend>
-          {#each task.scope.targets as target (target.host_id)}
-            {@const subtask = subtaskFor(task, target.host_id)}
-            {@const session = subtask?.session}
-            <div class="target">
-              <label class="check"><input type="checkbox" checked={selectedTargets(task, choices[task.id]).includes(target.host_id)} disabled={busy[task.id] || !canAppend(task)} onchange={(event) => choices[task.id] = { ...choices[task.id], [target.host_id]: targetChoice(task, target.host_id, event.currentTarget.checked) }} /><span>{hostName(target.host_id)}</span><span class="state {subtask?.state ?? 'queued'}">{t(`ops.state.${subtask?.state ?? 'queued'}` as MessageKey)}</span></label>
-              {#if session && onselectsubagent}
-                <button type="button" class="link" onclick={() => onselectsubagent?.(session, hostName(target.host_id))}>{t('ai.subagents.view')}</button>
-              {/if}
-              {#if subtask?.state === 'completed'}<p class="muted">{t('ops.completedTarget')}</p>{/if}
-              {#if subtask?.reason}<p class="muted">{t(`ops.reason.${subtask.reason}` as MessageKey)}</p>{/if}
-              {#if subtask?.error_code}<code class="error-code">{subtask.error_code}</code>{/if}
-              {#if isUncertain(subtask)}<p class="attention">{t('ops.uncertain')}</p>{/if}
-              {#if subtask?.state === 'waiting_approval'}<p class="muted">{t('ops.approvalHint')}</p>{/if}
-              {#if subtask && subtask.evidence.length > 0}
-                <div class="evidence-links">{#each subtask.evidence as reference, n (`${reference.session}:${reference.reference}`)}<button class="link" type="button" onclick={() => showEvidence(task, reference, `${hostName(target.host_id)} · ${t('ops.evidence', { n: n + 1 })}`)}>{t('ops.evidence', { n: n + 1 })}</button>{/each}</div>
-              {/if}
-            </div>
-          {:else}
-            <p class="muted">{t('ops.noTargets')}</p>
-          {/each}
-        </fieldset>
-        {#if canAppend(task)}
-          <form onsubmit={(event) => { event.preventDefault(); void append(task); }}>
-            <label>{t('ops.input')}<textarea rows="2" value={inputs[task.id] ?? ''} oninput={(event) => inputs[task.id] = event.currentTarget.value} placeholder={t('ops.inputHint')} disabled={busy[task.id]}></textarea></label>
-            <p class="muted">{t('ops.inputTargets')}</p>
-            <button type="submit" class="secondary" disabled={busy[task.id] || !inputs[task.id]?.trim() || selectedTargets(task, choices[task.id]).length === 0}>{t('ops.send')}</button>
-          </form>
+          <span class="chevron" class:expanded><Icon name="chevronDown" size={13} /></span>
+        </button>
+        {#if waitingHost && onselectsubagent}
+          <button type="button" class="plain action review" onclick={(event) => { event.stopPropagation(); openLog(waitingHost); }}>{t('ops.goApprove')}</button>
+        {:else if canCancelTask(primary)}
+          <button type="button" class="plain action" disabled={pending.has(primary.id)} onclick={(event) => { event.stopPropagation(); void perform(primary, () => ops.cancelTask(primary.id)); }}>{t('ops.stop')}</button>
+        {:else if canRetryTask(primary)}
+          <button type="button" class="plain action" disabled={pending.has(primary.id)} onclick={(event) => { event.stopPropagation(); void retry(primary); }}>{t('ops.retry')}</button>
         {/if}
-        <div class="actions">
-          {#if canRetry(task)}<button type="button" class="secondary" disabled={busy[task.id]} onclick={() => retry(task)}>{t('ops.retry')}</button>{/if}
-          {#if canCancel(task)}<button type="button" class="secondary" disabled={busy[task.id]} onclick={() => cancel(task)}>{t('ops.cancel')}</button>{/if}
-        </div>
-        {#if messages[task.id]}<p class="feedback" role="status">{messages[task.id]}</p>{/if}
-      </div>
-    </details>
-  {:else}
-    <p class="muted">{refreshing ? t('ops.loading') : t('ops.empty')}</p>
-  {/each}
-</section>
-
-{#if evidence}
-  <Dialog title={evidence.title} onclose={closeEvidence} width={680}>
-    {#if evidence.loading}<p class="muted">{t('ops.evidenceLoading')}</p>{:else if evidence.error}<p class="error" role="alert">{evidence.error}</p>{:else}
-      {@const text = evidenceText(evidence.body)}
-      {#if text !== null}<Markdown {text} />{/if}
-      {#if typeof evidence.body !== 'string'}
-        {#if text !== null}<details class="raw"><summary>{t('ops.rawEvidence')}</summary><pre class="selectable">{JSON.stringify(evidence.body, null, 2)}</pre></details>{:else}<pre class="selectable">{JSON.stringify(evidence.body, null, 2)}</pre>{/if}
-      {/if}
+      </header>
     {/if}
-    {#snippet actions()}<button type="button" class="secondary" onclick={closeEvidence}>{t('common.close')}</button>{/snippet}
+    {#if error}<p class="load-error" role="alert">{error}</p>{/if}
+    {#if expanded && primary}
+      <div class="drawer">
+        {#each tasks as task (task.id)}
+          <div class="task">
+            <div class="meta">
+              {#if tasks.length > 1}<strong class="ellipsis" title={task.title}>{task.title}</strong>{/if}
+              <time>{clock.format(task.updated_at)}</time>
+              {#if task.source.kind === 'schedule'}<span class="tag">{t('ops.scheduleTag')}</span>{/if}
+              {#if task.read_only}<span class="tag">{t('ops.readOnlyTag')}</span>{/if}
+              <div class="actions">
+                {#if task.subtasks.some(hasDetails)}
+                  <button type="button" class="plain action" onclick={() => (report = { taskId: task.id })}>{t('ops.viewReport')}</button>
+                {/if}
+                {#if canRetryTask(task)}
+                  <button type="button" class="plain action" disabled={pending.has(task.id)} onclick={() => void retry(task)}>{t('ops.retryFailed')}</button>
+                {/if}
+                {#if canCancelTask(task)}
+                  <button type="button" class="plain action" disabled={pending.has(task.id)} onclick={() => void perform(task, () => ops.cancelTask(task.id))}>{t('ops.stop')}</button>
+                {/if}
+              </div>
+            </div>
+            {#each task.subtasks as sub (sub.host_id)}
+              {@const status = hostStatus(sub)}
+              {@const subtaskId = sub.id}
+              <div class="host-row">
+                <span class="dot {sub.state}" aria-hidden="true"></span>
+                <strong class="host ellipsis" title={sub.host_name}>{sub.host_name}</strong>
+                <span class="host-status ellipsis {sub.state}" title={status}>{status}</span>
+                <div class="actions">
+                  {#if sub.session && onselectsubagent}
+                    {@const awaiting = sub.state === 'waiting_approval'}
+                    <button type="button" class="plain action" class:review={awaiting} onclick={() => openLog(sub)}>{t(awaiting ? 'ops.goApprove' : 'ops.viewProcess')}</button>
+                  {/if}
+                  {#if hasDetails(sub)}
+                    <button type="button" class="plain action" onclick={() => (report = { taskId: task.id, hostId: sub.host_id })}>{t('ops.viewDetail')}</button>
+                  {/if}
+                  {#if isSubtaskActive(sub) && subtaskId}
+                    <IconButton icon="stop" small label={t('ops.stopHost', { host: sub.host_name })} disabled={pending.has(task.id)} onclick={() => void perform(task, () => ops.cancelSubtask(task.id, subtaskId))} />
+                  {/if}
+                  {#if canRetrySubtask(sub)}
+                    <IconButton icon="refresh" small label={t('ops.retryHost', { host: sub.host_name })} disabled={pending.has(task.id)} onclick={() => void retry(task, sub.host_id)} />
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </section>
+{/if}
+
+{#snippet result(sub: OpsSubtaskView, single: boolean)}
+  <section class="result">
+    <header class="result-header">
+      {#if !single}<strong>{sub.host_name}</strong>{/if}
+      <span class="state-pill {sub.state}">{t(`ops.state.${sub.state}`)}</span>
+    </header>
+    {#if single && sub.task.trim()}
+      <blockquote class="task-prompt selectable"><strong>{t('ops.taskPrompt')}</strong><p>{sub.task}</p></blockquote>
+    {/if}
+    {#if sub.error || sub.reason}
+      <p class="result-alert {sub.state} selectable">{sub.error ?? (sub.reason && t(`ops.reason.${sub.reason}`))}</p>
+    {/if}
+    {#if sub.checks.length}
+      <div class="checks">
+        <strong>{t('ops.checks')}</strong>
+        <ul>
+          {#each sub.checks as check}
+            <li>{check.criterion}{#if check.summary}<span>{check.summary}</span>{/if}</li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+    {#if sub.reply}
+      <Markdown text={sub.reply} />
+    {:else if sub.summary}
+      <p class="selectable">{sub.summary}</p>
+    {:else if !sub.error && !sub.reason && !sub.checks.length}
+      <p class="muted">{t('ops.noReportYet')}</p>
+    {/if}
+  </section>
+{/snippet}
+
+{#if reportTask}
+  <Dialog title={reportHost ? t('ops.hostResultTitle', { host: reportHost.host_name }) : t('ops.reportTitle')} width={580} onclose={() => (report = null)}>
+    {#if reportHost}
+      {@render result(reportHost, true)}
+    {:else}
+      <div class="report-heading">
+        <strong>{reportTask.title}</strong>
+        <span class="progress">{progress(reportTask.counts)}</span>
+      </div>
+      {#each reportTask.subtasks as sub (sub.host_id)}
+        {@render result(sub, false)}
+      {/each}
+    {/if}
+    {#snippet actions()}
+      {#if reportHost?.session && onselectsubagent}
+        <button type="button" class="secondary" onclick={() => openLog(reportHost)}>{t('ai.subagents.viewLog')}</button>
+      {/if}
+      <button type="button" class="primary" onclick={() => (report = null)}>{t('common.close')}</button>
+    {/snippet}
   </Dialog>
 {/if}
 
 <style>
-  .tasks { flex: none; max-height: 40vh; padding: var(--space-2) var(--space-3); overflow: auto; border-bottom: 1px solid var(--separator); font-size: var(--text-footnote); }
-  header, header > span, .actions, .evidence-links, .metadata { display: flex; align-items: center; gap: var(--space-2); }
-  header { justify-content: space-between; margin-bottom: var(--space-2); }
-  header > span { font-weight: 500; }
-  .task { margin-top: var(--space-2); border-radius: var(--radius-sm); background: var(--fill); }
-  .task > summary { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-2); cursor: pointer; }
-  .task-body { display: flex; flex-direction: column; gap: var(--space-2); padding: 0 var(--space-2) var(--space-3); }
-  .metadata, .evidence-links, .actions { flex-wrap: wrap; }
-  .metadata { color: var(--fg-muted); font-size: var(--text-caption); }
-  .state { flex: none; color: var(--fg-muted); font-size: var(--text-caption); }
-  .state.completed { color: var(--success); }
-  .state.running, .state.queued { color: var(--accent); }
-  .state.waiting_approval, .state.blocked, .attention { color: var(--warning); }
-  .state.failed { color: var(--danger); }
-  fieldset { margin: 0; padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 0; }
-  legend { padding: 0 var(--space-1); color: var(--fg-muted); }
-  .target + .target { margin-top: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--separator); }
-  .check { display: flex; align-items: center; gap: var(--space-2); color: var(--fg); }
-  .check .state { margin-left: auto; }
-  .target p, .target .evidence-links { margin-top: var(--space-1); padding-left: 22px; }
-  .error-code { display: block; margin-top: var(--space-1); color: var(--fg-muted); overflow-wrap: anywhere; }
-  .muted, .attention, .feedback { margin: 0; font-size: var(--text-footnote); }
-  .muted { color: var(--fg-muted); }
-  .feedback { color: var(--accent); }
-  .error { margin: var(--space-2) 0; color: var(--danger); overflow-wrap: anywhere; }
-  .link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
-  .link:disabled { opacity: 0.5; cursor: default; }
-  form { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); }
-  form label { display: flex; flex-direction: column; gap: var(--space-1); width: 100%; color: var(--fg-muted); }
-  textarea { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; }
-  .raw summary { cursor: pointer; color: var(--fg-muted); }
-  pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--text-footnote); }
+  .tasks {
+    container: ops-card / inline-size;
+    flex: none;
+    margin: 0 var(--space-3) var(--space-2);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow: 0 0 0 0.5px var(--separator), var(--shadow-sm);
+  }
+  .summary, .toggle, .meta, .host-row, .actions, .result-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .summary { padding-inline: var(--space-2); }
+  .toggle {
+    flex: 1;
+    min-width: 0;
+    min-height: 36px;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 0 var(--space-1);
+    background: transparent;
+    color: var(--fg);
+    text-align: start;
+    font: inherit;
+    cursor: pointer;
+  }
+  .toggle:hover { background: var(--fill); }
+  .title { flex: 1; }
+  .ellipsis {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .progress {
+    color: var(--fg-muted);
+    font-size: var(--text-footnote);
+    font-variant-numeric: tabular-nums;
+  }
+  .toggle .progress { flex: 0 1 auto; }
+  .track {
+    display: flex;
+    width: 44px;
+    height: 4px;
+    flex: none;
+    overflow: hidden;
+    background: var(--fill);
+    border-radius: var(--radius-pill);
+  }
+  .done { background: var(--success); }
+  .active-segment { background: var(--accent-soft); }
+  .chevron {
+    flex: none;
+    display: inline-flex;
+    color: var(--fg-muted);
+    transition: transform var(--dur-fast) var(--ease-out);
+  }
+  .chevron.expanded { transform: rotate(180deg); }
+  .drawer {
+    max-height: min(36vh, 320px);
+    overflow-y: auto;
+    border-top: 1px solid var(--separator);
+  }
+  .task { padding: var(--space-1) var(--space-3); }
+  .task + .task { border-top: 1px solid var(--separator); }
+  .meta {
+    flex-wrap: wrap;
+    min-height: 26px;
+    color: var(--fg-muted);
+    font-size: var(--text-caption);
+  }
+  .meta strong { color: var(--fg); }
+  time, .tag { white-space: nowrap; }
+  .tag {
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-pill);
+    background: var(--fill);
+    color: var(--fg-muted);
+    font-size: var(--text-caption);
+  }
+  .host-row { min-height: 28px; }
+  .host-row + .host-row { border-top: 0.5px solid var(--separator); }
+  .host { max-width: 28%; font-weight: 600; }
+  .host-status { flex: 1; color: var(--fg-muted); font-size: var(--text-footnote); }
+  .actions { flex: none; gap: var(--space-1); margin-inline-start: auto; }
+  .action {
+    height: 24px;
+    color: var(--fg-muted);
+    font-size: var(--text-footnote);
+  }
+  .summary > .action { background: var(--fill); }
+  .action.review, .summary > .action.review {
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+  .action:hover:not(:disabled) { background: var(--fill-hover); color: var(--fg); }
+  .action.review:hover:not(:disabled) { color: var(--warning); }
+  .dot {
+    width: 6px;
+    height: 6px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--status-color, var(--fg-subtle));
+  }
+  .running, .queued { --status-color: var(--accent); }
+  .waiting_approval, .blocked, .interrupted { --status-color: var(--warning); }
+  .completed { --status-color: var(--success); }
+  .failed { --status-color: var(--danger); }
+  .dot.running { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.4; } }
+  .host-status.waiting_approval, .host-status.blocked, .host-status.interrupted, .host-status.failed {
+    color: var(--status-color);
+  }
+  .load-error {
+    margin: 0;
+    padding: var(--space-2) var(--space-3);
+    color: var(--danger);
+    font-size: var(--text-footnote);
+  }
+  .report-heading, .result { display: grid; gap: var(--space-2); min-width: 0; overflow-wrap: anywhere; }
+  .report-heading { font-size: var(--text-title); }
+  .report-heading + .result, .result + .result {
+    border-top: 1px solid var(--separator);
+    padding-top: var(--space-3);
+  }
+  .state-pill {
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-pill);
+    color: var(--status-color, var(--fg-muted));
+    background: var(--fill);
+    font-size: var(--text-caption);
+  }
+  .task-prompt, .result-alert {
+    margin: 0;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+  }
+  .task-prompt {
+    border-inline-start: 2px solid var(--separator);
+    background: var(--fill);
+    color: var(--fg-muted);
+  }
+  .task-prompt p { margin: var(--space-1) 0 0; white-space: pre-wrap; }
+  .result-alert {
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+  .result-alert.failed { background: var(--danger-soft); color: var(--danger); }
+  .checks ul { margin: var(--space-1) 0 0; padding-inline-start: var(--space-5); }
+  .checks li span { display: block; color: var(--fg-muted); }
+  .checks li + li { margin-top: var(--space-1); }
+  .muted { margin: 0; color: var(--fg-muted); }
+  @container ops-card (width < 420px) { .track { display: none; } }
+  @container ops-card (width < 310px) {
+    .task-count { padding-inline: var(--space-1); }
+    .toggle { gap: var(--space-1); }
+    .host-row { gap: var(--space-1); }
+  }
+  @media (prefers-reduced-motion: reduce) { .dot.running { animation: none; } }
 </style>

@@ -1,18 +1,25 @@
 <script lang="ts">
   import { tick, type Snippet } from 'svelte';
+  import Icon from '../ui/Icon.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import { t } from '../i18n';
   import type { Chat } from './ai.svelte';
-  import { subagentStatus } from './subagent';
+  import { shortHostName } from '../ops/taskview';
+  import { isSubagentActive, type SubagentStatus } from './subagent';
 
-  let { chats, selected, transcript, attention, onselect, onclose }: {
+  let { chats, selected, transcript, attention, statusOf, onstop, onselect, onclose }: {
     chats: Chat[];
     selected: Chat;
     transcript: Snippet<[Chat]>;
     attention: Snippet;
+    statusOf: (chat: Chat) => SubagentStatus;
+    onstop?: (chat: Chat) => void;
     onselect: (chat: Chat) => void;
     onclose: () => void;
   } = $props();
+
+  const status = $derived(statusOf(selected));
+  const active = $derived(isSubagentActive(selected));
 
   let list: HTMLDivElement;
   let following = true;
@@ -40,19 +47,24 @@
 
 <aside class="subagent-panel" aria-label={t('ai.subagents.title')}>
   <header>
-    <div class="heading">
-      <span>{t('ai.subagents.title')}</span>
-      <strong title={selected.hostLabel ?? ''}>{selected.hostLabel}</strong>
+    <span class="back"><IconButton icon="back" small label={t('ai.subagents.back')} onclick={onclose} /></span>
+    <div class="heading" title={selected.hostLabel ?? ''}>
+      <Icon name="server" size={13} />
+      <strong>{shortHostName(selected.hostLabel)}</strong>
     </div>
-    <span class="status {subagentStatus(selected)}">{t(`ai.subagents.status.${subagentStatus(selected)}`)}</span>
+    <span class="status-pill {status}">{t(`ai.subagents.status.${status}`)}</span>
+    {#if active && onstop}
+      <IconButton icon="stop" small label={t('ai.subagents.stop')} onclick={() => onstop?.(selected)} />
+    {/if}
     <IconButton icon="close" small label={t('ai.subagents.close')} onclick={onclose} />
   </header>
   {#if chats.length > 1}
     <nav aria-label={t('ai.subagents.title')}>
       {#each chats as sub (sub.id)}
-        <button type="button" class:active={selected === sub} aria-pressed={selected === sub} onclick={() => onselect(sub)} title={t(`ai.subagents.status.${subagentStatus(sub)}`)}>
-          <span class="dot {subagentStatus(sub)}"></span>
-          <span>{sub.hostLabel}</span>
+        {@const hostStatus = statusOf(sub)}
+        <button type="button" class:active={selected === sub} aria-pressed={selected === sub} onclick={() => onselect(sub)} title={sub.hostLabel ?? ''}>
+          <span class="dot {hostStatus}" role="img" aria-label={t(`ai.subagents.status.${hostStatus}`)}></span>
+          <span class="host-tab">{shortHostName(sub.hostLabel)}</span>
           {#if sub.waiting > 0}<span class="count" aria-label={t('ai.subagents.waitingCount', { n: sub.waiting })}>{sub.waiting}</span>{/if}
         </button>
       {/each}
@@ -65,6 +77,9 @@
     {:else if selected.historical && selected.historyStatus === 'error'}
       <p class="error" role="alert">{selected.historyError}</p>
       <button type="button" class="secondary retry" onclick={() => void selected.loadSubagentHistory()}>{t('ai.connection.retry')}</button>
+    {:else if active && selected.items.every((item) => item.kind === 'delegation')}
+      {#if selected.items.length}{@render transcript(selected)}{/if}
+      <p class="live muted" role="status"><span class="dot running" aria-hidden="true"></span>{t('ai.subagents.connecting')}</p>
     {:else if selected.items.length === 0}
       <p class="muted">{t('ai.subagents.empty')}</p>
     {:else}
@@ -73,7 +88,12 @@
       {/key}
     {/if}
   </div>
-  <footer>{t('ai.subagents.footer')}</footer>
+  <footer>
+    {#if active}
+      <span class="live {status}"><span class="dot {status}" aria-hidden="true"></span>{t(`ai.subagents.status.${status}`)}</span>
+    {/if}
+    <span>{t('ai.subagents.footer')}</span>
+  </footer>
 </aside>
 
 <style>
@@ -91,41 +111,51 @@
     gap: var(--space-2);
   }
   header {
-    padding: var(--space-2) var(--space-3);
+    min-height: var(--row-height);
+    padding: var(--space-1) var(--space-3);
     border-bottom: 1px solid var(--separator);
   }
+  .back { display: none; }
+  @container ai-split (width < 960px) { .back { display: inline-flex; } }
   .heading {
     flex: 1;
     min-width: 0;
-    display: grid;
-    gap: var(--space-1);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
   }
-  .heading span, footer, .muted {
+  footer, .muted {
     color: var(--fg-muted);
     font-size: var(--text-footnote);
   }
-  .heading strong, nav button > span:nth-child(2) {
+  .heading strong, .host-tab {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .status, .dot { --status: var(--fg-muted); }
   .running { --status: var(--accent); }
-  .waiting { --status: var(--warning); }
-  .finished { --status: var(--success); }
-  .status {
-    color: var(--status);
-    font-size: var(--text-footnote);
+  .waiting, .blocked { --status: var(--warning); }
+  .completed { --status: var(--success); }
+  .failed { --status: var(--danger); }
+  .status-pill {
+    flex: none;
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-pill);
+    background: var(--fill);
+    color: var(--status, var(--fg-muted));
+    font-size: var(--text-caption);
+    white-space: nowrap;
   }
   nav {
-    flex-wrap: wrap;
-    max-height: 24%;
-    overflow: auto;
+    flex-wrap: nowrap;
+    flex: none;
+    overflow-x: auto;
     padding: var(--space-2) var(--space-3);
     border-bottom: 1px solid var(--separator);
   }
   nav button {
-    max-width: 100%;
+    flex: none;
+    max-width: 70%;
     border: 1px solid transparent;
     border-radius: var(--radius-pill);
     padding: var(--space-1) var(--space-2);
@@ -145,7 +175,16 @@
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--status);
+    background: var(--status, var(--fg-subtle));
+  }
+  .dot.running { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.4; } }
+  @media (prefers-reduced-motion: reduce) { .dot.running { animation: none; } }
+  .live {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--status, var(--fg-muted));
   }
   .count {
     color: var(--warning);
@@ -163,6 +202,8 @@
   }
   .transcript > :global(*) { flex: none; }
   footer {
+    display: grid;
+    gap: var(--space-1);
     border-top: 1px solid var(--separator);
     padding: var(--space-2) var(--space-3);
   }

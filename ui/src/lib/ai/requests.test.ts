@@ -12,10 +12,9 @@ test('retry preserves the original text and request ID', () => {
   assert.deepEqual(original, { id: 'request-1', text: 'inspect hosts' });
 });
 
-test('planner recovery blocks sends until explicit confirmation and never overrides active work', () => {
-  assert.equal(canSendPrompt(false, false, true, false), false);
-  assert.equal(canSendPrompt(false, false, true, true), true);
-  assert.equal(canSendPrompt(true, false, true, true), false);
-  assert.equal(canSendPrompt(false, true, true, true), false);
-  assert.equal(canSendPrompt(false, false, false, false), true);
+test('only an active or starting lead prevents sending a prompt', () => {
+  assert.equal(canSendPrompt(false, false), true);
+  assert.equal(canSendPrompt(true, false), false);
+  assert.equal(canSendPrompt(false, true), false);
+  assert.equal(canSendPrompt(true, true), false);
 });

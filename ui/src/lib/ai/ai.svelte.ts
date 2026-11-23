@@ -22,6 +22,7 @@ import {
   type AiRecord,
   type ExternalEvent,
   type SubtaskEvent,
+  type SubtaskEndState,
   type ReportEvent,
   type AgentCommand,
   type ConfigOption,
@@ -41,6 +42,7 @@ import {
 import { errorText, t, type MessageKey } from '../i18n';
 import { addCache, type CacheTotals } from './quota';
 import { approvalFor, connectionProblem, itemsFromRecords, titleOf, waitingApproval, type ChatItem } from './chatview';
+import { ops } from '../ops/ops.svelte';
 import { prefs } from '../settings/prefs.svelte';
 import { canSendPrompt, requestForSend, type PromptRequest } from './requests';
 import { canChangeTerminal } from './composer';
@@ -64,10 +66,6 @@ export function contextKey(context: AiContext): string {
 
 export class Chat {
   private request: PromptRequest | null = null;
-  recoveryRequired = $state(false);
-  recoveryConfirmed = $state(false);
-  /** An input rejected before planner recovery remains available for an explicit retry. */
-  recoveryRequest = $state<PromptRequest | null>(null);
   /** The backend session, once started. */
   id = $state<string | null>(null);
   /** The agent answering (`builtin:<id>` or `acp:<id>`); the default when not chosen. */
@@ -115,6 +113,8 @@ export class Chat {
   external = $state<string | null>(null);
   /** That agent disconnected, or the sub-agent finished. */
   ended = $state(false);
+  finalState = $state<SubtaskEndState | null>(null);
+  summary = $state<string | null>(null);
   parentId = $state<string | null>(null);
   hostId = $state<string | null>(null);
   hostLabel = $state<string | null>(null);
@@ -143,9 +143,11 @@ export class Chat {
     }
   }
 
-  finishSubagent(): void {
+  finishSubagent(state?: SubtaskEndState, summary?: string | null): void {
     this.ended = true;
     this.busy = false;
+    if (state !== undefined) this.finalState = state;
+    if (summary !== undefined) this.summary = summary;
     for (const item of this.items) {
       if (item.kind === 'approval' && item.answer === undefined) item.answer = null;
     }
@@ -171,7 +173,7 @@ export class Chat {
   }
 
   get canSend(): boolean {
-    return canSendPrompt(this.busy, this.starting, this.recoveryRequired, this.recoveryConfirmed);
+    return canSendPrompt(this.busy, this.starting);
   }
 
   get starting(): boolean {
@@ -329,20 +331,6 @@ export class Chat {
     await this.send(this.request?.text ?? last.text, terminal, true);
   }
 
-  /** Confirms recovery and starts the planner without submitting an input. */
-  async confirmRecovery(terminal: SessionId | null): Promise<void> {
-    if (!this.recoveryRequired || this.starting || this.busy) return;
-    this.recoveryConfirmed = true;
-    await this.prepare(terminal);
-  }
-
-  /** Retries the preserved input with its original authorization after recovery. */
-  async retryRecovery(terminal: SessionId | null): Promise<void> {
-    const request = this.recoveryRequest;
-    if (!request || !this.canSend || this.recoveryRequired) return;
-    await this.submit(request, terminal);
-  }
-
   /** Starts the agent without sending anything (to list its models before the first message). */
   async prepare(terminal: SessionId | null): Promise<void> {
     if (this.preparation) return this.preparation;
@@ -404,11 +392,9 @@ export class Chat {
         const agent = this.agent ?? (this.context.kind === 'fleet' ? ai.fleetAgent : ai.defaultAgent);
         if (!agent) throw { code: 'ai.no_agent', message: 'no agent' };
         this.agent = agent;
-        const started = await aiStart(this.context, agent, this.attachTerminal ? terminal : null, this.resumeId, this.selectedModel, this.recoveryConfirmed);
+        const started = await aiStart(this.context, agent, this.attachTerminal ? terminal : null, this.resumeId, this.selectedModel);
         this.id = started.id;
         this.resumeId = null;
-        this.recoveryRequired = false;
-        this.recoveryConfirmed = false;
         this.host = started.host;
         this.agentName = started.agent;
         this.options = started.config_options;
@@ -420,10 +406,6 @@ export class Chat {
         this.wanted = {};
         if (this.title) await aiRename(started.id, this.title);
       } catch (error) {
-        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ops.recovery_required') {
-          this.recoveryRequired = true;
-          this.recoveryConfirmed = false;
-        }
         this.notice(error, this.preparing && !this.id);
         return false;
       } finally {
@@ -443,17 +425,13 @@ export class Chat {
 
   private async submit(request: PromptRequest, terminal: SessionId | null): Promise<void> {
     this.request = request;
-    if (!(await this.start(terminal))) {
-      if (this.recoveryRequired) this.recoveryRequest = request;
-      return;
-    }
+    if (!(await this.start(terminal))) return;
     const id = this.id;
     if (!id) return;
     this.prompting = true;
     this.busy = true;
     try {
       const reason = await aiPrompt(id, request.text, request.id);
-      if (this.recoveryRequest?.id === request.id) this.recoveryRequest = null;
       if (reason !== 'end_turn' && reason !== 'cancelled') {
         const key = `ai.stop.${reason}` as MessageKey;
         this.items.push({ kind: 'notice', text: t(key) === key ? reason : t(key), code: null });
@@ -473,7 +451,8 @@ export class Chat {
   }
 
   async cancel(): Promise<void> {
-    if (this.id) await aiCancel(this.id).catch((error: unknown) => this.notice(error));
+    const id = this.id ?? this.resumeId;
+    if (id) await aiCancel(id).catch((error: unknown) => this.notice(error));
   }
 
   async answer(requestId: number, answer: AiAnswer): Promise<void> {
@@ -647,6 +626,7 @@ class AiStore {
   /** Deletes conversation `id`; a panel showing it starts a new conversation. */
   async delete(id: string): Promise<void> {
     await aiDelete(id);
+    ops.clearConversation(id);
     for (const chat of [...this.chats.values()]) {
       if (chat.id === id || chat.resumeId === id) await this.reset(chat);
     }
@@ -715,7 +695,7 @@ class AiStore {
   private subtask(event: SubtaskEvent): void {
     if ('ended' in event) {
       const chat = this.subagents.get(event.id);
-      if (chat && (!event.parent || event.parent === chat.parentId)) chat.finishSubagent();
+      if (chat && (!event.parent || event.parent === chat.parentId)) chat.finishSubagent(event.state, event.summary);
       return;
     }
     const fleetLead = this.chats.get('fleet');
@@ -784,6 +764,7 @@ class AiStore {
   listen(): void {
     if (this.listening) return;
     this.listening = true;
+    void ops.listen();
     onAiUpdate((id, event) => this.byId[id]?.handle(event)).catch((error: unknown) => console.warn('AI events unavailable', error));
     onAiTurn((event) => this.byId[event.id]?.handleWakeup(event.active, event.error)).catch((error: unknown) => console.warn('AI turn events unavailable', error));
     onAiExternal((event) => this.external(event)).catch((error: unknown) => console.warn('outside agent events unavailable', error));

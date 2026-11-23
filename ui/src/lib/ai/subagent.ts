@@ -1,4 +1,5 @@
-import type { SubtaskEvent } from '../ipc';
+import type { SubtaskEndState, SubtaskEvent } from '../ipc';
+import type { OpsTaskState } from '../ops/types';
 import type { ChatItem } from './chatview';
 
 export type SubagentStart = Extract<SubtaskEvent, { task_id: string }>;
@@ -14,6 +15,8 @@ interface SubagentState {
   historical: boolean;
   busy: boolean;
   ended: boolean;
+  finalState: SubtaskEndState | null;
+  summary: string | null;
   items: ChatItem[];
 }
 
@@ -32,6 +35,8 @@ export function startSubagent<T extends SubagentState>(
   chat.taskPrompt = event.task;
   chat.historical = false;
   chat.ended = false;
+  chat.finalState = null;
+  chat.summary = null;
   chat.busy = true;
   chat.items.push({ kind: 'delegation', task: event.task });
   subagents.set(event.id, chat);
@@ -69,8 +74,47 @@ export function firstWaitingChat<T extends { waiting: number }>(chats: Iterable<
   return null;
 }
 
-export function subagentStatus(chat: { historical: boolean; ended: boolean; waiting: number }): 'history' | 'finished' | 'waiting' | 'running' {
-  if (chat.historical) return 'history';
-  if (chat.ended) return 'finished';
-  return chat.waiting > 0 ? 'waiting' : 'running';
+export type SubagentStatus = 'running' | 'waiting' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'history';
+
+export function isSubagentActive(chat: Pick<SubagentState, 'historical' | 'ended'>): boolean {
+  return !chat.historical && !chat.ended;
+}
+
+type StatusChat = Pick<SubagentState, 'historical' | 'ended' | 'finalState'> & { waiting: number };
+
+function terminalStatus(state?: OpsTaskState | null): SubagentStatus | undefined {
+  switch (state) {
+    case 'interrupted': return 'blocked';
+    case 'blocked':
+    case 'failed':
+    case 'cancelled':
+    case 'completed': return state;
+  }
+}
+
+export function subagentStatus(chat: StatusChat, opsState?: OpsTaskState): SubagentStatus {
+  if (chat.historical) return terminalStatus(opsState) ?? 'history';
+  if (!chat.ended) return chat.waiting > 0 ? 'waiting' : 'running';
+  return terminalStatus(opsState) ?? terminalStatus(chat.finalState) ?? 'completed';
+}
+
+export function latestActivity(items: readonly ChatItem[]): string | null {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.kind === 'delegation') break;
+    let detail: string | null = null;
+    if (item?.kind === 'tool') detail = item.call.title;
+    if (item?.kind === 'approval' || item?.kind === 'operation') {
+      const operation = item.operation;
+      if (operation.op === 'agent_tool') detail = operation.command || operation.path || operation.title;
+      else if ('command' in operation) detail = operation.command;
+      else if ('path' in operation) detail = operation.path;
+    }
+    const line = detail?.trim().split('\n', 1)[0]?.trim();
+    if (line) {
+      const chars = [...line];
+      return chars.length > 60 ? `${chars.slice(0, 59).join('')}…` : line;
+    }
+  }
+  return null;
 }
