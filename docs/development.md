@@ -34,7 +34,7 @@
 
 ### 版本号与手动签名发布（`gh`）
 
-版本号遵循 SemVer 2.0（`MAJOR.MINOR.PATCH[-prerelease]`），以根目录 `Cargo.toml` 的 `[workspace.package].version` 为单一真源（`src-tauri/tauri.conf.json` 自动继承）：Pre-1.0 阶段每完成一个大里程碑递增 `MINOR`（如 `0.2.0`、`0.3.0`），常规修复递增 `PATCH`，尝鲜版使用 `-beta.N` / `-rc.N`。
+版本号遵循 SemVer 2.0（`MAJOR.MINOR.PATCH[-prerelease]`），以根目录 `Cargo.toml` 的 `[workspace.package].version` 为单一真源（`src-tauri/tauri.conf.json` 自动继承）：Pre-1.0 阶段仅在新增独立功能模块、跨平台里程碑或配置/同步格式变更时递增 `MINOR`（如 `0.2.0`、`0.3.0`）；缺陷修复、UI 交互打磨与既有子系统的体验重构递增 `PATCH`（如 `0.2.1`）；尝鲜版使用 `-beta.N` / `-rc.N`。
 
 本地构建带签名更新包并经 GitHub CLI（`gh`）发布：
 
