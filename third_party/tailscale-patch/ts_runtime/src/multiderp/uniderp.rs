@@ -25,6 +25,7 @@ use crate::{
     derp_latency::DerpLatencyMeasurement,
     env::Env,
     multiderp::{Multiderp, SetRegionTransportId},
+    netmon,
     peer_tracker::{PeerDb, PeerState},
     task::ErasedTask,
 };
@@ -51,6 +52,8 @@ pub struct Uniderp {
     task: ActorRef<ErasedTask>,
 
     home_derp_tx: watch::Sender<bool>,
+    net_gen_tx: watch::Sender<u64>,
+    network: Option<netmon::NetworkFingerprint>,
 
     env: Env,
 }
@@ -79,6 +82,7 @@ impl kameo::Actor for Uniderp {
 
     async fn on_start(args: Self::Args, slf: ActorRef<Self>) -> Result<Self, Self::Error> {
         let (home_derp_tx, home_derp_rx) = watch::channel(false);
+        let (net_gen_tx, net_gen_rx) = watch::channel(0);
 
         let (transport_id, from_dataplane, to_dataplane) = args
             .env
@@ -99,6 +103,7 @@ impl kameo::Actor for Uniderp {
             transport_id,
             peer_db: Arc::new(RwLock::new(None)),
             home_derp_rx,
+            net_gen_rx,
             to_dataplane,
             keys: args.env.keys.node_keys.clone(),
             from_dataplane: Arc::new(Mutex::new(from_dataplane)),
@@ -111,6 +116,7 @@ impl kameo::Actor for Uniderp {
             .await?;
         args.env.subscribe::<Arc<PeerState>>(&slf).await?;
         args.env.subscribe::<DerpLatencyMeasurement>(&slf).await?;
+        args.env.subscribe::<Arc<netmon::State>>(&slf).await?;
 
         args.env
             .register(Some(Self::name(args.region_id)), &slf)
@@ -120,6 +126,8 @@ impl kameo::Actor for Uniderp {
             runner_state: runner,
             transport_id,
             home_derp_tx,
+            net_gen_tx,
+            network: None,
             task,
             env: args.env,
         })
@@ -217,12 +225,30 @@ impl Message<DerpLatencyMeasurement> for Uniderp {
     }
 }
 
+impl Message<Arc<netmon::State>> for Uniderp {
+    type Reply = ();
+
+    async fn handle(&mut self, state: Arc<netmon::State>, _ctx: &mut Context<Self, Self::Reply>) {
+        let next = state.fingerprint();
+        let changed = self
+            .network
+            .as_ref()
+            .is_some_and(|previous| previous != &next);
+        self.network = Some(next);
+        if changed {
+            self.net_gen_tx
+                .send_modify(|generation| *generation = generation.wrapping_add(1));
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Runner {
     region_id: RegionId,
     region: DerpRegion,
     transport_id: UnderlayTransportId,
     home_derp_rx: watch::Receiver<bool>,
+    net_gen_rx: watch::Receiver<u64>,
     to_dataplane: Tx<FromUnderlay>,
     from_dataplane: Arc<Mutex<Rx<ToUnderlay>>>,
     peer_db: Arc<RwLock<Option<Arc<PeerDb>>>>,
@@ -237,12 +263,14 @@ enum Activity {
 
 enum TransportExit {
     Idle,
+    Rebind,
     Closed,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum Retry {
     Reconnect,
+    Rebind,
     Wait,
     Closed,
 }
@@ -263,6 +291,7 @@ impl Runner {
                     Activity::Closed => break,
                 };
             }
+            self.net_gen_rx.borrow_and_update();
             let result = match self.connect().await {
                 Ok(transport) => {
                     let connected = Instant::now();
@@ -278,6 +307,7 @@ impl Runner {
             match result {
                 Ok(TransportExit::Closed) => break,
                 Ok(TransportExit::Idle) => reconnect = false,
+                Ok(TransportExit::Rebind) => reconnect = *self.home_derp_rx.borrow_and_update(),
                 Err(error) => {
                     let home = *self.home_derp_rx.borrow_and_update();
                     if home {
@@ -291,6 +321,7 @@ impl Runner {
                             retry = (retry * 2).min(Duration::from_secs(15));
                             continue;
                         }
+                        Retry::Rebind => reconnect = true,
                         Retry::Wait => reconnect = false,
                         Retry::Closed => break,
                     }
@@ -316,6 +347,9 @@ impl Runner {
                     }
                 }
                 _ = self.to_dataplane.closed() => return Retry::Closed,
+                changed = self.net_gen_rx.changed() => {
+                    return if changed.is_ok() { Retry::Rebind } else { Retry::Closed };
+                }
                 _ = tokio::time::sleep(retry) => return Retry::Reconnect,
             }
         }
@@ -387,6 +421,21 @@ impl Runner {
 
     #[tracing::instrument(skip_all, fields(transport_id = ?self.transport_id), level = "trace")]
     async fn run_transport(
+        &mut self,
+        transport: DefaultClient,
+        pending: Option<(DynEndpoint, Vec<PacketMut>)>,
+    ) -> Result<TransportExit, ts_derp::Error> {
+        let mut net_gen_rx = self.net_gen_rx.clone();
+        tokio::select! {
+            biased;
+            changed = net_gen_rx.changed() => {
+                Ok(if changed.is_ok() { TransportExit::Rebind } else { TransportExit::Closed })
+            }
+            result = self.forward_packets(transport, pending) => result,
+        }
+    }
+
+    async fn forward_packets(
         &mut self,
         transport: DefaultClient,
         pending: Option<(DynEndpoint, Vec<PacketMut>)>,
@@ -472,10 +521,12 @@ mod tests {
     ) -> (
         Runner,
         watch::Sender<bool>,
+        watch::Sender<u64>,
         Tx<ToUnderlay>,
         Rx<FromUnderlay>,
     ) {
         let (home_tx, home_rx) = watch::channel(home);
+        let (net_gen_tx, net_gen_rx) = watch::channel(0);
         let (from_tx, from_rx) = mpsc::unbounded_channel();
         let (to_tx, to_rx) = mpsc::unbounded_channel();
         let runner = Runner {
@@ -490,18 +541,19 @@ mod tests {
             },
             transport_id: UnderlayTransportId(1),
             home_derp_rx: home_rx,
+            net_gen_rx,
             to_dataplane: to_tx,
             from_dataplane: Arc::new(Mutex::new(from_rx)),
             peer_db: Arc::new(RwLock::new(None)),
             keys: NodeKeyPair::random(),
         };
-        (runner, home_tx, from_tx, to_rx)
+        (runner, home_tx, net_gen_tx, from_tx, to_rx)
     }
 
     #[tokio::test]
     async fn exits_when_dataplane_queue_closes() {
         for home in [false, true] {
-            let (mut runner, _home, from, _to) = runner(home);
+            let (mut runner, _home, _net_gen, from, _to) = runner(home);
             tokio::time::timeout(Duration::from_secs(1), async {
                 tokio::join!(runner.run(), async { drop(from) });
             })
@@ -511,8 +563,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn network_change_interrupts_home_derp_backoff() {
+        let (mut runner, _home, net_gen, _from, _to) = runner(true);
+        net_gen.send(1).unwrap();
+        let retry = tokio::time::timeout(
+            Duration::from_secs(1),
+            runner.retry_after_error(true, Duration::from_secs(30)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(retry, Retry::Rebind);
+    }
+
+    #[tokio::test]
     async fn non_home_failure_waits_for_new_activity() {
-        let (mut runner, home, from, _to) = runner(false);
+        let (mut runner, home, _net_gen, from, _to) = runner(false);
         assert!(runner.connect().await.is_err());
         assert_eq!(
             runner

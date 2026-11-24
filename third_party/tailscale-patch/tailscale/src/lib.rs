@@ -134,7 +134,9 @@ pub use error::{Error, InternalErrorKind};
 #[doc(inline)]
 pub use ts_control::{Node as NodeInfo, NodeStatus};
 use ts_netstack_smoltcp::{CreateSocket, netcore::Channel};
-pub use ts_runtime::{DerpRegion, ProbePath, ProbeResult, control_runner::AuthStatus};
+pub use ts_runtime::{
+    ControlLinkState, DerpRegion, ProbePath, ProbeResult, control_runner::AuthStatus,
+};
 use ts_runtime::{Spawn, control_runner::AuthResponse};
 
 #[cfg(feature = "axum")]
@@ -283,6 +285,27 @@ impl Device {
             .await
             .map_err(ts_runtime::Error::from)?;
         Ok(receiver)
+    }
+
+    /// Subscribe to control map stream health, with the current state as the initial value.
+    pub async fn subscribe_control_link(
+        &self,
+    ) -> Result<tokio::sync::watch::Receiver<ControlLinkState>, Error> {
+        let (receiver,) = self
+            .runtime
+            .ask(ts_runtime::SubscribeControlLink)
+            .await
+            .map_err(ts_runtime::Error::from)?;
+        Ok(receiver)
+    }
+
+    /// Request a health check of the current control connection.
+    pub async fn probe_control(&self) -> Result<(), Error> {
+        self.runtime
+            .ask(ts_runtime::ProbeControl)
+            .await
+            .map_err(ts_runtime::Error::from)
+            .map_err(Into::into)
     }
 
     /// Report the currently selected home DERP region, once measured.

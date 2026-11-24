@@ -9,7 +9,7 @@ use kameo::{
 };
 use ts_netcheck::RegionResult;
 
-use crate::{Error, env::Env};
+use crate::{Error, env::Env, netmon};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct DerpLatencyMeasurement {
@@ -18,6 +18,8 @@ pub struct DerpLatencyMeasurement {
 
 pub struct DerpLatencyMeasurer {
     env: Env,
+    derp_map: Option<ts_control::DerpMap>,
+    network: Option<netmon::NetworkFingerprint>,
 }
 
 impl kameo::Actor for DerpLatencyMeasurer {
@@ -26,11 +28,16 @@ impl kameo::Actor for DerpLatencyMeasurer {
 
     async fn on_start(env: Env, slf: ActorRef<Self>) -> Result<Self, Self::Error> {
         env.subscribe::<Arc<ts_control::StateUpdate>>(&slf).await?;
+        env.subscribe::<Arc<netmon::State>>(&slf).await?;
         env.register(None, &slf).await?;
 
         tracing::trace!("derp latency measurer running");
 
-        Ok(Self { env })
+        Ok(Self {
+            env,
+            derp_map: None,
+            network: None,
+        })
     }
 }
 
@@ -46,7 +53,33 @@ impl Message<Arc<ts_control::StateUpdate>> for DerpLatencyMeasurer {
             return;
         };
 
-        tracing::trace!("new derp map: beginning measurement");
+        self.derp_map = Some(derp_map.clone());
+        self.refresh_latencies().await;
+    }
+}
+
+impl Message<Arc<netmon::State>> for DerpLatencyMeasurer {
+    type Reply = ();
+
+    async fn handle(&mut self, state: Arc<netmon::State>, _ctx: &mut Context<Self, Self::Reply>) {
+        let next = state.fingerprint();
+        let changed = self
+            .network
+            .as_ref()
+            .is_some_and(|previous| previous != &next);
+        self.network = Some(next);
+        if changed {
+            self.refresh_latencies().await;
+        }
+    }
+}
+
+impl DerpLatencyMeasurer {
+    async fn refresh_latencies(&self) {
+        let Some(derp_map) = &self.derp_map else {
+            return;
+        };
+        tracing::trace!("measuring DERP region latency");
 
         let latencies = measure_regions(derp_map).await;
         if let Some(home) = latencies.first() {

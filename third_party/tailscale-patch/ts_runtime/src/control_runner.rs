@@ -4,7 +4,8 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use http::{HeaderName, HeaderValue, StatusCode};
 use tokio::{
     sync::watch,
-    time::{sleep, timeout},
+    task::AbortHandle,
+    time::{Instant, MissedTickBehavior, sleep, timeout},
 };
 use ts_capabilityversion::CapabilityVersion;
 use ts_control_serde::{HostInfo, RegisterAuth, RegisterRequest};
@@ -19,6 +20,7 @@ use kameo::{
     reply::DelegatedReply,
     supervision::RestartPolicy,
 };
+use kameo_actors::scheduler::SetInterval;
 use ts_control::{
     ControlDialer, DialPlan, Endpoint, Error as ControlError, Node, StateUpdate,
     client::{HttpConn, handle_ping, map_stream, send_map_request},
@@ -29,6 +31,7 @@ use crate::{
     derp_latency::{DerpLatencyMeasurement, DerpLatencyMeasurer},
     direct,
     env::Env,
+    netmon,
 };
 
 /// Actor responsible for maintaining the connection to control.
@@ -38,6 +41,11 @@ pub struct ControlRunner {
     params: Params,
     state: RegState,
     auth_status: watch::Sender<AuthStatus>,
+    control_link: watch::Sender<ControlLinkState>,
+    last_stream_activity: Option<Instant>,
+    map_stream_task: Option<AbortHandle>,
+    map_stream_generation: u64,
+    network: Option<netmon::NetworkFingerprint>,
 
     map_request: MapRequestState,
     reconnecting: bool,
@@ -76,12 +84,21 @@ pub enum AuthStatus {
     KeyRejected,
 }
 
+/// Health of the control map stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, kameo::Reply)]
+pub enum ControlLinkState {
+    Connecting,
+    Connected,
+    Reconnecting,
+}
+
 enum RegState {
     NotRegistered {
         pending_auth_requests: Vec<ReplySender<AuthResponse>>,
     },
     AuthRequired(url::Url),
     Registered(HttpConn),
+    Reconnecting,
     AuthKeyRejected,
 }
 
@@ -127,6 +144,9 @@ pub enum ControlRunnerError {
 
 #[derive(Clone)]
 struct AuthRequired(Option<url::Url>);
+
+#[derive(Clone)]
+struct CheckControlIdle;
 
 struct RegisterResult(Result<HttpConn, RegisterFailure>);
 
@@ -407,6 +427,16 @@ impl kameo::Actor for ControlRunner {
 
         params.env.subscribe::<DerpLatencyMeasurement>(&slf).await?;
         params.env.subscribe::<direct::NewEndpoints>(&slf).await?;
+        params.env.subscribe::<Arc<netmon::State>>(&slf).await?;
+        params
+            .env
+            .scheduler
+            .tell(
+                SetInterval::new(slf.downgrade(), Duration::from_secs(30), CheckControlIdle)
+                    .set_missed_tick_behaviour(MissedTickBehavior::Skip),
+            )
+            .await
+            .map_err(crate::Error::from)?;
 
         DerpLatencyMeasurer::supervise(&slf, params.env.clone())
             .spawn()
@@ -419,6 +449,11 @@ impl kameo::Actor for ControlRunner {
                 pending_auth_requests: Default::default(),
             },
             auth_status: watch::Sender::new(AuthStatus::Starting),
+            control_link: watch::Sender::new(ControlLinkState::Connecting),
+            last_stream_activity: None,
+            map_stream_task: None,
+            map_stream_generation: 0,
+            network: None,
             params,
             map_request: MapRequestState::default(),
             reconnecting: false,
@@ -442,6 +477,18 @@ impl ControlRunner {
     #[message]
     pub fn subscribe_auth(&self) -> (watch::Receiver<AuthStatus>,) {
         (self.auth_status.subscribe(),)
+    }
+
+    /// Subscribe to control map stream health.
+    #[message]
+    pub fn subscribe_control_link(&self) -> (watch::Receiver<ControlLinkState>,) {
+        (self.control_link.subscribe(),)
+    }
+
+    /// Check an existing control connection with a map request.
+    #[message(ctx)]
+    pub async fn probe_control(&mut self, ctx: &mut Context<Self, ()>) {
+        self.update_map_request(ctx.actor_ref()).await;
     }
 
     /// Read the selected home DERP region.
@@ -533,7 +580,9 @@ impl ControlRunner {
         ctx: &mut Context<Self, DelegatedReply<AuthResponse>>,
     ) -> DelegatedReply<AuthResponse> {
         match &mut self.state {
-            RegState::Registered(..) => ctx.reply(AuthResponse::Authorized),
+            RegState::Registered(..) | RegState::Reconnecting => {
+                ctx.reply(AuthResponse::Authorized)
+            }
             RegState::AuthRequired(u) => {
                 ctx.reply(AuthResponse::InteractiveAuthRequired(u.clone()))
             }
@@ -634,6 +683,14 @@ impl ControlRunner {
             return;
         }
         self.reconnecting = true;
+        if matches!(self.state, RegState::Registered(_)) {
+            self.state = RegState::Reconnecting;
+        }
+        if let Some(task) = self.map_stream_task.take() {
+            task.abort();
+        }
+        self.last_stream_activity = None;
+        self.set_control_link(ControlLinkState::Reconnecting);
         let delay = self.reconnect_delay;
         self.reconnect_delay = next_reconnect_delay(delay);
         let env = self.params.env.clone();
@@ -685,6 +742,16 @@ impl ControlRunner {
         self.auth_status.send_replace(AuthStatus::KeyRejected);
     }
 
+    fn set_control_link(&self, next: ControlLinkState) {
+        self.control_link.send_if_modified(|state| {
+            if *state == next {
+                return false;
+            }
+            *state = next;
+            true
+        });
+    }
+
     fn attach_map_stream(&mut self, actor: &ActorRef<Self>, conn: HttpConn, stream: MapStream) {
         self.state
             .update(RegState::Registered(conn), AuthResponse::Authorized);
@@ -693,10 +760,15 @@ impl ControlRunner {
             *status = AuthStatus::Authorized;
             changed
         });
-        actor.attach_stream(stream, (), ());
+        self.last_stream_activity = Some(Instant::now());
+        self.set_control_link(ControlLinkState::Connected);
+        self.map_stream_generation = self.map_stream_generation.wrapping_add(1);
+        let generation = self.map_stream_generation;
+        let stream = stream.map(move |msg| (generation, msg));
+        self.map_stream_task = Some(actor.attach_stream(stream, (), generation).abort_handle());
     }
 
-    async fn update_map_request(&self) {
+    async fn update_map_request(&mut self, actor: &ActorRef<Self>) {
         if self.reconnecting {
             return;
         }
@@ -723,6 +795,7 @@ impl ControlRunner {
             Ok(Ok(_))
         ) {
             tracing::warn!("unable to update control map request");
+            self.reconnect(actor).await;
         }
     }
 }
@@ -799,7 +872,8 @@ impl Message<RegisterResult> for ControlRunner {
             Err(error) => {
                 tracing::debug!(%error, "could not open initial control map stream");
                 self.state
-                    .update(RegState::Registered(conn), AuthResponse::Authorized);
+                    .update(RegState::Reconnecting, AuthResponse::Authorized);
+                drop(conn);
                 self.auth_status.send_replace(AuthStatus::Authorized);
                 self.reconnect(ctx.actor_ref()).await;
             }
@@ -820,7 +894,7 @@ impl Message<ReconnectResult> for ControlRunner {
             Ok((conn, stream, map_request)) => {
                 self.attach_map_stream(ctx.actor_ref(), conn, stream);
                 if self.map_request != map_request {
-                    self.update_map_request().await;
+                    self.update_map_request(ctx.actor_ref()).await;
                 }
             }
             Err(RegisterFailure::Rejected) => self.reject_registration(),
@@ -838,12 +912,12 @@ enum PendingNodeRequest {
     SelfNode(ReplySender<Option<Node>>),
 }
 
-impl Message<StreamMessage<Arc<StateUpdate>, (), ()>> for ControlRunner {
+impl Message<StreamMessage<(u64, Arc<StateUpdate>), (), u64>> for ControlRunner {
     type Reply = ();
 
     async fn handle(
         &mut self,
-        msg: StreamMessage<Arc<StateUpdate>, (), ()>,
+        msg: StreamMessage<(u64, Arc<StateUpdate>), (), u64>,
         ctx: &mut Context<Self, Self::Reply>,
     ) {
         let msg = match msg {
@@ -852,19 +926,32 @@ impl Message<StreamMessage<Arc<StateUpdate>, (), ()>> for ControlRunner {
                 return;
             }
 
-            StreamMessage::Next(msg) => msg,
+            StreamMessage::Next((generation, msg))
+                if generation == self.map_stream_generation && !self.reconnecting =>
+            {
+                msg
+            }
 
-            StreamMessage::Finished(_) => {
+            StreamMessage::Finished(generation)
+                if generation == self.map_stream_generation && !self.reconnecting =>
+            {
                 tracing::debug!("state update stream terminated");
                 self.reconnect(ctx.actor_ref()).await;
                 return;
             }
+            _ => return,
         };
 
+        self.last_stream_activity = Some(Instant::now());
+        self.set_control_link(ControlLinkState::Connected);
         self.reconnect_delay = INITIAL_RECONNECT_DELAY;
 
         if let RegState::Registered(conn) = &self.state {
-            let _ = handle_ping(&msg, &self.params.config.server_url, conn).await;
+            let _ = timeout(
+                MAP_REQUEST_TIMEOUT,
+                handle_ping(&msg, &self.params.config.server_url, conn),
+            )
+            .await;
         }
 
         if let Some(dial_plan) = &msg.dial_plan
@@ -929,26 +1016,57 @@ impl Message<StreamMessage<Arc<StateUpdate>, (), ()>> for ControlRunner {
 impl Message<direct::NewEndpoints> for ControlRunner {
     type Reply = ();
 
-    async fn handle(&mut self, msg: direct::NewEndpoints, _ctx: &mut Context<Self, Self::Reply>) {
+    async fn handle(&mut self, msg: direct::NewEndpoints, ctx: &mut Context<Self, Self::Reply>) {
         if self.map_request.endpoints == msg.0.as_ref() {
             return;
         }
 
         self.map_request.endpoints = msg.0.to_vec();
-        self.update_map_request().await;
+        self.update_map_request(ctx.actor_ref()).await;
     }
 }
 
 impl Message<DerpLatencyMeasurement> for ControlRunner {
     type Reply = ();
 
-    async fn handle(&mut self, msg: DerpLatencyMeasurement, _ctx: &mut Context<Self, Self::Reply>) {
+    async fn handle(&mut self, msg: DerpLatencyMeasurement, ctx: &mut Context<Self, Self::Reply>) {
         if self.map_request.derp_latency_measurement.as_ref() == Some(&msg) {
             return;
         }
 
         self.map_request.derp_latency_measurement = Some(msg);
-        self.update_map_request().await;
+        self.update_map_request(ctx.actor_ref()).await;
+    }
+}
+
+impl Message<CheckControlIdle> for ControlRunner {
+    type Reply = ();
+
+    async fn handle(&mut self, _: CheckControlIdle, ctx: &mut Context<Self, Self::Reply>) {
+        if self
+            .last_stream_activity
+            .is_some_and(|last| last.elapsed() >= Duration::from_secs(75))
+        {
+            self.update_map_request(ctx.actor_ref()).await;
+        }
+    }
+}
+
+impl Message<Arc<netmon::State>> for ControlRunner {
+    type Reply = ();
+
+    async fn handle(&mut self, state: Arc<netmon::State>, ctx: &mut Context<Self, Self::Reply>) {
+        let next = state.fingerprint();
+        let changed = self
+            .network
+            .as_ref()
+            .is_some_and(|previous| previous != &next);
+        tracing::trace!(changed, empty = next.is_empty(), "control network snapshot");
+        self.network = Some(next);
+        if changed {
+            self.reconnect_delay = INITIAL_RECONNECT_DELAY;
+            self.update_map_request(ctx.actor_ref()).await;
+        }
     }
 }
 

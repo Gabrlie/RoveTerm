@@ -184,7 +184,7 @@
   .tailscale-btn { width: 100%; }
   .ts-dot { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--danger); }
   .ts-dot.connected { background: var(--success); box-shadow: 0 0 0 2px var(--success-soft); }
-  .ts-dot.connecting { animation: ts-pulse 1.2s ease-in-out infinite; }
+  .ts-dot.connecting { background: var(--warning); box-shadow: 0 0 0 2px var(--warning-soft); animation: ts-pulse 1.2s ease-in-out infinite; }
   @keyframes ts-pulse { 50% { opacity: 0.35; } }
   @media (prefers-reduced-motion: reduce) { .ts-dot.connecting { animation: none; } }
   .group {

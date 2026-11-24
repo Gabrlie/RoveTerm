@@ -228,9 +228,7 @@ struct PeerPd {
     /// It is expected that we may get incoming pong traffic from endpoints not in this map, e.g.
     /// from timed out probes.
     tx_lookup: HashMap<TxId, DynEndpoint>,
-    /// Map holding the previous probe latencies for each endpoint (i.e. from the last probe
-    /// generation). This is used to decide a latency while the next probe is in-flight.
-    previous_probe_latencies: HashMap<(UnderlayTransportId, DynEndpoint), Duration>,
+    published_best: Option<(UnderlayTransportId, DynEndpoint)>,
 
     this_node_endpoints: Arc<[ts_control::Endpoint]>,
 
@@ -261,12 +259,63 @@ struct PeerPd {
     env: Env,
 }
 
+#[allow(
+    clippy::mutable_key_type,
+    reason = "DynEndpoint uses interior mutability for inline storage"
+)]
+fn select_best_path(
+    published: Option<&(UnderlayTransportId, DynEndpoint)>,
+    latencies: &HashMap<(UnderlayTransportId, DynEndpoint), Duration>,
+) -> Option<(UnderlayTransportId, DynEndpoint)> {
+    let (best, &best_rtt) = latencies.iter().min_by_key(|(_, rtt)| *rtt)?;
+    if let Some(current) = published
+        && let Some(&current_rtt) = latencies.get(current)
+        && !(best != current
+            && current_rtt - best_rtt >= Duration::from_millis(15)
+            && best_rtt.as_nanos() * 4 <= current_rtt.as_nanos() * 3)
+    {
+        return Some(current.clone());
+    }
+    Some(best.clone())
+}
+
 impl PeerPd {
     pub fn actor_name(peer_id: PeerId) -> SmolStr {
         smol_str::format_smolstr!("peerpd_{}", peer_id.0)
     }
 
     async fn start_probes(&mut self) {
+        self.tx_lookup.clear();
+        #[allow(
+            clippy::mutable_key_type,
+            reason = "DynEndpoint uses interior mutability for inline storage"
+        )]
+        let mut latencies = HashMap::new();
+        for (ep, state) in self.current_probes.drain() {
+            let ProbeState::Success { latency, transport } = state else {
+                tracing::trace!(?ep, "probe did not succeed before next start_probe");
+                continue;
+            };
+            tracing::trace!(?ep, ?latency, "valid latency");
+            latencies.insert((transport, ep), latency);
+        }
+
+        let next_best = select_best_path(self.published_best.as_ref(), &latencies);
+        if next_best != self.published_best {
+            if let Err(error) = self
+                .env
+                .publish_noretain(PeerBestPath {
+                    peer: self.peer_id,
+                    ep: next_best.clone(),
+                })
+                .await
+            {
+                tracing::debug!(%error, "could not publish peer discovery update");
+            } else {
+                self.published_best = next_best;
+            }
+        }
+
         let Some(disco_key) = self.disco_key else {
             tracing::trace!("no disco key known for peer, can't send pings");
             return;
@@ -283,40 +332,6 @@ impl PeerPd {
         }
 
         self.started_probing = true;
-
-        self.tx_lookup.clear();
-        self.previous_probe_latencies.clear();
-
-        let latencies_was_empty = self.previous_probe_latencies.is_empty();
-
-        for (ep, state) in self.current_probes.drain() {
-            let ProbeState::Success { latency, transport } = state else {
-                tracing::trace!(?ep, "probe did not succeed before next start_probe");
-                continue;
-            };
-
-            tracing::trace!(?ep, ?latency, "valid latency");
-            self.previous_probe_latencies
-                .insert((transport, ep), latency);
-        }
-
-        if latencies_was_empty != self.previous_probe_latencies.is_empty() {
-            let best = self
-                .previous_probe_latencies
-                .iter()
-                .min_by_key(|&(_, dur)| dur);
-
-            if let Err(error) = self
-                .env
-                .publish_noretain(PeerBestPath {
-                    peer: self.peer_id,
-                    ep: best.map(|((transport, ep), _latency)| (*transport, ep.clone())),
-                })
-                .await
-            {
-                tracing::debug!(%error, "could not publish peer discovery update");
-            }
-        }
 
         // Send `CallMeMaybe`s on all disco coordinator endpoints. Reminder: coord_endpoints_ctrl is
         // already filtered at reception-time by Endpoint::is_disco_coordinator.
@@ -470,7 +485,7 @@ impl kameo::Actor for PeerPd {
             env,
             peer_id,
             started_probing: false,
-            previous_probe_latencies: Default::default(),
+            published_best: None,
             this_node_endpoints: Default::default(),
             disco_key: Default::default(),
             tx_lookup: Default::default(),
@@ -613,8 +628,64 @@ impl Message<IncomingDiscoMsg> for PeerPd {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::mutable_key_type,
+    reason = "DynEndpoint uses interior mutability for inline storage"
+)]
 mod tests {
     use super::*;
+
+    fn endpoint(port: u16) -> (UnderlayTransportId, DynEndpoint) {
+        (
+            UnderlayTransportId(1),
+            DynEndpoint::udp(([127, 0, 0, 1], port).into()),
+        )
+    }
+
+    #[test]
+    fn upgrades_to_direct() {
+        let ep = endpoint(1);
+        let latencies = HashMap::from([(ep.clone(), Duration::from_millis(20))]);
+        assert_eq!(select_best_path(None, &latencies), Some(ep));
+    }
+
+    #[test]
+    fn falls_back_to_derp_when_direct_probes_fail() {
+        assert_eq!(select_best_path(Some(&endpoint(1)), &HashMap::new()), None);
+    }
+
+    #[test]
+    fn switches_immediately_if_current_endpoint_fails() {
+        let ep = endpoint(2);
+        let latencies = HashMap::from([(ep.clone(), Duration::from_millis(100))]);
+        assert_eq!(select_best_path(Some(&endpoint(1)), &latencies), Some(ep));
+    }
+
+    #[test]
+    fn keeps_current_path_unless_both_improvement_thresholds_are_met() {
+        let current = endpoint(1);
+        let other = endpoint(2);
+        for (current_ms, other_ms) in [(40, 26), (100, 76), (40, 38)] {
+            let latencies = HashMap::from([
+                (current.clone(), Duration::from_millis(current_ms)),
+                (other.clone(), Duration::from_millis(other_ms)),
+            ]);
+            assert_eq!(
+                select_best_path(Some(&current), &latencies),
+                Some(current.clone())
+            );
+        }
+    }
+
+    #[test]
+    fn switches_when_improvement_meets_both_thresholds() {
+        let (current, best) = (endpoint(1), endpoint(2));
+        let latencies = HashMap::from([
+            (current.clone(), Duration::from_millis(60)),
+            (best.clone(), Duration::from_millis(45)),
+        ]);
+        assert_eq!(select_best_path(Some(&current), &latencies), Some(best));
+    }
 
     #[tokio::test]
     async fn queries_best_path_and_stops_after_bus_shutdown() {

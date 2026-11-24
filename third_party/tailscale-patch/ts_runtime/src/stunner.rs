@@ -13,12 +13,13 @@ use ts_derp::IpUsage;
 use ts_netcheck::stun::TransactionId;
 use zerocopy::IntoBytes;
 
-use crate::{dataplane::IncomingStunMsg, direct::DirectActor, env::Env};
+use crate::{dataplane::IncomingStunMsg, direct::DirectActor, env::Env, netmon};
 
 /// Actor that sends STUN requests to DERP servers to get this node's public IPv4.
 pub struct Stunner {
     env: Env,
     servers: Vec<SocketAddr>,
+    network: Option<netmon::NetworkFingerprint>,
 }
 
 impl Stunner {
@@ -79,6 +80,7 @@ impl kameo::Actor for Stunner {
 
     async fn on_start(env: Self::Args, slf: ActorRef<Self>) -> Result<Self, Self::Error> {
         env.subscribe::<Arc<ts_control::StateUpdate>>(&slf).await?;
+        env.subscribe::<Arc<netmon::State>>(&slf).await?;
 
         env.scheduler
             .tell(
@@ -96,7 +98,24 @@ impl kameo::Actor for Stunner {
         Ok(Self {
             env,
             servers: vec![],
+            network: None,
         })
+    }
+}
+
+impl Message<Arc<netmon::State>> for Stunner {
+    type Reply = ();
+
+    async fn handle(&mut self, state: Arc<netmon::State>, _ctx: &mut Context<Self, Self::Reply>) {
+        let next = state.fingerprint();
+        let changed = self
+            .network
+            .as_ref()
+            .is_some_and(|previous| previous != &next);
+        self.network = Some(next);
+        if changed && !self.servers.is_empty() {
+            self.try_stun().await;
+        }
     }
 }
 

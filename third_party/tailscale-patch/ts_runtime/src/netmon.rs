@@ -71,7 +71,33 @@ pub struct State {
     pub default_route_interface_v6: Option<InterfaceId>,
 }
 
+/// Local addresses and default routes that affect network connections.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkFingerprint {
+    default_route_interface_v4: Option<InterfaceId>,
+    default_route_interface_v6: Option<InterfaceId>,
+    sorted_up_addrs: Vec<ipnet::IpNet>,
+}
+
+impl NetworkFingerprint {
+    pub fn is_empty(&self) -> bool {
+        self.default_route_interface_v4.is_none()
+            && self.default_route_interface_v6.is_none()
+            && self.sorted_up_addrs.is_empty()
+    }
+}
+
 impl State {
+    pub fn fingerprint(&self) -> NetworkFingerprint {
+        let mut sorted_up_addrs: Vec<_> = self.up_addrs().map(|(_, addr)| addr).collect();
+        sorted_up_addrs.sort_unstable();
+        NetworkFingerprint {
+            default_route_interface_v4: self.default_route_interface_v4.clone(),
+            default_route_interface_v6: self.default_route_interface_v6.clone(),
+            sorted_up_addrs,
+        }
+    }
+
     /// Iterate the addresses on all interfaces in the `up` state.
     pub fn up_addrs(&self) -> impl Iterator<Item = (InterfaceId, ipnet::IpNet)> {
         self.addrs
@@ -316,8 +342,8 @@ impl NetmonActor {
                 // This logic is meant to rectify that and make our state reflect what the platform
                 // has told us it should be regardless of the underlying consistency model.
                 if self.mon.strong_delete_consistency() {
-                    modified = modified || self.state.routes.remove(interface).is_some();
-                    modified = modified || self.state.addrs.remove(interface).is_some();
+                    modified |= self.state.routes.remove(interface).is_some();
+                    modified |= self.state.addrs.remove(interface).is_some();
                 }
             }
             Event::DefaultRouteInterface(iface, family) => {

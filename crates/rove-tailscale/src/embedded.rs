@@ -8,12 +8,13 @@ use std::{
 use async_trait::async_trait;
 use futures::FutureExt;
 use tailscale::{
-    AuthStatus, Device, NodeInfo, NodeStatus, ProbePath, ProbeResult, keys::PersistState,
+    AuthStatus, ControlLinkState, Device, NodeInfo, NodeStatus, ProbePath, ProbeResult,
+    keys::PersistState,
 };
 use tokio::{
     sync::{Mutex, oneshot, watch},
     task::JoinHandle,
-    time::{MissedTickBehavior, interval, timeout},
+    time::{Instant as TokioInstant, MissedTickBehavior, interval, sleep, sleep_until, timeout},
 };
 use zeroize::Zeroizing;
 
@@ -151,7 +152,18 @@ impl TailnetService for EmbeddedTailnet {
 
     async fn connect(&self, request: ConnectRequest) -> Result<TailnetStatus, TailscaleError> {
         rove_http::install_crypto_provider();
-        let (config, auth_key) = resolve(request)?;
+        let ConnectRequest {
+            key_state_json,
+            auth_key,
+            control_url,
+            hostname,
+        } = request;
+        let params = ConnectParams {
+            key_state_json,
+            control_url,
+            hostname,
+        };
+        let config = params.resolve()?;
         let mut live = self.live.lock().await;
         stop(&mut live).await;
         self.current
@@ -163,13 +175,18 @@ impl TailnetService for EmbeddedTailnet {
         let connect_timeout = self.connect_timeout;
         let peer_refresh = self.peer_refresh;
         let task = tokio::spawn(async move {
-            let result = tokio::select! {
-                biased;
-                _ = &mut cancelled => Ok(()),
-                result = AssertUnwindSafe(run(&current, config, auth_key, connect_timeout, peer_refresh)).catch_unwind() => {
-                    result.unwrap_or(Err(TailscaleError::Device))
-                }
-            };
+            let result = AssertUnwindSafe(run(
+                &current,
+                params,
+                config,
+                auth_key,
+                connect_timeout,
+                peer_refresh,
+                &mut cancelled,
+            ))
+            .catch_unwind()
+            .await
+            .unwrap_or(Err(TailscaleError::Device));
             let device = {
                 let mut current = current.lock();
                 let device = current.device.take();
@@ -189,10 +206,7 @@ impl TailnetService for EmbeddedTailnet {
                 device
             };
             if let Some(device) = device {
-                // The patched Device also stops its actors when dropped during unwinding.
-                let _ = AssertUnwindSafe(device.shutdown_ref(Some(connect_timeout)))
-                    .catch_unwind()
-                    .await;
+                shutdown_device(&device, connect_timeout).await;
             }
         });
         *live = Some(Live {
@@ -285,6 +299,11 @@ impl TailnetService for EmbeddedTailnet {
             }
             Err(error) => {
                 tracing::warn!(elapsed_ms, %error, "Tailscale TCP dial failed");
+                if matches!(error, TailscaleError::Timeout | TailscaleError::Device) {
+                    tokio::spawn(async move {
+                        let _ = device.probe_control().await;
+                    });
+                }
                 Err(error)
             }
         }
@@ -323,28 +342,35 @@ fn derp_region(region: tailscale::DerpRegion) -> Option<TailnetDerpRegion> {
     })
 }
 
-fn resolve(
-    request: ConnectRequest,
-) -> Result<(tailscale::Config, Option<Zeroizing<String>>), TailscaleError> {
-    let key_state: PersistState = serde_json::from_slice(&request.key_state_json)
-        .map_err(|_| TailscaleError::InvalidKeyState)?;
-    let mut config = tailscale::Config::from(key_state);
-    config.client_name = Some("RoveTerm".into());
-    if let Some(url) = request.control_url {
-        let parsed =
-            url::Url::parse(&url).map_err(|_| TailscaleError::InvalidConfig("control URL"))?;
-        if !is_web_url(&parsed) {
-            return Err(TailscaleError::InvalidConfig("control URL"));
+struct ConnectParams {
+    key_state_json: Zeroizing<Vec<u8>>,
+    control_url: Option<String>,
+    hostname: Option<String>,
+}
+
+impl ConnectParams {
+    fn resolve(&self) -> Result<tailscale::Config, TailscaleError> {
+        let key_state: PersistState = serde_json::from_slice(&self.key_state_json)
+            .map_err(|_| TailscaleError::InvalidKeyState)?;
+        let mut config = tailscale::Config::from(key_state);
+        config.client_name = Some("RoveTerm".into());
+        if let Some(url) = &self.control_url {
+            let parsed =
+                url::Url::parse(url).map_err(|_| TailscaleError::InvalidConfig("control URL"))?;
+            if !is_web_url(&parsed) {
+                return Err(TailscaleError::InvalidConfig("control URL"));
+            }
+            config.control_server_url = parsed;
         }
-        config.control_server_url = parsed;
+        config.requested_hostname = Some(
+            self.hostname
+                .as_ref()
+                .filter(|hostname| !hostname.is_empty())
+                .cloned()
+                .unwrap_or_else(|| "RoveTerm".into()),
+        );
+        Ok(config)
     }
-    config.requested_hostname = Some(
-        request
-            .hostname
-            .filter(|hostname| !hostname.is_empty())
-            .unwrap_or_else(|| "RoveTerm".into()),
-    );
-    Ok((config, request.auth_key))
 }
 
 fn is_web_url(url: &url::Url) -> bool {
@@ -354,60 +380,177 @@ fn is_web_url(url: &url::Url) -> bool {
         && url.password().is_none()
 }
 
+const CONTROL_GRACE: Duration = Duration::from_secs(6);
+const CONTROL_REBUILD: Duration = Duration::from_secs(25);
+const RECOVERY_INITIAL_DELAY: Duration = Duration::from_secs(1);
+
+fn wake_jump_threshold(tick: Duration) -> Duration {
+    (tick * 5).max(Duration::from_secs(10))
+}
+
+fn detect_sleep_jump(mono_elapsed: Duration, wall_elapsed: Duration, threshold: Duration) -> bool {
+    mono_elapsed >= threshold || wall_elapsed >= threshold
+}
+
+fn next_recovery_delay(delay: Duration) -> Duration {
+    let cap = if delay < Duration::from_secs(15) {
+        15
+    } else {
+        30
+    };
+    delay.saturating_mul(2).min(Duration::from_secs(cap))
+}
+
+async fn shutdown_device(device: &Device, limit: Duration) {
+    let _ = AssertUnwindSafe(device.shutdown_ref(Some(limit)))
+        .catch_unwind()
+        .await;
+}
+
 async fn run(
     current: &Shared,
-    config: tailscale::Config,
-    auth_key: Option<Zeroizing<String>>,
+    params: ConnectParams,
+    mut config: tailscale::Config,
+    mut auth_key: Option<Zeroizing<String>>,
     connect_timeout: Duration,
     peer_refresh: Duration,
+    cancelled: &mut oneshot::Receiver<()>,
 ) -> Result<(), TailscaleError> {
-    let device = timeout(connect_timeout, Device::new_with_secret(&config, auth_key))
-        .await
-        .map_err(|_| TailscaleError::Timeout)?
-        .map_err(|_| TailscaleError::Device)?;
-    drop(config);
-    let device = Arc::new(device);
-    current.lock().device = Some(device.clone());
+    let mut was_running = false;
+    let mut recovery_delay = RECOVERY_INITIAL_DELAY;
+    loop {
+        let result = tokio::select! {
+            biased;
+            _ = &mut *cancelled => return Ok(()),
+            result = async {
+                let device = timeout(connect_timeout, Device::new_with_secret(&config, auth_key.take()))
+                    .await
+                    .map_err(|_| TailscaleError::Timeout)?
+                    .map_err(|error| match error {
+                        tailscale::Error::AuthKeyRejected => TailscaleError::KeyRejected,
+                        _ => TailscaleError::Device,
+                    })?;
+                drop(config);
+                let device = Arc::new(device);
+                current.lock().device = Some(device.clone());
+                monitor_device(
+                    current, &device, connect_timeout, peer_refresh,
+                    &mut was_running, &mut recovery_delay,
+                ).await
+            } => result,
+        };
 
+        match result {
+            Err(error) if !was_running => return Err(error),
+            Err(error @ (TailscaleError::Timeout | TailscaleError::Device)) => {
+                tracing::info!(%error, "rebuilding Tailscale device after runtime failure");
+            }
+            Err(error) => return Err(error),
+            Ok(()) => {}
+        }
+
+        let device = {
+            let mut current = current.lock();
+            let device = current.device.take();
+            current.publish(true, TailnetState::Starting, None, None, None, Vec::new());
+            device
+        };
+        if let Some(device) = device {
+            shutdown_device(&device, Duration::from_secs(3)).await;
+        }
+
+        tokio::select! {
+            biased;
+            _ = &mut *cancelled => return Ok(()),
+            _ = sleep(recovery_delay) => {}
+        }
+        recovery_delay = next_recovery_delay(recovery_delay);
+        config = params.resolve()?;
+    }
+}
+
+async fn monitor_device(
+    current: &Shared,
+    device: &Device,
+    connect_timeout: Duration,
+    peer_refresh: Duration,
+    was_running: &mut bool,
+    recovery_delay: &mut Duration,
+) -> Result<(), TailscaleError> {
     let mut auth = timeout(connect_timeout, device.subscribe_auth())
         .await
         .map_err(|_| TailscaleError::Timeout)?
         .map_err(|_| TailscaleError::Device)?;
-    let mut refresh = interval(peer_refresh);
-    refresh.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut control = timeout(connect_timeout, device.subscribe_control_link())
+        .await
+        .map_err(|_| TailscaleError::Timeout)?
+        .map_err(|_| TailscaleError::Device)?;
+
+    let tick = peer_refresh.min(Duration::from_secs(2));
+    let mut heartbeat = interval(tick);
+    heartbeat.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let threshold = wake_jump_threshold(tick);
+    let (mut last_mono, mut last_wall) = (Instant::now(), SystemTime::now());
+    let mut starting_since = None;
+    let mut reconnecting_since = None;
+    let mut next_refresh = None;
+    let mut ready = false;
+
     loop {
+        let now = TokioInstant::now();
         let status = auth.borrow_and_update().clone();
+        let link = *control.borrow_and_update();
+        let (mut deadline, mut refresh_at) = (None, None);
+        if !matches!(status, AuthStatus::Authorized) {
+            reconnecting_since = None;
+            next_refresh = None;
+            ready = false;
+        }
+
         match status {
-            AuthStatus::Authorized => {
-                let (self_node, peers) = timeout(connect_timeout, read_nodes(&device))
-                    .await
-                    .map_err(|_| TailscaleError::Timeout)??;
-                current.lock().publish(
-                    true,
-                    TailnetState::Running,
-                    None,
-                    None,
-                    Some(self_node),
-                    peers,
-                );
-                tokio::select! {
-                    result = auth.changed() => result.map_err(|_| TailscaleError::Device)?,
-                    _ = refresh.tick() => {}
+            AuthStatus::Authorized if link == ControlLinkState::Connected => {
+                starting_since = None;
+                if reconnecting_since.take().is_some() {
+                    next_refresh = None;
+                }
+                refresh_at = Some(next_refresh.unwrap_or(now));
+            }
+            AuthStatus::Authorized if ready => {
+                let since = *reconnecting_since.get_or_insert(now);
+                let elapsed = now.duration_since(since);
+                if elapsed >= CONTROL_REBUILD {
+                    tracing::info!("rebuilding Tailscale device after prolonged control outage");
+                    return Ok(());
+                }
+                if elapsed >= CONTROL_GRACE {
+                    current.lock().publish(
+                        true,
+                        TailnetState::Starting,
+                        None,
+                        None,
+                        None,
+                        Vec::new(),
+                    );
+                    deadline = Some(since + CONTROL_REBUILD);
+                } else {
+                    deadline = Some(since + CONTROL_GRACE);
                 }
             }
-            AuthStatus::Starting => {
+            AuthStatus::Starting | AuthStatus::Authorized => {
                 current
                     .lock()
                     .publish(true, TailnetState::Starting, None, None, None, Vec::new());
-                timeout(connect_timeout, auth.changed())
-                    .await
-                    .map_err(|_| TailscaleError::Timeout)?
-                    .map_err(|_| TailscaleError::Device)?;
+                let expires = *starting_since.get_or_insert(now) + connect_timeout;
+                if now >= expires {
+                    return Err(TailscaleError::Timeout);
+                }
+                deadline = Some(expires);
             }
             AuthStatus::InteractiveAuthRequired(url) => {
                 if !is_web_url(&url) {
                     return Err(TailscaleError::InvalidStatus("invalid browser login URL"));
                 }
+                starting_since = None;
                 current.lock().publish(
                     true,
                     TailnetState::NeedsLogin,
@@ -416,10 +559,10 @@ async fn run(
                     None,
                     Vec::new(),
                 );
-                auth.changed().await.map_err(|_| TailscaleError::Device)?;
             }
             AuthStatus::KeyRejected => return Err(TailscaleError::KeyRejected),
             AuthStatus::NeedsMachineAuth => {
+                starting_since = None;
                 current.lock().publish(
                     true,
                     TailnetState::NeedsMachineAuth,
@@ -428,9 +571,64 @@ async fn run(
                     None,
                     Vec::new(),
                 );
-                auth.changed().await.map_err(|_| TailscaleError::Device)?;
             }
         }
+
+        let refresh = async {
+            wait_until(refresh_at).await;
+            timeout(connect_timeout, read_nodes(device))
+                .await
+                .map_err(|_| TailscaleError::Timeout)?
+        };
+        tokio::pin!(refresh);
+        loop {
+            tokio::select! {
+                biased;
+                _ = heartbeat.tick() => {
+                    let (now_mono, now_wall) = (Instant::now(), SystemTime::now());
+                    let mono_elapsed = now_mono.duration_since(last_mono);
+                    let wall_elapsed = now_wall.duration_since(last_wall).unwrap_or(Duration::ZERO);
+                    (last_mono, last_wall) = (now_mono, now_wall);
+                    if *was_running && detect_sleep_jump(mono_elapsed, wall_elapsed, threshold) {
+                        tracing::info!(?mono_elapsed, ?wall_elapsed, "rebuilding Tailscale device after wake");
+                        return Ok(());
+                    }
+                }
+                result = auth.changed() => {
+                    result.map_err(|_| TailscaleError::Device)?;
+                    break;
+                }
+                result = control.changed() => {
+                    result.map_err(|_| TailscaleError::Device)?;
+                    if *control.borrow() == ControlLinkState::Connected {
+                        next_refresh = None;
+                    }
+                    break;
+                }
+                _ = wait_until(deadline) => break,
+                result = &mut refresh => {
+                    let (self_node, peers) = result?;
+                    current.lock().publish(
+                        true, TailnetState::Running, None, None, Some(self_node), peers,
+                    );
+                    *was_running = true;
+                    *recovery_delay = RECOVERY_INITIAL_DELAY;
+                    ready = true;
+                    next_refresh = Some(refresh_at.unwrap_or(now) + peer_refresh);
+                    if next_refresh.is_some_and(|next| next <= TokioInstant::now()) {
+                        next_refresh = Some(TokioInstant::now() + peer_refresh);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+async fn wait_until(deadline: Option<TokioInstant>) {
+    match deadline {
+        Some(deadline) => sleep_until(deadline).await,
+        None => std::future::pending().await,
     }
 }
 
@@ -575,6 +773,41 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wake_threshold_is_five_ticks_or_at_least_ten_seconds() {
+        assert_eq!(
+            wake_jump_threshold(Duration::from_millis(250)),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            wake_jump_threshold(Duration::from_secs(2)),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            wake_jump_threshold(Duration::from_secs(3)),
+            Duration::from_secs(15)
+        );
+    }
+
+    #[test]
+    fn sleep_jump_uses_either_clock() {
+        let threshold = Duration::from_secs(10);
+        let short = Duration::from_secs(2);
+        assert!(!detect_sleep_jump(short, short, threshold));
+        assert!(!detect_sleep_jump(short, Duration::ZERO, threshold));
+        assert!(detect_sleep_jump(threshold, short, threshold));
+        assert!(detect_sleep_jump(short, threshold, threshold));
+    }
+
+    #[test]
+    fn recovery_delay_increases_to_thirty_seconds() {
+        let mut delay = RECOVERY_INITIAL_DELAY;
+        for seconds in [1, 2, 4, 8, 15, 30, 30] {
+            assert_eq!(delay, Duration::from_secs(seconds));
+            delay = next_recovery_delay(delay);
+        }
+    }
 
     #[test]
     fn fresh_identity_round_trips_and_is_unique() {

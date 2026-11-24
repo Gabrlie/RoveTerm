@@ -34,6 +34,7 @@ mod src_filter;
 mod stunner;
 mod task;
 
+pub use control_runner::ControlLinkState;
 pub(crate) use env::Env;
 pub use error::{Error, ErrorKind};
 pub use kameo::actor::{ActorRef, Spawn};
@@ -184,6 +185,8 @@ forward!(
     control_runner::AuthUrl,
     control_runner::QueryAuthStatus,
     control_runner::SubscribeAuth,
+    control_runner::SubscribeControlLink,
+    control_runner::ProbeControl,
 );
 forward!(
     PeerTracker,
