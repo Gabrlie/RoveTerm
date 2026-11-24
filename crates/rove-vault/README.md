@@ -9,6 +9,7 @@
 - `Vault` 打开后处于锁定状态。主机元数据和 known_hosts 在锁定时照常可读写；读写凭据需要先解锁，否则返回 `VaultError::Locked`。
 - `try_unlock()` 用于启动阶段，失败时只改变锁定状态，不返回错误。`unlock()` 用于用户发起的操作，允许系统弹出授权。
 - 首次解锁且没有任何密钥时，生成新的设备主密钥并写入 `KeyCache`。
+- `Vault::rewrap_master_key` 供宿主切换 `KeyCache` 的保护策略。回调只处理策略，Vault 用同一把主密钥保留已有凭据。调用约定见 [主密钥重封装](../../docs/subsystems/vault.md#主密钥重封装)。
 - vault 中已有凭据、但 `KeyCache` 中的密钥缺失或不匹配时，状态为 `KeyLost`；只能通过 `reset_secrets()` 丢弃全部凭据后重新解锁，主机和 known_hosts 保留。
 - 删除主机时级联删除它的凭据；修改主机的认证方式类别时删除原有凭据。
 - 主机的跳板机必须是另一台已存在的主机，跳板链无环且不超过 `MAX_JUMP_DEPTH`；删除跳板机后依赖它的主机改为直连。
@@ -17,6 +18,7 @@
 - 快捷指令（snippets）不含秘密，名称为空时取命令第一行。
 - `preferences()` 在没有记录时返回默认值；`set_preferences()` 校验后整体替换。`device_preferences()` / `set_device_preferences()` 读写只属于本机的 `DevicePrefs`，单独存放，不随同步离开设备。偏好设置不含秘密，锁定时可读写。
 - `DevicePrefs.external_editor` 是本机编辑器配置，旧记录缺字段时默认禁用；只校验绝对路径语法和参数边界，不查询磁盘。完整限制及参数传递契约见 [本机编辑器偏好](../../docs/subsystems/vault.md#本机编辑器偏好)。
+- `DevicePrefs.vault_biometric` 保存本机的 Vault 生物识别偏好，默认为 `false`，不参与同步。宿主在重封装成功后保存新偏好。
 - Tailscale 主机路由随主机同步。设备连接设置和加密设备身份存于本机，使用 `tailscale_state` 系列方法访问身份。
 - 数据库结构版本记录在 `PRAGMA user_version` 中，只增不减，旧版本按顺序迁移；打开更新版本写入的数据库时返回 `FutureSchema`。
 

@@ -32,6 +32,12 @@ pub trait KeyCache: Send + Sync {
 
 数据库的 `meta.key_check` 保存一段用当前密钥加密的固定明文，用于判断钥匙串中的密钥是否匹配。
 
+### 主密钥重封装
+
+`Vault::rewrap_master_key(switch_policy, rollback_policy)` 持有数据库锁，通过 `Interaction::Allowed` 读取并核对现有主密钥，再调用 `switch_policy` 配置下一次 `KeyCache::store` 使用的保护策略。Vault 直接将主密钥交给 `KeyCache`，回调无需接收密钥字节。已有 `key_check` 时保留原值，凭据继续用原密钥解密。首次设置沿用缓存中的密钥，缓存为空时生成新密钥，并在缓存写入成功后记录 `key_check`。成功时返回 `Unlocked`。
+
+已有 `key_check` 时，主密钥缺失或不匹配会使 Vault 清除内存中的加密器并进入 `KeyLost`。读取缓存报错时，已解锁的 Vault 保持可用，锁定的 Vault 更新锁定原因。两种情况下均不切换策略。`switch_policy` 报错时应保留旧策略。策略切换成功后，如果写入缓存或 `key_check` 失败，Vault 调用 `rollback_policy` 恢复旧策略下的访问，再返回原始错误。
+
 ## 加密
 
 - 加密密钥 = HKDF-SHA256(设备主密钥, info = `rove/vault/enc/v1`)。
@@ -91,6 +97,7 @@ pub trait KeyCache: Send + Sync {
 | `DevicePrefs.download_dir` | 空（系统下载目录） | 去除首尾空白，空或绝对路径，最多 1024 字节 |
 | `DevicePrefs.max_transfers` | 3 | 1–8 |
 | `DevicePrefs.external_editor` | `program`、`args` 均空（禁用） | 只属于本机；见[本机编辑器偏好](#本机编辑器偏好) |
+| `DevicePrefs.vault_biometric` | `false`，旧记录缺字段时同样为 `false` | 本机生物识别偏好，不参与同步。宿主通过 `Vault::rewrap_master_key` 切换保护策略 |
 | `ai.mode` | `ask_by_risk` | `ask_by_risk` / `ask_all` / `auto`，新 AI 会话的默认审批模式 |
 | `ai.max_steps` | 40 | 1–200，内置助手一个回合内最多的模型请求次数 |
 | `ai.request_timeout_secs` | 180 | 30–1800，内置助手等待回复开始及两段之间的最长时间 |

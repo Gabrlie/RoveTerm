@@ -670,6 +670,9 @@ pub struct DevicePrefs {
     pub max_transfers: u8,
     /// External editor program and arguments on this device only.
     pub external_editor: ExternalEditorPrefs,
+    /// Whether this device uses biometric protection for the vault master key.
+    #[serde(default)]
+    pub vault_biometric: bool,
     /// The older single agent setting; moved into `agents` when read, never written.
     #[serde(skip_serializing)]
     pub agent: AgentPrefs,
@@ -801,6 +804,7 @@ impl Default for DevicePrefs {
             download_dir: String::new(),
             max_transfers: 3,
             external_editor: ExternalEditorPrefs::default(),
+            vault_biometric: false,
             agent: AgentPrefs::default(),
             agents: AgentsPrefs::default(),
             connection: ConnectionPrefs::default(),
@@ -1581,6 +1585,21 @@ mod tests {
             ..DevicePrefs::default()
         };
         assert!(too_many.validate().is_err());
+    }
+
+    #[test]
+    fn vault_biometric_defaults_to_false_and_round_trips() {
+        let legacy: DevicePrefs = serde_json::from_str(r#"{"max_transfers":4}"#).unwrap();
+        assert!(!legacy.vault_biometric);
+        assert!(!DevicePrefs::default().vault_biometric);
+
+        let enabled = DevicePrefs {
+            vault_biometric: true,
+            ..DevicePrefs::default()
+        };
+        let json = serde_json::to_string(&enabled).unwrap();
+        let decoded: DevicePrefs = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.validate().unwrap(), enabled);
     }
 
     #[test]

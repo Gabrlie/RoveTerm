@@ -191,8 +191,73 @@ impl Vault {
         self.unlock_with(Interaction::Allowed)
     }
 
+    /// Re-stores the device master key under a different key-cache policy and unlocks the vault.
+    /// The current policy may prompt for authorization. Existing credentials keep the same key.
+    ///
+    /// `switch_policy` configures the cache for the next write and leaves the old policy in place
+    /// on error. `rollback_policy` restores access under the old policy if storing the key or
+    /// recording its check fails. Both callbacks run while the vault holds its database lock.
+    pub fn rewrap_master_key<F, R>(
+        &self,
+        switch_policy: F,
+        rollback_policy: R,
+    ) -> Result<LockState, VaultError>
+    where
+        F: FnOnce() -> Result<(), VaultError>,
+        R: FnOnce(),
+    {
+        let conn = self.conn.lock();
+        let key_check = read_key_check(&conn)?;
+        let loaded = match self.key_cache.load(Interaction::Allowed) {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                if let LockState::Locked { reason } = &mut *self.state.write() {
+                    *reason = lock_reason(&error);
+                }
+                return Err(error.into());
+            }
+        };
+        let key = match loaded {
+            Some(key) => key,
+            None if key_check.is_some() => return Err(self.mark_key_lost()),
+            None => MasterKey::generate()?,
+        };
+        let cipher = FieldCipher::derive(&key);
+        if let Some(check) = &key_check
+            && !matches_key_check(&cipher, check)
+        {
+            return Err(self.mark_key_lost());
+        }
+
+        switch_policy()?;
+        if let Err(error) = self.key_cache.store(&key) {
+            rollback_policy();
+            return Err(error.into());
+        }
+        if key_check.is_none()
+            && let Err(error) = write_key_check(&conn, &cipher)
+        {
+            rollback_policy();
+            return Err(error);
+        }
+
+        *self.cipher.write() = Some(cipher);
+        *self.state.write() = LockState::Unlocked;
+        Ok(LockState::Unlocked)
+    }
+
+    fn mark_key_lost(&self) -> VaultError {
+        let mut cipher = self.cipher.write();
+        *cipher = None;
+        *self.state.write() = LockState::Locked {
+            reason: LockReason::KeyLost,
+        };
+        VaultError::Locked("device key lost".into())
+    }
+
     fn unlock_with(&self, interaction: Interaction) -> LockState {
-        let state = match self.load_or_create_key(interaction) {
+        let conn = self.conn.lock();
+        let state = match self.load_or_create_key(&conn, interaction) {
             Ok(cipher) => {
                 *self.cipher.write() = Some(cipher);
                 LockState::Unlocked
@@ -204,50 +269,38 @@ impl Vault {
         state
     }
 
-    fn load_or_create_key(&self, interaction: Interaction) -> Result<FieldCipher, LockReason> {
-        let key_check: Option<Vec<u8>> = self
-            .conn
-            .lock()
-            .query_row(
-                "SELECT value FROM meta WHERE key = 'key_check'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
+    fn load_or_create_key(
+        &self,
+        conn: &Connection,
+        interaction: Interaction,
+    ) -> Result<FieldCipher, LockReason> {
+        let key_check = read_key_check(conn)
             .map_err(|error| LockReason::StoreUnavailable(error.to_string()))?;
-        let loaded = self.key_cache.load(interaction).map_err(lock_reason)?;
-        match (loaded, key_check) {
-            (Some(key), Some(check)) => {
-                let cipher = FieldCipher::derive(&key);
-                match cipher.open(&check, KEY_CHECK_AAD) {
-                    Ok(plain) if plain.as_slice() == KEY_CHECK_PLAINTEXT => Ok(cipher),
-                    _ => Err(LockReason::KeyLost),
-                }
-            }
-            (None, Some(_)) => Err(LockReason::KeyLost),
-            (Some(key), None) => self.adopt_key(&key),
-            (None, None) => {
+        let key = match self
+            .key_cache
+            .load(interaction)
+            .map_err(|error| lock_reason(&error))?
+        {
+            Some(key) => key,
+            None if key_check.is_some() => return Err(LockReason::KeyLost),
+            None => {
                 let key = MasterKey::generate()
                     .map_err(|error| LockReason::StoreUnavailable(error.to_string()))?;
-                self.key_cache.store(&key).map_err(lock_reason)?;
-                self.adopt_key(&key)
+                self.key_cache
+                    .store(&key)
+                    .map_err(|error| lock_reason(&error))?;
+                key
             }
+        };
+        let cipher = FieldCipher::derive(&key);
+        if let Some(check) = key_check {
+            if !matches_key_check(&cipher, &check) {
+                return Err(LockReason::KeyLost);
+            }
+        } else {
+            write_key_check(conn, &cipher)
+                .map_err(|error| LockReason::StoreUnavailable(error.to_string()))?;
         }
-    }
-
-    /// Records the key check for a key that has no secrets encrypted under it yet.
-    fn adopt_key(&self, key: &MasterKey) -> Result<FieldCipher, LockReason> {
-        let cipher = FieldCipher::derive(key);
-        let check = cipher
-            .seal(KEY_CHECK_PLAINTEXT, KEY_CHECK_AAD)
-            .map_err(|error| LockReason::StoreUnavailable(error.to_string()))?;
-        self.conn
-            .lock()
-            .execute(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES ('key_check', ?1)",
-                params![check],
-            )
-            .map_err(|error| LockReason::StoreUnavailable(error.to_string()))?;
         Ok(cipher)
     }
 
@@ -257,9 +310,9 @@ impl Vault {
         tracing::warn!(
             "resetting the vault: stored passwords, private keys, AI keys and Tailscale state are removed"
         );
+        let conn = self.conn.lock();
         let key = MasterKey::generate()?;
         self.key_cache.store(&key)?;
-        let conn = self.conn.lock();
         let tx = conn.unchecked_transaction()?;
         tx.execute("DELETE FROM host_secrets", [])?;
         tx.execute("UPDATE ssh_keys SET sealed = NULL", [])?;
@@ -274,9 +327,11 @@ impl Vault {
         }
         tx.execute("DELETE FROM meta WHERE key = 'key_check'", [])?;
         tx.commit()?;
-        let cipher = self
-            .adopt_key(&key)
-            .map_err(|reason| VaultError::Locked(format!("{reason:?}")))?;
+        let cipher = FieldCipher::derive(&key);
+        write_key_check(&conn, &cipher).map_err(|error| {
+            let reason = LockReason::StoreUnavailable(error.to_string());
+            VaultError::Locked(format!("{reason:?}"))
+        })?;
         *self.cipher.write() = Some(cipher);
         *self.state.write() = LockState::Unlocked;
         Ok(LockState::Unlocked)
@@ -747,11 +802,35 @@ fn secret_aad(id: HostId) -> Vec<u8> {
     format!("rove/vault/host-secret/v1:{id}").into_bytes()
 }
 
-fn lock_reason(error: KeyCacheError) -> LockReason {
+fn read_key_check(conn: &Connection) -> rusqlite::Result<Option<Vec<u8>>> {
+    conn.query_row(
+        "SELECT value FROM meta WHERE key = 'key_check'",
+        [],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+fn matches_key_check(cipher: &FieldCipher, check: &[u8]) -> bool {
+    cipher
+        .open(check, KEY_CHECK_AAD)
+        .is_ok_and(|plain| plain.as_slice() == KEY_CHECK_PLAINTEXT)
+}
+
+fn write_key_check(conn: &Connection, cipher: &FieldCipher) -> Result<(), VaultError> {
+    let check = cipher.seal(KEY_CHECK_PLAINTEXT, KEY_CHECK_AAD)?;
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('key_check', ?1)",
+        params![check],
+    )?;
+    Ok(())
+}
+
+fn lock_reason(error: &KeyCacheError) -> LockReason {
     match error {
         KeyCacheError::Denied => LockReason::Denied,
         KeyCacheError::Malformed => LockReason::KeyLost,
-        KeyCacheError::Unavailable(message) => LockReason::StoreUnavailable(message),
+        KeyCacheError::Unavailable(message) => LockReason::StoreUnavailable(message.clone()),
     }
 }
 
@@ -965,4 +1044,281 @@ fn migrate(conn: &Connection) -> Result<(), VaultError> {
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use parking_lot::Mutex;
+
+    use super::*;
+
+    #[derive(Default)]
+    struct BiometricKeyCache {
+        biometric: AtomicBool,
+        deny_load: AtomicBool,
+        fail_biometric_store: AtomicBool,
+        stored: Mutex<Option<(MasterKey, bool)>>,
+    }
+
+    impl BiometricKeyCache {
+        fn enable_biometrics(&self) -> Result<(), VaultError> {
+            self.biometric.store(true, Ordering::Relaxed);
+            Ok(())
+        }
+
+        fn disable_biometrics(&self) {
+            self.biometric.store(false, Ordering::Relaxed);
+        }
+    }
+
+    impl KeyCache for BiometricKeyCache {
+        fn load(&self, interaction: Interaction) -> Result<Option<MasterKey>, KeyCacheError> {
+            let biometric = self.biometric.load(Ordering::Relaxed);
+            if self.deny_load.load(Ordering::Relaxed)
+                || (biometric && interaction == Interaction::Silent)
+            {
+                return Err(KeyCacheError::Denied);
+            }
+            Ok(self
+                .stored
+                .lock()
+                .as_ref()
+                .filter(|(_, protected)| *protected == biometric)
+                .map(|(key, _)| key.clone()))
+        }
+
+        fn store(&self, key: &MasterKey) -> Result<(), KeyCacheError> {
+            let biometric = self.biometric.load(Ordering::Relaxed);
+            if biometric && self.fail_biometric_store.load(Ordering::Relaxed) {
+                return Err(KeyCacheError::Unavailable("test store failure".into()));
+            }
+            *self.stored.lock() = Some((key.clone(), biometric));
+            Ok(())
+        }
+    }
+
+    fn save_host_secret(vault: &Vault) -> (HostId, Secret) {
+        let host = vault
+            .create_host(HostDraft {
+                name: String::new(),
+                group: None,
+                hostname: "host.example".into(),
+                port: 22,
+                username: "test".into(),
+                auth: AuthMethod::Password,
+                route: HostRoute::Direct,
+                tags: Vec::new(),
+            })
+            .unwrap();
+        let secret = Secret::Password {
+            password: Zeroizing::new(uuid::Uuid::now_v7().to_string()),
+        };
+        vault.set_secret(host.id, &secret).unwrap();
+        (host.id, secret)
+    }
+
+    #[test]
+    fn biometric_cache_requires_interaction_to_unlock_saved_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.db");
+        let cache = Arc::new(BiometricKeyCache::default());
+        cache.enable_biometrics().unwrap();
+        let (id, secret) = {
+            let vault = Vault::open(&path, cache.clone()).unwrap();
+            assert_eq!(vault.unlock(), LockState::Unlocked);
+            save_host_secret(&vault)
+        };
+
+        let vault = Vault::open(&path, cache).unwrap();
+        let denied = LockState::Locked {
+            reason: LockReason::Denied,
+        };
+        assert_eq!(vault.try_unlock(), denied);
+        assert_eq!(vault.lock_state(), denied);
+        assert!(matches!(vault.secret(id), Err(VaultError::Locked(_))));
+        assert_eq!(vault.unlock(), LockState::Unlocked);
+        assert_eq!(vault.secret(id).unwrap(), Some(secret));
+    }
+
+    #[test]
+    fn rewrap_keeps_saved_secrets_under_biometric_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.db");
+        let cache = Arc::new(BiometricKeyCache::default());
+        let vault = Vault::open(&path, cache.clone()).unwrap();
+        assert_eq!(vault.try_unlock(), LockState::Unlocked);
+        let (id, secret) = save_host_secret(&vault);
+        let check = read_key_check(&vault.conn.lock()).unwrap().unwrap();
+
+        let state = vault
+            .rewrap_master_key(
+                || cache.enable_biometrics(),
+                || panic!("successful rewrap must not roll back"),
+            )
+            .unwrap();
+        assert_eq!(state, LockState::Unlocked);
+        assert_eq!(vault.secret(id).unwrap().as_ref(), Some(&secret));
+        assert_eq!(read_key_check(&vault.conn.lock()).unwrap(), Some(check));
+
+        drop(vault);
+        let vault = Vault::open(&path, cache).unwrap();
+        assert_eq!(
+            vault.try_unlock(),
+            LockState::Locked {
+                reason: LockReason::Denied,
+            }
+        );
+        assert_eq!(vault.unlock(), LockState::Unlocked);
+        assert_eq!(vault.secret(id).unwrap(), Some(secret));
+    }
+
+    #[test]
+    fn rewrap_rolls_back_after_key_store_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.db");
+        let cache = Arc::new(BiometricKeyCache::default());
+        let vault = Vault::open(&path, cache.clone()).unwrap();
+        assert_eq!(vault.try_unlock(), LockState::Unlocked);
+        let (id, secret) = save_host_secret(&vault);
+        let check = read_key_check(&vault.conn.lock()).unwrap().unwrap();
+        cache.fail_biometric_store.store(true, Ordering::Relaxed);
+
+        let result =
+            vault.rewrap_master_key(|| cache.enable_biometrics(), || cache.disable_biometrics());
+        assert!(matches!(
+            result,
+            Err(VaultError::KeyCache(KeyCacheError::Unavailable(_)))
+        ));
+        assert!(!cache.biometric.load(Ordering::Relaxed));
+        assert_eq!(vault.lock_state(), LockState::Unlocked);
+        assert_eq!(vault.secret(id).unwrap().as_ref(), Some(&secret));
+        assert_eq!(read_key_check(&vault.conn.lock()).unwrap(), Some(check));
+
+        drop(vault);
+        let vault = Vault::open(&path, cache).unwrap();
+        assert_eq!(vault.try_unlock(), LockState::Unlocked);
+        assert_eq!(vault.secret(id).unwrap(), Some(secret));
+    }
+
+    #[test]
+    fn rewrap_adopts_a_generated_or_cached_key_in_a_new_vault() {
+        for initial_key in [None, Some(MasterKey::generate().unwrap())] {
+            let cache = Arc::new(BiometricKeyCache::default());
+            if let Some(key) = &initial_key {
+                cache.store(key).unwrap();
+            }
+            let vault = Vault::open_in_memory(cache.clone()).unwrap();
+            assert!(read_key_check(&vault.conn.lock()).unwrap().is_none());
+
+            let state = vault
+                .rewrap_master_key(
+                    || cache.enable_biometrics(),
+                    || panic!("successful rewrap must not roll back"),
+                )
+                .unwrap();
+            assert_eq!(state, LockState::Unlocked);
+            assert_eq!(vault.lock_state(), LockState::Unlocked);
+            let key = cache.load(Interaction::Allowed).unwrap().unwrap();
+            let check = read_key_check(&vault.conn.lock()).unwrap().unwrap();
+            assert!(matches_key_check(&FieldCipher::derive(&key), &check));
+            if let Some(initial_key) = &initial_key {
+                assert!(matches_key_check(&FieldCipher::derive(initial_key), &check));
+            }
+            assert!(matches!(
+                cache.load(Interaction::Silent),
+                Err(KeyCacheError::Denied)
+            ));
+        }
+    }
+
+    #[test]
+    fn rewrap_rolls_back_when_writing_key_check_fails() {
+        let cache = Arc::new(BiometricKeyCache::default());
+        let vault = Vault::open_in_memory(cache.clone()).unwrap();
+        vault
+            .conn
+            .lock()
+            .execute_batch(
+                "CREATE TRIGGER reject_key_check BEFORE INSERT ON meta
+                 WHEN NEW.key = 'key_check' BEGIN
+                    SELECT RAISE(ABORT, 'test key check write failure');
+                 END;",
+            )
+            .unwrap();
+
+        let result =
+            vault.rewrap_master_key(|| cache.enable_biometrics(), || cache.disable_biometrics());
+        assert!(matches!(result, Err(VaultError::Database(_))));
+        assert!(!cache.biometric.load(Ordering::Relaxed));
+        assert!(read_key_check(&vault.conn.lock()).unwrap().is_none());
+        assert_eq!(
+            vault.lock_state(),
+            LockState::Locked {
+                reason: LockReason::NotAttempted,
+            }
+        );
+        assert!(vault.cipher.read().is_none());
+    }
+
+    #[test]
+    fn rewrap_load_error_updates_only_the_locked_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.db");
+        let cache = Arc::new(BiometricKeyCache::default());
+        let unlocked = Vault::open(&path, cache.clone()).unwrap();
+        assert_eq!(unlocked.try_unlock(), LockState::Unlocked);
+        let (id, secret) = save_host_secret(&unlocked);
+        let locked = Vault::open(&path, cache.clone()).unwrap();
+        cache.deny_load.store(true, Ordering::Relaxed);
+
+        for vault in [&locked, &unlocked] {
+            let result = vault.rewrap_master_key(
+                || panic!("load failure must not switch policy"),
+                || panic!("load failure must not roll back policy"),
+            );
+            assert!(matches!(
+                result,
+                Err(VaultError::KeyCache(KeyCacheError::Denied))
+            ));
+        }
+        assert_eq!(
+            locked.lock_state(),
+            LockState::Locked {
+                reason: LockReason::Denied,
+            }
+        );
+        assert_eq!(unlocked.lock_state(), LockState::Unlocked);
+        assert_eq!(unlocked.secret(id).unwrap(), Some(secret));
+    }
+
+    #[test]
+    fn rewrap_rejects_a_missing_or_mismatched_key() {
+        for replacement in [None, Some(MasterKey::generate().unwrap())] {
+            let cache = Arc::new(BiometricKeyCache::default());
+            let vault = Vault::open_in_memory(cache.clone()).unwrap();
+            assert_eq!(vault.try_unlock(), LockState::Unlocked);
+            let (id, _) = save_host_secret(&vault);
+            let check = read_key_check(&vault.conn.lock()).unwrap().unwrap();
+            *cache.stored.lock() = replacement.map(|key| (key, false));
+
+            let result = vault.rewrap_master_key(
+                || panic!("a lost key must not switch policy"),
+                || panic!("a lost key must not roll back policy"),
+            );
+            assert!(
+                matches!(result, Err(VaultError::Locked(reason)) if reason == "device key lost")
+            );
+            assert_eq!(
+                vault.lock_state(),
+                LockState::Locked {
+                    reason: LockReason::KeyLost,
+                }
+            );
+            assert_eq!(read_key_check(&vault.conn.lock()).unwrap(), Some(check));
+            assert!(vault.has_secret(id).unwrap());
+            assert!(matches!(vault.secret(id), Err(VaultError::Locked(_))));
+        }
+    }
 }
