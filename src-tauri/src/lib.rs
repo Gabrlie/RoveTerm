@@ -7,6 +7,7 @@ mod external_edit;
 #[cfg(any(mobile, test))]
 mod keepalive;
 mod logs;
+mod mobile_files;
 #[cfg(any(mobile, test))]
 mod mobile_key_cache;
 mod ops_runtime;
@@ -66,6 +67,12 @@ fn data_dir(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
 
 fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = data_dir(app)?;
+    let staging_root = app.path().app_cache_dir();
+    #[cfg(desktop)]
+    let staging_root = staging_root.unwrap_or_else(|_| std::env::temp_dir());
+    #[cfg(mobile)]
+    let staging_root = staging_root?;
+    let staging_root = staging_root.join("rove-staged");
     // Without log files the app still runs; the terminal keeps the log.
     if let Err(error) = logs::start_files(&data_dir) {
         tracing::warn!(%error, "log files unavailable");
@@ -95,7 +102,8 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = Runtime::boot_in(ctx.clone(), &profile, &profile::catalog())?;
     tracing::info!(profile = profile.name(), data_dir = %data_dir.display(), "runtime booted");
 
-    let state = AppState::new(runtime, &data_dir).map_err(|error| error.message)?;
+    let state = AppState::new(runtime, &data_dir, staging_root).map_err(|error| error.message)?;
+    state.mobile_files.sweep_all();
     match state.vault.device_preferences() {
         Ok(device) => {
             #[cfg(mobile)]
@@ -117,6 +125,7 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     let handle = app.handle().clone();
+    let staged_uploads = mobile_files::watch_transfers(ctx.events(), state.mobile_files.clone());
     let transfers = ctx.events().on::<rove_fs::TransferUpdate>(move |update| {
         if let Err(error) = handle.emit(TRANSFER_EVENT, update) {
             tracing::error!(%error, "forwarding transfer update failed");
@@ -130,6 +139,7 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     });
     if let Some((_, disposers)) = state.lifetime.lock().expect("lifetime lock").as_mut() {
         disposers.push(forward);
+        disposers.push(staged_uploads);
         disposers.push(transfers);
         disposers.push(forwards);
         disposers.extend(host_services);
@@ -224,6 +234,7 @@ pub(crate) async fn shutdown_async(app: &tauri::AppHandle) {
     }
     state.external_edits.shutdown().await;
     state.transfers.cancel_all();
+    state.mobile_files.sweep_all();
     state.forwards.stop_all();
     // The config file names a port that is about to close.
     state.fs_sessions.clear();
@@ -351,6 +362,8 @@ pub fn run() {
             commands::external_edit::external_edit_reveal,
             commands::external_edit::external_edit_set_dirty,
             commands::external_edit::external_edit_shutdown,
+            commands::sftp::transfer_prepare_upload,
+            commands::sftp::transfer_discard_staged,
             commands::sftp::transfer_upload,
             commands::sftp::transfer_download,
             commands::sftp::transfer_local_clashes,
@@ -358,6 +371,7 @@ pub fn run() {
             commands::sftp::transfer_cancel,
             commands::sftp::transfer_clear,
             commands::sftp::transfer_reveal,
+            commands::sftp::transfer_export,
             commands::app::log_write,
             commands::autostart::autostart_get,
             commands::autostart::autostart_set,

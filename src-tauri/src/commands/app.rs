@@ -65,18 +65,48 @@ pub fn log_write(level: String, message: String) -> Result<(), CommandError> {
     Ok(())
 }
 
-/// Opens the folder of the log files in the system file manager.
-#[tauri::command]
-pub fn logs_reveal() -> Result<(), CommandError> {
+/// Opens the log folder on desktop or shares the latest log on mobile.
+#[tauri::command(async)]
+pub fn logs_reveal(app: tauri::AppHandle) -> Result<(), CommandError> {
     let dir = crate::logs::dir()
         .ok_or_else(|| CommandError::new("app.io", "the log is not written to files"))?;
-    // Where no file manager opens, the path still lets the user find the files.
-    crate::reveal::reveal(dir).map_err(|error| {
-        CommandError::new(
-            "app.io",
-            format!("{error}; the log files are in {}", dir.display()),
-        )
-    })
+    #[cfg(desktop)]
+    {
+        let _ = app;
+        crate::reveal::reveal(dir).map_err(|error| {
+            CommandError::new(
+                "app.io",
+                format!("{error}. The log files are in {}", dir.display()),
+            )
+        })
+    }
+    #[cfg(mobile)]
+    {
+        crate::logs::flush();
+        let newest = crate::logs::list_files_in(dir)
+            .map_err(|error| CommandError::new("app.io", error.to_string()))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| CommandError::new("app.io", "no log files found"))?;
+        let path = dir.join(&newest.name);
+        let path = path.as_path();
+        #[cfg(target_os = "android")]
+        let staged = {
+            use tauri::Manager;
+
+            app.state::<crate::state::AppState>()
+                .mobile_files
+                .stage_share_source(path, dir)
+                .map_err(|error| CommandError::new("app.io", error.message))?
+        };
+        #[cfg(target_os = "android")]
+        let path = staged.path();
+        crate::reveal::share_or_reveal(&app, path, Some(&newest.name))
+            .map_err(|error| CommandError::new("app.io", error))?;
+        #[cfg(target_os = "android")]
+        staged.keep_until_sweep();
+        Ok(())
+    }
 }
 
 /// Lists available daily log files in the application log directory, newest first.

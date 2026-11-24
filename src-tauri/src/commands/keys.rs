@@ -174,15 +174,48 @@ pub struct LoadedKey {
     pub public_key: Option<String>,
     /// File name without `.pub`, as a suggested key name.
     pub name: String,
-    /// The private key file, or the chosen file when no private key was found.
+    /// The local key path or the native picker's file name.
     pub path: String,
 }
 
-/// Reads the key file at `path`, decides whether it is a private or a public key, and also reads
-/// the other half next to it (`<path>.pub` for a private key, `<path>` without `.pub` for a
-/// public one). Fails with `key.unrecognized` when the file is neither.
+/// Reads a selected key. For local paths, also looks for its companion file.
 #[tauri::command]
-pub async fn key_load_file(path: String) -> Result<LoadedKey, CommandError> {
+pub async fn key_load_file(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<LoadedKey, CommandError> {
+    if !crate::mobile_files::is_stage_uri(&path) {
+        return load_local_key_file(path).await;
+    }
+    let staged = state
+        .mobile_files
+        .stage_temp_async(&app, &path, Some(MAX_KEY_TEXT as u64))
+        .await?;
+    let mut text = Zeroizing::new(read_key_text(staged.path()).await?);
+    let staged_name = staged.name().to_owned();
+    drop(staged);
+    match classify(&text) {
+        Some(KeyFileKind::Private) => Ok(LoadedKey {
+            private_key: Some(std::mem::take(&mut *text)),
+            public_key: None,
+            name: staged_name.clone(),
+            path: staged_name,
+        }),
+        Some(KeyFileKind::Public) => Ok(LoadedKey {
+            private_key: None,
+            public_key: Some(text.trim().to_owned()),
+            name: staged_name
+                .strip_suffix(".pub")
+                .unwrap_or(&staged_name)
+                .to_owned(),
+            path: staged_name,
+        }),
+        None => Err(unrecognized_key()),
+    }
+}
+
+async fn load_local_key_file(path: String) -> Result<LoadedKey, CommandError> {
     let chosen = Path::new(&path);
     if !chosen.is_absolute() {
         return Err(CommandError::new("input.invalid", "not an absolute path"));
@@ -226,11 +259,15 @@ pub async fn key_load_file(path: String) -> Result<LoadedKey, CommandError> {
                 name: stem,
             })
         }
-        None => Err(CommandError::new(
-            "key.unrecognized",
-            "the file is neither a private nor a public SSH key",
-        )),
+        None => Err(unrecognized_key()),
     }
+}
+
+fn unrecognized_key() -> CommandError {
+    CommandError::new(
+        "key.unrecognized",
+        "the file is neither a private nor a public SSH key",
+    )
 }
 
 /// Default key files in `~/.ssh` that exist on this device, most preferred first. The app is not
@@ -404,7 +441,7 @@ mod tests {
         .unwrap();
         std::fs::write(dir.path().join("id_test.pub"), "ssh-ed25519 AAAA me@host\n").unwrap();
 
-        let from_private = key_load_file(private.to_string_lossy().into_owned())
+        let from_private = load_local_key_file(private.to_string_lossy().into_owned())
             .await
             .unwrap();
         assert!(from_private.private_key.is_some());
@@ -414,7 +451,7 @@ mod tests {
         );
         assert_eq!(from_private.name, "id_test");
 
-        let from_public = key_load_file(
+        let from_public = load_local_key_file(
             dir.path()
                 .join("id_test.pub")
                 .to_string_lossy()
@@ -428,10 +465,10 @@ mod tests {
 
         let other = dir.path().join("notes.txt");
         std::fs::write(&other, "hello").unwrap();
-        let error = key_load_file(other.to_string_lossy().into_owned())
+        let error = load_local_key_file(other.to_string_lossy().into_owned())
             .await
             .unwrap_err();
         assert_eq!(error.code, "key.unrecognized");
-        assert!(key_load_file("relative/id_rsa".into()).await.is_err());
+        assert!(load_local_key_file("relative/id_rsa".into()).await.is_err());
     }
 }

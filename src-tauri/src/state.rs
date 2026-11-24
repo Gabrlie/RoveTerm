@@ -1,14 +1,14 @@
 //! Services shared by every command.
 
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use rove_fs::{FsSessions, LocalFs, TransferQueue};
 use rove_kernel::{Disposer, Runtime};
 use rove_session::SessionManager;
 use rove_ssh::{Forwards, HostKeyPrompts, SshConnector};
 use rove_vault::{LockState, Vault};
-use std::sync::Mutex;
 
 use crate::error::CommandError;
 
@@ -32,6 +32,8 @@ pub struct AppState {
     pub external_edit_dirty: AtomicBool,
     /// File transfer queue.
     pub transfers: Arc<TransferQueue>,
+    /// Native document copies and their upload lifetimes.
+    pub mobile_files: Arc<crate::mobile_files::MobileFiles>,
     /// This device's file system.
     pub local_fs: Arc<LocalFs>,
     /// Durable event journal.
@@ -65,7 +67,11 @@ pub struct AppState {
 
 impl AppState {
     /// Resolves services from the booted runtime.
-    pub fn new(runtime: Runtime, data_dir: &std::path::Path) -> Result<Self, CommandError> {
+    pub fn new(
+        runtime: Runtime,
+        data_dir: &Path,
+        staging_root: PathBuf,
+    ) -> Result<Self, CommandError> {
         let ctx = runtime.context().clone();
         let journal = ctx.require::<dyn rove_journal::JournalStore>()?;
         let external_edits = crate::external_edit::ExternalEditManager::new(data_dir);
@@ -81,6 +87,7 @@ impl AppState {
             external_edits,
             external_edit_dirty: AtomicBool::new(false),
             transfers: ctx.require::<TransferQueue>()?,
+            mobile_files: Arc::new(crate::mobile_files::MobileFiles::new(staging_root)),
             local_fs: ctx.require::<LocalFs>()?,
             journal,
             ops: ctx.require::<rove_ops::OpsSupervisor>()?,

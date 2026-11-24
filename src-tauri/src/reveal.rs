@@ -39,6 +39,29 @@ pub fn reveal(path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(desktop)]
+pub fn share_or_reveal(
+    _app: &tauri::AppHandle,
+    path: &std::path::Path,
+    _title: Option<&str>,
+) -> Result<(), String> {
+    reveal(path).map_err(|error| error.to_string())
+}
+
+#[cfg(mobile)]
+pub fn share_or_reveal(
+    app: &tauri::AppHandle,
+    path: &std::path::Path,
+    title: Option<&str>,
+) -> Result<(), String> {
+    use tauri_plugin_rove_mobile::MobileBridgeExt;
+
+    let path = path.to_str().ok_or("file path must be UTF-8")?;
+    app.rove_mobile()
+        .share_file(path, title)
+        .map_err(|error| error.to_string())
+}
+
 /// Opens a validated HTTP or HTTPS URL in the system browser.
 #[cfg(desktop)]
 pub fn open_url(_app: &tauri::AppHandle, url: &str) -> Result<(), String> {
