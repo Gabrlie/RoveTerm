@@ -4,6 +4,8 @@ mod commands;
 mod connect;
 mod error;
 mod external_edit;
+#[cfg(any(mobile, test))]
+mod keepalive;
 mod logs;
 #[cfg(any(mobile, test))]
 mod mobile_key_cache;
@@ -151,6 +153,17 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(desktop)]
     if let Some((_, disposers)) = state.lifetime.lock().expect("lifetime lock").as_mut() {
         disposers.push(tailnet_events);
+    }
+    #[cfg(mobile)]
+    {
+        let keepalive = keepalive::start(app.handle().clone(), &ctx, &state);
+        let mut lifetime = state
+            .lifetime
+            .lock()
+            .map_err(|_| std::io::Error::other("application lifetime lock poisoned"))?;
+        if let Some((_, disposers)) = lifetime.as_mut() {
+            disposers.extend(keepalive);
+        }
     }
     let vault = state.vault.clone();
     #[cfg(mobile)]
@@ -354,6 +367,7 @@ pub fn run() {
             commands::app::logs_list,
             commands::app::logs_read,
             commands::app::mobile_insets,
+            commands::app::mobile_back_default,
             commands::schedules::schedule_status,
             commands::schedules::schedule_claim,
             commands::schedules::schedule_device,

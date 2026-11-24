@@ -1,4 +1,4 @@
-//! Application log and window insets commands.
+//! Application log and mobile window commands.
 
 use crate::error::CommandError;
 use tauri_plugin_rove_mobile::{MobileBridgeExt, MobileInsets};
@@ -8,6 +8,14 @@ use tauri_plugin_rove_mobile::{MobileBridgeExt, MobileInsets};
 pub fn mobile_insets(app: tauri::AppHandle) -> Result<MobileInsets, CommandError> {
     app.rove_mobile()
         .get_insets()
+        .map_err(|error| CommandError::new("app.io", error.to_string()))
+}
+
+/// Performs the native back action when the app has no screen to pop.
+#[tauri::command]
+pub fn mobile_back_default(app: tauri::AppHandle) -> Result<(), CommandError> {
+    app.rove_mobile()
+        .move_to_background()
         .map_err(|error| CommandError::new("app.io", error.to_string()))
 }
 
