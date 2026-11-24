@@ -1,13 +1,7 @@
-<script lang="ts" module>
-  /** Open dialogs, innermost last; Escape closes only the innermost one. */
-  const stack: symbol[] = [];
-</script>
-
 <script lang="ts">
-  // Modal sheet. The first focusable field receives focus so typing works without a click; closing
-  // returns focus to whatever had it before (usually a terminal). Escape is handled on the window,
-  // so it still works after the focused element inside the dialog disappears.
   import { onMount, type Snippet } from 'svelte';
+  import { viewport } from '../layout/viewport.svelte';
+  import { handleBack, pushBackHandler } from './backStack';
 
   interface Props {
     title: string;
@@ -15,19 +9,23 @@
     children: Snippet;
     actions?: Snippet;
     width?: number;
+    autofocus?: boolean;
   }
 
-  let { title, onclose, children, actions, width = 440 }: Props = $props();
+  let { title, onclose, children, actions, width = 440, autofocus }: Props = $props();
   let panel: HTMLDivElement;
-  const id = Symbol('dialog');
 
   onMount(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    stack.push(id);
-    const first = panel.querySelector<HTMLElement>('input, select, textarea, button:not(.close)');
-    first?.focus();
+    const disposeBack = pushBackHandler(() => onclose());
+    if (autofocus ?? !viewport.coarse) {
+      const first = panel.querySelector<HTMLElement>('input, select, textarea, button:not(.close)');
+      first?.focus();
+    } else {
+      panel.focus();
+    }
     return () => {
-      stack.splice(stack.indexOf(id), 1);
+      disposeBack();
       if (previous?.isConnected) previous.focus();
     };
   });
@@ -39,16 +37,14 @@
   }
 
   function onKeydown(event: KeyboardEvent): void {
-    if (event.key !== 'Escape' || stack.at(-1) !== id || event.defaultPrevented) return;
-    event.preventDefault();
-    onclose();
+    if (event.key === 'Escape' && !event.defaultPrevented && handleBack()) event.preventDefault();
   }
 </script>
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="backdrop" role="presentation" use:portal>
-  <div class="dialog" role="dialog" aria-modal="true" aria-label={title} tabindex="-1" style:width="min({width}px, 92vw)" bind:this={panel}>
+<div class="backdrop" class:compact={viewport.compact} role="presentation" use:portal>
+  <div class="dialog" role="dialog" aria-modal="true" aria-label={title} tabindex="-1" style:--dialog-width="{width}px" bind:this={panel}>
     <header>{title}</header>
     <div class="body">{@render children()}</div>
     {#if actions}
@@ -69,6 +65,7 @@
     animation: fade var(--dur) var(--ease-out);
   }
   .dialog {
+    width: min(var(--dialog-width), 92vw);
     max-height: 88vh;
     display: flex;
     flex-direction: column;
@@ -78,6 +75,16 @@
     box-shadow: var(--glass-edge), var(--shadow-lg);
     outline: none;
     animation: rise var(--dur-slow) var(--ease);
+  }
+  .backdrop.compact {
+    align-items: end;
+    padding: max(var(--safe-top), 12px) var(--safe-right) max(var(--safe-bottom), var(--ime-bottom)) var(--safe-left);
+  }
+  .compact .dialog {
+    width: 100%;
+    max-width: 100%;
+    max-height: calc(100dvh - max(var(--safe-top), 12px) - max(var(--safe-bottom), var(--ime-bottom)));
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   }
   @keyframes fade {
     from {
@@ -128,6 +135,11 @@
   }
   .dialog :global(.row > label) {
     flex: 1;
+  }
+  @media (max-width: 520px) {
+    .dialog :global(.row) {
+      flex-wrap: wrap;
+    }
   }
   .dialog :global(.check) {
     flex-direction: row;

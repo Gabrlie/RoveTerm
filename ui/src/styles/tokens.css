@@ -123,6 +123,14 @@
   color-scheme: light;
 }
 
+@media (pointer: coarse) {
+  :root {
+    --control-height: calc(38px * var(--ui-scale));
+    --row-height: calc(44px * var(--ui-scale));
+    --touch-target: 44px;
+  }
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     --window: #1b1b1d;

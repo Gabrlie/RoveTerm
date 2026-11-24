@@ -1,4 +1,4 @@
-import { isMobile } from '../platform.ts';
+import { detectPlatform } from '../platform.ts';
 
 export interface MobileInsets {
   top: number;
@@ -11,6 +11,16 @@ export interface MobileInsets {
 interface InsetsBridge {
   fetch?: () => Promise<MobileInsets>;
   listen?: (cb: (insets: MobileInsets) => void) => Promise<() => void>;
+  onChange?: (insets: MobileInsets) => void;
+}
+
+const imeListeners = new Set<(value: number) => void>();
+let currentImeBottom = 0;
+
+export function subscribeImeBottom(listener: (value: number) => void): () => void {
+  imeListeners.add(listener);
+  listener(currentImeBottom);
+  return () => { imeListeners.delete(listener); };
 }
 
 function insetPixels(value: number | undefined): number {
@@ -41,7 +51,7 @@ export function applyInsets(insets: MobileInsets, root = document.documentElemen
 
 /** Uses CSS safe areas until the bridge supplies native insets in CSS pixels. */
 export function initInsets(bridge?: InsetsBridge): () => void {
-  if (!isMobile || typeof window === 'undefined') return () => {};
+  if (typeof window === 'undefined' || !detectPlatform(window.navigator).isMobile) return () => {};
 
   const root = document.documentElement;
   const viewport = window.visualViewport;
@@ -54,8 +64,12 @@ export function initInsets(bridge?: InsetsBridge): () => void {
     const imeBottom = native?.imeBottom || (viewport
       ? computeVisualViewportIme(window.innerHeight, viewport.height, viewport.offsetTop)
       : 0);
-    if (native) applyInsets({ ...native, imeBottom }, root);
+    const effectiveInsets = { ...(native ?? sanitizeInsets(undefined)), imeBottom };
+    if (native) applyInsets(effectiveInsets, root);
     else root.style.setProperty('--ime-bottom', `${imeBottom}px`);
+    currentImeBottom = imeBottom;
+    for (const listener of imeListeners) listener(imeBottom);
+    bridge?.onChange?.(effectiveInsets);
   }
 
   function updateNative(insets: MobileInsets): void {

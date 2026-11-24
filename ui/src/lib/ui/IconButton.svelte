@@ -52,6 +52,18 @@
     width: 24px;
     height: 24px;
   }
+  @media (pointer: coarse) {
+    .icon-button {
+      width: calc(28px * var(--ui-scale));
+      height: calc(28px * var(--ui-scale));
+      min-width: 36px;
+      min-height: 36px;
+    }
+    .icon-button.small {
+      min-width: 34px;
+      min-height: 34px;
+    }
+  }
   .icon-button:hover:not(:disabled) {
     background: var(--fill-hover);
     color: var(--fg);
