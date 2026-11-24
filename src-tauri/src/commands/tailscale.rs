@@ -146,7 +146,10 @@ pub async fn tailscale_logout(state: State<'_, AppState>) -> Result<TailnetStatu
 
 #[cfg(desktop)]
 #[tauri::command]
-pub fn tailscale_open_auth_url(state: State<'_, AppState>) -> Result<(), CommandError> {
+pub fn tailscale_open_auth_url(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
     let status = state.tailscale.status();
     let url = status
         .auth_url
@@ -157,7 +160,7 @@ pub fn tailscale_open_auth_url(state: State<'_, AppState>) -> Result<(), Command
         .ok_or_else(|| {
             CommandError::new("tailscale.no_auth_url", "there is no active browser login")
         })?;
-    crate::reveal::open_url(url.as_str())
+    crate::reveal::open_url(&app, url.as_str())
         .map_err(|_| CommandError::new("app.io", "could not open the system browser"))
 }
 

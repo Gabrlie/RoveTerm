@@ -555,25 +555,19 @@ pub async fn update_restart(app: AppHandle) -> Result<(), CommandError> {
 
 /// Opens an allowlisted RoveTerm GitHub Releases URL in the system browser.
 #[tauri::command]
-pub fn update_open_release(url: String) -> Result<(), CommandError> {
+pub async fn update_open_release(app: AppHandle, url: String) -> Result<(), CommandError> {
     if !is_allowed_release_url(&url) {
         return Err(CommandError::new(
             "input.invalid",
             "release URL must point to RoveTerm's GitHub Releases",
         ));
     }
-    #[cfg(desktop)]
-    {
-        crate::reveal::open_url(url.trim())
-            .map_err(|error| CommandError::new("app.io", error.to_string()))
-    }
-    #[cfg(mobile)]
-    {
-        Err(CommandError::new(
-            "update.unsupported",
-            "opening external links is not wired on this platform yet",
-        ))
-    }
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::reveal::open_url(&app, url.trim())
+            .map_err(|error| CommandError::new("app.io", error))
+    })
+    .await
+    .map_err(|error| CommandError::new("app.task", error.to_string()))?
 }
 
 #[cfg(test)]

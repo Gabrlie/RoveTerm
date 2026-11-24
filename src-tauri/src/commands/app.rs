@@ -1,6 +1,15 @@
-//! The application's own commands: its log.
+//! Application log and window insets commands.
 
 use crate::error::CommandError;
+use tauri_plugin_rove_mobile::{MobileBridgeExt, MobileInsets};
+
+/// Returns the latest system bar and keyboard insets.
+#[tauri::command]
+pub fn mobile_insets(app: tauri::AppHandle) -> Result<MobileInsets, CommandError> {
+    app.rove_mobile()
+        .get_insets()
+        .map_err(|error| CommandError::new("app.io", error.to_string()))
+}
 
 /// Longest message taken from the interface.
 const MAX_MESSAGE: usize = 4096;

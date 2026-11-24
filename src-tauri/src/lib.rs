@@ -5,10 +5,13 @@ mod connect;
 mod error;
 mod external_edit;
 mod logs;
+#[cfg(any(mobile, test))]
+mod mobile_key_cache;
 mod ops_runtime;
 mod ops_tools;
 mod profile;
 mod reveal;
+#[cfg(desktop)]
 mod schedule;
 mod sink;
 mod state;
@@ -73,12 +76,14 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg_attr(not(any(mobile, debug_assertions)), allow(unused_mut))]
     let mut host_services = Vec::new();
     #[cfg(mobile)]
-    host_services.push(
-        ctx.provide::<dyn rove_vault::KeyCache>(std::sync::Arc::new(mobile::UnavailableKeyCache))?,
-    );
+    let mobile_cache = std::sync::Arc::new(mobile_key_cache::MobileKeyCache::native(
+        app.handle().clone(),
+    ));
+    #[cfg(mobile)]
+    host_services.push(ctx.provide::<dyn rove_vault::KeyCache>(mobile_cache.clone())?);
     // Development builds can run without a platform key store (CI, headless X servers); the key
     // lives only in memory, so stored secrets become unreadable after a restart.
-    #[cfg(debug_assertions)]
+    #[cfg(all(desktop, debug_assertions))]
     if std::env::var_os("ROVETERM_DEV_MEMORY_KEYCACHE").is_some() {
         tracing::warn!("using the in-memory development key cache");
         host_services.push(ctx.provide::<dyn rove_vault::KeyCache>(std::sync::Arc::new(
@@ -91,6 +96,8 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState::new(runtime, &data_dir).map_err(|error| error.message)?;
     match state.vault.device_preferences() {
         Ok(device) => {
+            #[cfg(mobile)]
+            mobile_cache.set_biometric(device.vault_biometric);
             commands::prefs::apply_connection(&state, &device.connection);
             #[cfg(desktop)]
             state.tailscale.set_configured(device.tailscale.configured);
@@ -146,6 +153,8 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         disposers.push(tailnet_events);
     }
     let vault = state.vault.clone();
+    #[cfg(mobile)]
+    app.manage(mobile_cache);
     app.manage(state);
     let handle = app.handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -164,8 +173,11 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     tauri::async_runtime::spawn(async move {
         commands::external::restore(&handle).await;
     });
-    schedule::start(app.handle());
-    commands::autostart::apply(app);
+    #[cfg(desktop)]
+    {
+        schedule::start(app.handle());
+        commands::autostart::apply(app);
+    }
     Ok(())
 }
 
@@ -264,6 +276,7 @@ pub fn run() {
     rove_http::install_crypto_provider();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_rove_mobile::init())
         .plugin(tauri_plugin_clipboard_manager::init());
     #[cfg(desktop)]
     let builder = builder
@@ -271,7 +284,8 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![commands::autostart::MINIMIZED_ARG]),
         ))
-        .plugin(tauri_plugin_updater::Builder::new().build());
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .on_menu_event(commands::menu::on_event);
     let app = builder
         .setup(boot)
         .on_window_event(|window, event| {
@@ -282,7 +296,6 @@ pub fn run() {
                 api.prevent_close();
             }
         })
-        .on_menu_event(commands::menu::on_event)
         .invoke_handler(tauri::generate_handler![
             commands::session::session_open_local,
             commands::tailscale::tailscale_status,
@@ -340,6 +353,7 @@ pub fn run() {
             commands::app::logs_reveal,
             commands::app::logs_list,
             commands::app::logs_read,
+            commands::app::mobile_insets,
             commands::schedules::schedule_status,
             commands::schedules::schedule_claim,
             commands::schedules::schedule_device,
@@ -362,6 +376,8 @@ pub fn run() {
             commands::vault::vault_status,
             commands::vault::vault_unlock,
             commands::vault::vault_reset_secrets,
+            commands::vault::vault_biometric_status,
+            commands::vault::vault_set_biometric,
             commands::keys::key_list,
             commands::keys::key_generate,
             commands::keys::key_import,
@@ -431,28 +447,6 @@ pub fn run() {
         RunEvent::Exit => shutdown(handle),
         _ => {}
     });
-}
-
-#[cfg(mobile)]
-mod mobile {
-    use rove_vault::{Interaction, KeyCache, KeyCacheError, MasterKey};
-
-    /// Placeholder until a Keystore-backed cache exists: secrets stay locked on mobile.
-    pub struct UnavailableKeyCache;
-
-    impl KeyCache for UnavailableKeyCache {
-        fn load(&self, _interaction: Interaction) -> Result<Option<MasterKey>, KeyCacheError> {
-            Err(KeyCacheError::Unavailable(
-                "no key store on this platform yet".into(),
-            ))
-        }
-
-        fn store(&self, _key: &MasterKey) -> Result<(), KeyCacheError> {
-            Err(KeyCacheError::Unavailable(
-                "no key store on this platform yet".into(),
-            ))
-        }
-    }
 }
 
 #[cfg(test)]

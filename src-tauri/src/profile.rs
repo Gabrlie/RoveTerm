@@ -28,7 +28,7 @@ pub fn catalog() -> Vec<Arc<dyn Plugin>> {
 }
 
 /// Keychain service name; development builds never touch the production key.
-fn keychain_service() -> &'static str {
+pub(crate) fn keychain_service() -> &'static str {
     if cfg!(debug_assertions) {
         "dev.roveterm.app.dev"
     } else {

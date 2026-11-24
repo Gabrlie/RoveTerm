@@ -33,6 +33,7 @@ uuid.workspace = true
 tokio-util.workspace = true
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2.8.4"
+tauri-plugin-rove-mobile = { path = "plugins/tauri-plugin-rove-mobile" }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "process", "rt", "sync"] }
 toml.workspace = true

@@ -1,6 +1,6 @@
 //! User preferences and the fonts they can refer to.
 
-use rove_vault::{DevicePrefs, Preferences};
+use rove_vault::{DevicePrefs, Preferences, Vault, VaultError};
 use tauri::State;
 
 use crate::error::CommandError;
@@ -46,12 +46,22 @@ pub async fn device_prefs_set(
     state: State<'_, AppState>,
     prefs: DevicePrefs,
 ) -> Result<DevicePrefs, CommandError> {
-    let prefs = state.vault.set_device_preferences(prefs)?;
+    let prefs = save_device_preferences(&state.vault, prefs)?;
     state
         .transfers
         .set_max_concurrent(usize::from(prefs.max_transfers));
     apply_connection(&state, &prefs.connection);
     Ok(prefs)
+}
+
+fn save_device_preferences(
+    vault: &Vault,
+    mut prefs: DevicePrefs,
+) -> Result<DevicePrefs, VaultError> {
+    vault.transaction(|| {
+        prefs.vault_biometric = vault.device_preferences()?.vault_biometric;
+        vault.set_device_preferences(prefs)
+    })
 }
 
 /// Applies the connection settings to connections opened from now on.
@@ -89,4 +99,38 @@ fn monospace_families() -> Vec<String> {
 #[cfg(mobile)]
 fn monospace_families() -> Vec<String> {
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rove_vault::MemoryKeyCache;
+    use std::sync::Arc;
+
+    #[test]
+    fn generic_save_preserves_the_stored_vault_biometric_policy() {
+        let vault = Vault::open_in_memory(Arc::new(MemoryKeyCache::default())).unwrap();
+        for enabled in [false, true] {
+            vault
+                .set_device_preferences(DevicePrefs {
+                    vault_biometric: enabled,
+                    ..DevicePrefs::default()
+                })
+                .unwrap();
+            let saved = save_device_preferences(
+                &vault,
+                DevicePrefs {
+                    vault_biometric: !enabled,
+                    max_transfers: 2,
+                    ..DevicePrefs::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(saved.vault_biometric, enabled);
+            assert_eq!(saved.max_transfers, 2);
+            let stored = vault.device_preferences().unwrap();
+            assert_eq!(stored.vault_biometric, enabled);
+            assert_eq!(stored.max_transfers, 2);
+        }
+    }
 }

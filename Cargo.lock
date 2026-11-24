@@ -5224,6 +5224,7 @@ dependencies = [
  "tauri-plugin-autostart",
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-dialog",
+ "tauri-plugin-rove-mobile",
  "tauri-plugin-updater",
  "tempfile",
  "thiserror 2.0.21",
@@ -6744,6 +6745,20 @@ dependencies = [
  "thiserror 2.0.21",
  "toml 1.2.1+spec-1.1.0",
  "url",
+]
+
+[[package]]
+name = "tauri-plugin-rove-mobile"
+version = "0.2.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.21",
+ "tracing",
+ "url",
+ "zeroize",
 ]
 
 [[package]]

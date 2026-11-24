@@ -1,4 +1,4 @@
-//! Showing a file or folder in the system file manager.
+//! Opening files and URLs in system applications.
 
 /// Opens the file manager: a folder is opened, a file is shown selected in its folder where the
 /// platform can (Linux opens its folder).
@@ -39,9 +39,9 @@ pub fn reveal(path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Opens a validated HTTP or HTTPS URL in the desktop system browser.
+/// Opens a validated HTTP or HTTPS URL in the system browser.
 #[cfg(desktop)]
-pub fn open_url(url: &str) -> std::io::Result<()> {
+pub fn open_url(_app: &tauri::AppHandle, url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let mut command = std::process::Command::new("open");
     #[cfg(target_os = "windows")]
@@ -53,7 +53,19 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let mut command = std::process::Command::new("xdg-open");
 
-    let mut child = command.arg(url).spawn()?;
+    let mut child = command
+        .arg(url)
+        .spawn()
+        .map_err(|error| error.to_string())?;
     std::thread::spawn(move || child.wait());
     Ok(())
+}
+
+#[cfg(mobile)]
+pub fn open_url(app: &tauri::AppHandle, url: &str) -> Result<(), String> {
+    use tauri_plugin_rove_mobile::MobileBridgeExt;
+
+    app.rove_mobile()
+        .open_external_url(url)
+        .map_err(|error| error.to_string())
 }

@@ -1,11 +1,14 @@
 //! The fleet lead's scheduled tasks: how each last ran, and running one now.
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::State;
 
 use crate::error::CommandError;
+#[cfg(desktop)]
 use crate::schedule;
 use crate::state::AppState;
+#[cfg(desktop)]
+use tauri::AppHandle;
 
 /// How a scheduled task last ran.
 #[derive(Debug, Serialize)]
@@ -23,6 +26,7 @@ pub struct ScheduleStatus {
 }
 
 /// How each scheduled task last ran.
+#[cfg(desktop)]
 #[tauri::command]
 pub fn schedule_status(state: State<'_, AppState>) -> Vec<ScheduleStatus> {
     schedule::handled(state.journal.as_ref())
@@ -38,11 +42,18 @@ pub fn schedule_status(state: State<'_, AppState>) -> Vec<ScheduleStatus> {
         .collect()
 }
 
+#[cfg(mobile)]
+#[tauri::command]
+pub fn schedule_status() -> Vec<ScheduleStatus> {
+    Vec::new()
+}
+
 #[tauri::command]
 pub fn schedule_device(state: State<'_, AppState>) -> Result<uuid::Uuid, CommandError> {
     Ok(state.vault.installation_id()?)
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn schedule_claim(state: State<'_, AppState>, id: String) -> Result<(), CommandError> {
     let _lock = state.sync_lock.lock().await;
@@ -72,7 +83,14 @@ pub async fn schedule_claim(state: State<'_, AppState>, id: String) -> Result<()
     Ok(())
 }
 
+#[cfg(mobile)]
+#[tauri::command]
+pub fn schedule_claim() -> Result<(), CommandError> {
+    Err(unsupported())
+}
+
 /// Runs scheduled task `id` now, whatever its time; `false` when it is running already.
+#[cfg(desktop)]
 #[tauri::command]
 pub fn schedule_run_now(
     app: AppHandle,
@@ -97,4 +115,18 @@ pub fn schedule_run_now(
         task,
         jiff::Timestamp::now().as_millisecond(),
     ))
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub fn schedule_run_now() -> Result<bool, CommandError> {
+    Err(unsupported())
+}
+
+#[cfg(mobile)]
+fn unsupported() -> CommandError {
+    CommandError::new(
+        "schedule.unsupported",
+        "scheduled tasks are available on desktop",
+    )
 }
