@@ -6,6 +6,7 @@ use tauri::AppHandle;
 use crate::error::CommandError;
 
 /// The argument a login start passes: the window starts minimized.
+#[cfg(desktop)]
 pub const MINIMIZED_ARG: &str = "--minimized";
 
 /// Whether RoveTerm starts when the user logs in; `None` where it cannot (mobile).
@@ -52,13 +53,18 @@ pub fn autostart_set(app: AppHandle, enabled: bool) -> Result<(), CommandError> 
 
 /// Minimizes the main window when this start came from logging in.
 pub fn apply(app: &tauri::App) {
-    use tauri::Manager;
-    if !std::env::args().any(|arg| arg == MINIMIZED_ARG) {
-        return;
-    }
-    if let Some(window) = app.get_webview_window("main")
-        && let Err(error) = window.minimize()
+    #[cfg(desktop)]
     {
-        tracing::warn!(%error, "minimizing the window at login failed");
+        use tauri::Manager;
+        if !std::env::args().any(|arg| arg == MINIMIZED_ARG) {
+            return;
+        }
+        if let Some(window) = app.get_webview_window("main")
+            && let Err(error) = window.minimize()
+        {
+            tracing::warn!(%error, "minimizing the window at login failed");
+        }
     }
+    #[cfg(not(desktop))]
+    let _ = app;
 }

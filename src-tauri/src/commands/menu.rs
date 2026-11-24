@@ -3,13 +3,17 @@
 //! the action id. Other platforms draw their menus in the WebView, so the command only validates.
 
 use serde::Deserialize;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
+#[cfg(desktop)]
+use tauri::Emitter;
 
 use crate::error::CommandError;
 
 /// Event carrying the action id of a chosen menu item.
+#[cfg(desktop)]
 pub const MENU_ACTION_EVENT: &str = "menu-action";
 /// Prefix of menu item ids that name an action.
+#[cfg(desktop)]
 const ACTION_PREFIX: &str = "action:";
 
 const MAX_MENUS: usize = 12;
@@ -234,6 +238,7 @@ fn install(app: &AppHandle, menus: &[MenuSpec], labels: &NativeLabels) -> tauri:
 }
 
 /// Forwards a chosen action item to the WebView.
+#[cfg(desktop)]
 pub fn on_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     if let Some(id) = event.id().0.strip_prefix(ACTION_PREFIX)
         && let Err(error) = app.emit(MENU_ACTION_EVENT, id)

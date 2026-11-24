@@ -98,6 +98,6 @@
         <small>{t(!status.supported ? 'error.vault.biometric_unsupported' : !status.enrolled ? 'error.vault.biometric_unavailable' : 'vault.biometricHint')}</small>
       {/if}
     </span>
-    <Switch bind:checked label={t('vault.biometric')} disabled={busy || !status?.supported || !status?.enrolled} onchange={(enabled) => void setBiometric(enabled)} />
+    <Switch bind:checked label={t('vault.biometric')} disabled={busy || !status?.supported || (!status?.enrolled && !status?.enabled)} onchange={(enabled) => void setBiometric(enabled)} />
   </div>
 </div>
