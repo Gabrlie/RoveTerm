@@ -2,7 +2,8 @@
 
 use std::time::Duration;
 
-use rove_ssh::{ServerStats, sample_server};
+use rove_session::ServerStats;
+use rove_ssh::sample_server;
 use tauri::State;
 
 use crate::connect::{host_target, quick_target};
@@ -21,25 +22,63 @@ pub struct ServerStatsResponse {
     pub tailscale_path: Option<rove_tailscale::TailnetPath>,
 }
 
-/// Samples the server of a saved host (`host_id`) or quick-connect `address` over its live shared
-/// connection. Never connects or asks for credentials: fails with `ssh.not_connected` when no
-/// terminal or file panel holds a connection.
+#[derive(Debug, PartialEq, Eq)]
+enum MonitorTarget<'a> {
+    SavedHost(&'a str),
+    Address(&'a str),
+    Local,
+}
+
+fn monitor_target<'a>(
+    host_id: Option<&'a str>,
+    address: Option<&'a str>,
+    local: Option<bool>,
+) -> Result<MonitorTarget<'a>, CommandError> {
+    match (host_id, address, local == Some(true)) {
+        (Some(id), None, false) => Ok(MonitorTarget::SavedHost(id)),
+        (None, Some(address), false) => Ok(MonitorTarget::Address(address)),
+        (None, None, true) => Ok(MonitorTarget::Local),
+        _ => Err(CommandError::new(
+            "input.invalid",
+            "pass exactly one of host_id, address, and local",
+        )),
+    }
+}
+
+/// Samples the local desktop or an SSH host with a live shared connection.
 #[tauri::command]
 pub async fn server_stats(
     state: State<'_, AppState>,
     host_id: Option<String>,
     address: Option<String>,
+    local: Option<bool>,
 ) -> Result<ServerStatsResponse, CommandError> {
-    let (target, _host) = match (host_id, address) {
-        (Some(id), None) => {
+    let (target, _host) = match monitor_target(host_id.as_deref(), address.as_deref(), local)? {
+        MonitorTarget::SavedHost(id) => {
             let host = state.vault.host(id.parse()?)?;
             (host_target(&state, &host)?, Some(host))
         }
-        (None, Some(address)) => (quick_target(&address)?, None),
-        _ => {
+        MonitorTarget::Address(address) => (quick_target(address)?, None),
+        MonitorTarget::Local => {
+            #[cfg(desktop)]
+            {
+                let monitor = state.local_monitor.clone();
+                let stats = tokio::time::timeout(
+                    SAMPLE_TIMEOUT,
+                    tauri::async_runtime::spawn_blocking(move || monitor.sample()),
+                )
+                .await
+                .map_err(|_| CommandError::new("monitor.timeout", "local status timed out"))?
+                .map_err(|error| CommandError::new("app.task", error.to_string()))?;
+                return Ok(ServerStatsResponse {
+                    stats,
+                    tailscale_path: None,
+                });
+            }
+            #[cfg(mobile)]
             return Err(CommandError::new(
-                "input.invalid",
-                "pass exactly one of host_id and address",
+                "monitor.unsupported",
+                "local status is available on desktop",
             ));
         }
     };
@@ -102,4 +141,44 @@ pub async fn host_detect_os(
         .map_err(|_| CommandError::new("ssh.timeout", "system detection timed out"))??;
     state.vault.set_host_os(id, os.clone())?;
     Ok(os)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selects_each_status_target() {
+        assert_eq!(
+            monitor_target(Some("saved"), None, None).unwrap(),
+            MonitorTarget::SavedHost("saved")
+        );
+        assert_eq!(
+            monitor_target(None, Some("user@example.com"), Some(false)).unwrap(),
+            MonitorTarget::Address("user@example.com")
+        );
+        assert_eq!(
+            monitor_target(None, None, Some(true)).unwrap(),
+            MonitorTarget::Local
+        );
+    }
+
+    #[test]
+    fn rejects_missing_and_conflicting_status_targets() {
+        for (host, address, local) in [
+            (None, None, None),
+            (None, None, Some(false)),
+            (Some("saved"), Some("address"), None),
+            (Some("saved"), None, Some(true)),
+            (None, Some("address"), Some(true)),
+            (Some("saved"), Some("address"), Some(true)),
+        ] {
+            let error = monitor_target(host, address, local).unwrap_err();
+            assert_eq!(error.code, "input.invalid");
+            assert_eq!(
+                error.message,
+                "pass exactly one of host_id, address, and local"
+            );
+        }
+    }
 }

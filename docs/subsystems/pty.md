@@ -25,3 +25,7 @@ shell 的环境变量额外设置 `TERM=xterm-256color`、`COLORTERM=truecolor`�
 4. reader 读到文件结束后，取得 waiter 的退出状态并发送 `Exit`。
 
 父进程在启动 shell 后立即关闭 slave 端，否则 reader 永远读不到文件结束。
+
+## 本机状态
+
+`LocalMonitor::sample` 在 macOS、Linux 和 Windows 上采集 CPU、内存、系统、磁盘和网卡数据，并返回与 SSH 主机共用的 `ServerStats`。首次采样建立 CPU 基线，后续采样用累加计数表示 CPU 使用率。完成采样后的 250 毫秒内复用该样本。本机样本的链路延迟列表为空。

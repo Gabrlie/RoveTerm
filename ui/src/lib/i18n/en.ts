@@ -26,6 +26,7 @@ export const en = {
   'error.ssh.key': 'Private key could not be read',
   'error.ssh.passphrase_required': 'Private key passphrase required',
   'error.ssh.proxy': 'Proxy could not connect',
+  'error.monitor.timeout': 'Reading local status timed out',
   'connect.connecting': 'Connecting to {address}…',
   'connect.connectingVia': 'Connecting to {address} via {via}…',
   'connect.handshake': 'Connected, starting the SSH handshake',

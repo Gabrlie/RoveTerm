@@ -1,6 +1,6 @@
 # rove-pty
 
-本地 PTY 终端 Provider，提供 `LocalTerminals` 服务。参考见 [docs/subsystems/pty.md](../../docs/subsystems/pty.md)。
+提供本地 PTY 终端服务 `LocalTerminals` 和桌面主机状态服务 `LocalMonitor`。参考见 [docs/subsystems/pty.md](../../docs/subsystems/pty.md)。
 
 ## 契约
 

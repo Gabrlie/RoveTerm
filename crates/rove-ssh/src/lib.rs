@@ -37,9 +37,10 @@ pub use keys::{
     KeyInfo, KeyType, authorize_command, check_public_key, describe as describe_key,
     generate as generate_key,
 };
-pub use monitor::{CpuTimes, Disk, NetInterface, ServerStats, sample as sample_server};
+pub use monitor::sample as sample_server;
 pub use os::probe as probe_os;
 pub use progress::{AuthKind, ConnectStep, Progress};
+pub use rove_session::{CpuTimes, Disk, NetInterface, ServerStats};
 pub use sftp::SftpFs;
 pub use sshconfig::{
     ImportReport, QuickTarget, SshConfigHost, import_ssh_config, parse_quick_connect,

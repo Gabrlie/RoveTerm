@@ -4,6 +4,7 @@
 //! [`OpenedTerminal`](rove_session::OpenedTerminal) for the session manager. See
 //! `docs/subsystems/pty.md`.
 
+mod monitor;
 mod shell;
 mod terminal;
 
@@ -12,6 +13,7 @@ use std::sync::Arc;
 use rove_kernel::{Context, Disposer, KernelError, Plugin, PluginConfig};
 use serde::Deserialize;
 
+pub use monitor::LocalMonitor;
 pub use shell::{LaunchSpec, LocalRequest, default_shell};
 pub use terminal::LocalTerminals;
 
@@ -25,7 +27,7 @@ pub struct PtyConfig {
     pub args: Vec<String>,
 }
 
-/// Registers [`LocalTerminals`] on the context.
+/// Registers [`LocalTerminals`] and [`LocalMonitor`] on the context.
 pub struct PtyPlugin;
 
 impl Plugin for PtyPlugin {
@@ -38,6 +40,9 @@ impl Plugin for PtyPlugin {
         if config.shell.as_deref().is_some_and(str::is_empty) {
             return Err(KernelError::plugin("pty", "shell must not be empty"));
         }
-        Ok(vec![ctx.provide(Arc::new(LocalTerminals::new(config)))?])
+        Ok(vec![
+            ctx.provide(Arc::new(LocalTerminals::new(config)))?,
+            ctx.provide(Arc::new(LocalMonitor::new()))?,
+        ])
     }
 }

@@ -5,6 +5,7 @@
 //! See `docs/subsystems/session.md`.
 
 mod manager;
+mod monitor;
 mod replay;
 mod types;
 
@@ -17,6 +18,7 @@ pub use manager::{
     OpenedTerminal, OutputChunk, OutputSink, SessionConfig, SessionExited, SessionManager,
     SessionOpened, SessionSummary,
 };
+pub use monitor::{CpuTimes, Disk, NetInterface, ServerStats};
 pub use types::{ExitStatus, SessionId, SessionInfo, SessionKind, TermSize, TerminalOutput};
 
 /// Control handle of one terminal, implemented by each provider.

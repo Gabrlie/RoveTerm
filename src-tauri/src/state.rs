@@ -46,6 +46,9 @@ pub struct AppState {
     /// Local PTY provider.
     #[cfg(desktop)]
     pub pty: Arc<rove_pty::LocalTerminals>,
+    /// Local host status provider.
+    #[cfg(desktop)]
+    pub local_monitor: Arc<rove_pty::LocalMonitor>,
     /// Running AI sessions.
     pub ai: crate::commands::ai::AiSessions,
     /// Access for agents the user runs on their own, while it is on.
@@ -89,6 +92,8 @@ impl AppState {
             external: crate::commands::external::ExternalAccess::new(data_dir),
             #[cfg(desktop)]
             pty: ctx.require::<rove_pty::LocalTerminals>()?,
+            #[cfg(desktop)]
+            local_monitor: ctx.require::<rove_pty::LocalMonitor>()?,
             sync_lock: tokio::sync::Mutex::new(()),
             updates: crate::commands::update::UpdateState::default(),
             shutting_down: AtomicBool::new(false),

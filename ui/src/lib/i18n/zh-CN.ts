@@ -107,6 +107,7 @@ export const zhCN: Messages = {
   'error.ssh.key': '私钥无法读取',
   'error.ssh.passphrase_required': '需要私钥密码',
   'error.ssh.proxy': '代理无法建立连接',
+  'error.monitor.timeout': '读取本机状态超时',
   'connect.connecting': '正在连接 {address}…',
   'connect.connectingVia': '正在经 {via} 连接 {address}…',
   'connect.handshake': '已建立连接，开始 SSH 握手',
