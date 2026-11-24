@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import { editors } from './lib/files/editors.svelte';
   import DraftsHost from './lib/files/DraftsHost.svelte';
   import ExternalEdits from './lib/files/ExternalEdits.svelte';
@@ -356,7 +357,14 @@
 
   async function importSshConfig(): Promise<void> {
     try {
-      const report = await hosts.importSshConfig();
+      let report;
+      if (isMobile) {
+        const picked = await openDialog({ directory: false, multiple: false, title: t('host.chooseSshConfig') });
+        if (typeof picked !== 'string') return;
+        report = await hosts.importSshConfig(picked);
+      } else {
+        report = await hosts.importSshConfig();
+      }
       showNotice(t('host.imported', { created: report.created.length, skipped: report.skipped.length }));
     } catch (error) {
       showNotice(errorText(error), 'error');

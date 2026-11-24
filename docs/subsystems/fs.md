@@ -30,6 +30,8 @@ enqueue(TransferRequest) → TransferId，状态 queued
 
 传输持有源和目标的 `Arc<dyn FileSystem>`，所以关闭 SFTP 面板不会中断正在进行的传输；SFTP 会话在最后一个持有者释放后才关闭它的 channel。
 
+移动端上传先把系统文件选择器提供的文件复制到 `<app_cache_dir>/rove-staged`，再将暂存路径交给 `TransferQueue`。最终 `TransferUpdate` 触发暂存清理，入队前取消可显式丢弃暂存文件。应用启动和退出时清理暂存目录。
+
 ## 路径
 
 远程路径一律按 POSIX 处理（`posix_join`、`posix_parent`）。本地路径由 `LocalFs` 按平台语法拼接。从 IPC 传入的单个文件名先经 `validate_name` 校验，拒绝空名、`.`、`..` 和包含分隔符的名称。传输时源目录列出的每个名称同样校验，并确认拼接后的路径恰好位于目标目录之下（例如拒绝 Windows 的 `C:x`），不符合时整个传输失败，不会写到目标目录之外。
@@ -41,12 +43,17 @@ enqueue(TransferRequest) → TransferId，状态 queued
 | 命令 | 作用 |
 |---|---|
 | `sftp_open(host_id \| address, password, remember)` | 获取连接的方式和打开终端相同，返回 `{ id, label, home }` |
-| `transfer_local_clashes` | 返回待下载的名称中哪些已存在于本地目标目录（默认为系统下载目录），界面据此询问替换、保留两者或跳过 |
+| `transfer_local_clashes` | 检查待下载的名称是否已在目标目录中存在，界面据此询问替换、保留两者或跳过 |
 | `sftp_list` / `sftp_mkdir` / `sftp_rename` / `sftp_remove` | 浏览和修改远程目录；`sftp_remove` 递归删除，拒绝删除根目录 |
 | `sftp_close` | 从 `FsSessions` 移除；进行中的传输不受影响 |
-| `transfer_upload` / `transfer_download` | 为每个路径排一个传输；下载目录缺省时使用系统下载目录，系统未配置时退回已存在的 `~/Downloads` |
+| `transfer_prepare_upload` | 暂存移动端选择的文件，返回可用于上传的本地路径 |
+| `transfer_discard_staged` | 丢弃尚未入队的暂存文件 |
+| `transfer_upload` / `transfer_download` | 为每个路径排一个传输 |
 | `transfer_list` / `transfer_cancel` / `transfer_clear` | 查询、取消、清除已结束的传输 |
-| `transfer_reveal(id)` | 在系统文件管理器中显示已完成的下载（macOS `open -R`、Windows `explorer /select,` 选中文件；Linux 用 `xdg-open` 打开所在文件夹）；路径取自传输本身，不接受调用方给的路径 |
+| `transfer_reveal(id)` | 显示已完成的下载。移动端打开系统分享面板。macOS 和 Windows 在文件管理器中选中文件，Linux 打开所在目录 |
+| `transfer_export(id)` | 在移动端通过系统文件选择器将已完成的下载保存到设备，保存成功返回 `true`，取消返回 `false` |
+
+下载与重名检查共用默认目录。桌面端使用系统下载目录，系统未配置时退回已存在的 `~/Downloads`。移动端在系统下载目录不可用时使用应用专用下载目录。分享和导出按传输 ID 取得下载路径。
 
 `TransferUpdate` 以 `transfer-update` 事件转发给 WebView。远程路径必须是绝对 POSIX 路径，本地路径必须是绝对路径，单次最多 1000 个路径；新文件名经 `validate_name` 校验。
 

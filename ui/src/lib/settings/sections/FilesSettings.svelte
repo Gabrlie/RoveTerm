@@ -4,6 +4,7 @@
   import Switch from '../../ui/Switch.svelte';
   import { t } from '../../i18n';
   import type { FilePrefs } from '../../ipc';
+  import { isMobile } from '../../platform';
   import { prefs } from '../prefs.svelte';
   import { editDevice, editPrefs } from '../edit.svelte';
 
@@ -49,12 +50,18 @@
   <div class="form-row">
     <span class="form-label">
       {t('settings.downloadDir')}
-      <small class="path" title={prefs.device.download_dir}>{prefs.device.download_dir || t('settings.downloadDirDefault')}</small>
+      {#if isMobile}
+        <small>{t('settings.downloadDirMobile')}</small>
+      {:else}
+        <small class="path" title={prefs.device.download_dir}>{prefs.device.download_dir || t('settings.downloadDirDefault')}</small>
+      {/if}
     </span>
-    {#if prefs.device.download_dir}
-      <button type="button" class="plain" onclick={() => void editDevice((draft) => (draft.download_dir = ''))}>{t('settings.reset')}</button>
+    {#if !isMobile}
+      {#if prefs.device.download_dir}
+        <button type="button" class="plain" onclick={() => void editDevice((draft) => (draft.download_dir = ''))}>{t('settings.reset')}</button>
+      {/if}
+      <button type="button" class="secondary" onclick={() => void chooseDownloadDir()}>{t('settings.choose')}</button>
     {/if}
-    <button type="button" class="secondary" onclick={() => void chooseDownloadDir()}>{t('settings.choose')}</button>
   </div>
   <div class="form-row">
     <span class="form-label">{t('settings.maxTransfers')}</span>

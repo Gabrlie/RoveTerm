@@ -1,5 +1,6 @@
 <script lang="ts">
   // The download center: every upload and download of this run, the ones still going first.
+  import { onMount } from 'svelte';
   import IconButton from '../ui/IconButton.svelte';
   import { t } from '../i18n';
   import TransferRow from '../files/TransferRow.svelte';
@@ -12,6 +13,10 @@
 
   const going = $derived(newestFirst(transfers.all.filter((row) => !isFinal(row))));
   const done = $derived(newestFirst(transfers.all.filter(isFinal)));
+
+  onMount(() => {
+    transfers.start().catch((error: unknown) => console.warn('transfer events unavailable', error));
+  });
 </script>
 
 <div class="center">

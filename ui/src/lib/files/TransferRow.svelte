@@ -1,16 +1,17 @@
 <script lang="ts">
-  // One transfer: direction, name and where it goes, progress, state, and what can be done
-  // with it (cancel while it runs, show a finished download in the file manager).
+  // The transfer's direction, destination, progress, and available actions.
   import Icon from '../ui/Icon.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import { errorText, t } from '../i18n';
   import type { TransferUpdate } from '../ipc';
+  import { isMobile } from '../platform';
   import { notify } from '../ui/toast.svelte';
   import { formatSize } from './format';
   import { isFinal, progress } from './transferview';
   import { transfers } from './transfers.svelte';
 
   let { row }: { row: TransferUpdate } = $props();
+  let exporting = $state(false);
 
   const failure = $derived(row.error ? errorText({ code: `fs.${row.error.kind}`, message: row.error.detail ?? '' }) : '');
   const status = $derived.by(() => {
@@ -23,6 +24,19 @@
 
   function reveal(): void {
     transfers.reveal(row.id).catch((error: unknown) => notify(errorText(error), 'error'));
+  }
+
+  async function exportFile(): Promise<void> {
+    if (exporting) return;
+    exporting = true;
+    try {
+      const saved = await transfers.exportFile(row.id);
+      if (saved) notify(t('transfer.exported'), 'info');
+    } catch (error) {
+      notify(errorText(error), 'error');
+    } finally {
+      exporting = false;
+    }
   }
 </script>
 
@@ -42,7 +56,14 @@
   {#if !isFinal(row)}
     <IconButton icon="close" small label={t('files.cancelTransfer')} onclick={() => void transfers.cancel(row.id)} />
   {:else if row.tag === 'download' && row.state === 'done' && !row.skipped}
-    <IconButton icon="folder" small label={t('transfer.reveal')} onclick={reveal} />
+    {#if isMobile}
+      <div class="actions">
+        <IconButton icon="share" small label={t('transfer.share')} onclick={reveal} />
+        <IconButton icon="folderDownload" small label={t('transfer.export')} disabled={exporting} onclick={() => void exportFile()} />
+      </div>
+    {:else}
+      <IconButton icon="folder" small label={t('transfer.reveal')} onclick={reveal} />
+    {/if}
   {/if}
 </div>
 
@@ -57,6 +78,12 @@
   }
   .row:hover {
     background: var(--fill-hover);
+  }
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex: none;
   }
   .icon {
     display: grid;

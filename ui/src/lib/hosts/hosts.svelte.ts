@@ -46,8 +46,8 @@ class HostStore {
     await this.refresh();
   }
 
-  async importSshConfig(): Promise<ImportReport> {
-    const report = await hostImportSshConfig();
+  async importSshConfig(path?: string | null): Promise<ImportReport> {
+    const report = await hostImportSshConfig(path);
     await this.refresh();
     return report;
   }

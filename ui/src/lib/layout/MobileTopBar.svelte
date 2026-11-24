@@ -46,6 +46,7 @@
   const items = $derived([
     item('host.quickConnect', 'plug', 'action.host.quickConnect'),
     item('host.new', 'add', 'action.host.new'),
+    item('host.import', 'importConfig', 'action.host.import'),
     ...(remoteTools ? [item('forward.manage', 'forwards', 'host.forwards')] : []),
     ...(!panelsSuspended ? [item('panel.snippets', 'snippets', 'action.panel.snippets')] : []),
     item('panel.transfers', 'download', 'action.panel.transfers'),

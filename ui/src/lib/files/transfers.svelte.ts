@@ -1,6 +1,6 @@
 // Every transfer the backend reports, kept current from `transfer-update` events, and whether
 // the downloads popover is open (it opens by itself when a transfer starts, as in a browser).
-import { onTransferUpdate, transferCancel, transferClear, transferList, transferReveal, type TransferId, type TransferUpdate } from '../ipc';
+import { onTransferUpdate, transferCancel, transferClear, transferExport, transferList, transferReveal, type TransferId, type TransferUpdate } from '../ipc';
 import { isFinal } from './transferview';
 
 export { isFinal };
@@ -40,9 +40,13 @@ class Transfers {
     return transferCancel(id);
   }
 
-  /** Shows finished download `id` in the system file manager. */
+  /** Shows a finished download in the desktop file manager or mobile share sheet. */
   reveal(id: TransferId): Promise<void> {
     return transferReveal(id);
+  }
+
+  exportFile(id: TransferId): Promise<boolean> {
+    return transferExport(id);
   }
 
   /** Forgets finished transfers here and in the backend. */

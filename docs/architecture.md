@@ -77,7 +77,7 @@ src-tauri 的 OutputSink → ipc::Channel → TermView.write(Uint8Array)
 
 会话活在 Rust 侧，UI 只持有 `SessionId`。WebView 重载或面板重新挂载时，通过回放缓冲恢复屏幕内容；这也是会话恢复和"AI 操作终端"的前提。
 
-移动端由 `src-tauri/src/keepalive.rs` 汇总活动状态，经 `tauri-plugin-rove-mobile` 驱动 Android 的 `SessionKeepAliveService` 和 iOS 的 `KeepAliveController`。插件将前后台切换与 Android 返回操作分别发布为 `rove-mobile://lifecycle` 和 `rove-mobile://back`。平台配置见[开发指南](development.md#android)。
+移动端由 `src-tauri/src/keepalive.rs` 汇总活动状态，经 `tauri-plugin-rove-mobile` 驱动 Android 的 `SessionKeepAliveService` 和 iOS 的 `KeepAliveController`。插件将前后台切换与 Android 返回操作分别发布为 `rove-mobile://lifecycle` 和 `rove-mobile://back`，并桥接文件暂存、原生分享和导出到设备。平台配置见[开发指南](development.md#android)。
 
 ## SSH 连接复用
 
