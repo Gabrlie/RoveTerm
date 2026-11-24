@@ -3,7 +3,11 @@ import type { PaneId } from '../layout/layout';
 
 export interface TerminalHandle {
   focus(): void;
+  blur(): void;
+  isFocused(): boolean;
+  refresh(): void;
   selection(): string;
+  send(data: string): void;
   paste(text: string): void;
 }
 

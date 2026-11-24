@@ -1,3 +1,8 @@
+<script lang="ts" module>
+  // Font size is shared by every terminal. Save successive pinches in gesture order.
+  let fontSizeSave = Promise.resolve();
+</script>
+
 <script lang="ts">
   // One xterm.js view bound to one backend session. The parent supplies `open`, which starts the
   // session with the view's initial size; output arrives on the channel passed to it.
@@ -20,13 +25,20 @@
   import { formatStep } from './connectLog';
   import { isAppShortcut } from '../actions';
   import { prefs, SYMBOL_FONT } from '../settings/prefs.svelte';
+  import { editPrefs } from '../settings/edit.svelte';
   import { readClipboard, writeClipboard } from '../ui/clipboard';
   import { osc52Text } from './osc52';
   import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
+  import { applyModifiers, type ModifierState } from './keybar';
+  import { accumulateScrollLines, alternateScrollSequence, exceededTouchSlop, LONG_PRESS_MS, pinchFontSize, touchDistance } from './touch';
 
   interface Props {
     open: (size: TermSize, onOutput: (message: OutputMessage) => void) => Promise<SessionId>;
     active?: boolean;
+    coarse?: boolean;
+    ctrl?: ModifierState;
+    alt?: ModifierState;
+    onmodifiers?: (ctrl: ModifierState, alt: ModifierState) => void;
     onsession?: (id: SessionId) => void;
     onexit?: (status: ExitStatus) => void;
     onerror?: (error: unknown) => void;
@@ -37,7 +49,10 @@
     onrestart?: () => void;
   }
 
-  let { open, active = true, onsession, onexit, onerror, ontitle, remote = false, onrestart }: Props = $props();
+  let {
+    open, active = true, coarse = false, ctrl = 'off', alt = 'off', onmodifiers,
+    onsession, onexit, onerror, ontitle, remote = false, onrestart,
+  }: Props = $props();
   /** The session ended; keys no longer go anywhere. */
   let ended = false;
 
@@ -58,9 +73,56 @@
   let bellTimer = 0;
   const media = matchMedia('(prefers-color-scheme: dark)');
 
+  type TouchGesture = {
+    kind: 'single';
+    id: number;
+    x: number;
+    y: number;
+    lastY: number;
+    remainderPx: number;
+    scrolling: boolean;
+  } | PinchGesture | { kind: 'blocked' };
+
+  interface PinchGesture {
+    kind: 'pinch';
+    first: number;
+    second: number;
+    distance: number;
+    initialSize: number;
+    size: number;
+  }
+
+  let gesture: TouchGesture | undefined;
+  let longPress = 0;
+  let screen: HTMLElement | null = null;
+  let pendingPinch: PinchGesture | undefined;
+
   /** Moves keyboard focus into the terminal. */
   export function focus(): void {
     term?.focus();
+  }
+
+  export function blur(): void {
+    term?.blur();
+  }
+
+  export function isFocused(): boolean {
+    return !!container?.contains(document.activeElement);
+  }
+
+  /** Sends an already encoded key or sequence. Enter reconnects an ended session. */
+  export function send(data: string): void {
+    if (ended) {
+      if (data === '\r') onrestart?.();
+      return;
+    }
+    if (sessionId && data) sessionWrite(sessionId, data).catch((error: unknown) => console.warn('write failed', error));
+  }
+
+  export function refresh(): void {
+    refit();
+    // Resizing the WebGL canvas clears it. Repaint without waiting for new output.
+    if (term) term.refresh(0, term.rows - 1);
   }
 
   /** Returns the current selection, or an empty string. */
@@ -97,8 +159,134 @@
 
   function onContextMenu(event: MouseEvent): void {
     event.preventDefault();
+    if (gesture || (event instanceof PointerEvent && event.pointerType === 'touch')) return;
     if (prefs.value.terminal.right_click === 'paste') pasteClipboard();
     else menu = { x: event.clientX, y: event.clientY };
+  }
+
+  function fingerDistance(first: Touch, second: Touch): number {
+    return touchDistance({ x: first.clientX, y: first.clientY }, { x: second.clientX, y: second.clientY });
+  }
+
+  function visibleFontSize(saved: number): number {
+    return (gesture?.kind === 'pinch' ? gesture : pendingPinch)?.size ?? saved;
+  }
+
+  function resizeFont(size: number): void {
+    if (!term || term.options.fontSize === size) return;
+    term.options.fontSize = size;
+    scheduleRefit();
+  }
+
+  function savePinch(pinch: PinchGesture): void {
+    if (pinch.size === pinch.initialSize) return;
+    pendingPinch = pinch;
+    fontSizeSave = fontSizeSave.then(async () => {
+      if (pinch.size !== prefs.value.terminal.font_size) {
+        await editPrefs((draft) => (draft.terminal.font_size = pinch.size));
+      }
+    });
+    void fontSizeSave.then(() => {
+      if (pendingPinch !== pinch) return;
+      pendingPinch = undefined;
+      resizeFont(visibleFontSize(prefs.value.terminal.font_size));
+    });
+  }
+
+  function onTouchStart(event: TouchEvent): void {
+    event.preventDefault();
+    if (!term || gesture?.kind === 'pinch' || gesture?.kind === 'blocked') return;
+    const [first, second] = Array.from(event.touches).filter((touch) => container.contains(touch.target as Node));
+    if (!first) return;
+    if (second) {
+      clearTimeout(longPress);
+      const size = term.options.fontSize ?? prefs.value.terminal.font_size;
+      gesture = {
+        kind: 'pinch', first: first.identifier, second: second.identifier,
+        distance: fingerDistance(first, second), initialSize: size, size,
+      };
+      return;
+    }
+    if (gesture) return;
+    const touch: TouchGesture = {
+      kind: 'single', id: first.identifier, x: first.clientX, y: first.clientY,
+      lastY: first.clientY, remainderPx: 0, scrolling: false,
+    };
+    gesture = touch;
+    longPress = window.setTimeout(() => {
+      if (gesture !== touch) return;
+      gesture = { kind: 'blocked' };
+      menu = { x: touch.x, y: touch.y };
+    }, LONG_PRESS_MS);
+  }
+
+  function onTouchMove(event: TouchEvent): void {
+    event.preventDefault();
+    if (!term || !gesture || gesture.kind === 'blocked') return;
+    const touches = Array.from(event.touches);
+    if (gesture.kind === 'pinch') {
+      const { first, second, initialSize, distance } = gesture;
+      const a = touches.find((touch) => touch.identifier === first);
+      const b = touches.find((touch) => touch.identifier === second);
+      if (a && b) {
+        gesture.size = pinchFontSize(initialSize, distance, fingerDistance(a, b));
+        resizeFont(gesture.size);
+      }
+      return;
+    }
+
+    const single = gesture;
+    const touch = touches.find((touch) => touch.identifier === single.id);
+    if (!touch) return;
+    if (!single.scrolling) {
+      if (!exceededTouchSlop(single.x, single.y, touch.clientX, touch.clientY)) return;
+      clearTimeout(longPress);
+      if (Math.abs(touch.clientX - single.x) > Math.abs(touch.clientY - single.y)) {
+        gesture = { kind: 'blocked' };
+        return;
+      }
+      single.scrolling = true;
+    }
+    const lineHeight = (screen?.clientHeight ?? 0) / term.rows
+      || prefs.value.terminal.font_size * prefs.value.terminal.line_height;
+    const scroll = accumulateScrollLines(single.remainderPx, touch.clientY - single.lastY, lineHeight);
+    single.lastY = touch.clientY;
+    single.remainderPx = scroll.remainderPx;
+    if (!scroll.lines) return;
+    if (term.buffer.active.type === 'normal') term.scrollLines(scroll.lines);
+    else send(alternateScrollSequence(scroll.lines));
+  }
+
+  function onTouchEnd(event: TouchEvent): void {
+    event.preventDefault();
+    clearTimeout(longPress);
+    const touches = Array.from(event.touches).filter((touch) => container.contains(touch.target as Node));
+    const previous = gesture;
+    if (previous?.kind === 'pinch') {
+      const { first, second } = previous;
+      if (touches.some((touch) => touch.identifier === first) && touches.some((touch) => touch.identifier === second)) return;
+      savePinch(previous);
+    } else if (previous?.kind === 'single' && !previous.scrolling) {
+      const touch = Array.from(event.changedTouches).find((touch) => touch.identifier === previous.id);
+      if (touch && !exceededTouchSlop(previous.x, previous.y, touch.clientX, touch.clientY)) focus();
+    }
+    // A remaining pinch finger cannot become a tap, long press or scroll.
+    gesture = touches.length ? { kind: 'blocked' } : undefined;
+  }
+
+  function cancelTouch(): void {
+    clearTimeout(longPress);
+    const wasPinching = gesture?.kind === 'pinch';
+    gesture = undefined;
+    if (wasPinching) resizeFont(visibleFontSize(prefs.value.terminal.font_size));
+  }
+
+  function onForeground(): void {
+    if (document.visibilityState === 'hidden') {
+      cancelTouch();
+    } else if (getComputedStyle(container).visibility === 'visible') {
+      scheduleRefit();
+    }
   }
 
   function ring(): void {
@@ -140,8 +328,6 @@
     // Hidden views (inactive tabs) have no size; fitting them would shrink the shell to nothing.
     if (container.clientWidth === 0 || container.clientHeight === 0) return;
     fit.fit();
-    // Resizing the WebGL canvas clears it; repaint the viewport without waiting for new output.
-    term.refresh(0, term.rows - 1);
     const size = { cols: term.cols, rows: term.rows };
     if (sessionId && (size.cols !== lastSize.cols || size.rows !== lastSize.rows)) {
       lastSize = size;
@@ -151,7 +337,7 @@
 
   function scheduleRefit(): void {
     cancelAnimationFrame(frame);
-    frame = requestAnimationFrame(refit);
+    frame = requestAnimationFrame(refresh);
   }
 
   /**
@@ -220,13 +406,15 @@
     const fontFamily = prefs.terminalFontFamily;
     const target = term;
     if (!target) return;
+    let superseded = false;
     void loadFonts(fontSize).then(() => {
-      if (target !== term) return;
+      if (superseded || target !== term) return;
       target.options.fontFamily = fontFamily;
-      target.options.fontSize = fontSize;
+      target.options.fontSize = visibleFontSize(fontSize);
       target.options.lineHeight = lineHeight;
       scheduleRefit();
     });
+    return () => (superseded = true);
   });
 
   onMount(async () => {
@@ -257,6 +445,14 @@
       return true;
     });
     term.open(container);
+    screen = container.querySelector('.xterm-screen');
+    container.addEventListener('touchstart', onTouchStart, { passive: false });
+    container.addEventListener('touchmove', onTouchMove, { passive: false });
+    container.addEventListener('touchend', onTouchEnd, { passive: false });
+    container.addEventListener('touchcancel', cancelTouch);
+    document.addEventListener('visibilitychange', onForeground);
+    window.addEventListener('pageshow', onForeground);
+    window.addEventListener('focus', onForeground);
     if (prefersWebgl()) void loadWebgl(term);
     fit.fit();
     lastSize = { cols: term.cols, rows: term.rows };
@@ -264,11 +460,11 @@
     // App shortcuts are handled by the window; the terminal must not also send them to the shell.
     term.attachCustomKeyEventHandler((event) => !isAppShortcut(event));
     term.onData((data) => {
-      if (ended) {
-        if (data === '\r') onrestart?.();
-        return;
-      }
-      if (sessionId) sessionWrite(sessionId, data).catch((error: unknown) => console.warn('write failed', error));
+      if (ended) return send(data);
+      if (!sessionId) return;
+      const next = applyModifiers(data, ctrl, alt);
+      if (next.ctrl !== ctrl || next.alt !== alt) onmodifiers?.(next.ctrl, next.alt);
+      send(next.data);
     });
     term.onTitleChange((title) => ontitle?.(title));
     term.onBell(ring);
@@ -289,8 +485,8 @@
       sessionId = opened;
       onsession?.(sessionId);
       // The container may have changed size while the session was opening.
-      refit();
-      if (active) term.focus();
+      refresh();
+      if (active && !coarse) term.focus();
     } catch (error) {
       if (destroyed) return;
       term.write(`\x1b[31m${t('terminal.openFailed', { message: errorText(error) })}\x1b[0m\r\n`);
@@ -301,7 +497,7 @@
   $effect(() => {
     if (active) {
       scheduleRefit();
-      term?.focus();
+      if (!coarse) term?.focus();
     }
   });
 
@@ -309,9 +505,18 @@
     destroyed = true;
     cancelAnimationFrame(frame);
     clearTimeout(bellTimer);
+    clearTimeout(longPress);
+    container?.removeEventListener('touchstart', onTouchStart);
+    container?.removeEventListener('touchmove', onTouchMove);
+    container?.removeEventListener('touchend', onTouchEnd);
+    container?.removeEventListener('touchcancel', cancelTouch);
+    document.removeEventListener('visibilitychange', onForeground);
+    window.removeEventListener('pageshow', onForeground);
+    window.removeEventListener('focus', onForeground);
     observer?.disconnect();
     media.removeEventListener('change', applyTheme);
     term?.dispose();
+    term = undefined;
   });
 
 </script>
@@ -329,6 +534,8 @@
     padding: var(--space-1) 0 0 var(--space-2);
     background: var(--term-bg);
     overflow: hidden;
+    touch-action: none;
+    -webkit-touch-callout: none;
   }
   .term :global(.xterm) {
     height: 100%;

@@ -8,7 +8,9 @@
   // mounted while another tab of its group is shown (hidden, keeping its size).
   import { onDestroy, untrack } from 'svelte';
   import TermView from '../terminal/TermView.svelte';
+  import TerminalKeyBar from '../terminal/TerminalKeyBar.svelte';
   import TerminalStatusBar from '../terminal/TerminalStatusBar.svelte';
+  import { consumeModifier, cycleModifier, type ModifierState } from '../terminal/keybar';
   import { prefs } from '../settings/prefs.svelte';
   import AiPanel from '../ai/AiPanel.svelte';
   import FileBrowser from '../files/FileBrowser.svelte';
@@ -21,6 +23,7 @@
   import type { PaneId } from './layout';
   import { errorText, t } from '../i18n';
   import Icon from '../ui/Icon.svelte';
+  import { readClipboard } from '../ui/clipboard';
   import { hosts } from '../hosts/hosts.svelte';
   import { isMobile } from '../platform';
   import { tailscale } from '../tailscale/tailscale.svelte';
@@ -37,6 +40,9 @@
     shown: boolean;
     /** Shown in the focused group: takes keyboard focus. */
     focused: boolean;
+    showKeyBar?: boolean;
+    coarse?: boolean;
+    onsnippets?: () => void;
     /**
      * Called when the pane needs a typed credential before it can connect. `override` asks for a
      * login password for a host that normally uses keys.
@@ -50,9 +56,36 @@
     onschedules: () => void;
   }
 
-  let { pane, shown, focused, oncredentials, onedithost, onaisettings, ontailscalesettings, onschedules }: Props = $props();
+  let {
+    pane, shown, focused, showKeyBar = isMobile, coarse = isMobile, onsnippets,
+    oncredentials, onedithost, onaisettings, ontailscalesettings, onschedules,
+  }: Props = $props();
   let view = $state<TermView>();
+  let ctrl = $state<ModifierState>('off');
+  let alt = $state<ModifierState>('off');
+  let keyboardOpen = $state(false);
   const editorDraft = $derived(pane.target.kind === 'editor' ? editors.find(pane.target.draftId) : undefined);
+
+  function setModifiers(nextCtrl: ModifierState, nextAlt: ModifierState): void {
+    ctrl = nextCtrl;
+    alt = nextAlt;
+  }
+
+  function sendKey(data: string, consume?: boolean): void {
+    if (consume) setModifiers(consumeModifier(ctrl), consumeModifier(alt));
+    view?.send(data);
+  }
+
+  function pasteKey(): void {
+    void readClipboard().then((text) => {
+      if (text) view?.paste(text);
+    });
+  }
+
+  function toggleKeyboard(): void {
+    if (view?.isFocused()) view.blur();
+    else view?.focus();
+  }
 
   const host = $derived.by(() => {
     const hostId = hostOf(pane.target);
@@ -191,11 +224,15 @@
     {/if}
   {:else}
     <div class="terminal-shell">
-      <div class="terminal-stage">
+      <div class="terminal-stage" onfocusin={() => (keyboardOpen = view?.isFocused() ?? false)} onfocusout={() => (keyboardOpen = false)}>
         <TermView
           bind:this={view}
           open={opener(pane)}
           active={focused}
+          {coarse}
+          {ctrl}
+          {alt}
+          onmodifiers={setModifiers}
           onsession={(sessionId) => {
             workspace.attached(pane.id, sessionId);
             if (pane.target.kind === 'ssh') hosts.connected(pane.target.hostId).catch((error: unknown) => console.warn('host refresh failed', error));
@@ -254,6 +291,19 @@
       </div>
       {#if prefs.value.status.terminal_bar && (pane.target.kind === 'ssh' || pane.target.kind === 'quick' || pane.target.kind === 'local') && pane.sessionId !== null && !pane.exited && !pane.failure}
         <TerminalStatusBar source={pane.target.kind === 'local' ? { kind: 'local' } : remoteSourceOf(pane.target)!} session={pane.sessionId} visible={shown} />
+      {/if}
+      {#if showKeyBar && (pane.target.kind === 'ssh' || pane.target.kind === 'quick' || pane.target.kind === 'local') && pane.sessionId !== null && !pane.exited && !pane.failure}
+        <TerminalKeyBar
+          {ctrl}
+          {alt}
+          {keyboardOpen}
+          onctrl={() => (ctrl = cycleModifier(ctrl))}
+          onalt={() => (alt = cycleModifier(alt))}
+          onsend={sendKey}
+          onpaste={pasteKey}
+          {onsnippets}
+          ontogglekeyboard={toggleKeyboard}
+        />
       {/if}
     </div>
   {/if}
