@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "src-tauri", "tools/*"]
+members = ["crates/*", "src-tauri", "src-tauri/plugins/tauri-plugin-rove-mobile", "tools/*"]
 exclude = ["third_party"]
 
 [workspace.package]
