@@ -3,15 +3,14 @@
 </script>
 
 <script lang="ts">
-  // The right-hand panel: one page at a time — server status of the focused pane's remote,
-  // snippets, the AI chat, or the download center — chosen from the activity rail.
   import IconButton from '../ui/IconButton.svelte';
   import StatusPanel from './StatusPanel.svelte';
   import SnippetsPanel from './SnippetsPanel.svelte';
   import TransfersPanel from './TransfersPanel.svelte';
   import { t } from '../i18n';
-  import { remoteSourceOf, sourceKey, workspace, hostOf } from '../workspace/workspace.svelte';
+  import { workspace } from '../workspace/workspace.svelte';
   import { hosts } from '../hosts/hosts.svelte';
+  import { paneStatsSource, statsSourceKey } from './serverStats.svelte';
 
   import AiPanel from '../ai/AiPanel.svelte';
 
@@ -24,14 +23,7 @@
     transfers: 'action.panel.transfers',
   };
 
-  const source = $derived.by(() => {
-    const pane = workspace.focusedPane;
-    if (!pane) return null;
-    // A deleted host has nothing to sample: show the skeleton, not a lookup error.
-    const hostId = hostOf(pane.target);
-    if (hostId && hosts.loaded && !hosts.find(hostId)) return null;
-    return remoteSourceOf(pane.target);
-  });
+  const statsSource = $derived(paneStatsSource(workspace.focusedPane, (id) => !hosts.loaded || !!hosts.find(id)));
 </script>
 
 <aside class="panel">
@@ -44,11 +36,8 @@
     {#if page === 'ai'}
       <AiPanel {onsettings} />
     {:else if page === 'status'}
-      {@const pane = workspace.focusedPane}
-      <!-- A session that ended shows the skeleton until it connects again. -->
-      {@const live = pane?.exited ? null : source}
-      {#key live ? sourceKey(live) : ''}
-        <StatusPanel source={live} visible={true} session={pane?.sessionId ?? null} />
+      {#key statsSource ? statsSourceKey(statsSource) : ''}
+        <StatusPanel source={statsSource} visible={true} session={workspace.focusedPane?.sessionId ?? null} />
       {/key}
     {:else if page === 'transfers'}
       <TransfersPanel />

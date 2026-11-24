@@ -560,6 +560,7 @@ export interface DirEntry {
 
 /** Where a remote pane connects: a saved host or a quick-connect address. */
 export type RemoteSource = { hostId: HostId } | { address: string };
+export type StatsSource = RemoteSource | { kind: 'local' };
 
 export interface SftpOpened {
   id: FsId;
@@ -930,10 +931,14 @@ export interface ServerStats {
   tailscale_path?: TailnetPath | null;
 }
 
-export function serverStats(source: RemoteSource): Promise<ServerStats> {
+export function serverStats(source: StatsSource): Promise<ServerStats> {
+  if ('kind' in source && source.kind === 'local') {
+    return invoke('server_stats', { hostId: null, address: null, local: true });
+  }
   return invoke('server_stats', {
     hostId: 'hostId' in source ? source.hostId : null,
     address: 'address' in source ? source.address : null,
+    local: false,
   });
 }
 

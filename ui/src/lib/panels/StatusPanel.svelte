@@ -1,15 +1,16 @@
 <script lang="ts">
   import Icon from '../ui/Icon.svelte';
   import CoreChart from './CoreChart.svelte';
-  import type { RemoteSource, SessionId } from '../ipc';
+  import type { SessionId, StatsSource } from '../ipc';
   import { errorText, t } from '../i18n';
   import { formatSize } from '../files/format';
   import { prefs } from '../settings/prefs.svelte';
   import { describeTailscalePath, formatLatencyMs, formatNetworkRate, HISTORY, observeServerStats } from './serverStats.svelte';
 
-  let { source, visible, session = null }: { source: RemoteSource | null; visible: boolean; session?: SessionId | null } = $props();
+  let { source, visible, session = null }: { source: StatsSource | null; visible: boolean; session?: SessionId | null } = $props();
 
   const INTERFACES_SHOWN = 6;
+  const isLocal = $derived(!!source && 'kind' in source && source.kind === 'local');
   const settings = $derived(prefs.value.status);
   const showCards = $derived(settings.show_system || settings.show_cpu || settings.show_memory || settings.show_network || settings.show_disks);
   const sampling = observeServerStats(() => visible && showCards ? source : null, () => session);
@@ -69,7 +70,7 @@
         <section class="card">
           <h4><Icon name="server" size={14} />{t('status.system')}</h4>
           <dl class="facts">
-            {#each ['status.hostname', 'status.os', 'status.response', 'status.uptimeLabel'] as const as label (label)}
+            {#each ['status.hostname', 'status.os', ...(isLocal ? [] : ['status.response'] as const), 'status.uptimeLabel'] as const as label (label)}
               <div><dt>{t(label)}</dt><dd><span class="skeleton" style:width="70%"></span></dd></div>
             {/each}
             <div class="wide"><dt>{t('status.kernel')}</dt><dd><span class="skeleton" style:width="55%"></span></dd></div>
@@ -122,22 +123,24 @@
         <dl class="facts">
           <div><dt>{t('status.hostname')}</dt><dd>{stats.hostname}</dd></div>
           <div><dt>{t('status.os')}</dt><dd>{stats.os || stats.kernel.split(' ')[0]}</dd></div>
-          <div title={stats.latency_us.length > 1 ? t('status.latencySegments') : undefined}>
-            <dt>
-              {t('status.response')}
-              {#if stats.latency_us.length > 1}
-                <small class="parts">{t('status.segments', { names: segmentNames(stats.latency_us.length) })}</small>
-              {/if}
-            </dt>
-            <dd>
-              {t('status.ms', { n: formatLatencyMs(stats.latency_us) })}
-              {#if badge}
-                <span class="path-badge" class:relay={badge.kind === 'relay'} title={badge.title}>
-                  {badge.kind === 'direct' ? t('status.pathDirect') : badge.region ? t('status.pathRelayRegion', { region: badge.region }) : t('status.pathRelay')}
-                </span>
-              {/if}
-            </dd>
-          </div>
+          {#if stats.latency_us.length > 0}
+            <div title={stats.latency_us.length > 1 ? t('status.latencySegments') : undefined}>
+              <dt>
+                {t('status.response')}
+                {#if stats.latency_us.length > 1}
+                  <small class="parts">{t('status.segments', { names: segmentNames(stats.latency_us.length) })}</small>
+                {/if}
+              </dt>
+              <dd>
+                {t('status.ms', { n: formatLatencyMs(stats.latency_us) })}
+                {#if badge}
+                  <span class="path-badge" class:relay={badge.kind === 'relay'} title={badge.title}>
+                    {badge.kind === 'direct' ? t('status.pathDirect') : badge.region ? t('status.pathRelayRegion', { region: badge.region }) : t('status.pathRelay')}
+                  </span>
+                {/if}
+              </dd>
+            </div>
+          {/if}
           <div><dt>{t('status.uptimeLabel')}</dt><dd>{uptime(stats.uptime_secs)}</dd></div>
           <div class="wide"><dt>{t('status.kernel')}</dt><dd>{stats.kernel}</dd></div>
         </dl>
@@ -209,7 +212,7 @@
     {#if settings.show_disks}
       <section class="card">
         <h4><Icon name="folder" size={14} />{t('status.disks')}</h4>
-        {#each stats.disks as disk (disk.filesystem)}
+        {#each stats.disks as disk (`${disk.filesystem}\0${disk.mount}`)}
           {@const used = percent(disk.used, disk.total)}
           <div class="disk" title={disk.filesystem}>
             <div class="row"><span class="mono name">{disk.mount}</span><span class="value" class:danger={used > 90}>{used.toFixed(0)}%</span></div>

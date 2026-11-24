@@ -6,7 +6,7 @@
 <script lang="ts">
   // One tab's content: a terminal or a file browser, with the connection failure banner. Stays
   // mounted while another tab of its group is shown (hidden, keeping its size).
-  import { untrack } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import TermView from '../terminal/TermView.svelte';
   import TerminalStatusBar from '../terminal/TerminalStatusBar.svelte';
   import { prefs } from '../settings/prefs.svelte';
@@ -16,7 +16,8 @@
   import { editors } from '../files/editors.svelte';
   import { terminals } from '../terminal/registry';
   import { hostOf, remoteSourceOf, sourceKey, workspace, type PaneState } from '../workspace/workspace.svelte';
-  import { isCommandError, sessionOpenLocal, sessionOpenQuick, sessionOpenSsh, credentialKindOf, type CredentialKind, type OutputMessage, type TermSize } from '../ipc';
+  import { sessionOpenLocal, sessionOpenQuick, sessionOpenSsh, credentialKindOf, type CredentialKind, type HostId, type OutputMessage, type StatsSource, type TermSize } from '../ipc';
+  import { hasOtherLivePaneForStats, invalidateServerStats, paneStatsSource, statsSourceKey } from '../panels/serverStats.svelte';
   import type { PaneId } from './layout';
   import { errorText, t } from '../i18n';
   import Icon from '../ui/Icon.svelte';
@@ -51,7 +52,6 @@
 
   let { pane, shown, focused, oncredentials, onedithost, onaisettings, ontailscalesettings, onschedules }: Props = $props();
   let view = $state<TermView>();
-  let sftpFailureCode = $state<string | null>(null);
   const editorDraft = $derived(pane.target.kind === 'editor' ? editors.find(pane.target.draftId) : undefined);
 
   const host = $derived.by(() => {
@@ -73,9 +73,22 @@
     return hostId !== null && hosts.loaded && !hosts.find(hostId) && !pane.sessionId;
   });
 
-  /** Records the failure; a missing password or passphrase is asked for right away. */
+  const hostExists = (id: HostId) => !hosts.loaded || !!hosts.find(id);
+
+  function invalidateIfLast(source: StatsSource | null): void {
+    if (source && !hasOtherLivePaneForStats(Object.values(workspace.panes), pane.id, statsSourceKey(source), hostExists)) {
+      invalidateServerStats(source);
+    }
+  }
+
+  function invalidateTargetStats(): void {
+    invalidateIfLast(pane.target.kind === 'local' ? { kind: 'local' } : remoteSourceOf(pane.target));
+  }
+
+  /** Records the failure and requests any missing credential. */
   function onOpenError(error: unknown): void {
     workspace.failed(pane.id, error);
+    invalidateTargetStats();
     const kind = credentialKindOf(error);
     if (kind) oncredentials(pane.id, kind);
   }
@@ -100,9 +113,14 @@
 
   function onExit(code: number | null): void {
     workspace.exited(pane.id, { code, signal: null });
+    invalidateTargetStats();
     // A local shell that exits normally closes its tab, like a terminal window.
     if (pane.target.kind === 'local' && code === 0) workspace.closePane(pane.id);
   }
+
+  onDestroy(() => {
+    if (!workspace.panes[pane.id]) invalidateIfLast(paneStatsSource(pane, hostExists));
+  });
 
   // Restored tabs connect the first time they are shown.
   $effect(() => {
@@ -128,7 +146,7 @@
       tailscaleRetriedAt.delete(key);
       return;
     }
-    const failureCode = pane.failure?.code ?? sftpFailureCode;
+    const failureCode = pane.failure?.code ?? null;
     if (pane.deferred || orphaned) return;
     const epoch = tailscale.status.updated_at;
     const alreadyRetriedForEpoch = tailscaleRetriedAt.get(key) === epoch;
@@ -156,14 +174,10 @@
       active={focused}
       visible={shown}
       onopened={() => {
-        sftpFailureCode = null;
+        pane.failure = null;
         workspace.opened(pane.id);
       }}
-      onerror={(error) => {
-        sftpFailureCode = isCommandError(error) ? error.code : null;
-        const kind = credentialKindOf(error);
-        if (kind) oncredentials(pane.id, kind);
-      }}
+      onerror={onOpenError}
     />
   {:else if pane.target.kind === 'fleet'}
     <div class="fleet">
@@ -238,8 +252,8 @@
           </div>
         {/if}
       </div>
-      {#if prefs.value.status.terminal_bar && (pane.target.kind === 'ssh' || pane.target.kind === 'quick') && pane.sessionId !== null && !pane.exited && !pane.failure}
-        <TerminalStatusBar source={remoteSourceOf(pane.target)!} session={pane.sessionId} visible={shown} />
+      {#if prefs.value.status.terminal_bar && (pane.target.kind === 'ssh' || pane.target.kind === 'quick' || pane.target.kind === 'local') && pane.sessionId !== null && !pane.exited && !pane.failure}
+        <TerminalStatusBar source={pane.target.kind === 'local' ? { kind: 'local' } : remoteSourceOf(pane.target)!} session={pane.sessionId} visible={shown} />
       {/if}
     </div>
   {/if}

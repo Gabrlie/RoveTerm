@@ -1,8 +1,8 @@
 import { untrack } from 'svelte';
-import { isCommandError, serverStats, type CpuTimes, type MemoryDisplay, type NetInterface, type NetworkUnit, type RemoteSource, type ServerStats, type SessionId } from '../ipc';
+import { isCommandError, serverStats, type CpuTimes, type HostId, type MemoryDisplay, type NetInterface, type NetworkUnit, type ServerStats, type SessionId, type StatsSource } from '../ipc';
 import { prefs } from '../settings/prefs.svelte';
 import type { TailscalePath as TailnetPath } from '../tailscale/types';
-import { sourceKey } from '../workspace/workspace.svelte';
+import { sourceKey, type PaneState } from '../workspace/workspace.svelte';
 
 /** Samples kept per core, oldest first. */
 export const HISTORY = 40;
@@ -26,6 +26,44 @@ const EMPTY: HostStatsState = {
   stats: null, cpu: null, coreHistory: [], rates: {}, totalRate: null, problem: null, error: null,
 };
 
+type StatsPane = Pick<PaneState, 'target' | 'sessionId' | 'exited' | 'failure' | 'deferred'>;
+
+export function statsSourceKey(source: StatsSource): string {
+  return 'kind' in source ? 'local' : sourceKey(source);
+}
+
+export function paneStatsSource(pane: StatsPane | undefined, hostExists: (id: HostId) => boolean): StatsSource | null {
+  if (!pane || pane.deferred || pane.exited || pane.failure) return null;
+  const { target, sessionId } = pane;
+  switch (target.kind) {
+    case 'fleet':
+      return null;
+    case 'local':
+      return sessionId !== null ? { kind: 'local' } : null;
+    case 'ssh':
+      return sessionId !== null && hostExists(target.hostId) ? { hostId: target.hostId } : null;
+    case 'quick':
+      return sessionId !== null ? { address: target.address } : null;
+    case 'sftp':
+    case 'editor':
+      return 'hostId' in target.source && !hostExists(target.source.hostId) ? null : target.source;
+  }
+}
+
+export function hasOtherLivePaneForStats(
+  panes: Iterable<StatsPane & Pick<PaneState, 'id'>>,
+  excludePaneId: string,
+  key: string,
+  hostExists: (id: HostId) => boolean,
+): boolean {
+  for (const pane of panes) {
+    if (pane.id === excludePaneId) continue;
+    const source = paneStatsSource(pane, hostExists);
+    if (source && statsSourceKey(source) === key) return true;
+  }
+  return false;
+}
+
 export function cpuUsage(now: CpuTimes, before: CpuTimes | undefined): number | null {
   if (!before) return null;
   const total = now.total - before.total;
@@ -45,7 +83,7 @@ export function networkRates(now: NetInterface[], before: NetInterface[], second
       const rx = Math.max(0, (net.rx - old.rx) / seconds);
       const tx = Math.max(0, (net.tx - old.tx) / seconds);
       rates[net.name] = { rx, tx };
-      if (net.name !== 'lo') {
+      if (net.name !== 'lo' && net.name !== 'lo0') {
         totalRate ??= { rx: 0, tx: 0 };
         totalRate.rx += rx;
         totalRate.tx += tx;
@@ -111,15 +149,22 @@ export function describeTailscalePath(path: TailnetPath | null | undefined) {
 class HostStats {
   state = $state.raw<HostStatsState>(EMPTY);
   private previousAt = 0;
+  private generation = 0;
   private consumers = new Map<symbol, SessionId | null>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private inFlight = false;
   private refreshPending = false;
   private stopWatchingInterval: (() => void) | undefined;
-  private readonly source: RemoteSource;
+  private readonly source: StatsSource;
 
-  constructor(source: RemoteSource) {
+  constructor(source: StatsSource) {
     this.source = source;
+  }
+
+  reset(): void {
+    this.generation += 1;
+    this.state = EMPTY;
+    this.previousAt = 0;
   }
 
   acquire(session: SessionId | null) {
@@ -183,8 +228,10 @@ class HostStats {
 
   private async sample(): Promise<void> {
     this.inFlight = true;
+    const generation = this.generation;
     try {
       const stats = await serverStats(this.source);
+      if (generation !== this.generation) return;
       const at = performance.now();
       const before = this.state.stats;
       const coreHistory = stats.cpus.map((core, index) => {
@@ -202,8 +249,10 @@ class HostStats {
       };
       this.previousAt = at;
     } catch (error) {
+      if (generation !== this.generation) return;
       const code = isCommandError(error) ? error.code : 'unknown';
-      if (code !== 'ssh.not_connected') this.state = { ...this.state, problem: code, error };
+      if (code === 'ssh.not_connected') this.reset();
+      else this.state = { ...this.state, problem: code, error };
     } finally {
       this.inFlight = false;
       if (this.consumers.size > 0) {
@@ -217,9 +266,13 @@ class HostStats {
 
 const hosts = new Map<string, HostStats>();
 
-/** Shares one polling loop per remote. Release the handle when the consumer stops observing. */
-export function acquire(source: RemoteSource, sessionHint: SessionId | null = null) {
-  const key = sourceKey(source);
+export function invalidateServerStats(source: StatsSource): void {
+  hosts.get(statsSourceKey(source))?.reset();
+}
+
+/** Shares one polling loop per source. Release the handle when the consumer stops observing. */
+export function acquire(source: StatsSource, sessionHint: SessionId | null = null) {
+  const key = statsSourceKey(source);
   let host = hosts.get(key);
   if (!host) {
     host = new HostStats(source);
@@ -228,12 +281,12 @@ export function acquire(source: RemoteSource, sessionHint: SessionId | null = nu
   return host.acquire(sessionHint);
 }
 
-/** Observes the current remote while the caller supplies one, retaining its snapshot between views. */
-export function observeServerStats(source: () => RemoteSource | null, session: () => SessionId | null) {
+/** Observes the current source, retaining its snapshot between views until invalidated. */
+export function observeServerStats(source: () => StatsSource | null, session: () => SessionId | null) {
   let handle = $state.raw<ReturnType<typeof acquire> | null>(null);
   $effect(() => {
-    const remote = source();
-    const current = remote ? acquire(remote, untrack(session)) : null;
+    const target = source();
+    const current = target ? acquire(target, untrack(session)) : null;
     handle = current;
     return () => current?.release();
   });

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import type { RemoteSource, SessionId } from '../ipc';
+  import type { SessionId, StatsSource } from '../ipc';
   import { t } from '../i18n';
   import { formatSize } from '../files/format';
   import Icon from '../ui/Icon.svelte';
@@ -15,7 +15,7 @@
   import { prefs } from '../settings/prefs.svelte';
   import { currentScheme } from './theme';
 
-  let { source, session, visible }: { source: RemoteSource; session: SessionId | null; visible: boolean } = $props();
+  let { source, session, visible }: { source: StatsSource; session: SessionId | null; visible: boolean } = $props();
 
   const media = matchMedia('(prefers-color-scheme: dark)');
   let systemDark = $state(media.matches);
