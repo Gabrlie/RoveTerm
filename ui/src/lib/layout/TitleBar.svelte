@@ -8,7 +8,8 @@
   import IconButton from '../ui/IconButton.svelte';
   import Icon from '../ui/Icon.svelte';
   import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
-  import { actions, bindingsOf, displayBinding, isMac, type ActionId } from '../actions';
+  import { actions, bindingsOf, displayBinding, type ActionId } from '../actions';
+  import { isMacDesktop, isMobile } from '../platform';
   import { MENUS, type Menu } from '../menu';
   import { t } from '../i18n';
 
@@ -70,7 +71,7 @@
     if (next && title) show(next, title);
   }
 
-  const appWindow = isMac ? null : getCurrentWindow();
+  const appWindow = isMacDesktop || isMobile ? null : getCurrentWindow();
 
   async function syncMaximized(): Promise<void> {
     maximized = (await appWindow?.isMaximized().catch(() => false)) ?? false;
@@ -85,8 +86,8 @@
   onDestroy(() => unlistenResize?.());
 </script>
 
-<header class="titlebar" class:mac={isMac} bind:this={bar} data-tauri-drag-region>
-  {#if !isMac}
+<header class="titlebar" class:mac={isMacDesktop} bind:this={bar} data-tauri-drag-region={isMobile ? undefined : ''}>
+  {#if !isMacDesktop && !isMobile}
     <span class="mark" aria-hidden="true"><Icon name="terminal" size={15} /></span>
     <nav class="menus" aria-label={t('menu.bar')} bind:this={titles}>
       {#each MENUS as menu (menu.id)}
@@ -106,7 +107,7 @@
       {/each}
     </nav>
   {/if}
-  <span class="drag" data-tauri-drag-region></span>
+  <span class="drag" data-tauri-drag-region={isMobile ? undefined : ''}></span>
   <div class="layout">
     <IconButton icon="sidebar" small label={t('action.sidebar.toggle')} active={sidebarOpen} onclick={() => onaction('sidebar.toggle')} />
     <IconButton icon="panelBottom" small label={t('action.panel.bottom')} active={bottomOpen} disabled={panelsDisabled} onclick={() => onaction('panel.bottom')} />

@@ -4,7 +4,7 @@
   import DraftsHost from './lib/files/DraftsHost.svelte';
   import ExternalEdits from './lib/files/ExternalEdits.svelte';
   import { externalEdits } from './lib/files/external.svelte';
-  import { isMobile } from './lib/platform';
+  import { capabilities, isMacDesktop, isMobile } from './lib/platform';
   import Dialog from './lib/ui/Dialog.svelte';
   import { ask } from './lib/ui/confirm.svelte';
   import { externalEditSetDirty, externalEditShutdown, onExternalEditExitRequest, updateRestart } from './lib/ipc';
@@ -40,7 +40,7 @@
   import { vault } from './lib/vault/vault.svelte';
   import { sync } from './lib/sync/sync.svelte';
   import { tailscale } from './lib/tailscale/tailscale.svelte';
-  import { actionFor, isMac, isTextField, type ActionId } from './lib/actions';
+  import { actionFor, isTextField, type ActionId } from './lib/actions';
   import { terminalCopies, terminalPastes, type ClipboardContext } from './lib/terminal/claims';
   import { isActionId, nativeMenuLabels, nativeMenus } from './lib/menu';
   import { terminals } from './lib/terminal/registry';
@@ -348,11 +348,11 @@
 
   // macOS: the menu bar follows the interface language; its items run actions here.
   $effect(() => {
-    if (!isMac) return;
+    if (!isMacDesktop) return;
     menuSet(nativeMenus(), nativeMenuLabels()).catch((error: unknown) => console.warn('menu bar unavailable', error));
   });
   $effect(() => {
-    if (!isMac) return;
+    if (!isMacDesktop) return;
     const pending = onMenuAction((id) => {
       if (isActionId(id)) run(id);
     });
@@ -372,6 +372,7 @@
         editors.showDrafts = true;
         break;
       case 'tab.newLocal':
+        if (!capabilities.localPty) break;
         workspace.openTab({ kind: 'local' });
         break;
       case 'tab.close':
@@ -419,6 +420,7 @@
         openFleet();
         break;
       case 'fleet.schedules':
+        if (!capabilities.schedules) break;
         ai.unreadReports = 0;
         schedulesOpen = true;
         break;
@@ -560,6 +562,7 @@
   // Scheduled runs report even when no AI view is open.
   $effect(() => {
     ai.listen();
+    if (!capabilities.schedules) return;
     return ai.onReport((event) =>
       notify(event.ok ? t('schedule.done', { name: event.name }) : t('schedule.failed', { name: event.name, error: event.error ?? '' }), event.ok ? 'info' : 'error'),
     );
@@ -732,7 +735,7 @@
   />
 {/if}
 
-{#if schedulesOpen}
+{#if capabilities.schedules && schedulesOpen}
   <SchedulesDialog onclose={() => (schedulesOpen = false)} onopenreport={(id) => void openConversation(id)} />
 {/if}
 
@@ -768,6 +771,8 @@
 <style>
   .app {
     height: 100vh;
+    height: 100dvh;
+    padding: var(--safe-top) var(--safe-right) max(var(--safe-bottom), var(--ime-bottom)) var(--safe-left);
     display: flex;
     flex-direction: column;
   }

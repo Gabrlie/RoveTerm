@@ -1,6 +1,6 @@
 <script lang="ts">
   // Lists the actions table; Enter runs the highlighted action.
-  import { actions, bindingsOf, displayBinding, type ActionId } from '../actions';
+  import { actions, bindingsOf, displayBinding, isActionAvailable, type ActionId } from '../actions';
   import { t } from '../i18n';
   import Icon from './Icon.svelte';
 
@@ -12,7 +12,7 @@
 
   const matches = $derived(
     actions
-      .filter((action) => !action.hidden)
+      .filter((action) => !action.hidden && isActionAvailable(action.id))
       .filter((action) => t(action.label).toLowerCase().includes(query.trim().toLowerCase())),
   );
 

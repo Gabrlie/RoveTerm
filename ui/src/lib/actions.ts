@@ -1,6 +1,7 @@
 // The actions table: the single source for keyboard shortcuts, menus and the command palette.
-// App shortcuts use ⌘ on macOS and Ctrl+Shift elsewhere, so plain Ctrl+letter always reaches the shell.
+// App shortcuts use ⌘ on Apple platforms and Ctrl+Shift elsewhere, so plain Ctrl+letter always reaches the shell.
 import type { MessageKey } from './i18n';
+import { capabilities, isApple } from './platform.ts';
 
 export type ActionId =
   | 'tab.newLocal'
@@ -47,7 +48,7 @@ export type ActionId =
 export interface Action {
   id: ActionId;
   label: MessageKey;
-  /** Default bindings. `App` means ⌘ on macOS and Ctrl+Shift elsewhere. */
+  /** Default bindings. `App` means ⌘ on Apple platforms and Ctrl+Shift elsewhere. */
   keys: string[];
   /** Hidden from the command palette. */
   hidden?: boolean;
@@ -57,7 +58,13 @@ export interface Action {
   scope?: 'editor';
 }
 
-export const isMac = /Mac|iPhone|iPad/.test(navigator.platform) || navigator.userAgent.includes('Mac OS');
+export const isMac = isApple;
+
+export function isActionAvailable(id: ActionId, caps = capabilities): boolean {
+  if (id === 'tab.newLocal') return caps.localPty;
+  if (id === 'fleet.schedules') return caps.schedules;
+  return true;
+}
 
 export const actions: Action[] = [
   { id: 'tab.newLocal', label: 'action.tab.newLocal', keys: ['App+T'] },
@@ -172,8 +179,9 @@ export function isTextField(target: EventTarget | null): boolean {
 /** Returns the action bound to `event`, if any. */
 export function actionFor(event: KeyboardEvent): ActionId | undefined {
   const id = index.get(eventBinding(event));
-  if (id && byId.get(id)?.scope === 'editor' && (!(event.target instanceof Element) || !event.target.closest('.text-editor'))) return undefined;
-  if (id && byId.get(id)?.yieldsToTextField && isTextField(event.target)) return undefined;
+  if (!id || !isActionAvailable(id)) return undefined;
+  if (byId.get(id)?.scope === 'editor' && (!(event.target instanceof Element) || !event.target.closest('.text-editor'))) return undefined;
+  if (byId.get(id)?.yieldsToTextField && isTextField(event.target)) return undefined;
   return id;
 }
 

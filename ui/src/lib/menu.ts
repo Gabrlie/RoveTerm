@@ -1,6 +1,6 @@
 // The application menus: the title bar menus on Windows and Linux and the menu bar on macOS.
 // Items name actions; their labels and shortcuts come from the actions table.
-import { actions, bindingsOf, type ActionId } from './actions';
+import { actions, bindingsOf, isActionAvailable, type ActionId } from './actions';
 import { menuAccelerator } from './accelerator';
 import { t, type MessageKey } from './i18n';
 import type { NativeMenu, NativeMenuLabels } from './ipc';
@@ -48,12 +48,26 @@ export const MENUS: Menu[] = [
   { id: 'help', label: 'menu.help', items: ['help.shortcuts', 'help.logs', '-', 'help.checkUpdates', 'help.about'] },
 ];
 
+function availableEntries(items: MenuEntry[]): MenuEntry[] {
+  const entries: MenuEntry[] = [];
+  for (const entry of items) {
+    if (entry === '-') {
+      const previous = entries.at(-1);
+      if (previous && previous !== '-') entries.push(entry);
+    } else if (isActionAvailable(entry)) {
+      entries.push(entry);
+    }
+  }
+  if (entries.at(-1) === '-') entries.pop();
+  return entries;
+}
+
 /** The menus for the macOS menu bar, labelled in the current language. The Edit menu is left
  *  out: the system's own Edit menu keeps native copy and paste in text fields. */
 export function nativeMenus(): NativeMenu[] {
   return MENUS.filter((menu) => menu.id !== 'edit').map((menu) => ({
     label: t(menu.label),
-    items: menu.items.map((entry) => {
+    items: availableEntries(menu.items).map((entry) => {
       if (entry === '-') return { kind: 'separator' as const };
       const action = actions.find((candidate) => candidate.id === entry);
       // Copy and paste belong to text fields as well; they stay with the system Edit menu.

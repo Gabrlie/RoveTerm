@@ -8,7 +8,7 @@
   import AgentLoginDialog from './AgentLoginDialog.svelte';
   import UsageMeter from './UsageMeter.svelte';
   import ModelPopover from './ModelPopover.svelte';
-  import { isMobile } from '../platform';
+  import { capabilities, isMobile } from '../platform';
   import { builtinCommands, canPrestart, choiceKey, optionKey, slashItems, slashQuery, splitOptions, type SlashItem } from './composer';
   import { ai, contextKey, type Chat } from './ai.svelte';
   import { formatToolOutput, isLeadTool, LEAD_TOOL_ICONS, OPERATION_ICONS, outcomeState, rows, subject, toolSubject, type ApprovalItem } from './chatview';
@@ -727,7 +727,7 @@
       <span class="spacer"></span>
     {/if}
     <IconButton icon="add" small label={t('ai.newChat')} disabled={chat.starting || (chat.busy && !hasActiveWork) || cancelling || creatingChat} onclick={() => void newChat()} />
-    {#if fleet && onschedules}
+    {#if capabilities.schedules && fleet && onschedules}
       <span class="schedules">
         <IconButton icon="clock" small label={t('fleet.schedules')} onclick={onschedules} />
         {#if ai.unreadReports > 0}<span class="dot" aria-label={t('fleet.newReports', { n: ai.unreadReports })}></span>{/if}

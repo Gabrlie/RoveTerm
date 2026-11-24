@@ -6,6 +6,7 @@
   import { t } from '../i18n';
   import { aiRecords, aiSessions, type AiRecord, type AiSessionSummary } from '../ipc';
   import { ai } from '../ai/ai.svelte';
+  import { capabilities } from '../platform';
 
   interface Props {
     /** Opens the fleet lead's tab, sending `text` when given. */
@@ -51,7 +52,9 @@
     void loadRecent();
   });
 
-  onMount(() => ai.onReport(() => void loadRecent()));
+  onMount(() => {
+    if (capabilities.schedules) return ai.onReport(() => void loadRecent());
+  });
 </script>
 
 <section class="fleet">
@@ -61,9 +64,11 @@
       <h2>{t('fleet.home')}</h2>
       <p>{t('fleet.homeHint')}</p>
     </div>
-    <button type="button" class="secondary" onclick={onschedules}>
-      {t('fleet.schedules')}{#if ai.unreadReports > 0}<span class="badge">{t('fleet.newReports', { n: ai.unreadReports })}</span>{/if}
-    </button>
+    {#if capabilities.schedules}
+      <button type="button" class="secondary" onclick={onschedules}>
+        {t('fleet.schedules')}{#if ai.unreadReports > 0}<span class="badge">{t('fleet.newReports', { n: ai.unreadReports })}</span>{/if}
+      </button>
+    {/if}
     <button type="button" class="secondary" onclick={() => onopen(null)}>{t('fleet.openAll')}</button>
   </div>
   <div class="input">

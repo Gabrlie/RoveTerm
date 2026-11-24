@@ -5,7 +5,8 @@ import './styles/controls.css';
 import './styles/fonts.css';
 import App from './App.svelte';
 import { prefs } from './lib/settings/prefs.svelte';
-import { isMac } from './lib/actions';
+import { isMacDesktop } from './lib/platform';
+import { initInsets } from './lib/layout/insets';
 import { forwardConsole } from './lib/ui/consolelog';
 import { logWrite } from './lib/ipc';
 
@@ -13,7 +14,8 @@ import { logWrite } from './lib/ipc';
 forwardConsole(logWrite);
 
 // macOS draws its window buttons over the top-left corner (overlay title bar).
-if (isMac) document.documentElement.dataset.platform = 'mac';
+if (isMacDesktop) document.documentElement.dataset.platform = 'mac';
+initInsets();
 
 const target = document.getElementById('app');
 if (!target) throw new Error('missing #app mount point');

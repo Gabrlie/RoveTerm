@@ -12,8 +12,8 @@
   import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
   import { hostMenuItems } from '../hosts/hostMenu';
   import { hostAddress, hostSubtitle } from '../hosts/route';
-  import { actions, type ActionId } from '../actions';
-  import { isMobile } from '../platform';
+  import { actions, isActionAvailable, type ActionId } from '../actions';
+  import { capabilities, isMobile } from '../platform';
   import { tailscale } from '../tailscale/tailscale.svelte';
   import { findConversionCandidates } from '../tailscale/matching';
   import { notify } from '../ui/toast.svelte';
@@ -40,7 +40,8 @@
   let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
   /** Actions offered when right-clicking empty space. */
-  const PAGE_ACTIONS: ActionId[] = ['host.new', 'host.quickConnect', 'host.import', 'tab.newLocal'];
+  const PAGE_ACTIONS = (['host.new', 'host.quickConnect', 'host.import', 'tab.newLocal'] satisfies ActionId[])
+    .filter((id) => isActionAvailable(id));
   const conversionCandidates = $derived(!isMobile && tailscale.connected ? findConversionCandidates(hosts.items, tailscale.peers, tailscale.dismissed) : []);
   const firstConversionCandidate = $derived(conversionCandidates[0] ?? null);
 
@@ -116,7 +117,9 @@
     </div>
     <button type="button" class="secondary action" onclick={onquick}><Icon name="quickConnect" size={15} />{t('action.host.quickConnect')}</button>
     <button type="button" class="secondary action" onclick={() => onedit(null)}><Icon name="add" size={15} />{t('host.new')}</button>
-    <button type="button" class="secondary action" onclick={onlocal}><Icon name="terminal" size={15} />{t('action.tab.newLocal')}</button>
+    {#if capabilities.localPty}
+      <button type="button" class="secondary action" onclick={onlocal}><Icon name="terminal" size={15} />{t('action.tab.newLocal')}</button>
+    {/if}
   </header>
 
   {#if hosts.items.length > 0}

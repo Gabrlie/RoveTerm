@@ -8,6 +8,7 @@
   import ContextMenu, { type MenuItem } from '../ui/ContextMenu.svelte';
   import { t } from '../i18n';
   import type { ActionId } from '../actions';
+  import { capabilities } from '../platform';
   import type { IconName } from '../ui/icons';
   import type { Theme } from '../ipc';
   import { workspace, hostOf } from '../workspace/workspace.svelte';
@@ -137,7 +138,9 @@
         <IconButton icon={sync.lastError ? 'warning' : 'cloudCheck'} small label={syncTitle} onclick={() => void sync.syncNow().catch(() => undefined)} />
       </span>
     {/if}
-    <IconButton icon="terminal" small label={t('action.tab.newLocal')} onclick={() => onaction('tab.newLocal')} />
+    {#if capabilities.localPty}
+      <IconButton icon="terminal" small label={t('action.tab.newLocal')} onclick={() => onaction('tab.newLocal')} />
+    {/if}
     <IconButton icon={themeIcon} small label={t('status.theme')} onclick={openThemeMenu} />
     <IconButton icon="command" small label={t('action.palette.open')} onclick={() => onaction('palette.open')} />
     <span class="clock">{clock(now)}</span>
