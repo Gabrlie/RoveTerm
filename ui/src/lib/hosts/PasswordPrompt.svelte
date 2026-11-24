@@ -22,12 +22,11 @@
   }
 </script>
 
-<Dialog {title} {onclose} width={380}>
+<Dialog {title} {onclose} width={380} autofocus={true}>
   <form id="password-form" onsubmit={submit}>
     <label
       >{secret === 'password' ? t('host.password') : t('host.passphrase')}
-      <!-- svelte-ignore a11y_autofocus -->
-      <input type="password" bind:value={password} autocomplete={secret === 'password' ? 'current-password' : 'off'} autofocus />
+      <input type="password" bind:value={password} autocomplete={secret === 'password' ? 'current-password' : 'off'} />
     </label>
     {#if allowRemember}
       <label class="check"><input type="checkbox" bind:checked={remember} />{secret === 'password' ? t('host.rememberPassword') : t('host.rememberPassphrase')}</label>

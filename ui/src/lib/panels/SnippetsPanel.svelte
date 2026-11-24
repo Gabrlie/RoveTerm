@@ -9,6 +9,9 @@
   import { terminals } from '../terminal/registry';
   import { workspace } from '../workspace/workspace.svelte';
 
+  let { onsent }: { onsent?: () => void } = $props();
+
+  let panel: HTMLDivElement;
   let items = $state<Snippet[]>([]);
   let query = $state('');
   /** `null` while no editor is open; `''` for a new snippet. */
@@ -76,17 +79,25 @@
    * keystrokes ending in Enter, in one write so the Enter cannot overtake the text; each line of
    * a multi-line snippet runs in turn.
    */
-  function send(snippet: Snippet, run: boolean): void {
+  async function send(snippet: Snippet, run: boolean): Promise<void> {
     const pane = target;
     if (!pane?.sessionId) return;
     const view = terminals.get(pane.id);
     const text = snippet.command.replace(/\r?\n$/, '');
     if (run) {
-      sessionWrite(pane.sessionId, `${text.replace(/\r?\n/g, '\r')}\r`).catch((caught: unknown) => (error = errorText(caught)));
+      try {
+        await sessionWrite(pane.sessionId, `${text.replace(/\r?\n/g, '\r')}\r`);
+      } catch (caught) {
+        error = errorText(caught);
+        return;
+      }
+      if (!panel?.isConnected || target?.id !== pane.id) return;
     } else {
-      view?.paste(text);
+      if (!view) return;
+      view.paste(text);
     }
     view?.focus();
+    onsent?.();
   }
 
   /** Focuses the editor's first field when it appears. */
@@ -101,7 +112,7 @@
   });
 </script>
 
-<div class="snippets">
+<div class="snippets" bind:this={panel}>
   <div class="tools">
     <div class="search">
       <Icon name="search" size={13} />
@@ -133,8 +144,8 @@
           <code>{snippet.command}</code>
         </div>
         <div class="actions">
-          <IconButton icon="play" label={t('snippets.run')} small disabled={!target} onclick={() => send(snippet, true)} />
-          <IconButton icon="terminal" label={t('snippets.insert')} small disabled={!target} onclick={() => send(snippet, false)} />
+          <IconButton icon="play" label={t('snippets.run')} small disabled={!target} onclick={() => void send(snippet, true)} />
+          <IconButton icon="terminal" label={t('snippets.insert')} small disabled={!target} onclick={() => void send(snippet, false)} />
           <IconButton icon="edit" label={t('snippets.edit')} small onclick={() => edit(snippet)} />
           <IconButton icon="remove" label={t('snippets.delete')} small danger onclick={() => void remove(snippet)} />
         </div>
@@ -259,5 +270,19 @@
   }
   .error {
     color: var(--danger);
+  }
+  @media (pointer: coarse) {
+    .actions {
+      position: static;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      margin-top: var(--space-2);
+      background: transparent;
+      box-shadow: none;
+    }
+    .buttons button {
+      min-height: var(--control-height);
+    }
   }
 </style>

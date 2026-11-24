@@ -10,6 +10,7 @@
   import { t } from '../i18n';
   import { workspace } from '../workspace/workspace.svelte';
   import { hosts } from '../hosts/hosts.svelte';
+  import { viewport } from '../layout/viewport.svelte';
   import { paneStatsSource, statsSourceKey } from './serverStats.svelte';
 
   import AiPanel from '../ai/AiPanel.svelte';
@@ -42,7 +43,7 @@
     {:else if page === 'transfers'}
       <TransfersPanel />
     {:else}
-      <SnippetsPanel />
+      <SnippetsPanel onsent={viewport.compact ? onclose : undefined} />
     {/if}
   </div>
 </aside>

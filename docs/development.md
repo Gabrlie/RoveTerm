@@ -53,9 +53,13 @@
 
 Android 使用 Keystore 保护凭据库的设备主密钥，可在应用的安全设置中启用生物识别或屏幕锁验证。也可在装有 Android SDK、NDK、JDK 17、Rust 与 Node.js / pnpm 的 Docker 容器中挂载工作区，使用相同命令构建 APK。
 
+`src-tauri/gen/android/app/src/main/AndroidManifest.xml` 声明 `SessionKeepAliveService` 为 `specialUse` 类型的前台服务，登记用途及 `FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_SPECIAL_USE`、`POST_NOTIFICATIONS` 和 `WAKE_LOCK` 权限。有活动会话等工作时，服务通过带「断开全部」操作的通知展示保活状态。
+
 ### iOS / iPadOS（用户自签名）
 
 iOS / iPadOS 由用户自签名安装，App Store 和 `pnpm release:prepare` 的官方发布包均不提供安装包。在装有 Xcode 的 macOS 上运行 `pnpm tauri ios init` 生成 Xcode 工程。工作区插件 [`tauri-plugin-rove-mobile`](../src-tauri/plugins/tauri-plugin-rove-mobile/README.md) 在构建时接入 Swift Keychain 和 Insets 代码，并补齐 `Info.plist` 的 Face ID 和本地网络用途说明。使用 Xcode 构建并签名，或通过侧载工具签名和安装。
+
+应用带活动工作进入后台时，`KeepAliveController` 通过 `beginBackgroundTask` 向系统申请有限的后台运行时间。时限到达、活动结束或应用回到前台时，控制器调用 `endBackgroundTask`。
 
 ## 开发交付教程
 

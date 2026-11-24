@@ -202,7 +202,7 @@
           <p class="muted">{t('status.noInterfaces')}</p>
         {/each}
         {#if interfaces.length > INTERFACES_SHOWN}
-          <button type="button" class="more" onclick={() => (showAllInterfaces = !showAllInterfaces)}>
+          <button type="button" class="more" aria-expanded={showAllInterfaces} onclick={() => (showAllInterfaces = !showAllInterfaces)}>
             {showAllInterfaces ? t('status.showLess') : t('status.showAll', { n: interfaces.length })}
           </button>
         {/if}
@@ -240,6 +240,7 @@
   .card {
     display: flex;
     flex-direction: column;
+    min-width: 0;
     gap: var(--space-1);
     padding: var(--space-3);
     border-radius: var(--radius-md);
@@ -267,9 +268,10 @@
   }
   .facts {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-2);
     margin: 0;
+    overflow-wrap: anywhere;
   }
   .facts .wide {
     grid-column: 1 / -1;
@@ -285,7 +287,6 @@
   }
   .facts dd {
     margin: 0;
-    overflow-wrap: anywhere;
   }
   .path-badge {
     display: inline-block;
@@ -303,6 +304,7 @@
   }
   .headline {
     display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
     gap: var(--space-2);
   }
@@ -375,7 +377,7 @@
   }
   .net {
     display: grid;
-    grid-template-columns: minmax(4em, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr) repeat(2, minmax(0, max-content));
     gap: var(--space-2);
     align-items: center;
     padding: 3px var(--space-2);
@@ -383,15 +385,18 @@
     background: var(--fill);
   }
   .name {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .up {
     color: var(--success);
+    overflow-wrap: anywhere;
   }
   .down {
     color: var(--accent);
+    overflow-wrap: anywhere;
   }
   .disk {
     display: flex;
@@ -409,5 +414,20 @@
     color: var(--accent);
     font: inherit;
     cursor: pointer;
+  }
+  @media (max-width: 520px) {
+    .net {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      row-gap: var(--space-1);
+    }
+    .net .name {
+      grid-column: 1 / -1;
+    }
+  }
+  @media (pointer: coarse) {
+    .more {
+      min-height: var(--touch-target);
+      padding: 0 var(--space-2);
+    }
   }
 </style>

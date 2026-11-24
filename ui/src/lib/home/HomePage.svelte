@@ -176,7 +176,7 @@
           role="button"
           tabindex="0"
           onclick={() => onconnect(host)}
-          onkeydown={(event) => event.key === 'Enter' && onconnect(host)}
+          onkeydown={(event) => event.target === event.currentTarget && event.key === 'Enter' && onconnect(host)}
           oncontextmenu={(event) => hostMenu(event, host)}
           title={hostAddress(host)}
         >
@@ -207,6 +207,9 @@
                 onedit(host);
               }}
             />
+          </div>
+          <div class="touch-actions">
+            <IconButton icon="more" label={t('host.more')} onclick={(event) => hostMenu(event, host)} />
           </div>
         </div>
       {:else}
@@ -391,6 +394,9 @@
   .card:focus-within .actions {
     opacity: 1;
   }
+  .touch-actions {
+    display: none;
+  }
   .empty {
     display: flex;
     flex-direction: column;
@@ -411,5 +417,36 @@
     background: linear-gradient(to bottom, color-mix(in srgb, var(--accent) 80%, #fff), var(--accent));
     box-shadow: var(--shadow-md);
     color: var(--accent-fg);
+  }
+  @media (max-width: 767px) {
+    .home {
+      padding: var(--space-3);
+    }
+    .search {
+      flex-basis: 100%;
+      min-width: 0;
+    }
+    .action {
+      max-width: 100%;
+      height: auto;
+      min-height: var(--control-height);
+      white-space: normal;
+    }
+    .grid {
+      grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr));
+    }
+  }
+  @media (pointer: coarse) {
+    .actions {
+      display: none;
+    }
+    .touch-actions {
+      display: flex;
+      flex: none;
+    }
+    .search,
+    .action {
+      min-height: var(--control-height);
+    }
   }
 </style>

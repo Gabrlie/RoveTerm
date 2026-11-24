@@ -12,7 +12,7 @@
   }
 </script>
 
-<Dialog title={t('action.host.quickConnect')} {onclose} width={420}>
+<Dialog title={t('action.host.quickConnect')} {onclose} width={420} autofocus={true}>
   <form id="quick-form" onsubmit={submit}>
     <label>{t('quick.address')}<input bind:value={address} placeholder="user@host:22" required spellcheck="false" autocomplete="off" /></label>
     <label>{t('host.password')}<input type="password" bind:value={password} placeholder={t('quick.passwordHint')} autocomplete="off" /></label>

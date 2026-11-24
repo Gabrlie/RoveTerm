@@ -181,4 +181,16 @@
     background: color-mix(in srgb, var(--bar-warning) 16%, transparent);
     color: var(--bar-warning);
   }
+  @media (max-width: 767px) {
+    .status-bar {
+      min-width: 0;
+      overflow-x: auto;
+      scrollbar-width: none;
+      touch-action: pan-x;
+    }
+    .metric,
+    .path-badge {
+      flex: none;
+    }
+  }
 </style>

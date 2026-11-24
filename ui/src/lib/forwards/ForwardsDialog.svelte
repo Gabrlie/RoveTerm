@@ -202,13 +202,15 @@
             </form>
           {/if}
         </div>
-        {#if status?.state === 'running'}
-          <IconButton icon="stop" label={t('forward.stop')} small disabled={busy === rule.id} onclick={() => void stop(rule)} />
-        {:else}
-          <IconButton icon="play" label={t('forward.start')} small disabled={busy === rule.id} onclick={() => void start(rule)} />
-        {/if}
-        <IconButton icon="edit" label={t('forward.edit')} small onclick={() => openEditor(rule)} />
-        <IconButton icon="remove" label={t('common.delete')} small danger onclick={() => void remove(rule)} />
+        <div class="rule-actions">
+          {#if status?.state === 'running'}
+            <IconButton icon="stop" label={t('forward.stop')} small disabled={busy === rule.id} onclick={() => void stop(rule)} />
+          {:else}
+            <IconButton icon="play" label={t('forward.start')} small disabled={busy === rule.id} onclick={() => void start(rule)} />
+          {/if}
+          <IconButton icon="edit" label={t('forward.edit')} small onclick={() => openEditor(rule)} />
+          <IconButton icon="remove" label={t('common.delete')} small danger onclick={() => void remove(rule)} />
+        </div>
       </li>
     {/each}
   </ul>
@@ -303,6 +305,10 @@
     flex-direction: column;
     gap: 2px;
   }
+  .rule-actions {
+    display: flex;
+    gap: var(--space-2);
+  }
   .title {
     display: flex;
     align-items: center;
@@ -315,6 +321,7 @@
   .detail {
     color: var(--fg-muted);
     font-size: var(--text-footnote);
+    overflow-wrap: anywhere;
   }
   .running {
     color: var(--accent);
@@ -333,13 +340,18 @@
   }
   .password {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
     margin-top: var(--space-1);
   }
   .password input[type='password'] {
-    flex: 1;
+    flex: 1 1 12ch;
     min-width: 0;
+  }
+  .password .check {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .editor {
     display: flex;
@@ -355,8 +367,13 @@
     color: var(--fg-muted);
     font-size: var(--text-footnote);
   }
-  .port {
-    flex: 0 0 96px !important;
+  .row > label {
+    min-width: 0;
+  }
+  @media (width > 520px) {
+    .row > .port {
+      flex: 0 0 96px;
+    }
   }
   .warning {
     display: flex;
@@ -364,5 +381,27 @@
     gap: var(--space-1);
     margin: 0;
     font-size: var(--text-footnote);
+  }
+  @media (max-width: 520px) {
+    .rule {
+      flex-wrap: wrap;
+    }
+    .text {
+      flex: 1 1 75%;
+    }
+    .title {
+      flex-wrap: wrap;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .rule-actions {
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      margin-left: auto;
+    }
+    .row > label,
+    .password input[type='password'] {
+      flex: 1 1 100%;
+    }
   }
 </style>

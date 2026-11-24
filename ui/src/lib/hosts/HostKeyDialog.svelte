@@ -34,10 +34,11 @@
   p {
     margin: 0;
     line-height: 1.5;
+    overflow-wrap: anywhere;
   }
   dl {
     display: grid;
-    grid-template-columns: auto 1fr;
+    grid-template-columns: auto minmax(0, 1fr);
     gap: var(--space-1) var(--space-3);
     margin: 0;
   }
@@ -46,10 +47,18 @@
   }
   dd {
     margin: 0;
+    overflow-wrap: anywhere;
   }
   .fingerprint {
     font-family: var(--font-mono);
     font-size: var(--text-footnote);
-    word-break: break-all;
+  }
+  @media (max-width: 520px) {
+    dl {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    dd + dt {
+      margin-top: var(--space-2);
+    }
   }
 </style>

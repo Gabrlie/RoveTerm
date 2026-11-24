@@ -343,8 +343,21 @@
     flex-direction: column;
     gap: var(--space-3);
   }
-  .port {
-    flex: 0 0 96px !important;
+  .row > label {
+    min-width: 0;
+  }
+  @media (width > 520px) {
+    .row > .port {
+      flex: 0 0 96px;
+    }
+  }
+  @media (max-width: 520px) {
+    .row {
+      flex-wrap: wrap;
+    }
+    .row > label {
+      flex: 1 1 100%;
+    }
   }
   .link {
     align-self: flex-start;
