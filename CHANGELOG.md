@@ -5,6 +5,22 @@ This file documents notable changes to RoveTerm in both Simplified Chinese and E
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-24
+
+### 中文更新日志
+
+- 修复内置 Tailscale 节点在系统休眠唤醒、网络切换或直连探测失败后的断连与卡死问题：自动重连控制面并回退至可用的 DERP 中继，重连超过短宽限期后在侧栏显示状态提示。
+- 服务器状态面板与底部状态条不再在连接中或断开后残留旧数据；本地终端现可直接读取并展示本机 CPU、内存、网卡与磁盘实时状态。
+- 运维总管标签页现在与主页一样自动收起右侧和底部面板，同时保留下载中心入口。
+- 修复应用内日志查看器中偶现的 ANSI 转义字符乱码，并更新飞牛 OS（fnOS）为官方品牌图标。
+
+### English Changelog
+
+- Fixed embedded Tailscale recovery after system sleep/wake, network changes, and failed direct probes: control sessions and DERP relays automatically re-establish, failed direct paths fall back to DERP immediately, and prolonged reconnects surface an amber indicator in the sidebar.
+- The Status panel and terminal status bar now clear stale remote metrics while connecting or after disconnecting, and local terminals now display live CPU, memory, network, and disk telemetry for the local host.
+- The Fleet Lead tab now suspends right and bottom panels just like Home while keeping the Downloads Center accessible.
+- Stripped stray ANSI escape codes from log files and the in-app log viewer, and updated fnOS hosts to use the official brand icon.
+
 ## [0.2.0] - 2026-11-23
 
 ### 中文更新日志
