@@ -16,18 +16,22 @@
     sftpOpen,
     sftpRemove,
     sftpRename,
+    transferDiscardStaged,
     transferDownload,
     transferLocalClashes,
+    transferPrepareUpload,
     transferUpload,
     type Conflict,
     type DirEntry,
     type ExternalEditUpdate,
     type FsId,
     type RemoteSource,
+    type StagedUpload,
     type TransferUpdate,
   } from '../ipc';
   import { errorText, t } from '../i18n';
   import { baseName, formatMode, formatSize, formatTime, isEditableTextFile, joinPath, normalizePath, parentPath, sortEntries } from './format';
+  import { allSelected, exceededMoveThreshold, formatCompactMeta, LONG_PRESS_MS, toggleSelectAll, toggleSelection, touchRowAction } from './fileSelection';
   import { isFinal, transfers } from './transfers.svelte';
   import { prefs } from '../settings/prefs.svelte';
   import FilesSkeleton from './FilesSkeleton.svelte';
@@ -37,6 +41,7 @@
   import { workspace } from '../workspace/workspace.svelte';
   import { externalEdits } from './external.svelte';
   import { isMobile } from '../platform';
+  import { viewport } from '../layout/viewport.svelte';
   import { notify } from '../ui/toast.svelte';
 
   interface Props {
@@ -60,7 +65,7 @@
     | { kind: 'mkdir' }
     | { kind: 'rename'; entry: DirEntry }
     | { kind: 'delete'; names: string[] }
-    | { kind: 'conflict'; fs: FsId; paths: string[]; dir: string; clashes: string[] }
+    | { kind: 'conflict'; fs: FsId; paths: string[]; dir: string; clashes: string[]; stagedPaths: string[] }
     | { kind: 'downloadConflict'; fs: FsId; paths: string[]; dir: string | null; clashes: string[] };
 
   let fsId = $state<FsId | null>(null);
@@ -73,7 +78,10 @@
   let navSeq = 0;
   let status = $state<{ error: boolean; text: string } | null>(null);
   let selected = $state<Set<string>>(new Set());
+  let selectMode = $state(false);
   let anchor = -1;
+  const touchUi = $derived(isMobile || viewport.coarse);
+  const compactList = $derived(viewport.compact);
   const showHidden = $derived(prefs.value.files.show_hidden);
   let dropping = $state(false);
   let pending = $state<Pending | null>(null);
@@ -88,6 +96,9 @@
   let unlistenDrop: UnlistenFn | undefined;
   let unbindExternal: (() => void) | undefined;
   let openingEditor = $state(false);
+  let press: { id: number; x: number; y: number; timer: number; fired: boolean } | undefined;
+  let suppressNextClick = false;
+  let suppressClickTimer = 0;
 
   async function editFile(external = false, targetEntry?: DirEntry): Promise<void> {
     const entry = targetEntry ?? (selection.length === 1 ? selection[0] : undefined);
@@ -107,8 +118,20 @@
   }
 
   const shown = $derived(sortEntries(showHidden ? entries : entries.filter((entry) => !entry.name.startsWith('.'))));
+  const shownNames = $derived(shown.map((entry) => entry.name));
   const selection = $derived(shown.filter((entry) => selected.has(entry.name)));
   const editable = $derived(selection.length === 1 && selection[0]?.kind === 'file');
+
+  function exitSelectMode(): void {
+    selectMode = false;
+    selected = new Set();
+    anchor = -1;
+  }
+
+  function toggleSelectMode(): void {
+    if (selectMode) exitSelectMode();
+    else selectMode = true;
+  }
 
   function toggleHidden(): void {
     void editPrefs((draft) => (draft.files.show_hidden = !draft.files.show_hidden));
@@ -137,8 +160,8 @@
       const listing = await sftpList(fsId, path);
       if (seq !== navSeq || destroyed) return;
       if (path !== cwd) {
-        selected = new Set();
-        anchor = -1;
+        exitSelectMode();
+        cancelLongPress();
       }
       entries = listing;
       cwd = path;
@@ -151,7 +174,7 @@
         loadingPath = null;
         loading = false;
         // Re-rendered rows drop focus; keep keyboard navigation on the list.
-        if (focusList && active && !pending) list?.focus({ preventScroll: true });
+        if (!viewport.coarse && focusList && active && !pending) list?.focus({ preventScroll: true });
       }
     }
   }
@@ -174,7 +197,21 @@
   function clickRow(event: MouseEvent, index: number): void {
     const entry = shown[index];
     if (!entry) return;
-    list?.focus({ preventScroll: true });
+    if (touchUi) {
+      if (suppressNextClick) {
+        clearClickSuppression();
+      } else if (selectMode) {
+        selected = toggleSelection(selected, entry.name);
+      } else {
+        switch (touchRowAction(entry)) {
+          case 'open': void navigate(joinPath(cwd, entry.name)); break;
+          case 'edit': void editFile(false, entry); break;
+          case 'menu': rowMenu(event.clientX, event.clientY, entry, index); break;
+        }
+      }
+      return;
+    }
+    if (!viewport.coarse) list?.focus({ preventScroll: true });
     if (event.shiftKey && anchor >= 0) {
       const [from, to] = anchor < index ? [anchor, index] : [index, anchor];
       selected = new Set(shown.slice(from, to + 1).map((row) => row.name));
@@ -189,6 +226,51 @@
       selected = new Set([entry.name]);
     }
     anchor = index;
+  }
+
+  function clearClickSuppression(): void {
+    clearTimeout(suppressClickTimer);
+    suppressNextClick = false;
+  }
+
+  function suppressPressClick(): void {
+    clearTimeout(suppressClickTimer);
+    suppressNextClick = true;
+    suppressClickTimer = window.setTimeout(clearClickSuppression, 700);
+  }
+
+  function cancelLongPress(): void {
+    if (press) clearTimeout(press.timer);
+    press = undefined;
+  }
+
+  function startLongPress(event: PointerEvent, entry: DirEntry, index: number): void {
+    if (!touchUi || !event.isPrimary) return;
+    clearClickSuppression();
+    cancelLongPress();
+    if ((event.pointerType !== 'touch' && event.pointerType !== 'pen') ||
+        (event.target instanceof Element && event.target.closest('.row-more'))) return;
+    const { pointerId: id, clientX: x, clientY: y } = event;
+    const candidate = { id, x, y, timer: 0, fired: false };
+    candidate.timer = window.setTimeout(() => {
+      candidate.fired = true;
+      suppressPressClick();
+      rowMenu(x, y, entry, index);
+    }, LONG_PRESS_MS);
+    press = candidate;
+  }
+
+  function moveLongPress(event: PointerEvent): void {
+    if (press?.id === event.pointerId && !press.fired &&
+        exceededMoveThreshold(press.x, press.y, event.clientX, event.clientY)) {
+      cancelLongPress();
+    }
+  }
+
+  function endLongPress(event: PointerEvent): void {
+    if (press?.id !== event.pointerId) return;
+    if (press.fired) suppressPressClick();
+    cancelLongPress();
   }
 
   /** Extension groups and the system colour their icons use. */
@@ -214,24 +296,34 @@
   }
 
   /** Right-click on a row: acts on the selection, selecting the row first when it is not in it. */
-  function rowMenu(event: MouseEvent, entry: DirEntry, index: number): void {
+  function onRowContextMenu(event: MouseEvent, entry: DirEntry, index: number): void {
     event.preventDefault();
     event.stopPropagation();
+    if (touchUi && (press || suppressNextClick ||
+        (event instanceof PointerEvent && (event.pointerType === 'touch' || event.pointerType === 'pen')))) return;
+    rowMenu(event.clientX, event.clientY, entry, index);
+  }
+
+  function openRowMenuAtButton(event: MouseEvent, entry: DirEntry, index: number): void {
+    const button = event.currentTarget as HTMLButtonElement;
+    const { left, bottom } = button.getBoundingClientRect();
+    rowMenu(left, bottom, entry, index);
+  }
+
+  function rowMenu(x: number, y: number, entry: DirEntry, index: number): void {
     if (!selected.has(entry.name)) {
       selected = new Set([entry.name]);
       anchor = index;
     }
-    list?.focus({ preventScroll: true });
+    if (!viewport.coarse) list?.focus({ preventScroll: true });
     const names = selection.map((row) => row.name);
     const single = names.length === 1;
     const items: MenuItem[] = [];
     if (single && (entry.kind === 'dir' || entry.kind === 'symlink')) {
       items.push({ label: t('files.open'), icon: 'folder', onselect: () => openEntry(entry) });
     }
-    items.push(
-      { label: t('files.download'), icon: 'download', onselect: () => void download(names, false) },
-      { label: t('files.downloadTo'), icon: 'folderDownload', onselect: () => void download(names, true) },
-    );
+    items.push({ label: t('files.download'), icon: 'download', onselect: () => void download(names, false) });
+    if (!isMobile) items.push({ label: t('files.downloadTo'), icon: 'folderDownload', onselect: () => void download(names, true) });
     if (single && entry.kind === 'file') {
       items.push({ label: t('files.editBuiltin'), icon: 'fileCode', separated: true, onselect: () => void editFile() });
       if (!isMobile) items.push({ label: t('files.editExternal'), icon: 'externalEdit', onselect: () => void editFile(true) });
@@ -239,7 +331,7 @@
     if (single) items.push({ label: t('files.rename'), icon: 'edit', separated: true, onselect: askRename });
     items.push({ label: t('files.copyPath'), icon: 'copy', separated: !single, onselect: () => copyPath(entry.name) });
     items.push({ label: t('common.delete'), icon: 'remove', danger: true, separated: true, onselect: askDelete });
-    menu = { x: event.clientX, y: event.clientY, items };
+    menu = { x, y, items };
   }
 
   /** A click on empty space in the list clears the selection, as in a file manager. */
@@ -255,17 +347,16 @@
     if (!fsId) return;
     selected = new Set();
     anchor = -1;
-    menu = {
-      x: event.clientX,
-      y: event.clientY,
-      items: [
-        { label: t('files.newFolder'), icon: 'folderAdd', onselect: askMkdir },
-        { label: t('files.upload'), icon: 'upload', onselect: () => void pickUpload(false) },
-        { label: t('files.uploadFolder'), icon: 'folderUpload', onselect: () => void pickUpload(true) },
-        { label: t('files.refresh'), icon: 'refresh', separated: true, onselect: () => void refresh() },
-        { label: t('files.showHidden'), icon: showHidden ? 'eye' : 'eyeOff', onselect: toggleHidden },
-      ],
-    };
+    const items: MenuItem[] = [
+      { label: t('files.newFolder'), icon: 'folderAdd', onselect: askMkdir },
+      { label: t('files.upload'), icon: 'upload', onselect: () => void pickUpload(false) },
+    ];
+    if (!isMobile) items.push({ label: t('files.uploadFolder'), icon: 'folderUpload', onselect: () => void pickUpload(true) });
+    items.push(
+      { label: t('files.refresh'), icon: 'refresh', separated: true, onselect: () => void refresh() },
+      { label: t('files.showHidden'), icon: showHidden ? 'eye' : 'eyeOff', onselect: toggleHidden },
+    );
+    menu = { x: event.clientX, y: event.clientY, items };
   }
 
   function openEntry(entry: DirEntry): void {
@@ -277,7 +368,7 @@
   /** Remote paths and the file session are fixed when the action starts, so navigating while a
    *  dialog is open cannot change what is transferred. */
   async function download(names: string[], ask: boolean): Promise<void> {
-    if (!fsId || names.length === 0) return;
+    if (!fsId || names.length === 0 || (isMobile && ask)) return;
     const fs = fsId;
     const paths = names.map((name) => joinPath(cwd, name));
     let dir: string | null = prefs.device.download_dir || null;
@@ -288,15 +379,20 @@
     }
     try {
       const clashes = await transferLocalClashes(names, dir);
-      if (clashes.length > 0 && !defaultConflict()) pending = { kind: 'downloadConflict', fs, paths, dir, clashes };
-      else await startDownload(fs, paths, dir, defaultConflict() ?? 'rename');
+      if (destroyed) return;
+      if (clashes.length > 0 && !defaultConflict()) {
+        cancelPending();
+        pending = { kind: 'downloadConflict', fs, paths, dir, clashes };
+      } else {
+        await startDownload(fs, paths, dir, defaultConflict() ?? 'rename');
+      }
     } catch (error) {
       fail(error);
     }
   }
 
   async function startDownload(fs: FsId, paths: string[], dir: string | null, conflict: Conflict): Promise<void> {
-    pending = null;
+    cancelPending();
     try {
       await transferDownload(fs, paths, dir, conflict);
       info(t('files.downloading', { count: paths.length }));
@@ -307,34 +403,73 @@
   }
 
   async function pickUpload(directory: boolean): Promise<void> {
-    const picked = await openDialog({ directory, multiple: true });
-    if (picked === null) return;
-    startUpload(Array.isArray(picked) ? picked : [picked]);
+    if (isMobile && directory) return;
+    try {
+      const picked = await openDialog({ directory, multiple: true });
+      if (picked === null || destroyed) return;
+      const rawPaths = Array.isArray(picked) ? picked : [picked];
+      const staged: StagedUpload[] = await transferPrepareUpload(rawPaths);
+      if (destroyed) {
+        discardStaged(staged.map((item) => item.path));
+        return;
+      }
+      startPreparedUpload(staged);
+    } catch (error) {
+      if (!destroyed) fail(error);
+    }
   }
 
-  function startUpload(paths: string[]): void {
+  function discardStaged(paths: string[]): void {
+    if (paths.length === 0) return;
+    void transferDiscardStaged(paths).catch((error: unknown) => console.warn('staged upload cleanup failed', error));
+  }
+
+  function cancelPending(): void {
+    if (pending?.kind === 'conflict') discardStaged(pending.stagedPaths);
+    pending = null;
+  }
+
+  function startPreparedUpload(staged: StagedUpload[]): void {
+    const paths = staged.map((item) => item.path);
+    startUpload(paths, staged.map((item) => item.name), paths);
+  }
+
+  function startUpload(paths: string[], names = paths.map(baseName), stagedPaths: string[] = []): void {
     if (!fsId || paths.length === 0) return;
     const fs = fsId;
     const dir = cwd;
     const existing = new Set(entries.map((entry) => entry.name));
-    const clashes = paths.map(baseName).filter((name) => existing.has(name));
-    if (clashes.length > 0 && !defaultConflict()) pending = { kind: 'conflict', fs, paths, dir, clashes };
-    else void upload(fs, paths, dir, defaultConflict() ?? 'rename');
+    const clashes = names.filter((name) => existing.has(name));
+    const conflict = defaultConflict();
+    if (clashes.length > 0 && !conflict) {
+      cancelPending();
+      pending = { kind: 'conflict', fs, paths, dir, clashes, stagedPaths };
+    } else {
+      void upload(fs, paths, dir, conflict ?? 'rename', stagedPaths);
+    }
   }
 
-  async function upload(fs: FsId, paths: string[], dir: string, conflict: Conflict): Promise<void> {
+  function confirmUpload(conflict: Conflict): void {
+    if (pending?.kind !== 'conflict') return;
+    const { fs, paths, dir, stagedPaths } = pending;
     pending = null;
+    void upload(fs, paths, dir, conflict, stagedPaths);
+  }
+
+  async function upload(fs: FsId, paths: string[], dir: string, conflict: Conflict, stagedPaths: string[] = []): Promise<void> {
     try {
       await transferUpload(fs, paths, dir, conflict);
       info(t('files.uploading', { count: paths.length }));
       transfers.popover = true;
     } catch (error) {
+      discardStaged(stagedPaths);
       fail(error);
     }
   }
 
   function askMkdir(): void {
     nameInput = '';
+    cancelPending();
     pending = { kind: 'mkdir' };
   }
 
@@ -342,14 +477,19 @@
     const entry = selection[0];
     if (!entry) return;
     nameInput = entry.name;
+    cancelPending();
     pending = { kind: 'rename', entry };
   }
 
   function askDelete(): void {
     if (selection.length === 0) return;
     const request: Pending = { kind: 'delete', names: selection.map((entry) => entry.name) };
-    if (prefs.value.files.confirm_delete) pending = request;
-    else void confirmPending(undefined, request);
+    if (prefs.value.files.confirm_delete) {
+      cancelPending();
+      pending = request;
+    } else {
+      void confirmPending(undefined, request);
+    }
   }
 
   /** Carries out `action` (the open dialog's by default). */
@@ -373,16 +513,16 @@
         await sftpRemove(fsId, action.names.map((entry) => joinPath(cwd, entry)));
         selected = new Set();
       }
-      pending = null;
+      if (pending === action) pending = null;
       await refresh();
     } catch (error) {
-      pending = null;
+      if (pending === action) pending = null;
       fail(error);
     }
   }
 
   function onListKeydown(event: KeyboardEvent): void {
-    if (pending) return;
+    if (pending || event.target instanceof HTMLButtonElement) return;
     const index = shown.findIndex((entry) => entry.name === [...selected].at(-1));
     switch (event.key) {
       case 'ArrowDown':
@@ -469,10 +609,17 @@
     });
     if (!isMobile) unlistenEdits = externalEdits.listen(onExternalEdit);
     transfers.start().catch((error: unknown) => console.warn('transfer events unavailable', error));
-    try {
-      unlistenDrop = await getCurrentWebview().onDragDropEvent(onDragDrop);
-    } catch (error) {
-      console.info('drag and drop unavailable', error);
+    if (!isMobile) {
+      try {
+        const unlisten = await getCurrentWebview().onDragDropEvent(onDragDrop);
+        if (destroyed) {
+          unlisten();
+          return;
+        }
+        unlistenDrop = unlisten;
+      } catch (error) {
+        console.info('drag and drop unavailable', error);
+      }
     }
     try {
       const opened = await sftpOpen(source, password, remember);
@@ -494,12 +641,23 @@
   });
 
   $effect(() => {
-    if (active && !pending) list?.focus({ preventScroll: true });
+    if (!viewport.coarse && active && !pending) list?.focus({ preventScroll: true });
+  });
+
+  $effect(() => {
+    if (!touchUi) {
+      if (selectMode) exitSelectMode();
+      cancelLongPress();
+      clearClickSuppression();
+    }
   });
 
   onDestroy(() => {
     destroyed = true;
     clearTimeout(refreshTimer);
+    cancelLongPress();
+    clearClickSuppression();
+    if (pending?.kind === 'conflict') discardStaged(pending.stagedPaths);
     unsubscribe?.();
     unlistenEdits?.();
     unlistenSaves?.();
@@ -509,7 +667,7 @@
   });
 </script>
 
-<div class="browser" class:dropping bind:this={root}>
+<div class="browser" class:dropping class:touch={touchUi} class:compact={compactList} bind:this={root}>
   <div class="toolbar">
     <IconButton icon="up" label={t('files.up')} small disabled={!fsId || parentPath(cwd) === null} onclick={goUp} />
     <span class:spinning={loading && entries.length > 0}>
@@ -520,9 +678,15 @@
     </form>
     <IconButton icon="folderAdd" label={t('files.newFolder')} small disabled={!fsId} onclick={askMkdir} />
     <IconButton icon="upload" label={t('files.upload')} small disabled={!fsId} onclick={() => void pickUpload(false)} />
-    <IconButton icon="folderUpload" label={t('files.uploadFolder')} small disabled={!fsId} onclick={() => void pickUpload(true)} />
-    <IconButton icon="download" label={t('files.download')} small disabled={selection.length === 0} onclick={() => void download(selection.map((entry) => entry.name), false)} />
-    <IconButton icon="folderDownload" label={t('files.downloadTo')} small disabled={selection.length === 0} onclick={() => void download(selection.map((entry) => entry.name), true)} />
+    {#if !isMobile}
+      <IconButton icon="folderUpload" label={t('files.uploadFolder')} small disabled={!fsId} onclick={() => void pickUpload(true)} />
+    {/if}
+    {#if !selectMode}
+      <IconButton icon="download" label={t('files.download')} small disabled={selection.length === 0} onclick={() => void download(selection.map((entry) => entry.name), false)} />
+    {/if}
+    {#if !isMobile}
+      <IconButton icon="folderDownload" label={t('files.downloadTo')} small disabled={selection.length === 0} onclick={() => void download(selection.map((entry) => entry.name), true)} />
+    {/if}
     <IconButton icon="fileCode" label={t('files.editBuiltin')} small disabled={!editable || openingEditor} onclick={() => void editFile()} />
     {#if !isMobile}
       <IconButton icon="externalEdit" label={t('files.editExternal')} small disabled={!editable} onclick={() => void editFile(true)} />
@@ -530,24 +694,49 @@
     {/if}
     <IconButton icon="drafts" label={t('editor.drafts')} small active={editors.dirty.length > 0} onclick={() => (editors.showDrafts = true)} />
     <IconButton icon="edit" label={t('files.rename')} small disabled={selection.length !== 1} onclick={askRename} />
-    <IconButton icon="remove" label={t('common.delete')} small danger disabled={selection.length === 0} onclick={askDelete} />
+    {#if !selectMode}
+      <IconButton icon="remove" label={t('common.delete')} small danger disabled={selection.length === 0} onclick={askDelete} />
+    {/if}
     <IconButton icon={showHidden ? 'eye' : 'eyeOff'} label={t('files.showHidden')} small active={showHidden} onclick={toggleHidden} />
+    {#if touchUi}
+      <IconButton icon="listChecks" label={t('files.selectMode')} small active={selectMode} disabled={!fsId} onclick={toggleSelectMode} />
+    {/if}
     {#if onclose}
       <span class="toolbar-gap"></span>
       <IconButton icon="close" label={t('common.close')} small onclick={onclose} />
     {/if}
   </div>
 
-  <div class="header row">
-    <span class="name">{t('files.name')}</span>
-    <span class="size">{t('files.size')}</span>
-    <span class="time">{t('files.modified')}</span>
-    <span class="mode">{t('files.mode')}</span>
-    {#if loading && entries.length > 0}
-      <div class="loading-bar" aria-hidden="true"></div>
+  {#if selectMode}
+    <div class="select-bar">
+      <span role="status">{t('files.selectedCount', { count: selection.length })}</span>
+      <button type="button" class="plain" disabled={shownNames.length === 0} onclick={() => (selected = toggleSelectAll(shownNames, selected))}>
+        {allSelected(shownNames, selected) ? t('files.clearSelection') : t('files.selectAll')}
+      </button>
+      <button type="button" class="plain" disabled={selection.length === 0} onclick={() => void download(selection.map((entry) => entry.name), false)}>
+        {t('files.download')}
+      </button>
+      <button type="button" class="plain danger" disabled={selection.length === 0} onclick={askDelete}>{t('common.delete')}</button>
+      <button type="button" class="plain" onclick={exitSelectMode}>{t('files.exitSelect')}</button>
+    </div>
+  {/if}
+
+  {#if compactList}
+    {#if loading}
+      <div class="loading-bar compact-progress" aria-hidden="true"></div>
     {/if}
-  </div>
-  <div class="list" class:loading tabindex="0" role="listbox" aria-multiselectable="true" aria-busy={loading} aria-label={label} bind:this={list} onkeydown={onListKeydown} oncontextmenu={listMenu} onclick={clickBlank}>
+  {:else}
+    <div class="header row" class:with-more={touchUi && !selectMode}>
+      <span class="name">{t('files.name')}</span>
+      <span class="size">{t('files.size')}</span>
+      <span class="time">{t('files.modified')}</span>
+      <span class="mode">{t('files.mode')}</span>
+      {#if loading && entries.length > 0}
+        <div class="loading-bar" aria-hidden="true"></div>
+      {/if}
+    </div>
+  {/if}
+  <div class="list" class:loading tabindex="0" role="listbox" aria-multiselectable="true" aria-busy={loading} aria-label={label} bind:this={list} onkeydown={onListKeydown} oncontextmenu={listMenu} onclick={clickBlank} onscroll={cancelLongPress}>
     <!-- Connecting and the first listing both show the skeleton, so no empty list flashes in between. -->
     {#if loading && entries.length === 0}
       <FilesSkeleton />
@@ -558,22 +747,46 @@
       <div
         class="row entry"
         class:selected={selected.has(entry.name)}
+        class:with-more={touchUi && !selectMode}
         role="option"
         aria-selected={selected.has(entry.name)}
         tabindex="-1"
         data-index={index}
         onclick={(event) => clickRow(event, index)}
-        ondblclick={() => openEntry(entry)}
-        oncontextmenu={(event) => rowMenu(event, entry, index)}
+        ondblclick={() => { if (!touchUi) openEntry(entry); }}
+        oncontextmenu={(event) => onRowContextMenu(event, entry, index)}
+        onpointerdown={(event) => startLongPress(event, entry, index)}
+        onpointermove={moveLongPress}
+        onpointerup={endLongPress}
+        onpointercancel={endLongPress}
         onkeydown={() => {}}
       >
         <span class="name">
+          {#if selectMode}
+            <span class="selection-check" class:checked={selected.has(entry.name)} aria-hidden="true">
+              {#if selected.has(entry.name)}<Icon name="check" size={12} />{/if}
+            </span>
+          {/if}
           <span class="glyph" style:--tint={fileTint(entry)}><Icon name={entry.kind === 'dir' ? 'folder' : entry.kind === 'symlink' ? 'link' : 'file'} size={15} /></span>
-          <span class="label">{entry.name}</span>
+          {#if compactList}
+            <span class="compact-content">
+              <span class="label">{entry.name}</span>
+              <span class="compact-meta">{formatCompactMeta(entry)}</span>
+            </span>
+          {:else}
+            <span class="label">{entry.name}</span>
+          {/if}
         </span>
-        <span class="size">{entry.kind === 'dir' ? '' : formatSize(entry.size)}</span>
-        <span class="time">{formatTime(entry.modified)}</span>
-        <span class="mode">{formatMode(entry.permissions)}</span>
+        {#if !compactList}
+          <span class="size">{entry.kind === 'dir' ? '' : formatSize(entry.size)}</span>
+          <span class="time">{formatTime(entry.modified)}</span>
+          <span class="mode">{formatMode(entry.permissions)}</span>
+        {/if}
+        {#if touchUi && !selectMode}
+          <span class="row-more">
+            <IconButton icon="more" small label={t('files.moreActions')} onclick={(event) => { event.stopPropagation(); openRowMenuAtButton(event, entry, index); }} />
+          </span>
+        {/if}
       </div>
     {/each}
   </div>
@@ -592,7 +805,7 @@
 {/if}
 
 {#if pending?.kind === 'mkdir' || pending?.kind === 'rename'}
-  <Dialog title={pending.kind === 'mkdir' ? t('files.newFolder') : t('files.rename')} onclose={() => (pending = null)} width={380}>
+  <Dialog title={pending.kind === 'mkdir' ? t('files.newFolder') : t('files.rename')} onclose={cancelPending} width={380} autofocus>
     <form id="files-name-form" onsubmit={confirmPending}>
       <input bind:value={nameInput} spellcheck="false" aria-label={t('files.name')} />
     </form>
@@ -610,14 +823,13 @@
     {/snippet}
   </Dialog>
 {:else if pending?.kind === 'conflict'}
-  {@const request = pending}
-  <Dialog title={t('files.conflictTitle')} onclose={() => (pending = null)} width={440}>
-    <p class="message">{t('files.conflictBody', { names: request.clashes.slice(0, 5).join(', ') })}</p>
+  <Dialog title={t('files.conflictTitle')} onclose={cancelPending} width={440}>
+    <p class="message">{t('files.conflictBody', { names: pending.clashes.slice(0, 5).join(', ') })}</p>
     {#snippet actions()}
-      <button type="button" class="secondary" onclick={() => (pending = null)}>{t('common.cancel')}</button>
-      <button type="button" class="secondary" onclick={() => void upload(request.fs, request.paths, request.dir, 'skip')}>{t('files.skip')}</button>
-      <button type="button" class="secondary" onclick={() => void upload(request.fs, request.paths, request.dir, 'rename')}>{t('files.keepBoth')}</button>
-      <button type="button" class="primary" onclick={() => void upload(request.fs, request.paths, request.dir, 'overwrite')}>{t('files.overwrite')}</button>
+      <button type="button" class="secondary" onclick={cancelPending}>{t('common.cancel')}</button>
+      <button type="button" class="secondary" onclick={() => confirmUpload('skip')}>{t('files.skip')}</button>
+      <button type="button" class="secondary" onclick={() => confirmUpload('rename')}>{t('files.keepBoth')}</button>
+      <button type="button" class="primary" onclick={() => confirmUpload('overwrite')}>{t('files.overwrite')}</button>
     {/snippet}
   </Dialog>
 {:else if pending?.kind === 'downloadConflict'}
@@ -659,6 +871,31 @@
     margin: 0 var(--space-1);
     background: var(--separator);
   }
+  .select-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    flex: none;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-3);
+    background: var(--material-bar);
+    box-shadow: inset 0 -1px 0 var(--separator);
+    font-size: var(--text-footnote);
+  }
+  .select-bar > span {
+    margin-inline-end: auto;
+    color: var(--fg-muted);
+    white-space: nowrap;
+  }
+  .select-bar button {
+    min-height: var(--touch-target, 44px);
+  }
+  .select-bar .danger {
+    color: var(--danger);
+  }
+  .select-bar .danger:hover:not(:disabled) {
+    background: var(--danger-soft);
+  }
   .spinning :global(svg) {
     animation: refresh-spin calc(4 * var(--dur-slow)) linear infinite;
   }
@@ -698,6 +935,9 @@
     height: 28px;
     border-radius: var(--radius-sm);
   }
+  .row.with-more {
+    grid-template-columns: minmax(120px, 1fr) 80px 136px 88px var(--touch-target, 44px);
+  }
   .header {
     position: relative;
     height: 26px;
@@ -717,6 +957,10 @@
     overflow: hidden;
     pointer-events: none;
     background: var(--accent-soft);
+  }
+  .compact-progress {
+    position: static;
+    flex: none;
   }
   .loading-bar::before {
     content: '';
@@ -748,6 +992,17 @@
     user-select: none;
     transition: opacity var(--dur) var(--ease);
   }
+  .touch .entry {
+    height: auto;
+    min-height: var(--touch-target, 44px);
+    -webkit-touch-callout: none;
+  }
+  .compact .entry {
+    display: flex;
+    height: auto;
+    min-height: 52px;
+    padding: var(--space-2) var(--space-3);
+  }
   .list.loading .entry {
     opacity: 0.55;
   }
@@ -761,14 +1016,14 @@
   .entry.selected {
     background: var(--fill-pressed);
   }
-  .list:focus .entry.selected {
+  .touch .entry.selected,
+  .compact .entry.selected {
+    background: var(--accent-soft);
+  }
+  .browser:not(.touch, .compact) .list:focus .entry.selected {
     background: var(--accent);
   }
-  .list:focus .entry.selected .name,
-  .list:focus .entry.selected .size,
-  .list:focus .entry.selected .time,
-  .list:focus .entry.selected .mode,
-  .list:focus .entry.selected .glyph {
+  .browser:not(.touch, .compact) .list:focus .entry.selected :is(.name, .size, .time, .mode, .glyph) {
     color: var(--accent-fg);
   }
   .name {
@@ -782,10 +1037,52 @@
     display: inline-flex;
     color: var(--tint);
   }
+  .compact .glyph {
+    flex: none;
+  }
   .label {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .compact .name {
+    flex: 1;
+  }
+  .compact-content {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+  .compact-meta {
+    overflow: hidden;
+    color: var(--fg-muted);
+    font-size: var(--text-caption);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row-more {
+    display: inline-flex;
+    flex: none;
+  }
+  .row-more :global(button) {
+    min-width: var(--touch-target, 44px);
+    min-height: var(--touch-target, 44px);
+  }
+  .selection-check {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border: 1px solid var(--fg-muted);
+    border-radius: var(--radius-xs);
+  }
+  .selection-check.checked {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-fg);
   }
   .size,
   .time,
