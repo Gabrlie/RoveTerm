@@ -9,6 +9,8 @@
 | 路径 | 职责 |
 |---|---|
 | `src/lib/ipc.ts` | 所有 Tauri 命令和事件的类型化封装；组件不直接调用 `invoke` |
+| `src/lib/platform.ts` | 平台与能力检测 |
+| `src/lib/layout/insets.ts` | 原生安全区域与软键盘遮挡高度 |
 | `src/lib/terminal/TermView.svelte` | 一个 xterm.js 视图绑定一个会话 |
 | `src/lib/terminal/theme.ts` | 亮、暗两套终端配色 |
 | `src/lib/terminal/registry.ts` | 按面板登记的终端句柄，供复制、粘贴等动作找到聚焦的终端 |
@@ -35,6 +37,14 @@
 | `src/styles/controls.css` | 共享控件样式：按钮（`primary` / `secondary` / `plain`）、文本框、滚动条、分组表单（`form-group` / `form-row`） |
 | `src/lib/terminal/schemes.ts`、`SCHEMES.md` | 终端配色目录与第三方配色来源 |
 | `src/styles/fonts.css`、`src/assets/fonts/` | 内置的 Symbols Nerd Font Mono 及其许可说明 |
+
+## 移动端
+
+`platform.ts` 提供平台标志和能力开关。Android 与 iOS 隐藏本地终端、定时任务入口及桌面窗口控件。
+
+`layout/insets.ts` 读取 `mobile_insets` 并订阅 `rove-mobile://insets`，将安全区域和键盘遮挡高度写入 `--safe-top`、`--safe-right`、`--safe-bottom`、`--safe-left` 与 `--ime-bottom`。浏览器的 CSS 安全区域和 Visual Viewport 提供回退值。
+
+移动端设置的「安全」页显示 vault 锁定状态，提供解锁、密钥丢失后的凭据重置，以及生物识别或屏幕锁保护开关。
 
 ## TermView
 

@@ -29,7 +29,7 @@ Profile 是一组启用的插件加一份 TOML 配置。随应用交付的 profi
 | Profile | 载体 | 用途 |
 |---|---|---|
 | `desktop` | `src-tauri` | Windows / macOS / Linux 桌面应用 |
-| `mobile` | `src-tauri`（Android） | 移动端，不启用本地 PTY |
+| `mobile` | `src-tauri`（Android / iOS） | 移动端，不启用本地 PTY 或定时任务 |
 | `headless` | `rove` CLI | 以 MCP server / ACP 模式运行，无 UI |
 
 配置按层合并：内置 profile（`src-tauri/profiles/*.toml`）→ 用户配置文件（应用配置目录下的 `roveterm.toml`）→ 应用运行时生成的一层（数据库路径、钥匙串服务名）；后一层按表深度合并覆盖前一层。每个插件在 `apply` 时校验自己的配置段，配置错误让启动失败，而不是被静默忽略。
@@ -88,7 +88,7 @@ src-tauri 的 OutputSink → ipc::Channel → TermView.write(Uint8Array)
 | Seam | Definition 所在 | Provider | Consumer |
 |---|---|---|---|
 | `TerminalSession` | rove-session | rove-pty、rove-ssh | `SessionManager`、AI 终端工具 |
-| `KeyCache` | rove-vault | 系统钥匙串（`keyring`）、Android Keystore | `Vault` 解锁 |
+| `KeyCache` | rove-vault | 系统钥匙串（`keyring`）、Android Keystore、iOS Keychain | `Vault` 解锁 |
 | `JournalStore` | rove-journal | SQLite | `SessionManager`、会话恢复、审计 |
 | `FileSystem` | rove-fs | 本地、SFTP | 传输队列、SFTP 面板、ACP `fs/*`、MCP 文件工具 |
 | `SyncBackend` | rove-sync | WebDAV、S3、Gist、自建服务 | 同步引擎 |
@@ -102,7 +102,7 @@ src-tauri 的 OutputSink → ipc::Channel → TermView.write(Uint8Array)
 
 运维任务先将正文写入本机加密审计，再持久化目标和状态后派发。总管通过任务工具异步编排，单主机 `Assistant` 仍通过 `Policy` 执行。任务范围、全局 worker 许可、状态迁移和恢复规则由 `rove-ops` 提供；应用层适配主机解析、凭据、模型和界面事件。详见 [ops](subsystems/ops.md)。
 
-- 凭据只以密文存储；设备主密钥只存在系统钥匙串里（[vault](subsystems/vault.md)）。
+- 凭据只以密文存储，设备主密钥由本机 `KeyCache` 托管（[vault](subsystems/vault.md)）。
 - 启动时静默解锁；解锁失败时应用照常可用，只有需要凭据的操作才请求授权。
 - **AI 可见即已记录**：AI 能看到的输入、执行的命令、读写的文件都能从 Journal 还原；唯一的例外是用户主动删除的对话（[ai](subsystems/ai.md) 的 `ai_delete`）。
 - Agent 进程发来的任何"始终允许"或模式请求都不参与决策；只有本地 `Policy` 决定是否放行。

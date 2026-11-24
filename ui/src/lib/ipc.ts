@@ -3,6 +3,15 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { TailscalePath as TailnetPath, TailscalePingResult, TailscaleSnapshot, TailscaleStatus } from './tailscale/types';
 import type { OpsTaskView } from './ops/types';
+import type { MobileInsets } from './layout/insets';
+
+export function mobileInsets(): Promise<MobileInsets> {
+  return invoke('mobile_insets');
+}
+
+export function onMobileInsets(handler: (insets: MobileInsets) => void): Promise<UnlistenFn> {
+  return listen<MobileInsets>('rove-mobile://insets', (event) => handler(event.payload));
+}
 
 export function opsTasks(conversation?: string): Promise<OpsTaskView[]> {
   return invoke('ops_task_list', { conversation });
@@ -268,6 +277,20 @@ export function vaultResetSecrets(): Promise<LockState> {
   return invoke('vault_reset_secrets');
 }
 
+export interface VaultBiometricStatus {
+  supported: boolean;
+  enrolled: boolean;
+  enabled: boolean;
+}
+
+export function vaultBiometricStatus(): Promise<VaultBiometricStatus> {
+  return invoke('vault_biometric_status');
+}
+
+export function vaultSetBiometric(enabled: boolean): Promise<DevicePrefs> {
+  return invoke('vault_set_biometric', { enabled });
+}
+
 /** Terminal appearance and behaviour; see `TerminalPrefs` in rove-vault. */
 export interface TerminalPrefs {
   /** Empty uses the built-in font stack. */
@@ -490,6 +513,7 @@ export interface DevicePrefs {
   external_editor: { program: string; args: string[] };
   tailscale: TailscalePrefs;
   updates: UpdatePrefs;
+  vault_biometric: boolean;
 }
 
 export interface UpdatePrefs {

@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  export type SettingsSection = 'appearance' | 'terminal' | 'files' | 'status' | 'ai' | 'sync' | 'tailscale' | 'shortcuts' | 'logs' | 'about';
+  export type SettingsSection = 'appearance' | 'terminal' | 'files' | 'status' | 'ai' | 'sync' | 'security' | 'tailscale' | 'shortcuts' | 'logs' | 'about';
 </script>
 
 <script lang="ts">
@@ -20,7 +20,8 @@
   import LogsSettings from './sections/LogsSettings.svelte';
   import AboutSettings from './sections/AboutSettings.svelte';
   import TailscaleSettings from './sections/TailscaleSettings.svelte';
-  import { isMobile } from '../platform';
+  import SecuritySettings from './sections/SecuritySettings.svelte';
+  import { capabilities, isMobile } from '../platform';
 
   let { initial = 'appearance', onclose, onopentailscale }: { initial?: SettingsSection; onclose: () => void; onopentailscale?: () => void } = $props();
 
@@ -33,6 +34,7 @@
     { id: 'status', label: 'settings.section.status', icon: 'pulse', tint: 'green' },
     { id: 'ai', label: 'settings.section.ai', icon: 'command', tint: 'pink' },
     { id: 'sync', label: 'settings.section.sync', icon: 'cloud', tint: 'teal' },
+    ...(capabilities.biometricVault ? [{ id: 'security', label: 'settings.section.security', icon: 'lock', tint: 'green' } as const] : []),
     ...(!isMobile ? [{ id: 'tailscale' as const, label: 'settings.section.tailscale' as const, icon: 'network' as const, tint: 'blue' }] : []),
     { id: 'shortcuts', label: 'settings.section.shortcuts', icon: 'keyboard', tint: 'orange' },
     { id: 'logs', label: 'settings.section.logs', icon: 'snippets', tint: 'graphite' },
@@ -45,7 +47,7 @@
 </script>
 
 <Dialog title={t('settings.title')} {onclose} width={780}>
-  <div class="settings">
+  <div class="settings" class:mobile={isMobile}>
     <nav aria-label={t('settings.title')}>
       {#each SECTIONS as entry (entry.id)}
         <button type="button" class:active={section === entry.id} aria-current={section === entry.id ? 'page' : undefined} onclick={() => (section = entry.id)}>
@@ -68,6 +70,8 @@
         <AiSettings />
       {:else if section === 'sync'}
         <SyncSettings />
+      {:else if section === 'security' && capabilities.biometricVault}
+        <SecuritySettings />
       {:else if section === 'tailscale' && !isMobile}
         <TailscaleSettings {onopentailscale} />
       {:else if section === 'shortcuts'}
@@ -160,5 +164,19 @@
   .problem {
     flex: 1;
     margin-right: auto;
+  }
+  @media (max-width: 560px) {
+    .settings.mobile {
+      flex-direction: column;
+    }
+    .mobile nav {
+      flex: none;
+      flex-direction: row;
+      overflow-x: auto;
+      box-shadow: inset 0 -1px 0 var(--separator);
+    }
+    .mobile nav button {
+      flex: none;
+    }
   }
 </style>

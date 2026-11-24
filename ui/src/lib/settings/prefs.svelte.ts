@@ -52,6 +52,7 @@ const DEVICE_DEFAULTS: DevicePrefs = {
   external_editor: { program: '', args: [] },
   tailscale: { configured: false, auto_connect: true, control_url: '', hostname: 'RoveTerm' },
   updates: { auto_check: true, skipped_version: '' },
+  vault_biometric: false,
 };
 
 /**
