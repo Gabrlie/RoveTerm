@@ -34,12 +34,21 @@ import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import org.json.JSONException
+import java.io.File
+import java.math.BigInteger
 import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 
 @InvokeArg
 internal class RegisterChannelArgs {
     lateinit var channel: Channel
+}
+
+@InvokeArg
+internal class StageFileArgs {
+    lateinit var uri: String
+    lateinit var destDir: String
+    var maxBytes: BigInteger? = null
 }
 
 @TauriPlugin
@@ -51,12 +60,16 @@ class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
 
     private val insets = InsetsObserver(activity)
     private val keystore = KeystoreHelper(activity)
+    private val fileBridge = FileBridge(activity)
     private val main = Handler(Looper.getMainLooper())
     private val keyguard = activity.getSystemService(KeyguardManager::class.java)
     private var active: Invoke? = null
+    private var activeExport: PendingExport? = null
     private var prompt: BiometricPrompt? = null
     private var legacyOperation: (() -> Unit)? = null
     private var lifecycleChannel: Channel? = null
+
+    private data class PendingExport(val invoke: Invoke, val sourceFile: File)
     private val lifecycleCallbacks = object : Application.ActivityLifecycleCallbacks {
         override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
         override fun onActivityStarted(activity: Activity) {}
@@ -168,6 +181,88 @@ class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     @Command
+    fun stageFile(invoke: Invoke) {
+        withFileOperation(invoke) {
+            val args = try {
+                invoke.parseArgs(StageFileArgs::class.java)
+            } catch (_: Exception) {
+                throw BridgeFailure("invalid_input", "Invalid staging arguments")
+            }
+            if (args.maxBytes?.signum() == -1) {
+                throw BridgeFailure("invalid_input", "Maximum file size must be nonnegative")
+            }
+            // Android file and stream sizes are bounded by a signed Long.
+            val maxBytes = args.maxBytes?.min(BigInteger.valueOf(Long.MAX_VALUE))?.toLong()
+            fileBridge.execute {
+                withFileOperation(invoke) {
+                    val file = fileBridge.stageFile(args.uri, args.destDir, maxBytes)
+                    invoke.resolve(JSObject().put("path", file.path).put("name", file.name).put("size", file.size))
+                }
+            }
+        }
+    }
+
+    @Command
+    fun shareFile(invoke: Invoke) {
+        activity.runOnUiThread {
+            withFileOperation(invoke) {
+                requireFileWindow()
+                val args = invoke.getArgs()
+                fileBridge.shareFile(args.requireString("path"), args.opt("title") as? String)
+                invoke.resolve()
+            }
+        }
+    }
+
+    @Command
+    fun exportFile(invoke: Invoke) {
+        activity.runOnUiThread {
+            withFileOperation(invoke) {
+                requireFileWindow()
+                if (activeExport != null || legacyOperation != null) {
+                    throw BridgeFailure("unavailable", "Another system picker is in progress")
+                }
+                val args = invoke.getArgs()
+                val export = fileBridge.prepareExportIntent(
+                    args.requireString("sourcePath"), args.requireString("suggestedName"),
+                )
+                activeExport = PendingExport(invoke, export.sourceFile)
+                try {
+                    startActivityForResult(invoke, export.intent, ::exportFileResult.name)
+                } catch (error: Exception) {
+                    finishExport(invoke, Result.failure(error))
+                }
+            }
+        }
+    }
+
+    @ActivityCallback
+    fun exportFileResult(invoke: Invoke, result: ActivityResult) {
+        val pending = activeExport ?: return
+        if (pending.invoke !== invoke) return
+        if (result.resultCode == Activity.RESULT_CANCELED) {
+            finishExport(invoke, Result.success(false))
+            return
+        }
+        val target = result.data?.data
+        if (result.resultCode != Activity.RESULT_OK || target == null) {
+            finishExport(invoke, Result.failure(BridgeFailure("unavailable", "The export destination is unavailable")))
+            return
+        }
+        try {
+            fileBridge.execute {
+                val exported = runCatching {
+                    fileBridge.copyToUri(pending.sourceFile, target)
+                    true
+                }
+                main.post { finishExport(invoke, exported) }
+            }
+        } catch (error: Exception) {
+            finishExport(invoke, Result.failure(error))
+        }
+    }
+
+    @Command
     fun getInsets(invoke: Invoke) {
         activity.runOnUiThread { invoke.resolve(insets.snapshot()) }
     }
@@ -255,6 +350,10 @@ class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
         }
         lifecycleChannel = null
         insets.close()
+        activeExport?.let { pending ->
+            finishExport(pending.invoke, Result.failure(BridgeFailure("unavailable", "Export was interrupted")))
+        }
+        fileBridge.close()
         val previousPrompt = prompt
         active?.let { invoke ->
             finish(invoke) { invoke.reject("Authentication was interrupted", "denied") }
@@ -434,6 +533,9 @@ class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
     private fun startCredentialConfirmation(
         invoke: Invoke, title: String, subtitle: String, operation: () -> Unit,
     ) {
+        if (activeExport != null) {
+            throw BridgeFailure("unavailable", "A system file picker is in progress")
+        }
         val intent = keyguard?.createConfirmDeviceCredentialIntent(title, subtitle)
             ?: throw BridgeFailure("biometric_unavailable", "No device credential is enrolled")
         legacyOperation = operation
@@ -465,6 +567,37 @@ class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
             is UserNotAuthenticatedException -> invoke.reject("Device key is locked", "denied")
             is AEADBadTagException -> invoke.reject("Invalid vault ciphertext", "malformed")
             else -> invoke.reject("Could not access Android Keystore", "unavailable")
+        }
+    }
+
+    private fun requireFileWindow() {
+        if (activity.isDestroyed || activity.isFinishing) {
+            throw BridgeFailure("unavailable", "No active window for file operations")
+        }
+    }
+
+    private fun finishExport(invoke: Invoke, result: Result<Boolean>) {
+        if (activeExport?.invoke !== invoke) return
+        activeExport = null
+        result.fold(
+            { exported -> invoke.resolve(JSObject().put("exported", exported)) },
+            { error -> rejectFileError(invoke, error) },
+        )
+    }
+
+    private fun withFileOperation(invoke: Invoke, operation: () -> Unit) {
+        try {
+            operation()
+        } catch (error: Exception) {
+            rejectFileError(invoke, error)
+        }
+    }
+
+    private fun rejectFileError(invoke: Invoke, error: Throwable) {
+        when (error) {
+            is BridgeFailure -> invoke.reject(error.message, error.code)
+            is JSONException -> invoke.reject("Invalid file arguments", "invalid_input")
+            else -> invoke.reject("Could not complete the file operation", "unavailable")
         }
     }
 

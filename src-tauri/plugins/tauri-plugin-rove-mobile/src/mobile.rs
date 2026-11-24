@@ -11,10 +11,11 @@ use zeroize::Zeroizing;
 
 use crate::{
     BACK_EVENT, BiometricStatus, INSETS_EVENT, KeepAliveAction, KeepAliveUpdate, LIFECYCLE_EVENT,
-    LifecycleEvent, MobileError, MobileInsets,
+    LifecycleEvent, MobileError, MobileInsets, StagedFile,
     error::map_invoke_error,
     models::{
         MASTER_KEY_LEN, NativeLifecycleEvent, decode_master_key, encode_base64, parse_external_url,
+        parse_stage_uri, sanitize_file_name, validate_local_file_path,
     },
 };
 
@@ -144,6 +145,32 @@ struct UrlArgs<'a> {
     url: &'a str,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StageFileArgs<'a> {
+    uri: &'a str,
+    dest_dir: &'a str,
+    max_bytes: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct ShareFileArgs<'a> {
+    path: &'a str,
+    title: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportFileArgs<'a> {
+    source_path: &'a str,
+    suggested_name: String,
+}
+
+#[derive(Deserialize)]
+struct ExportFileResponse {
+    exported: bool,
+}
+
 fn invoke_error(error: PluginInvokeError) -> MobileError {
     match error {
         PluginInvokeError::InvokeRejected(response) => {
@@ -234,6 +261,48 @@ impl<R: Runtime> MobileBridge<R> {
         self.handle
             .run_mobile_plugin("openExternalUrl", UrlArgs { url: url.as_str() })
             .map_err(invoke_error)
+    }
+
+    pub fn stage_file(
+        &self,
+        uri: &str,
+        dest_dir: &str,
+        max_bytes: Option<u64>,
+    ) -> Result<StagedFile, MobileError> {
+        let args = StageFileArgs {
+            uri: parse_stage_uri(uri)?,
+            dest_dir: validate_local_file_path(dest_dir)?,
+            max_bytes,
+        };
+        self.handle
+            .run_mobile_plugin("stageFile", args)
+            .map_err(invoke_error)
+    }
+
+    pub fn share_file(&self, path: &str, title: Option<&str>) -> Result<(), MobileError> {
+        let args = ShareFileArgs {
+            path: validate_local_file_path(path)?,
+            title,
+        };
+        self.handle
+            .run_mobile_plugin("shareFile", args)
+            .map_err(invoke_error)
+    }
+
+    pub fn export_file(
+        &self,
+        source_path: &str,
+        suggested_name: &str,
+    ) -> Result<bool, MobileError> {
+        let args = ExportFileArgs {
+            source_path: validate_local_file_path(source_path)?,
+            suggested_name: sanitize_file_name(suggested_name),
+        };
+        let response: ExportFileResponse = self
+            .handle
+            .run_mobile_plugin("exportFile", args)
+            .map_err(invoke_error)?;
+        Ok(response.exported)
     }
 
     pub fn get_insets(&self) -> Result<MobileInsets, MobileError> {

@@ -1,7 +1,69 @@
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
+use crate::MobileError;
+
 #[cfg(any(mobile, test))]
-use {crate::MobileError, url::Url, zeroize::Zeroizing};
+use {url::Url, zeroize::Zeroizing};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagedFile {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+}
+
+pub fn parse_stage_uri(uri: &str) -> Result<&str, MobileError> {
+    if !uri.contains('\0')
+        && let Some((scheme, remainder)) = uri.split_once("://")
+        && !remainder.is_empty()
+        && (scheme.eq_ignore_ascii_case("content") || scheme.eq_ignore_ascii_case("file"))
+    {
+        return Ok(uri);
+    }
+    Err(MobileError::InvalidInput(
+        "staging requires a content:// or file:// URI".into(),
+    ))
+}
+
+pub fn validate_local_file_path(path: &str) -> Result<&str, MobileError> {
+    if path.contains('\0') || !Path::new(path).is_absolute() {
+        return Err(MobileError::InvalidInput(
+            "file path must be absolute and contain no NUL bytes".into(),
+        ));
+    }
+    Ok(path)
+}
+
+pub fn sanitize_file_name(raw: &str) -> String {
+    const MAX_SCALARS: usize = 200;
+
+    let component = raw.rsplit(['/', '\\']).next().unwrap_or_default();
+    let name: String = component.chars().filter(|ch| !ch.is_control()).collect();
+    let name = name.trim_matches([' ', '.']);
+    if name.is_empty() {
+        return "file".into();
+    }
+    if name.chars().count() <= MAX_SCALARS {
+        return name.into();
+    }
+
+    if let Some(dot) = name.rfind('.') {
+        let (stem, extension) = name.split_at(dot);
+        let extension_len = extension.chars().count();
+        if extension_len < MAX_SCALARS {
+            return stem
+                .chars()
+                .take(MAX_SCALARS - extension_len)
+                .chain(extension.chars())
+                .collect();
+        }
+    }
+    let prefix: String = name.chars().take(MAX_SCALARS).collect();
+    prefix.trim_end_matches([' ', '.']).into()
+}
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -218,6 +280,108 @@ pub(crate) fn parse_external_url(input: &str) -> Result<Url, MobileError> {
 mod tests {
     use super::*;
     use serde_json::{from_value, json, to_value};
+
+    #[test]
+    fn stage_uris_require_a_supported_scheme_and_nonempty_remainder() {
+        for uri in [
+            "content://provider/document/123",
+            "CoNtEnT://provider/document/a%2Fb",
+            "file:///tmp/read%20me.txt",
+            "FILE:///tmp/report",
+        ] {
+            assert_eq!(parse_stage_uri(uri).unwrap(), uri);
+        }
+        for uri in [
+            "",
+            " \t\n",
+            "content://",
+            "file://",
+            "file:/tmp/x",
+            "https://example.org",
+            "content:/provider",
+            "/tmp/x",
+            " content://provider",
+            "file:///tmp/x\0y",
+        ] {
+            assert!(
+                matches!(parse_stage_uri(uri), Err(MobileError::InvalidInput(_))),
+                "{uri:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn local_file_paths_are_absolute_and_nul_free() {
+        #[cfg(windows)]
+        let paths = [r"C:\Users\me\report.txt", r"\\server\share\report.txt"];
+        #[cfg(not(windows))]
+        let paths = ["/tmp/report.txt", "/tmp/报 告.txt", "/"];
+
+        for path in paths {
+            assert_eq!(validate_local_file_path(path).unwrap(), path);
+        }
+        for path in ["", " \t ", "relative.txt", "../report.txt", "file:///tmp/x"] {
+            assert!(
+                matches!(
+                    validate_local_file_path(path),
+                    Err(MobileError::InvalidInput(_))
+                ),
+                "{path:?}"
+            );
+        }
+        assert!(matches!(
+            validate_local_file_path(&format!("{}\0", paths[0])),
+            Err(MobileError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn file_names_drop_path_components_and_control_characters() {
+        for (raw, expected) in [
+            ("/tmp/export/  ..report.txt. ", "report.txt"),
+            (r"C:\Users\me\报告.txt", "报告.txt"),
+            (r"dir/subdir\a b.tar.gz", "a b.tar.gz"),
+            ("\0a\n\u{0085}b\u{007f}.txt", "ab.txt"),
+            (".hidden", "hidden"),
+            ("", "file"),
+            ("/tmp/", "file"),
+            ("dir/ . . ", "file"),
+            (r"dir\..", "file"),
+            ("\t\n\0", "file"),
+        ] {
+            assert_eq!(sanitize_file_name(raw), expected, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn file_names_truncate_on_scalar_boundaries_and_keep_a_fitting_extension() {
+        let stem = "文🔌".repeat(110);
+        assert_eq!(sanitize_file_name(&stem), "文🔌".repeat(100));
+        assert_eq!(
+            sanitize_file_name(&format!("{stem}.txt")),
+            format!("{}.txt", "文🔌".repeat(98))
+        );
+        let long_extension = format!("a.{}", "文".repeat(201));
+        assert_eq!(
+            sanitize_file_name(&long_extension),
+            format!("a.{}", "文".repeat(198))
+        );
+        let prefix = "x".repeat(199);
+        assert_eq!(sanitize_file_name(&format!("{prefix} y")), prefix);
+        let limit = format!("a.{}", "文".repeat(198));
+        assert_eq!(sanitize_file_name(&limit), limit);
+    }
+
+    #[test]
+    fn staged_file_round_trips_the_native_response() {
+        let response =
+            json!({ "path": "/cache/report.txt", "name": "report.txt", "size": u64::MAX });
+        let file: StagedFile = from_value(response.clone()).unwrap();
+        assert_eq!(file.path, "/cache/report.txt");
+        assert_eq!(file.name, "report.txt");
+        assert_eq!(file.size, u64::MAX);
+        assert_eq!(to_value(file).unwrap(), response);
+    }
 
     fn keepalive_update() -> KeepAliveUpdate {
         KeepAliveUpdate {

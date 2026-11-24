@@ -39,6 +39,26 @@ private struct URLArgs: Decodable {
     let url: String
 }
 
+private struct StageFileArgs: Decodable {
+    let uri: String
+    let destDir: String
+    let maxBytes: UInt64?
+}
+
+private struct ShareFileArgs: Decodable {
+    let path: String
+    let title: String?
+}
+
+private struct ExportFileArgs: Decodable {
+    let sourcePath: String
+    let suggestedName: String
+}
+
+private struct ExportFileResponse: Encodable {
+    let exported: Bool
+}
+
 private struct RegisterChannelArgs: Decodable {
     let channel: Channel
 }
@@ -50,6 +70,7 @@ private struct KeepAliveArgs: Decodable {
 final class RoveMobilePlugin: Plugin {
     private let insets = InsetsObserver()
     private let keepAlive = KeepAliveController()
+    private let fileBridge = FileBridge()
     private let vaultQueue = DispatchQueue(label: "dev.roveterm.mobile.keychain")
 
     override func load(webview: WKWebView) {
@@ -121,6 +142,39 @@ final class RoveMobilePlugin: Plugin {
         DispatchQueue.main.async { invoke.resolve(self.insets.snapshot()) }
     }
 
+    @objc func stageFile(_ invoke: Invoke) {
+        Self.run(invoke) {
+            let args = try invoke.parseArgs(StageFileArgs.self)
+            fileBridge.stageFile(uri: args.uri, destDir: args.destDir, maxBytes: args.maxBytes) { result in
+                Self.finishFileOperation(invoke, result) { invoke.resolve($0) }
+            }
+        }
+    }
+
+    @objc func shareFile(_ invoke: Invoke) {
+        Self.run(invoke) {
+            let args = try invoke.parseArgs(ShareFileArgs.self)
+            DispatchQueue.main.async {
+                self.fileBridge.shareFile(path: args.path, title: args.title, from: self.manager.viewController) { result in
+                    Self.finishFileOperation(invoke, result) { _ in invoke.resolve() }
+                }
+            }
+        }
+    }
+
+    @objc func exportFile(_ invoke: Invoke) {
+        Self.run(invoke) {
+            let args = try invoke.parseArgs(ExportFileArgs.self)
+            DispatchQueue.main.async {
+                self.fileBridge.exportFile(
+                    sourcePath: args.sourcePath, suggestedName: args.suggestedName, from: self.manager.viewController
+                ) { result in
+                    Self.finishFileOperation(invoke, result) { invoke.resolve(ExportFileResponse(exported: $0)) }
+                }
+            }
+        }
+    }
+
     @objc func registerInsetsChannel(_ invoke: Invoke) {
         Self.run(invoke) {
             let args = try invoke.parseArgs(RegisterChannelArgs.self)
@@ -164,6 +218,17 @@ final class RoveMobilePlugin: Plugin {
             invoke.reject(error.message, code: error.code)
         } catch {
             invoke.reject("Invalid mobile bridge arguments", code: "invalid_input")
+        }
+    }
+
+    private static func finishFileOperation<T>(_ invoke: Invoke, _ result: Result<T, Error>, resolve: (T) -> Void) {
+        switch result {
+        case .success(let value):
+            resolve(value)
+        case .failure(let error as BridgeFailure):
+            invoke.reject(error.message, code: error.code)
+        case .failure:
+            invoke.reject("Could not complete the file operation", code: "unavailable")
         }
     }
 }
