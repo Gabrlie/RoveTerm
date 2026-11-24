@@ -40,6 +40,76 @@ pub struct BiometricStatus {
     pub enrolled: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeepAliveUpdate {
+    pub active: bool,
+    pub sessions: u32,
+    pub forwards: u32,
+    pub transfers: u32,
+    pub ops_tasks: u32,
+    pub title: String,
+    pub body: String,
+    pub disconnect_label: String,
+}
+
+impl KeepAliveUpdate {
+    pub fn total(&self) -> u32 {
+        self.sessions
+            .saturating_add(self.forwards)
+            .saturating_add(self.transfers)
+            .saturating_add(self.ops_tasks)
+    }
+
+    pub fn sanitized(&self) -> Self {
+        fn bounded_text(text: &str, max_chars: usize, default: &str) -> String {
+            let text = text.trim();
+            if text.is_empty() {
+                return default.into();
+            }
+            text.chars().take(max_chars).collect()
+        }
+
+        Self {
+            active: self.active && self.total() > 0,
+            sessions: self.sessions,
+            forwards: self.forwards,
+            transfers: self.transfers,
+            ops_tasks: self.ops_tasks,
+            title: bounded_text(&self.title, 80, "RoveTerm"),
+            body: bounded_text(&self.body, 160, ""),
+            disconnect_label: bounded_text(&self.disconnect_label, 40, "Disconnect all"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleState {
+    Foreground,
+    Background,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LifecycleEvent {
+    pub state: LifecycleState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeepAliveAction {
+    DisconnectAll,
+}
+
+#[cfg(any(mobile, test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum NativeLifecycleEvent {
+    Lifecycle { state: LifecycleState },
+    Back,
+    KeepAliveAction { action: KeepAliveAction },
+}
+
 #[cfg(any(mobile, test))]
 pub(crate) const MASTER_KEY_LEN: usize = 32;
 
@@ -147,6 +217,134 @@ pub(crate) fn parse_external_url(input: &str) -> Result<Url, MobileError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{from_value, json, to_value};
+
+    fn keepalive_update() -> KeepAliveUpdate {
+        KeepAliveUpdate {
+            active: true,
+            sessions: 0,
+            forwards: 0,
+            transfers: 0,
+            ops_tasks: 0,
+            title: " \t ".into(),
+            body: " \n ".into(),
+            disconnect_label: String::new(),
+        }
+    }
+
+    #[test]
+    fn keepalive_total_sums_all_counts_and_saturates() {
+        let update = KeepAliveUpdate {
+            sessions: 1,
+            forwards: 2,
+            transfers: 4,
+            ops_tasks: 8,
+            ..keepalive_update()
+        };
+        assert_eq!(update.total(), 15);
+        assert_eq!(
+            KeepAliveUpdate {
+                ops_tasks: u32::MAX,
+                ..update
+            }
+            .total(),
+            u32::MAX
+        );
+    }
+
+    #[test]
+    fn keepalive_requires_both_active_flag_and_work() {
+        let mut update = keepalive_update();
+        assert!(!update.sanitized().active);
+        for counts in [(1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)] {
+            (
+                update.sessions,
+                update.forwards,
+                update.transfers,
+                update.ops_tasks,
+            ) = counts;
+            assert!(update.sanitized().active);
+        }
+        update.active = false;
+        assert!(!update.sanitized().active);
+    }
+
+    #[test]
+    fn keepalive_sanitizes_copy_and_serializes_in_camel_case() {
+        let defaults = keepalive_update().sanitized();
+        assert_eq!(defaults.title, "RoveTerm");
+        assert!(defaults.body.is_empty());
+        assert_eq!(defaults.disconnect_label, "Disconnect all");
+
+        let update = KeepAliveUpdate {
+            sessions: 1,
+            forwards: 2,
+            transfers: 3,
+            ops_tasks: 4,
+            title: format!("  {}\n", "终".repeat(81)),
+            body: format!("\t{}  ", "端".repeat(161)),
+            disconnect_label: format!(" {} ", "🔌".repeat(41)),
+            ..keepalive_update()
+        };
+        let sanitized = update.sanitized();
+        assert_eq!(
+            to_value(&sanitized).unwrap(),
+            json!({
+                "active": true, "sessions": 1, "forwards": 2, "transfers": 3, "opsTasks": 4,
+                "title": "终".repeat(80), "body": "端".repeat(160), "disconnectLabel": "🔌".repeat(40),
+            })
+        );
+        assert!(update.title.starts_with("  "));
+    }
+
+    #[test]
+    fn native_lifecycle_events_match_the_channel_wire_format() {
+        for (event, payload) in [
+            (
+                NativeLifecycleEvent::Lifecycle {
+                    state: LifecycleState::Foreground,
+                },
+                json!({ "kind": "lifecycle", "state": "foreground" }),
+            ),
+            (
+                NativeLifecycleEvent::Lifecycle {
+                    state: LifecycleState::Background,
+                },
+                json!({ "kind": "lifecycle", "state": "background" }),
+            ),
+            (NativeLifecycleEvent::Back, json!({ "kind": "back" })),
+            (
+                NativeLifecycleEvent::KeepAliveAction {
+                    action: KeepAliveAction::DisconnectAll,
+                },
+                json!({ "kind": "keep_alive_action", "action": "disconnect_all" }),
+            ),
+        ] {
+            assert_eq!(to_value(event).unwrap(), payload);
+            assert_eq!(from_value::<NativeLifecycleEvent>(payload).unwrap(), event);
+        }
+        assert_eq!(
+            to_value(LifecycleEvent {
+                state: LifecycleState::Background
+            })
+            .unwrap(),
+            json!({ "state": "background" })
+        );
+    }
+
+    #[test]
+    fn native_lifecycle_events_reject_missing_or_unknown_discriminants() {
+        for payload in [
+            json!({}),
+            json!({ "kind": "unknown" }),
+            json!({ "kind": "lifecycle" }),
+            json!({ "kind": "lifecycle", "state": "paused" }),
+            json!({ "kind": "keep_alive_action" }),
+            json!({ "kind": "keep_alive_action", "action": "disconnectAll" }),
+        ] {
+            assert!(from_value::<NativeLifecycleEvent>(payload).is_err());
+        }
+    }
 
     #[test]
     fn base64_round_trips_rfc_vectors_and_all_byte_values() {

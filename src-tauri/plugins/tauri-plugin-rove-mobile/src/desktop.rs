@@ -1,9 +1,9 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, sync::Arc};
 
 use tauri::Runtime;
 use zeroize::Zeroizing;
 
-use crate::{BiometricStatus, MobileError, MobileInsets};
+use crate::{BiometricStatus, KeepAliveAction, KeepAliveUpdate, MobileError, MobileInsets};
 
 pub(crate) fn init<R: Runtime>() -> MobileBridge<R> {
     MobileBridge(PhantomData)
@@ -46,5 +46,19 @@ impl<R: Runtime> MobileBridge<R> {
 
     pub fn get_insets(&self) -> Result<MobileInsets, MobileError> {
         Ok(MobileInsets::default())
+    }
+
+    pub fn update_keepalive(&self, _update: &KeepAliveUpdate) -> Result<(), MobileError> {
+        Ok(())
+    }
+
+    pub fn move_to_background(&self) -> Result<(), MobileError> {
+        Ok(())
+    }
+
+    pub fn set_keepalive_action_handler(
+        &self,
+        _handler: Option<Arc<dyn Fn(KeepAliveAction) + Send + Sync>>,
+    ) {
     }
 }

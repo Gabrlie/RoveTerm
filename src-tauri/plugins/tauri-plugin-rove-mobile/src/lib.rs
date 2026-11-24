@@ -18,9 +18,13 @@ pub use desktop::MobileBridge;
 pub use error::MobileError;
 #[cfg(mobile)]
 pub use mobile::MobileBridge;
-pub use models::{BiometricStatus, MobileInsets};
+pub use models::{
+    BiometricStatus, KeepAliveAction, KeepAliveUpdate, LifecycleEvent, LifecycleState, MobileInsets,
+};
 
 pub const INSETS_EVENT: &str = "rove-mobile://insets";
+pub const LIFECYCLE_EVENT: &str = "rove-mobile://lifecycle";
+pub const BACK_EVENT: &str = "rove-mobile://back";
 
 pub trait MobileBridgeExt<R: Runtime> {
     fn rove_mobile(&self) -> &MobileBridge<R>;

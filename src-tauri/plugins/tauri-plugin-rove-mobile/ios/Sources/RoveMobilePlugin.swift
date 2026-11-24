@@ -39,12 +39,17 @@ private struct URLArgs: Decodable {
     let url: String
 }
 
-private struct RegisterInsetsArgs: Decodable {
+private struct RegisterChannelArgs: Decodable {
     let channel: Channel
+}
+
+private struct KeepAliveArgs: Decodable {
+    let active: Bool
 }
 
 final class RoveMobilePlugin: Plugin {
     private let insets = InsetsObserver()
+    private let keepAlive = KeepAliveController()
     private let vaultQueue = DispatchQueue(label: "dev.roveterm.mobile.keychain")
 
     override func load(webview: WKWebView) {
@@ -118,11 +123,38 @@ final class RoveMobilePlugin: Plugin {
 
     @objc func registerInsetsChannel(_ invoke: Invoke) {
         Self.run(invoke) {
-            let args = try invoke.parseArgs(RegisterInsetsArgs.self)
+            let args = try invoke.parseArgs(RegisterChannelArgs.self)
             // The Rust setup can be waiting for the acknowledgement on the UI thread.
             invoke.resolve()
             DispatchQueue.main.async { self.insets.register(args.channel) }
         }
+    }
+
+    @objc func registerLifecycleChannel(_ invoke: Invoke) {
+        Self.run(invoke) {
+            let args = try invoke.parseArgs(RegisterChannelArgs.self)
+            invoke.resolve()
+            DispatchQueue.main.async { self.keepAlive.register(args.channel) }
+        }
+    }
+
+    @objc func updateKeepAlive(_ invoke: Invoke) {
+        Self.run(invoke) {
+            let args = try invoke.parseArgs(KeepAliveArgs.self)
+            let update = { @MainActor in
+                self.keepAlive.update(active: args.active)
+                invoke.resolve()
+            }
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { update() }
+            } else {
+                DispatchQueue.main.async { update() }
+            }
+        }
+    }
+
+    @objc func moveToBackground(_ invoke: Invoke) {
+        invoke.resolve()
     }
 
     private static func run(_ invoke: Invoke, _ operation: () throws -> Void) {

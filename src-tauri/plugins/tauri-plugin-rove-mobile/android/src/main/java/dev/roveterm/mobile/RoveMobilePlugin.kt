@@ -1,22 +1,28 @@
 package dev.roveterm.mobile
 
+import android.Manifest
 import android.app.Activity
+import android.app.Application
 import android.app.KeyguardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.UserNotAuthenticatedException
 import android.util.Base64
+import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResult
 import androidx.appcompat.app.AppCompatActivity
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
 import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
 import androidx.biometric.BiometricPrompt
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import app.tauri.annotation.ActivityCallback
@@ -32,12 +38,17 @@ import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 
 @InvokeArg
-internal class RegisterInsetsArgs {
+internal class RegisterChannelArgs {
     lateinit var channel: Channel
 }
 
 @TauriPlugin
 class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
+    private companion object {
+        const val NOTIFICATION_PERMISSION_REQUEST = 1001
+        var notificationPermissionRequested = false
+    }
+
     private val insets = InsetsObserver(activity)
     private val keystore = KeystoreHelper(activity)
     private val main = Handler(Looper.getMainLooper())
@@ -45,6 +56,32 @@ class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
     private var active: Invoke? = null
     private var prompt: BiometricPrompt? = null
     private var legacyOperation: (() -> Unit)? = null
+    private var lifecycleChannel: Channel? = null
+    private val lifecycleCallbacks = object : Application.ActivityLifecycleCallbacks {
+        override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
+        override fun onActivityStarted(activity: Activity) {}
+        override fun onActivityPaused(activity: Activity) {}
+        override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+        override fun onActivityDestroyed(activity: Activity) {}
+
+        override fun onActivityResumed(activity: Activity) {
+            if (activity === this@RoveMobilePlugin.activity) sendLifecycle("foreground")
+        }
+
+        override fun onActivityStopped(activity: Activity) {
+            if (activity === this@RoveMobilePlugin.activity) sendLifecycle("background")
+        }
+    }
+    private val backCallback = object : OnBackPressedCallback(true) {
+        override fun handleOnBackPressed() {
+            lifecycleChannel?.send(JSObject().put("kind", "back"))
+        }
+    }
+    private val disconnectAll: () -> Unit = {
+        lifecycleChannel?.send(
+            JSObject().put("kind", "keep_alive_action").put("action", "disconnect_all"),
+        )
+    }
 
     @Command
     fun loadMasterKey(invoke: Invoke) = withKeyOperation(invoke) { args ->
@@ -138,7 +175,7 @@ class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun registerInsetsChannel(invoke: Invoke) {
         val channel = try {
-            invoke.parseArgs(RegisterInsetsArgs::class.java).channel
+            invoke.parseArgs(RegisterChannelArgs::class.java).channel
         } catch (_: Exception) {
             invoke.reject("Invalid insets channel", "invalid_input")
             return
@@ -148,14 +185,98 @@ class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
         main.post { if (!activity.isDestroyed) insets.register(channel) }
     }
 
+    @Command
+    fun registerLifecycleChannel(invoke: Invoke) {
+        val channel = try {
+            invoke.parseArgs(RegisterChannelArgs::class.java).channel
+        } catch (_: Exception) {
+            invoke.reject("Invalid lifecycle channel", "invalid_input")
+            return
+        }
+        invoke.resolve()
+        main.post {
+            if (activity.isDestroyed) return@post
+            val registered = lifecycleChannel != null
+            lifecycleChannel = channel
+            if (!registered) {
+                activity.application.registerActivityLifecycleCallbacks(lifecycleCallbacks)
+                (activity as? ComponentActivity)?.let { owner ->
+                    owner.onBackPressedDispatcher.addCallback(owner, backCallback)
+                }
+            }
+            SessionKeepAliveService.onDisconnectAll = disconnectAll
+        }
+    }
+
+    @Command
+    fun updateKeepAlive(invoke: Invoke) {
+        activity.runOnUiThread {
+            try {
+                val args = invoke.getArgs()
+                if (args.requireBoolean("active")) {
+                    SessionKeepAliveService.update(
+                        activity,
+                        args.requireString("title"),
+                        args.requireString("body"),
+                        args.requireString("disconnectLabel"),
+                    )
+                    main.post { requestNotificationPermission() }
+                } else {
+                    SessionKeepAliveService.stop(activity)
+                }
+                invoke.resolve()
+            } catch (error: BridgeFailure) {
+                invoke.reject(error.message, error.code)
+            } catch (_: JSONException) {
+                invoke.reject("Invalid keepalive arguments", "invalid_input")
+            } catch (_: IllegalStateException) {
+                // Includes ForegroundServiceStartNotAllowedException on Android 12 and later.
+                invoke.reject("Android did not allow starting the keepalive service", "unavailable")
+            } catch (_: SecurityException) {
+                invoke.reject("Android denied access to the keepalive service", "unavailable")
+            }
+        }
+    }
+
+    @Command
+    fun moveToBackground(invoke: Invoke) {
+        activity.runOnUiThread {
+            activity.moveTaskToBack(true)
+            invoke.resolve()
+        }
+    }
+
     override fun onDestroy(activity: AppCompatActivity) {
         if (this.activity !== activity) return
+        activity.application.unregisterActivityLifecycleCallbacks(lifecycleCallbacks)
+        backCallback.remove()
+        if (SessionKeepAliveService.onDisconnectAll === disconnectAll) {
+            SessionKeepAliveService.onDisconnectAll = null
+        }
+        lifecycleChannel = null
         insets.close()
         val previousPrompt = prompt
         active?.let { invoke ->
             finish(invoke) { invoke.reject("Authentication was interrupted", "denied") }
         }
         previousPrompt?.cancelAuthentication()
+    }
+
+    private fun sendLifecycle(state: String) {
+        lifecycleChannel?.send(JSObject().put("kind", "lifecycle").put("state", state))
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            notificationPermissionRequested || activity.isDestroyed || activity.isFinishing ||
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        ) return
+
+        notificationPermissionRequested = true
+        ActivityCompat.requestPermissions(
+            activity, arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST,
+        )
     }
 
     @ActivityCallback

@@ -10,9 +10,12 @@ use tauri::{
 use zeroize::Zeroizing;
 
 use crate::{
-    BiometricStatus, INSETS_EVENT, MobileError, MobileInsets,
+    BACK_EVENT, BiometricStatus, INSETS_EVENT, KeepAliveAction, KeepAliveUpdate, LIFECYCLE_EVENT,
+    LifecycleEvent, MobileError, MobileInsets,
     error::map_invoke_error,
-    models::{MASTER_KEY_LEN, decode_master_key, encode_base64, parse_external_url},
+    models::{
+        MASTER_KEY_LEN, NativeLifecycleEvent, decode_master_key, encode_base64, parse_external_url,
+    },
 };
 
 #[cfg(target_os = "ios")]
@@ -49,10 +52,50 @@ pub(crate) fn init<R: Runtime, C: DeserializeOwned>(
         insets.app.emit(INSETS_EVENT, value)
     });
     handle
-        .run_mobile_plugin::<()>("registerInsetsChannel", RegisterInsetsArgs { channel })
+        .run_mobile_plugin::<()>("registerInsetsChannel", RegisterChannelArgs { channel })
         .map_err(invoke_error)?;
 
-    Ok(MobileBridge { handle, insets })
+    let lifecycle = Arc::new(LifecycleChannelState {
+        app: app.clone(),
+        keepalive_action_handler: Mutex::new(None),
+    });
+    let weak_lifecycle = Arc::downgrade(&lifecycle);
+    let channel = Channel::<Value>::new(move |payload| {
+        let Some(lifecycle) = weak_lifecycle.upgrade() else {
+            return Ok(());
+        };
+        let Ok(event) = payload.deserialize::<NativeLifecycleEvent>() else {
+            tracing::warn!("ignored malformed mobile lifecycle event");
+            return Ok(());
+        };
+        match event {
+            NativeLifecycleEvent::Lifecycle { state } => lifecycle
+                .app
+                .emit(LIFECYCLE_EVENT, LifecycleEvent { state }),
+            NativeLifecycleEvent::Back => lifecycle.app.emit(BACK_EVENT, ()),
+            NativeLifecycleEvent::KeepAliveAction { action } => {
+                let handler = lifecycle
+                    .keepalive_action_handler
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .clone();
+                if let Some(handler) = handler {
+                    // The handler may call the bridge, which can wait on the native UI thread.
+                    tauri::async_runtime::spawn_blocking(move || handler(action));
+                }
+                Ok(())
+            }
+        }
+    });
+    handle
+        .run_mobile_plugin::<()>("registerLifecycleChannel", RegisterChannelArgs { channel })
+        .map_err(invoke_error)?;
+
+    Ok(MobileBridge {
+        handle,
+        insets,
+        lifecycle,
+    })
 }
 
 struct InsetsState<R: Runtime> {
@@ -60,8 +103,15 @@ struct InsetsState<R: Runtime> {
     latest: Mutex<MobileInsets>,
 }
 
+type KeepAliveActionHandler = Arc<dyn Fn(KeepAliveAction) + Send + Sync>;
+
+struct LifecycleChannelState<R: Runtime> {
+    app: AppHandle<R>,
+    keepalive_action_handler: Mutex<Option<KeepAliveActionHandler>>,
+}
+
 #[derive(Serialize)]
-struct RegisterInsetsArgs {
+struct RegisterChannelArgs {
     channel: Channel<Value>,
 }
 
@@ -113,6 +163,7 @@ fn invoke_error(error: PluginInvokeError) -> MobileError {
 pub struct MobileBridge<R: Runtime> {
     handle: PluginHandle<R>,
     insets: Arc<InsetsState<R>>,
+    lifecycle: Arc<LifecycleChannelState<R>>,
 }
 
 impl<R: Runtime> MobileBridge<R> {
@@ -191,5 +242,30 @@ impl<R: Runtime> MobileBridge<R> {
             .latest
             .lock()
             .unwrap_or_else(|err| err.into_inner()))
+    }
+
+    pub fn update_keepalive(&self, update: &KeepAliveUpdate) -> Result<(), MobileError> {
+        self.handle
+            .run_mobile_plugin("updateKeepAlive", update.sanitized())
+            .map_err(invoke_error)
+    }
+
+    pub fn move_to_background(&self) -> Result<(), MobileError> {
+        self.handle
+            .run_mobile_plugin("moveToBackground", ())
+            .map_err(invoke_error)
+    }
+
+    /// Runs notification actions on a worker thread so the handler can call the bridge.
+    pub fn set_keepalive_action_handler(&self, handler: Option<KeepAliveActionHandler>) {
+        let old = std::mem::replace(
+            &mut *self
+                .lifecycle
+                .keepalive_action_handler
+                .lock()
+                .unwrap_or_else(|err| err.into_inner()),
+            handler,
+        );
+        drop(old);
     }
 }
