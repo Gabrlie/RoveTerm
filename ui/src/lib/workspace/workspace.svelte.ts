@@ -6,6 +6,7 @@ import { reachKey } from '../hosts/reach';
 import { terminals } from '../terminal/registry';
 import { editors } from '../files/editors.svelte';
 import { baseName } from '../files/format';
+import { cycleFlatTarget, flatTabAt, flattenTabs, type FlatTab } from './flatTabs';
 import { SNAPSHOT_VERSION, snapshotGroup, type Snapshot, type SnapshotNode } from './snapshot';
 import { computeLayout, pane, paneIds, removePane, setRatio, splitPane, type LayoutNode, type PaneId, type Path, type SplitDir } from '../layout/layout';
 
@@ -130,6 +131,10 @@ class Workspace {
   /** Group ids in reading order. */
   get groupIds(): GroupId[] {
     return paneIds(this.root);
+  }
+
+  get flatTabs(): FlatTab[] {
+    return flattenTabs(this.groupIds, this.groups);
   }
 
   get focusedGroup(): Group | undefined {
@@ -275,15 +280,19 @@ class Workspace {
   }
 
   /**
-   * Opens a file browser for the focused tab's remote in a new group to its right. Returns false
-   * when the focused tab is not remote.
+   * Opens a file browser for the focused tab's remote. By default it splits to the right.
+   * Returns false if there is no remote target.
    */
-  openFilesBesideFocused(): boolean {
+  openFilesBesideFocused(split = true): boolean {
     const group = this.focusedGroup;
     const source = this.focusedPane;
     if (!group || !source) return false;
     const target = filesTargetFor(source.target);
     if (!target) return false;
+    if (!split) {
+      this.openTab(target);
+      return true;
+    }
     const added = this.createGroup([this.createPane(target)]);
     this.root = splitPane(this.root, group.id, 'row', added.id);
     this.focusedGroupId = added.id;
@@ -377,6 +386,11 @@ class Workspace {
     this.focusedGroupId = groupId;
   }
 
+  activateHome(): void {
+    const group = this.focusedGroup;
+    if (group) group.active = null;
+  }
+
   focusGroup(groupId: GroupId): void {
     if (this.groups[groupId]) this.focusedGroupId = groupId;
   }
@@ -398,8 +412,14 @@ class Workspace {
     if (state?.deferred) state.deferred = false;
   }
 
-  /** Shows the tab `offset` positions away in the focused group, wrapping; home comes first. */
-  cycleTab(offset: number): void {
+  /** Cycles through Home and the tabs in the focused group, or all groups in flat mode. */
+  cycleTab(offset: number, flat = false): void {
+    if (flat) {
+      const target = cycleFlatTarget(this.flatTabs, this.focusedPane?.id ?? null, offset);
+      if (target) this.activate(target.groupId, target.paneId);
+      else this.activateHome();
+      return;
+    }
     const group = this.focusedGroup;
     if (!group) return;
     const ids: (PaneId | null)[] = [null, ...group.tabs];
@@ -407,8 +427,13 @@ class Workspace {
     group.active = ids[(index + offset + ids.length) % ids.length] ?? null;
   }
 
-  /** Shows the focused group's tab at zero-based `index`, if it exists. */
-  gotoTab(index: number): void {
+  /** Shows the tab at zero-based `index` in the focused group, or across groups in flat mode. */
+  gotoTab(index: number, flat = false): void {
+    if (flat) {
+      const hit = flatTabAt(this.flatTabs, index);
+      if (hit) this.activate(hit.groupId, hit.paneId);
+      return;
+    }
     const group = this.focusedGroup;
     const paneId = group?.tabs[index];
     if (group && paneId) group.active = paneId;

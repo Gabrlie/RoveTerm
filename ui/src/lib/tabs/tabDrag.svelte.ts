@@ -84,34 +84,43 @@ export function justDragged(): boolean {
   return performance.now() - droppedAt < 300;
 }
 
-/** Starts tracking a press on tab `paneId`; it becomes a drag once the pointer travels. */
-export function pressTab(event: PointerEvent, paneId: PaneId): void {
-  if (event.button !== 0) return;
+/** Tracks a primary press and returns a cleanup for when its tab bar unmounts. */
+export function pressTab(event: PointerEvent, paneId: PaneId): (() => void) | undefined {
+  if (event.button !== 0 || !event.isPrimary || tabDrag.paneId !== null) return;
   const handle = event.currentTarget as HTMLElement;
-  const startX = event.clientX;
-  const startY = event.clientY;
+  const { clientX: startX, clientY: startY, pointerId } = event;
+  let dragging = false;
   const move = (moveEvent: PointerEvent): void => {
-    if (tabDrag.paneId === null) {
+    if (moveEvent.pointerId !== pointerId) return;
+    if (!dragging) {
+      if (tabDrag.paneId !== null) return;
       if (Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < THRESHOLD) return;
-      handle.setPointerCapture(moveEvent.pointerId);
+      handle.setPointerCapture(pointerId);
+      dragging = true;
       tabDrag.paneId = paneId;
     }
     tabDrag.x = moveEvent.clientX;
     tabDrag.y = moveEvent.clientY;
     tabDrag.target = hit(moveEvent.clientX, moveEvent.clientY);
   };
-  const end = (endEvent: PointerEvent): void => {
+  const cancel = (): void => {
     handle.removeEventListener('pointermove', move);
     handle.removeEventListener('pointerup', end);
     handle.removeEventListener('pointercancel', end);
-    if (tabDrag.paneId === null) return;
-    const target = endEvent.type === 'pointerup' ? tabDrag.target : null;
+    if (!dragging) return;
+    dragging = false;
     tabDrag.paneId = null;
     tabDrag.target = null;
     droppedAt = performance.now();
+  };
+  const end = (endEvent: PointerEvent): void => {
+    if (endEvent.pointerId !== pointerId) return;
+    const target = dragging && endEvent.type === 'pointerup' ? tabDrag.target : null;
+    cancel();
     if (target) drop(paneId, target);
   };
   handle.addEventListener('pointermove', move);
   handle.addEventListener('pointerup', end);
   handle.addEventListener('pointercancel', end);
+  return cancel;
 }

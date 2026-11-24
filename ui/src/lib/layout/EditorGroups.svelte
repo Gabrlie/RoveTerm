@@ -1,8 +1,6 @@
 <script lang="ts">
-  // The work area: editor groups laid out by the split tree, each a floating card with its own
-  // tab bar. The gaps between cards are the handles for resizing. Every tab's content lives in one
-  // layer above the cards, placed over its group's content area, so switching tabs, splitting,
-  // resizing or moving a tab to another group never remounts it or restarts its terminal.
+  // The workspace shows either one compact group or the groups of the split tree. Both modes
+  // share a pane layer keyed by pane id, preserving mounted views across layout changes.
   import type { Snippet } from 'svelte';
   import GroupTabBar from '../tabs/GroupTabBar.svelte';
   import PaneView from './PaneView.svelte';
@@ -12,6 +10,8 @@
   import type { Divider, PaneId, Rect } from './layout';
 
   interface Props {
+    compact?: boolean;
+    coarse?: boolean;
     /** The home page, shown in a group with no current tab. */
     home: Snippet;
     oncredentials: (paneId: PaneId, kind: CredentialKind, override?: boolean) => void;
@@ -24,15 +24,17 @@
     onschedules: () => void;
   }
 
-  let { home, oncredentials, onedithost, onaisettings, ontailscalesettings, onschedules }: Props = $props();
+  let { compact = false, coarse = false, home, oncredentials, onedithost, onaisettings, ontailscalesettings, onschedules }: Props = $props();
 
   /** Space between group cards, in CSS pixels; matches `--gap-panel`. */
   const GAP = 6;
-  /** Height of a group's tab bar (`GroupTabBar`), above its content. */
-  const TAB_BAR = 40;
+  const TOUCH_DIVIDER = 20;
   const EPSILON = 1e-6;
 
   let area: HTMLDivElement;
+  const tabBarHeight = $derived(compact || coarse ? 44 : 40);
+  const focusedGroup = $derived(workspace.focusedGroup);
+  const activePaneId = $derived(workspace.focusedPane?.id ?? null);
   const layout = $derived(workspace.layout());
   const multiple = $derived(layout.panes.size > 1);
 
@@ -58,7 +60,7 @@
   function stageStyle(rect: Rect): string {
     const left = rect.x > EPSILON ? GAP / 2 : 0;
     const right = rect.x + rect.w < 1 - EPSILON ? GAP / 2 : 0;
-    const top = (rect.y > EPSILON ? GAP / 2 : 0) + TAB_BAR;
+    const top = (rect.y > EPSILON ? GAP / 2 : 0) + tabBarHeight;
     const bottom = rect.y + rect.h < 1 - EPSILON ? GAP / 2 : 0;
     return [
       `left: calc(${percent(rect.x)} + ${left}px)`,
@@ -81,24 +83,28 @@
 
   function dividerStyle(divider: Divider): string {
     const { area: rect, ratio, dir } = divider;
+    const size = coarse ? TOUCH_DIVIDER : GAP;
     return dir === 'row'
-      ? `left: calc(${percent(rect.x + rect.w * ratio)} - ${GAP / 2}px); top: ${percent(rect.y)}; width: ${GAP}px; height: ${percent(rect.h)};`
-      : `top: calc(${percent(rect.y + rect.h * ratio)} - ${GAP / 2}px); left: ${percent(rect.x)}; height: ${GAP}px; width: ${percent(rect.w)};`;
+      ? `left: calc(${percent(rect.x + rect.w * ratio)} - ${size / 2}px); top: ${percent(rect.y)}; width: ${size}px; height: ${percent(rect.h)};`
+      : `top: calc(${percent(rect.y + rect.h * ratio)} - ${size / 2}px); left: ${percent(rect.x)}; height: ${size}px; width: ${percent(rect.w)};`;
   }
 
   function startDrag(event: PointerEvent, divider: Divider): void {
+    if (event.button !== 0 || !event.isPrimary) return;
     const target = event.currentTarget as HTMLElement;
     target.setPointerCapture(event.pointerId);
     const bounds = area.getBoundingClientRect();
+    const { area: rect, dir } = divider;
+    const pointerRatio = (pointer: PointerEvent): number => dir === 'row'
+      ? (pointer.clientX - bounds.left - rect.x * bounds.width) / (rect.w * bounds.width)
+      : (pointer.clientY - bounds.top - rect.y * bounds.height) / (rect.h * bounds.height);
+    const grabOffset = coarse ? pointerRatio(event) - divider.ratio : 0;
     const move = (moveEvent: PointerEvent): void => {
-      const { area: rect, dir } = divider;
-      const ratio =
-        dir === 'row'
-          ? (moveEvent.clientX - bounds.left - rect.x * bounds.width) / (rect.w * bounds.width)
-          : (moveEvent.clientY - bounds.top - rect.y * bounds.height) / (rect.h * bounds.height);
-      workspace.resize(divider.path, ratio);
+      if (moveEvent.pointerId !== event.pointerId) return;
+      workspace.resize(divider.path, pointerRatio(moveEvent) - grabOffset);
     };
-    const end = (): void => {
+    const end = (endEvent: PointerEvent): void => {
+      if (endEvent.pointerId !== event.pointerId) return;
       target.removeEventListener('pointermove', move);
       target.removeEventListener('pointerup', end);
       target.removeEventListener('pointercancel', end);
@@ -114,42 +120,60 @@
 </script>
 
 <div class="groups" bind:this={area}>
-  {#each [...layout.panes] as [groupId, rect] (groupId)}
-    {@const group = workspace.groups[groupId]}
-    {#if group}
-      {@const focused = workspace.focusedGroupId === groupId}
-      <section class="group" role="group" class:focused={multiple && focused} style={cardStyle(rect)} onpointerdown={() => focusGroup(groupId)} onfocusin={() => focusGroup(groupId)}>
-        <GroupTabBar {group} {focused} closable={multiple} />
-        <div class="stage" data-stage={groupId}>
-          {#if group.active === null}
+  {#if compact}
+    {#if focusedGroup}
+      <section class="group compact" role="group">
+        <GroupTabBar group={focusedGroup} focused={true} closable={false} compact={true} {coarse} flatTabs={workspace.flatTabs} {activePaneId} />
+        <div class="stage">
+          {#if activePaneId === null}
             <div class="home">{@render home()}</div>
           {/if}
         </div>
       </section>
     {/if}
-  {/each}
+  {:else}
+    {#each [...layout.panes] as [groupId, rect] (groupId)}
+      {@const group = workspace.groups[groupId]}
+      {#if group}
+        {@const focused = workspace.focusedGroupId === groupId}
+        <section class="group" role="group" class:focused={multiple && focused} style={cardStyle(rect)} onpointerdown={() => focusGroup(groupId)} onfocusin={() => focusGroup(groupId)}>
+          <GroupTabBar {group} {focused} closable={multiple} {coarse} />
+          <div class="stage" data-stage={groupId}>
+            {#if group.active === null}
+              <div class="home">{@render home()}</div>
+            {/if}
+          </div>
+        </section>
+      {/if}
+    {/each}
+  {/if}
   {#each Object.values(workspace.panes) as pane (pane.id)}
     {@const group = workspace.groupOf(pane.id)}
     {@const rect = group ? layout.panes.get(group.id) : undefined}
     {#if group && rect}
-      {@const shown = group.active === pane.id}
-      <div class="slot" class:hidden={!shown} style={stageStyle(rect)} data-stage={group.id} role="presentation" onpointerdown={() => focusGroup(group.id)}>
-        <PaneView {pane} {shown} focused={workspace.focusedGroupId === group.id && shown} {oncredentials} {onedithost} {onaisettings} {ontailscalesettings} {onschedules} />
+      {@const shown = compact ? activePaneId === pane.id : group.active === pane.id}
+      {@const focused = shown && (compact || workspace.focusedGroupId === group.id)}
+      {@const style = compact ? `left: 0; top: ${tabBarHeight}px; width: 100%; height: calc(100% - ${tabBarHeight}px);` : stageStyle(rect)}
+      <div class="slot" class:compact class:hidden={!shown} {style} data-stage={compact ? undefined : group.id} role="presentation" onpointerdown={() => focusGroup(group.id)}>
+        <PaneView {pane} {shown} {focused} {oncredentials} {onedithost} {onaisettings} {ontailscalesettings} {onschedules} />
       </div>
     {/if}
   {/each}
-  {#if tabDrag.target && dropRect}
-    <div class="drop" style={stageStyle(dropRect)}><div class="zone" style={dropZone(tabDrag.target)}></div></div>
+  {#if !compact}
+    {#if tabDrag.target && dropRect}
+      <div class="drop" style={stageStyle(dropRect)}><div class="zone" style={dropZone(tabDrag.target)}></div></div>
+    {/if}
+    {#each layout.dividers as divider (divider.path.join('') || 'root')}
+      <div
+        class="divider {divider.dir}"
+        class:coarse
+        style={dividerStyle(divider)}
+        role="separator"
+        aria-orientation={divider.dir === 'row' ? 'vertical' : 'horizontal'}
+        onpointerdown={(event) => startDrag(event, divider)}
+      ></div>
+    {/each}
   {/if}
-  {#each layout.dividers as divider (divider.path.join('') || 'root')}
-    <div
-      class="divider {divider.dir}"
-      style={dividerStyle(divider)}
-      role="separator"
-      aria-orientation={divider.dir === 'row' ? 'vertical' : 'horizontal'}
-      onpointerdown={(event) => startDrag(event, divider)}
-    ></div>
-  {/each}
 </div>
 
 <style>
@@ -174,6 +198,11 @@
       0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent),
       0 1px 3px rgb(0 0 0 / 0.06);
   }
+  .group.compact {
+    inset: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
   .stage {
     position: relative;
     flex: 1;
@@ -196,6 +225,9 @@
     visibility: hidden;
     pointer-events: none;
   }
+  .slot.compact {
+    border-radius: 0;
+  }
   /* Where a dragged tab would go: the whole group, or the half that becomes a new group. */
   .drop {
     position: absolute;
@@ -213,6 +245,9 @@
   .divider {
     position: absolute;
     z-index: 2;
+  }
+  .divider.coarse {
+    touch-action: none;
   }
   .divider.row {
     cursor: col-resize;
@@ -238,7 +273,8 @@
     top: calc(50% - 1px);
     height: 2px;
   }
-  .divider:hover::after {
+  .divider:hover::after,
+  .divider.coarse:active::after {
     background: var(--accent);
   }
 </style>

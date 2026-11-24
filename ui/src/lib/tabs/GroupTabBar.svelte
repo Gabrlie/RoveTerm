@@ -1,9 +1,10 @@
 <script lang="ts">
-  // Tabs of one editor group: home, the group's tabs, a button to show home ("new tab"), and
-  // splitting or closing the group.
+  // Home and workspace tabs, projected across all groups in compact mode.
+  import { onDestroy } from 'svelte';
   import IconButton from '../ui/IconButton.svelte';
   import Icon from '../ui/Icon.svelte';
   import { hostOf, workspace, type Group } from '../workspace/workspace.svelte';
+  import type { FlatTab } from '../workspace/flatTabs';
   import type { PaneId } from '../layout/layout';
   import { t } from '../i18n';
   import type { IconName } from '../ui/icons';
@@ -18,9 +19,27 @@
     focused: boolean;
     /** Whether the group can be closed (other groups remain). */
     closable: boolean;
+    compact?: boolean;
+    coarse?: boolean;
+    flatTabs?: FlatTab[];
+    activePaneId?: PaneId | null;
   }
 
-  let { group, focused, closable }: Props = $props();
+  let { group, focused, closable, compact = false, coarse = false, flatTabs, activePaneId }: Props = $props();
+  const tabs = $derived(compact && flatTabs ? flatTabs : group.tabs.map((paneId) => ({ groupId: group.id, paneId })));
+  const active = $derived(compact && activePaneId !== undefined ? activePaneId : group.active);
+
+  function showHome(): void {
+    if (compact) workspace.activateHome();
+    else workspace.activate(group.id, null);
+  }
+
+  let cancelPress: (() => void) | undefined;
+  onDestroy(() => cancelPress?.());
+
+  function onTabPress(event: PointerEvent, paneId: PaneId): void {
+    if (!compact) cancelPress = pressTab(event, paneId) ?? cancelPress;
+  }
 
   function tabIcon(paneId: PaneId): IconName {
     const kind = workspace.panes[paneId]?.target.kind;
@@ -65,43 +84,47 @@
 
   /** The tab menu: closing, splitting, moving into a new group, and reordering. */
   function menuItems(paneId: PaneId): MenuItem[] {
-    const index = group.tabs.indexOf(paneId);
-    const alone = group.tabs.length === 1;
-    const groups = workspace.groupIds;
-    const next = groups[(groups.indexOf(group.id) + 1) % groups.length];
+    const owner = workspace.groupOf(paneId);
+    if (!owner) return [];
+    const index = owner.tabs.indexOf(paneId);
     const items: MenuItem[] = [
       { label: t('common.close'), icon: 'close', onselect: () => void workspace.requestClosePane(paneId) },
       { label: t('tab.closeOthers'), onselect: () => void workspace.requestCloseTabsBeside(paneId, 'others') },
       { label: t('tab.closeRight'), onselect: () => void workspace.requestCloseTabsBeside(paneId, 'right') },
     ];
-    if (workspace.panes[paneId]?.target.kind !== 'editor') {
-      items.push(
-        { label: t('action.pane.splitRight'), icon: 'splitRight', separated: true, onselect: () => workspace.splitTab(paneId, 'row') },
-        { label: t('action.pane.splitDown'), icon: 'splitDown', onselect: () => workspace.splitTab(paneId, 'column') },
-      );
-    }
-    if (!alone) {
-      items.push(
-        { label: t('tab.moveRightGroup'), separated: true, onselect: () => workspace.moveTabToNewGroup(paneId, 'row') },
-        { label: t('tab.moveDownGroup'), onselect: () => workspace.moveTabToNewGroup(paneId, 'column') },
-      );
-    }
-    if (next && next !== group.id) {
-      items.push({ label: t('tab.moveNextGroup'), separated: alone, onselect: () => workspace.moveTab(paneId, next) });
+    if (!compact) {
+      if (workspace.panes[paneId]?.target.kind !== 'editor') {
+        items.push(
+          { label: t('action.pane.splitRight'), icon: 'splitRight', separated: true, onselect: () => workspace.splitTab(paneId, 'row') },
+          { label: t('action.pane.splitDown'), icon: 'splitDown', onselect: () => workspace.splitTab(paneId, 'column') },
+        );
+      }
+      const alone = owner.tabs.length === 1;
+      if (!alone) {
+        items.push(
+          { label: t('tab.moveRightGroup'), separated: true, onselect: () => workspace.moveTabToNewGroup(paneId, 'row') },
+          { label: t('tab.moveDownGroup'), onselect: () => workspace.moveTabToNewGroup(paneId, 'column') },
+        );
+      }
+      const groups = workspace.groupIds;
+      const next = groups[(groups.indexOf(owner.id) + 1) % groups.length];
+      if (next && next !== owner.id) {
+        items.push({ label: t('tab.moveNextGroup'), separated: alone, onselect: () => workspace.moveTab(paneId, next) });
+      }
     }
     if (index > 0) items.push({ label: t('tab.moveLeft'), separated: true, onselect: () => workspace.shiftTab(paneId, -1) });
-    if (index < group.tabs.length - 1) items.push({ label: t('tab.moveRight'), separated: index === 0, onselect: () => workspace.shiftTab(paneId, 1) });
+    if (index < owner.tabs.length - 1) items.push({ label: t('tab.moveRight'), separated: index === 0, onselect: () => workspace.shiftTab(paneId, 1) });
     return items;
   }
 
-  function openMenu(event: MouseEvent, paneId: PaneId): void {
+  function openMenu(event: MouseEvent, { groupId, paneId }: FlatTab): void {
     event.preventDefault();
-    workspace.activate(group.id, paneId);
+    workspace.activate(groupId, paneId);
     menu = { x: event.clientX, y: event.clientY, paneId };
   }
 
   /** Where a dragged tab would land in this bar, as an insertion index. */
-  const dropIndex = $derived(tabDrag.target?.kind === 'tabs' && tabDrag.target.groupId === group.id ? tabDrag.target.index : null);
+  const dropIndex = $derived(!compact && tabDrag.target?.kind === 'tabs' && tabDrag.target.groupId === group.id ? tabDrag.target.index : null);
 
   function onAuxClick(event: MouseEvent, paneId: PaneId): void {
     if (event.button === 1) void workspace.requestClosePane(paneId);
@@ -109,35 +132,36 @@
 
 </script>
 
-<div class="tabbar" class:focused role="tablist" data-tabbar={group.id}>
+<div class="tabbar" class:focused class:touch={compact || coarse} role="tablist" data-tabbar={compact ? undefined : group.id}>
   <div
     class="tab home"
-    class:active={group.active === null}
+    class:active={active === null}
     role="tab"
     tabindex="0"
-    aria-selected={group.active === null}
+    aria-selected={active === null}
     title={t('home.title')}
-    onclick={() => workspace.activate(group.id, null)}
-    onkeydown={(event) => event.key === 'Enter' && workspace.activate(group.id, null)}
+    onclick={showHome}
+    onkeydown={(event) => event.key === 'Enter' && showHome()}
   >
     <Icon name="home" size={14} />
   </div>
-  {#each group.tabs as paneId, index (paneId)}
+  {#each tabs as item, index (item.paneId)}
+    {@const { groupId, paneId } = item}
     {@const state = tabState(paneId)}
     <div
       class="tab"
-      class:active={paneId === group.active}
-      class:dragging={tabDrag.paneId === paneId}
+      class:active={paneId === active}
+      class:dragging={!compact && tabDrag.paneId === paneId}
       class:drop-before={dropIndex === index}
-      class:drop-after={dropIndex === group.tabs.length && index === group.tabs.length - 1}
+      class:drop-after={dropIndex === tabs.length && index === tabs.length - 1}
       role="tab"
       tabindex="0"
-      aria-selected={paneId === group.active}
+      aria-selected={paneId === active}
       data-tab-index={index}
-      onpointerdown={(event) => pressTab(event, paneId)}
-      oncontextmenu={(event) => openMenu(event, paneId)}
-      onclick={() => !justDragged() && workspace.activate(group.id, paneId)}
-      onkeydown={(event) => event.key === 'Enter' && workspace.activate(group.id, paneId)}
+      onpointerdown={(event) => onTabPress(event, paneId)}
+      oncontextmenu={(event) => openMenu(event, item)}
+      onclick={() => (compact || !justDragged()) && workspace.activate(groupId, paneId)}
+      onkeydown={(event) => event.key === 'Enter' && workspace.activate(groupId, paneId)}
       onauxclick={(event) => onAuxClick(event, paneId)}
       title={tabTooltip(paneId)}
     >
@@ -151,11 +175,13 @@
       <IconButton icon="close" label={t('action.tab.close')} small onclick={(event) => { event.stopPropagation(); void workspace.requestClosePane(paneId); }} />
     </div>
   {/each}
-  <IconButton icon="add" label={t('tab.new')} onclick={() => workspace.activate(group.id, null)} />
+  <IconButton icon="add" label={t('tab.new')} onclick={showHome} />
   <span class="spacer"></span>
-  <IconButton icon="splitRight" label={t('action.pane.splitRight')} small onclick={() => { workspace.focusGroup(group.id); workspace.splitFocused('row'); }} />
-  {#if closable}
-    <IconButton icon="close" label={t('tab.closeGroup')} small onclick={() => void workspace.requestCloseGroupWithTabs(group.id)} />
+  {#if !compact}
+    <IconButton icon="splitRight" label={t('action.pane.splitRight')} small onclick={() => { workspace.focusGroup(group.id); workspace.splitFocused('row'); }} />
+    {#if closable}
+      <IconButton icon="close" label={t('tab.closeGroup')} small onclick={() => void workspace.requestCloseGroupWithTabs(group.id)} />
+    {/if}
   {/if}
 </div>
 {#if menu}
@@ -227,6 +253,16 @@
     padding: 0;
     justify-content: center;
     animation: none;
+  }
+  .tabbar.touch {
+    height: 44px;
+    touch-action: pan-x;
+  }
+  .tabbar.touch .tab {
+    height: 34px;
+  }
+  .tabbar.touch .tab:not(.home) {
+    min-width: 112px;
   }
   .tab:hover:not(.active) {
     background: var(--fill-hover);
