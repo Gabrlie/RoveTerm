@@ -29,6 +29,10 @@ export interface Divider {
 export const MIN_RATIO = 0.1;
 export const MAX_RATIO = 0.9;
 
+export function arePanelsSuspended(targetKind: string | null | undefined): boolean {
+  return !targetKind || targetKind === 'fleet';
+}
+
 export function pane(id: PaneId): LayoutNode {
   return { kind: 'pane', id };
 }

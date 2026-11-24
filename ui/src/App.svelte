@@ -48,7 +48,7 @@
   import { aiRecords, aiSessions, logsReveal, menuSet, type AiRecord, type AiSessionSummary, onHostKeyPrompt, onMenuAction, workspaceLoad, workspaceSave, type CredentialKind, type HostEntry, type HostKeyPrompt } from './lib/ipc';
   import { parseSnapshot } from './lib/workspace/snapshot';
   import { errorText, t } from './lib/i18n';
-  import type { PaneId } from './lib/layout/layout';
+  import { arePanelsSuspended, type PaneId } from './lib/layout/layout';
 
   type PasswordRequest =
     | { kind: 'host'; host: HostEntry }
@@ -102,13 +102,13 @@
   }
   /** The right panel's open page; `null` when closed. One page at a time, as in VSCode. */
   let rightPage = $state<RightPage | null>(storedPage('ui.panel.rightPage'));
-  const onHome = $derived(!workspace.focusedPane);
-  let homeTransfersOpen = $state(false);
+  const panelsSuspended = $derived(arePanelsSuspended(workspace.focusedPane?.target.kind));
+  let suspendedTransfersOpen = $state(false);
   const effectiveRightPage = $derived<RightPage | null>(
-    onHome ? (homeTransfersOpen || rightPage === 'transfers' ? 'transfers' : null) : rightPage,
+    panelsSuspended ? (suspendedTransfersOpen || rightPage === 'transfers' ? 'transfers' : null) : rightPage,
   );
   $effect(() => {
-    if (!onHome) homeTransfersOpen = false;
+    if (!panelsSuspended) suspendedTransfersOpen = false;
   });
   /** The page `panel.right` reopens. */
   let lastRightPage: RightPage = storedPage('ui.panel.rightPage') ?? 'status';
@@ -122,14 +122,14 @@
 
   /** Opens `page`, or closes the panel when `page` is already open. */
   function toggleRight(page: RightPage): void {
-    if (onHome) return;
+    if (panelsSuspended) return;
     rightPage = rightPage === page ? null : page;
     lastRightPage = page;
   }
 
   function closeRight(): void {
-    if (onHome) {
-      homeTransfersOpen = false;
+    if (panelsSuspended) {
+      suspendedTransfersOpen = false;
       if (rightPage === 'transfers') rightPage = null;
     } else {
       rightPage = null;
@@ -149,19 +149,19 @@
       if (tab) workspace.reveal(tab);
     }
     const context = chat?.context;
-    if (onHome && context?.kind === 'local') {
+    if (panelsSuspended && context?.kind === 'local') {
       const local = Object.values(workspace.panes).find((pane) => pane.target.kind === 'local');
       if (local) workspace.reveal(local.id);
       else workspace.openTab({ kind: 'local' });
     }
-    if (onHome && context?.kind === 'quick') {
+    if (panelsSuspended && context?.kind === 'quick') {
       const tab = Object.values(workspace.panes).find((pane) => {
         const remote = remoteSourceOf(pane.target);
         return remote && 'address' in remote && remote.address === context.address;
       });
       if (tab) workspace.reveal(tab.id);
     }
-    if (onHome) return;
+    if (panelsSuspended) return;
     rightPage = 'ai';
     lastRightPage = 'ai';
   }
@@ -172,7 +172,7 @@
     return !!pane && remoteSourceOf(pane.target) !== null;
   });
   let bottomOpen = $state(stored('ui.panel.bottom', false));
-  const effectiveBottomOpen = $derived(bottomOpen && !onHome);
+  const effectiveBottomOpen = $derived(bottomOpen && !panelsSuspended);
   $effect(() => store('ui.panel.bottom', bottomOpen));
   let bottomMounted = $state(false);
   $effect(() => {
@@ -442,7 +442,11 @@
         keysOpen = true;
         break;
       case 'panel.right':
-        if (!onHome) rightPage = rightPage ? null : lastRightPage;
+        if (panelsSuspended) {
+          if (effectiveRightPage === 'transfers') closeRight();
+        } else {
+          rightPage = rightPage ? null : lastRightPage;
+        }
         break;
       case 'panel.status':
         toggleRight('status');
@@ -452,15 +456,15 @@
         break;
       case 'panel.transfers':
         // Opened from the downloads popover too: it shows the page rather than toggling it.
-        if (onHome) {
-          homeTransfersOpen = true;
+        if (panelsSuspended) {
+          suspendedTransfersOpen = true;
         } else {
           rightPage = 'transfers';
           lastRightPage = 'transfers';
         }
         break;
       case 'panel.bottom':
-        if (!onHome) bottomOpen = !bottomOpen;
+        if (!panelsSuspended) bottomOpen = !bottomOpen;
         break;
       case 'ai.open':
         toggleRight('ai');
@@ -640,7 +644,7 @@
 <svelte:document oncopy={onCopy} />
 
 <div class="app">
-  <TitleBar {sidebarOpen} rightOpen={effectiveRightPage !== null} bottomOpen={effectiveBottomOpen} onaction={run} />
+  <TitleBar {sidebarOpen} rightOpen={effectiveRightPage !== null} bottomOpen={effectiveBottomOpen} panelsDisabled={panelsSuspended} onaction={run} />
   <div class="body">
   {#if sidebarOpen}
     <HostSidebar onconnect={connect} onfiles={openFiles} onforwards={(host) => (forwardsHost = host)} onedit={(host) => (editing = host)} onnotice={(message) => showNotice(message, 'error')} onsettings={() => (settingsOpen = true)} ontailscale={() => (tailscaleOpen = true)} onkeys={() => (keysOpen = true)} />
@@ -681,7 +685,7 @@
     {/if}
     </div>
   </div>
-  <ActivityRail page={effectiveRightPage} bottomOpen={effectiveBottomOpen} home={onHome} remote={focusedRemote} onaction={run} />
+  <ActivityRail page={effectiveRightPage} bottomOpen={effectiveBottomOpen} suspended={panelsSuspended} remote={focusedRemote} onaction={run} />
   </div>
   <StatusBar onaction={run} />
 </div>
