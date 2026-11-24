@@ -3,13 +3,17 @@
   import Icon from '../ui/Icon.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import { t } from '../i18n';
+  import { viewport } from '../layout/viewport.svelte';
+  import { isMobile } from '../platform';
   import { editors, type EditDraft, type EditorCommand } from './editors.svelte';
+  import { defaultWordWrap, EDITOR_SYMBOLS, shouldAutoFocusEditor } from './editorTouch';
   import type { EditorController } from './codemirror';
 
   let { draft, active = true, onclose }: { draft: EditDraft; active?: boolean; onclose: () => void } = $props();
   let host: HTMLDivElement;
   let controller = $state<EditorController | null>(null);
   let loadError = $state(false);
+  let wordWrap = $state(defaultWordWrap(viewport.compact));
   const dirty = $derived(draft.text !== draft.original);
   const locked = $derived(draft.busy || editors.exiting || editors.closingIds.includes(draft.id));
 
@@ -34,7 +38,7 @@
         'replace': t('editor.replace'), 'replace all': t('editor.replaceAll'), 'all': t('editor.all'),
         'match case': t('editor.matchCase'), 'regexp': t('editor.regexp'), 'by word': t('editor.byWord'),
         'close': t('common.close'), 'No matches found': t('editor.noMatches'),
-      }, (text) => { draft.text = text; });
+      }, (text) => { draft.text = text; }, { wordWrap });
       if (disposed) created.destroy();
       else controller = created;
     }).catch(() => { loadError = true; });
@@ -42,7 +46,8 @@
   });
   $effect(() => { controller?.sync(draft.text); });
   $effect(() => { controller?.setEditable(!locked); });
-  $effect(() => { if (active) controller?.focus(); });
+  $effect(() => { controller?.setWordWrap(wordWrap); });
+  $effect(() => { if (active && shouldAutoFocusEditor(viewport.coarse)) controller?.focus(); });
 </script>
 
 <section class="text-editor" onfocusin={() => editors.focus(draft.id, command)}>
@@ -53,6 +58,7 @@
     <IconButton icon="undo" small label={t('editor.undo')} disabled={locked || !controller} onclick={() => controller?.undo()} />
     <IconButton icon="redo" small label={t('editor.redo')} disabled={locked || !controller} onclick={() => controller?.redo()} />
     <IconButton icon="search" small label={t('editor.find')} disabled={!controller} onclick={() => controller?.find()} />
+    <IconButton icon="wrapText" small label={t('editor.wrap')} active={wordWrap} disabled={!controller} onclick={() => (wordWrap = !wordWrap)} />
     <button class="secondary save" disabled={locked || !dirty} onclick={() => void editors.save(draft)}>{t(draft.busy ? 'editor.saving' : 'common.save')}</button>
     <IconButton icon="refresh" small label={t('editor.reload')} disabled={locked} onclick={() => void editors.reload(draft)} />
     <IconButton icon="close" small label={t('editor.close')} disabled={locked} onclick={() => void close()} />
@@ -69,6 +75,18 @@
   {/if}
   <div class="code" bind:this={host}></div>
   {#if loadError}<p class="notice error">{t('editor.loadError')}</p>{/if}
+  {#if (isMobile || viewport.coarse) && !locked && controller}
+    <div class="symbol-bar" role="group" aria-label={t('editor.symbols')}>
+      {#each EDITOR_SYMBOLS as symbol (symbol.label)}
+        <button
+          type="button"
+          class="plain"
+          onpointerdown={(event) => event.preventDefault()}
+          onclick={() => controller?.insertText(symbol.text)}
+        >{symbol.label}</button>
+      {/each}
+    </div>
+  {/if}
   <footer><span>{dirty ? t('editor.unsaved') : t('editor.saved')}</span><span>UTF-8{draft.text.startsWith('\uFEFF') ? ' · BOM' : ''} · {draft.text.includes('\r\n') ? 'CRLF' : draft.text.includes('\r') ? 'CR' : 'LF'}</span></footer>
 </section>
 
@@ -85,6 +103,27 @@
   .notice span { flex: 1; min-width: 100px; }
   .conflict { background: var(--warning-soft); color: var(--warning); }
   .error { background: var(--danger-soft); color: var(--danger); }
+  .symbol-bar {
+    display: flex;
+    align-items: center;
+    flex: none;
+    gap: var(--space-1);
+    height: 38px;
+    padding-inline: var(--space-2);
+    overflow-x: auto;
+    touch-action: pan-x;
+    scrollbar-width: none;
+    background: var(--material-bar);
+    box-shadow: inset 0 1px 0 var(--separator);
+  }
+  .symbol-bar button { flex: none; min-width: 36px; height: 34px; font: var(--text-body) var(--font-mono); }
   footer { display: flex; justify-content: space-between; padding: var(--space-1) var(--space-3); font-size: var(--text-caption); color: var(--fg-muted); box-shadow: inset 0 1px 0 var(--separator); }
   .save { height: 26px; padding: 0 var(--space-2); font-size: var(--text-footnote); }
+  @media (max-width: 520px) {
+    .identity { flex-basis: 80px; }
+    header > :global(.icon-button), .save { flex-shrink: 0; }
+  }
+  @media (pointer: coarse) {
+    .save { min-height: var(--control-height); }
+  }
 </style>

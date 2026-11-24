@@ -35,7 +35,7 @@ async function language(path: string): Promise<Extension> {
 const theme = EditorView.theme({
   '&': { height: '100%', color: 'var(--fg)', backgroundColor: 'var(--surface)', fontSize: 'var(--text-body)' },
   '&.cm-focused': { outline: 'none' },
-  '.cm-scroller': { overflow: 'auto', fontFamily: 'var(--font-mono)', lineHeight: '1.6' },
+  '.cm-scroller': { overflow: 'auto', WebkitOverflowScrolling: 'touch', fontFamily: 'var(--font-mono)', lineHeight: '1.6' },
   '.cm-content': { caretColor: 'var(--accent)', padding: 'var(--space-2) 0' },
   '.cm-line': { padding: '0 var(--space-3)' },
   '.cm-gutters': { backgroundColor: 'var(--editor-gutter)', color: 'var(--fg-subtle)', borderRight: '1px solid var(--separator)' },
@@ -45,7 +45,23 @@ const theme = EditorView.theme({
   '.cm-searchMatch': { backgroundColor: 'var(--warning-soft)', outline: '1px solid var(--warning)' },
   '.cm-searchMatch.cm-searchMatch-selected': { backgroundColor: 'var(--accent-soft)', outlineColor: 'var(--accent)' },
   '.cm-panels': { backgroundColor: 'var(--material-bar)', color: 'var(--fg)', borderColor: 'var(--separator)' },
-  '.cm-panel.cm-search': { padding: 'var(--space-2)', fontFamily: 'var(--font-ui)', fontSize: 'var(--text-footnote)' },
+  '.cm-panel.cm-search': {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 'var(--space-1)',
+    padding: 'var(--space-2)',
+    fontFamily: 'var(--font-ui)',
+    fontSize: 'var(--text-footnote)',
+    '& > input, & > button, & > label': { margin: '0' },
+    '& > label': { display: 'inline-flex', flexDirection: 'row', alignItems: 'center', whiteSpace: 'normal' },
+    '& > br': { display: 'none' },
+    '& [name=close]': { position: 'static', minWidth: 'var(--control-height)' },
+    '& .cm-textfield, & .cm-button': { minWidth: '0', maxWidth: '100%' },
+  },
+  '@media (pointer: coarse)': {
+    '.cm-panel.cm-search .cm-textfield, .cm-panel.cm-search button': { minHeight: 'var(--control-height)' },
+  },
   '.cm-textfield': { background: 'var(--surface)', color: 'var(--fg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-xs)' },
   '.cm-button': { background: 'var(--fill)', color: 'var(--fg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-xs)' },
 });
@@ -60,16 +76,25 @@ const highlight = syntaxHighlighting(HighlightStyle.define([
   { tag: tags.link, textDecoration: 'underline' },
 ]));
 
-export async function createEditor(parent: HTMLElement, initial: string, path: string, phrases: Record<string, string>, onchange: (text: string) => void) {
+export async function createEditor(
+  parent: HTMLElement,
+  initial: string,
+  path: string,
+  phrases: Record<string, string>,
+  onchange: (text: string) => void,
+  options?: { wordWrap?: boolean },
+) {
   let raw = initial;
   let preferredEnding = lineEnding(initial);
   let replacing = false;
   const editable = new Compartment();
   const lang = new Compartment();
+  const wordWrap = new Compartment();
   const view = new EditorView({ parent, state: EditorState.create({ doc: editorText(raw), extensions: [
     lineNumbers(), history(), drawSelection(), highlightActiveLine(), highlightActiveLineGutter(),
     indentOnInput(), bracketMatching(), search(), highlightSelectionMatches(), theme, highlight,
     EditorState.phrases.of(phrases), editable.of([EditorView.editable.of(true), EditorState.readOnly.of(false)]), lang.of([]),
+    wordWrap.of(options?.wordWrap ? EditorView.lineWrapping : []),
     keymap.of([...defaultKeymap, indentWithTab, { key: 'Escape', run: closeSearchPanel }]),
     EditorView.updateListener.of((update) => {
       if (!update.docChanged || replacing) return;
@@ -89,6 +114,11 @@ export async function createEditor(parent: HTMLElement, initial: string, path: s
     undo: () => { undo(view); },
     redo: () => { redo(view); },
     setEditable: (value: boolean) => view.dispatch({ effects: editable.reconfigure([EditorView.editable.of(value), EditorState.readOnly.of(!value)]) }),
+    setWordWrap: (enabled: boolean) => view.dispatch({ effects: wordWrap.reconfigure(enabled ? EditorView.lineWrapping : []) }),
+    insertText: (text: string) => {
+      if (view.state.readOnly || !view.state.facet(EditorView.editable)) return;
+      view.dispatch(view.state.replaceSelection(text), { scrollIntoView: true, userEvent: 'input.type' });
+    },
     sync: (text: string) => {
       if (text !== raw) preferredEnding = lineEnding(text);
       raw = text;

@@ -262,8 +262,8 @@ export interface ImportReport {
   skipped: string[];
 }
 
-export function hostImportSshConfig(): Promise<ImportReport> {
-  return invoke('host_import_ssh_config');
+export function hostImportSshConfig(path?: string | null): Promise<ImportReport> {
+  return invoke('host_import_ssh_config', path ? { path } : {});
 }
 
 export type LockReason =
@@ -690,6 +690,11 @@ export type Conflict = 'overwrite' | 'rename' | 'skip';
 
 export type TransferState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 
+export interface StagedUpload {
+  path: string;
+  name: string;
+}
+
 export interface TransferUpdate {
   id: TransferId;
   tag: 'upload' | 'download';
@@ -705,6 +710,14 @@ export interface TransferUpdate {
   files_total: number;
   skipped: boolean;
   error: { kind: string; detail?: string } | null;
+}
+
+export function transferPrepareUpload(paths: string[]): Promise<StagedUpload[]> {
+  return invoke('transfer_prepare_upload', { paths });
+}
+
+export function transferDiscardStaged(paths: string[]): Promise<void> {
+  return invoke('transfer_discard_staged', { paths });
 }
 
 export function transferUpload(id: FsId, localPaths: string[], remoteDir: string, conflict: Conflict): Promise<TransferId[]> {
@@ -774,6 +787,10 @@ export function logsRead(file: string | null = null, tailLines: number | null = 
 /** Shows finished download `id` in the system file manager. */
 export function transferReveal(id: TransferId): Promise<void> {
   return invoke('transfer_reveal', { id });
+}
+
+export function transferExport(id: TransferId): Promise<boolean> {
+  return invoke('transfer_export', { id });
 }
 
 export function transferClear(): Promise<void> {

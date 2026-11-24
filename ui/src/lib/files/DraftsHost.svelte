@@ -4,9 +4,12 @@
   import Dialog from '../ui/Dialog.svelte';
   import Icon from '../ui/Icon.svelte';
   import { t } from '../i18n';
+  import { viewport } from '../layout/viewport.svelte';
   import { workspace } from '../workspace/workspace.svelte';
+  import { draftViewMode } from './editorTouch';
 
   const selected = $derived(editors.selected ? editors.find(editors.selected) : undefined);
+  const viewMode = $derived(draftViewMode(viewport.compact, selected?.id ?? null));
   function answer(choice: CloseChoice): void { editors.closing?.resolve(choice); }
   function openTab(): void {
     if (!selected) return;
@@ -17,21 +20,28 @@
 
 {#if editors.showDrafts}
   <Dialog title={t('editor.drafts')} width={1080} onclose={() => (editors.showDrafts = false)}>
-    <div class="drafts">
-      <nav aria-label={t('editor.drafts')}>
-        {#if !editors.drafts.length}<p class="empty">{t('editor.noDrafts')}</p>{/if}
-        {#each editors.drafts as draft (draft.id)}
-          <button class:active={selected?.id === draft.id} onclick={() => (editors.selected = draft.id)}>
-            <Icon name="fileCode" size={15} /><span><strong>{draft.path.split('/').at(-1)}</strong><small>{draft.label}</small></span>
-            {#if draft.text !== draft.original}<span class="dirty" aria-label={t('editor.unsaved')}>●</span>{/if}
-          </button>
-        {/each}
-      </nav>
-      <div class="editor">
-        {#if selected}
-          {#key selected.id}<TextEditor draft={selected} onclose={() => (editors.selected = null)} />{/key}
-        {:else}<p class="empty">{t('editor.selectDraft')}</p>{/if}
-      </div>
+    <div class="drafts" class:compact={viewMode !== 'both'}>
+      {#if viewMode !== 'editor'}
+        <nav aria-label={t('editor.drafts')}>
+          {#if !editors.drafts.length}<p class="empty">{t('editor.noDrafts')}</p>{/if}
+          {#each editors.drafts as draft (draft.id)}
+            <button class:active={selected?.id === draft.id} onclick={() => (editors.selected = draft.id)}>
+              <Icon name="fileCode" size={15} /><span><strong>{draft.path.split('/').at(-1)}</strong><small>{draft.label}</small></span>
+              {#if draft.text !== draft.original}<span class="dirty" aria-label={t('editor.unsaved')}>●</span>{/if}
+            </button>
+          {/each}
+        </nav>
+      {/if}
+      {#if viewMode === 'editor'}
+        <button type="button" class="plain back" onclick={() => (editors.selected = null)}><Icon name="back" size={16} />{t('editor.backToList')}</button>
+      {/if}
+      {#if viewMode !== 'list'}
+        <div class="editor">
+          {#if selected}
+            {#key selected.id}<TextEditor draft={selected} onclose={() => (editors.selected = null)} />{/key}
+          {:else}<p class="empty">{t('editor.selectDraft')}</p>{/if}
+        </div>
+      {/if}
     </div>
     <p class="note">{t('editor.memoryNote')}</p>
     {#snippet actions()}
@@ -66,10 +76,10 @@
   small { color: var(--fg-muted); font-size: var(--text-caption); }
   .dirty { color: var(--accent); font-size: 8px; margin-left: auto; }
   .editor { flex: 1; min-width: 0; min-height: 0; border: 1px solid var(--separator); border-radius: var(--radius-sm); overflow: hidden; }
-  @media (max-width: 600px) {
-    .drafts { flex-direction: column; }
-    nav { width: auto; max-height: 100px; }
-  }
+  .drafts.compact { flex-direction: column; height: min(68dvh, 640px); min-height: 0; gap: var(--space-1); }
+  .compact nav { flex: 1; width: 100%; min-height: 0; }
+  .compact nav button { min-height: 44px; }
+  .back { align-self: flex-start; flex: none; min-height: var(--control-height); }
   .empty { text-align: center; padding: var(--space-4); color: var(--fg-muted); font-size: var(--text-footnote); }
   .note { margin: 0; color: var(--fg-muted); font-size: var(--text-caption); }
   .message { margin: 0; }

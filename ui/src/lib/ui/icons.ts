@@ -31,6 +31,8 @@ import folderUpload from 'lucide-static/icons/folder-up.svg?raw';
 import folderDownload from 'lucide-static/icons/folder-down.svg?raw';
 import files from 'lucide-static/icons/folder-sync.svg?raw';
 import transfer from 'lucide-static/icons/arrow-down-up.svg?raw';
+import share from 'lucide-static/icons/share-2.svg?raw';
+import listChecks from 'lucide-static/icons/list-checks.svg?raw';
 import upload from 'lucide-static/icons/upload.svg?raw';
 import download from 'lucide-static/icons/download.svg?raw';
 import refresh from 'lucide-static/icons/refresh-cw.svg?raw';
@@ -79,6 +81,7 @@ import externalEdits from 'lucide-static/icons/folder-pen.svg?raw';
 import drafts from 'lucide-static/icons/files.svg?raw';
 import undo from 'lucide-static/icons/undo-2.svg?raw';
 import redo from 'lucide-static/icons/redo-2.svg?raw';
+import wrapText from 'lucide-static/icons/wrap-text.svg?raw';
 import cpu from 'lucide-static/icons/cpu.svg?raw';
 import memory from 'lucide-static/icons/memory-stick.svg?raw';
 import gauge from 'lucide-static/icons/gauge.svg?raw';
@@ -94,6 +97,7 @@ export const icons = {
   drafts,
   undo,
   redo,
+  wrapText,
   sun,
   moon,
   sunMoon,
@@ -137,6 +141,8 @@ export const icons = {
   folderDownload,
   files,
   transfer,
+  share,
+  listChecks,
   upload,
   download,
   refresh,
