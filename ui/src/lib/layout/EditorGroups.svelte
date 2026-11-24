@@ -8,10 +8,12 @@
   import { tabDrag } from '../tabs/tabDrag.svelte';
   import type { CredentialKind } from '../ipc';
   import type { Divider, PaneId, Rect } from './layout';
+  import { isMobile } from '../platform';
 
   interface Props {
     compact?: boolean;
     coarse?: boolean;
+    inert?: boolean;
     /** The home page, shown in a group with no current tab. */
     home: Snippet;
     oncredentials: (paneId: PaneId, kind: CredentialKind, override?: boolean) => void;
@@ -22,9 +24,10 @@
     ontailscalesettings: () => void;
     /** Opens the fleet lead's scheduled tasks. */
     onschedules: () => void;
+    onsnippets?: () => void;
   }
 
-  let { compact = false, coarse = false, home, oncredentials, onedithost, onaisettings, ontailscalesettings, onschedules }: Props = $props();
+  let { compact = false, coarse = false, inert = false, home, oncredentials, onedithost, onaisettings, ontailscalesettings, onschedules, onsnippets }: Props = $props();
 
   /** Space between group cards, in CSS pixels; matches `--gap-panel`. */
   const GAP = 6;
@@ -119,7 +122,7 @@
   }
 </script>
 
-<div class="groups" bind:this={area}>
+<div class="groups" bind:this={area} {inert}>
   {#if compact}
     {#if focusedGroup}
       <section class="group compact" role="group">
@@ -155,7 +158,7 @@
       {@const focused = shown && (compact || workspace.focusedGroupId === group.id)}
       {@const style = compact ? `left: 0; top: ${tabBarHeight}px; width: 100%; height: calc(100% - ${tabBarHeight}px);` : stageStyle(rect)}
       <div class="slot" class:compact class:hidden={!shown} {style} data-stage={compact ? undefined : group.id} role="presentation" onpointerdown={() => focusGroup(group.id)}>
-        <PaneView {pane} {shown} {focused} {oncredentials} {onedithost} {onaisettings} {ontailscalesettings} {onschedules} />
+        <PaneView {pane} {shown} {focused} showKeyBar={isMobile || coarse} {coarse} {onsnippets} {oncredentials} {onedithost} {onaisettings} {ontailscalesettings} {onschedules} />
       </div>
     {/if}
   {/each}

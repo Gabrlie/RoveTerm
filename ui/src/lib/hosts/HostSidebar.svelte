@@ -14,8 +14,11 @@
   import { isMobile } from '../platform';
   import { tailscale } from '../tailscale/tailscale.svelte';
   import type { MessageKey } from '../i18n';
+  import { viewport } from '../layout/viewport.svelte';
 
   interface Props {
+    drawer?: boolean;
+    onclose?: () => void;
     onconnect: (host: HostEntry) => void;
     onfiles: (host: HostEntry) => void;
     onforwards: (host: HostEntry) => void;
@@ -27,8 +30,9 @@
     onkeys: () => void;
   }
 
-  let { onconnect, onfiles, onforwards, onedit, onnotice, onsettings, ontailscale, onkeys }: Props = $props();
+  let { drawer = false, onclose, onconnect, onfiles, onforwards, onedit, onnotice, onsettings, ontailscale, onkeys }: Props = $props();
 
+  const tapToConnect = $derived(viewport.coarse || viewport.compact || drawer);
   let menu = $state<{ x: number; y: number; host: HostEntry } | null>(null);
   const tailscaleStatusLabel = $derived(t(tailscale.stateLabelKey() as MessageKey));
 
@@ -55,7 +59,13 @@
   }
 </script>
 
-<aside class="sidebar">
+<aside class="sidebar" class:drawer class:touch={tapToConnect} aria-label={drawer ? t('mobile.drawer.hosts') : undefined}>
+  {#if drawer && onclose}
+    <header class="drawer-header">
+      <span>{t('mobile.drawer.hosts')}</span>
+      <IconButton icon="close" label={t('common.close')} onclick={onclose} />
+    </header>
+  {/if}
   <div class="search">
     <Icon name="search" size={14} />
     <input class="bare" bind:value={hosts.query} placeholder={t('host.search')} spellcheck="false" />
@@ -77,9 +87,13 @@
           class="host"
           role="button"
           tabindex="0"
-          ondblclick={() => onconnect(host)}
+          onclick={tapToConnect ? (event) => {
+            if (!(event.target instanceof Element && event.target.closest('.actions'))) onconnect(host);
+          } : undefined}
+          ondblclick={tapToConnect ? undefined : () => onconnect(host)}
           oncontextmenu={(event) => openMenu(event, host)}
           onkeydown={(event) => {
+            if (event.target !== event.currentTarget) return;
             if (event.key === 'Enter') onconnect(host);
             if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
               const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
@@ -102,7 +116,9 @@
             <span class="address">{hostSubtitle(host)}</span>
           </div>
           <div class="actions">
-            <IconButton icon="terminal" label={t('host.connect')} small onclick={() => onconnect(host)} />
+            {#if !tapToConnect}
+              <IconButton icon="terminal" label={t('host.connect')} small onclick={() => onconnect(host)} />
+            {/if}
             <IconButton
               icon="more"
               label={t('host.more')}
@@ -149,6 +165,18 @@
     background: var(--material-sidebar);
     box-shadow: var(--panel-shadow);
     overflow: hidden;
+  }
+  .sidebar.drawer {
+    width: min(300px, 85vw);
+    height: 100%;
+    border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  }
+  .drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-1) var(--space-2) 0 var(--space-3);
+    font-weight: 600;
   }
   .search {
     display: flex;
@@ -260,8 +288,16 @@
     display: none;
   }
   .host:hover .actions,
-  .host:focus-within .actions {
+  .host:focus-within .actions,
+  .touch .actions {
     display: flex;
+  }
+  .touch .host {
+    min-height: 48px;
+  }
+  .touch .actions :global(.icon-button) {
+    width: 44px;
+    height: 44px;
   }
   .empty {
     padding: var(--space-3);

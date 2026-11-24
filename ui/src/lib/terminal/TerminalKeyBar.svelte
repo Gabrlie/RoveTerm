@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import { t } from '../i18n';
   import Icon from '../ui/Icon.svelte';
   import type { IconName } from '../ui/icons';
   import KeyBarCustomizeDialog, { keyBarItemLabel } from './KeyBarCustomizeDialog.svelte';
@@ -105,14 +106,15 @@
   {@const modifier = id === 'ctrl' ? ctrl : id === 'alt' ? alt : undefined}
   {@const icon = id === 'toggleExtra' ? (expanded ? 'up' : 'more') : id && actionIcons[id]}
   {@const label = keyBarItemLabel(item)}
+  {@const accessibleLabel = modifier === 'locked' ? t(id === 'ctrl' ? 'keybar.ctrlLocked' : 'keybar.altLocked') : label}
   <button
     type="button"
     class="keycap"
     class:armed={modifier === 'armed'}
     class:locked={modifier === 'locked'}
     class:active={(id === 'keyboard' && keyboardOpen) || (id === 'toggleExtra' && expanded)}
-    title={label}
-    aria-label={label}
+    title={accessibleLabel}
+    aria-label={accessibleLabel}
     aria-pressed={modifier ? (modifier === 'armed' ? 'mixed' : modifier === 'locked') : id === 'keyboard' ? keyboardOpen : undefined}
     aria-expanded={id === 'toggleExtra' ? expanded : undefined}
     aria-haspopup={id === 'customize' ? 'dialog' : undefined}
@@ -127,7 +129,7 @@
   </button>
 {/snippet}
 
-<div class="keybar">
+<div class="keybar" role="group" aria-label={t('keybar.title')}>
   {#if expanded}
     <div class="key-row">
       {#each secondary as item}

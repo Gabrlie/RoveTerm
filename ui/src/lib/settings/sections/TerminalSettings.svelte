@@ -4,6 +4,9 @@
   import Switch from '../../ui/Switch.svelte';
   import { fontsMonospace, type TerminalPrefs } from '../../ipc';
   import { t, type MessageKey } from '../../i18n';
+  import { viewport } from '../../layout/viewport.svelte';
+  import { isMobile } from '../../platform';
+  import KeyBarCustomizeDialog from '../../terminal/KeyBarCustomizeDialog.svelte';
   import { SCHEMES, schemeById } from '../../terminal/schemes';
   import { prefs, terminalFontStack } from '../prefs.svelte';
   import { editDevice, editPrefs } from '../edit.svelte';
@@ -24,6 +27,7 @@
 
   const terminal = $derived(prefs.value.terminal);
   let installed = $state<string[]>([]);
+  let customizingKeyBar = $state(false);
 
   const fontOptions = $derived([
     { value: '', label: t('settings.fontDefault') },
@@ -171,7 +175,17 @@
       />
     </div>
   </div>
+  {#if isMobile || viewport.coarse}
+    <div class="form-row">
+      <span class="form-label">{t('keybar.title')}<small>{t('keybar.settingsHint')}</small></span>
+      <button type="button" class="secondary" onclick={() => (customizingKeyBar = true)}>{t('keybar.customize')}</button>
+    </div>
+  {/if}
 </div>
+
+{#if customizingKeyBar}
+  <KeyBarCustomizeDialog onclose={() => (customizingKeyBar = false)} />
+{/if}
 
 <p class="section-label">{t('settings.group.connection')}</p>
 <div class="form-group">

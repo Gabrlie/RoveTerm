@@ -13,6 +13,15 @@ export function onMobileInsets(handler: (insets: MobileInsets) => void): Promise
   return listen<MobileInsets>('rove-mobile://insets', (event) => handler(event.payload));
 }
 
+export type MobileLifecycleState = 'foreground' | 'background';
+
+export const mobileBackDefault = (): Promise<void> => invoke('mobile_back_default');
+
+export const onMobileLifecycle = (cb: (event: { state: MobileLifecycleState }) => void): Promise<UnlistenFn> =>
+  listen<{ state: MobileLifecycleState }>('rove-mobile://lifecycle', (event) => cb(event.payload));
+
+export const onMobileBack = (cb: () => void): Promise<UnlistenFn> => listen('rove-mobile://back', () => cb());
+
 export function opsTasks(conversation?: string): Promise<OpsTaskView[]> {
   return invoke('ops_task_list', { conversation });
 }

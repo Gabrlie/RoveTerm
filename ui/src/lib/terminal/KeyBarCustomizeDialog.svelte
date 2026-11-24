@@ -7,8 +7,9 @@
     switch (item.id) {
       case 'paste': return t('terminal.menu.paste');
       case 'snippets': return t('action.panel.snippets');
-      case 'toggleExtra': return t('host.more');
-      case 'customize': return t('action.settings.open');
+      case 'toggleExtra': return t('keybar.symbols');
+      case 'keyboard': return t('keybar.keyboard');
+      case 'customize': return t('keybar.customize');
       default: return builtinKeyMeta(item.id).label;
     }
   }
@@ -35,16 +36,8 @@
   let { onclose }: { onclose: () => void } = $props();
 
   const rowOrder: readonly KeyBarRow[] = ['primary', 'secondary'];
-  const rows = { primary: 'Primary', secondary: 'Secondary' } as const;
-  const categories: Record<BuiltinKeyMeta['category'], string> = {
-    modifier: 'Modifiers',
-    nav: 'Navigation',
-    combo: 'Shortcuts',
-    symbol: 'Symbols',
-    function: 'Function keys',
-    action: 'Actions',
-  };
-  const catalog = (Object.keys(categories) as BuiltinKeyMeta['category'][]).map((category) => ({
+  const categories: readonly BuiltinKeyMeta['category'][] = ['modifier', 'nav', 'combo', 'symbol', 'function', 'action'];
+  const catalog = categories.map((category) => ({
     category,
     keys: BUILTIN_KEY_CATALOG.filter((key) => key.category === category),
   }));
@@ -74,8 +67,8 @@
   }
 </script>
 
-<Dialog title={t('action.settings.open')} width={560} {onclose}>
-  <div class="row-picker" role="group" aria-label={t('action.settings.open')}>
+<Dialog title={t('keybar.title')} width={560} {onclose}>
+  <div class="row-picker" role="group" aria-label={t('keybar.title')}>
     {#each rowOrder as key}
       <button
         type="button"
@@ -83,18 +76,18 @@
         class:selected={row === key}
         aria-pressed={row === key}
         onclick={() => (row = key)}
-      >{rows[key]}</button>
+      >{t(`keybar.${key}`)}</button>
     {/each}
   </div>
 
-  <ol class="items" aria-label={rows[row]}>
+  <ol class="items" aria-label={t(`keybar.${row}`)}>
     {#each items as item, index}
       <li>
         <span class="key-label" title={item.kind === 'custom' ? item.sequence : undefined}>{keyBarItemLabel(item)}</span>
         <div class="item-actions">
           <IconButton icon="back" label={t('tab.moveLeft')} disabled={index === 0} onclick={() => (draft = moveKeyBarItem(draft, row, index, -1))} />
           <IconButton icon="chevron" label={t('tab.moveRight')} disabled={index === items.length - 1} onclick={() => (draft = moveKeyBarItem(draft, row, index, 1))} />
-          <IconButton icon={row === 'primary' ? 'up' : 'chevronDown'} label={'Move to ' + rows[otherRow]} disabled={!canMoveAcross} onclick={() => (draft = moveKeyBarItemAcrossRows(draft, row, index))} />
+          <IconButton icon={row === 'primary' ? 'up' : 'chevronDown'} label={t(otherRow === 'primary' ? 'keybar.moveToPrimary' : 'keybar.moveToSecondary')} disabled={!canMoveAcross} onclick={() => (draft = moveKeyBarItemAcrossRows(draft, row, index))} />
           <IconButton icon="remove" label={t('common.delete')} danger disabled={lockItem} onclick={() => (draft = removeKeyBarItem(draft, row, index))} />
         </div>
       </li>
@@ -104,7 +97,7 @@
   <div class="catalog">
     {#each catalog as { category, keys } (category)}
       <section>
-        <h3>{categories[category]}</h3>
+        <h3>{t(`keybar.category.${category}`)}</h3>
         <div class="chips">
           {#each keys as { id } (id)}
             {@const item = { kind: 'builtin', id } as const}
@@ -119,12 +112,12 @@
 
   <form class="custom" onsubmit={addCustom}>
     <label>
-      {t('forward.label')}
+      {t('keybar.customLabel')}
       <input bind:value={label} autocomplete="off" />
     </label>
     <label>
-      Sequence
-      <input bind:value={sequence} placeholder={'\\x1b[A / ^C / sudo '} autocomplete="off" autocapitalize="off" spellcheck="false" />
+      {t('keybar.customSequence')}
+      <input bind:value={sequence} placeholder={t('keybar.customSequenceHint')} autocomplete="off" autocapitalize="off" spellcheck="false" />
     </label>
     <button class="secondary" type="submit" disabled={full || !label.trim() || !sequence}>{t('ai.add')}</button>
   </form>
