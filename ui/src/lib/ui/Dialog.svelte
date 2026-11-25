@@ -43,11 +43,23 @@
   function onKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape' && !event.defaultPrevented && handleBack()) event.preventDefault();
   }
+
+  function blockBackdropEvent(event: MouseEvent): void {
+    if (event.target === event.currentTarget) event.stopPropagation();
+  }
 </script>
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="backdrop" class:compact={viewport.compact} class:page={compactPage} role="presentation" use:portal>
+<div
+  class="backdrop"
+  class:compact={viewport.compact}
+  class:page={compactPage}
+  role="presentation"
+  use:portal
+  onpointerdown={blockBackdropEvent}
+  onclick={blockBackdropEvent}
+>
   <div class="dialog" role="dialog" aria-modal="true" aria-label={title} tabindex="-1" style:--dialog-width="{width}px" bind:this={panel}>
     <header>
       {#if compactPage}<IconButton icon="back" label={t('mobile.back')} onclick={onclose} />{/if}
@@ -110,6 +122,16 @@
     font-weight: 600;
     letter-spacing: -0.01em;
   }
+  .compact header {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--m-header-nav, 48px);
+    padding: 0 var(--space-3);
+    font-size: var(--m-text-nav, 16px);
+    overflow-wrap: anywhere;
+  }
   .body {
     padding: var(--space-2) var(--space-5);
     overflow-y: auto;
@@ -137,12 +159,8 @@
     background: var(--surface);
   }
   .page header {
-    display: flex;
-    flex: none;
-    align-items: center;
-    gap: var(--space-2);
-    min-height: calc(var(--safe-top) + 48px);
-    padding: calc(var(--safe-top) + var(--space-2)) var(--space-3) var(--space-2);
+    min-height: calc(var(--safe-top) + var(--m-header-nav, 48px));
+    padding-top: var(--safe-top);
     background: var(--material-bar);
     box-shadow: inset 0 -0.5px 0 var(--separator);
   }
@@ -159,6 +177,9 @@
     padding: var(--space-3) var(--space-4) calc(max(var(--safe-bottom), var(--ime-bottom)) + var(--space-3));
     background: var(--material-bar);
     box-shadow: inset 0 0.5px 0 var(--separator);
+  }
+  .compact footer {
+    flex-wrap: wrap;
   }
   .dialog :global(label) {
     display: flex;

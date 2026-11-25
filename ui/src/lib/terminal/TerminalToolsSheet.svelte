@@ -61,7 +61,7 @@
 {#snippet tile(icon: IconName, tint: string, label: string, action: () => void, count = 0)}
   <button type="button" class="tile" style:--tile-tint={tint} onclick={() => openTool(action)}>
     <span class="tile-icon">
-      <Icon name={icon} size={18} />
+      <Icon name={icon} size={17} />
       {#if count > 0}<span class="badge">{count}</span>{/if}
     </span>
     <span>{label}</span>
@@ -125,7 +125,7 @@
     max-height: calc(100dvh - var(--safe-top));
     padding-bottom: calc(max(var(--safe-bottom), var(--ime-bottom)) + var(--space-4));
     overflow: hidden;
-    border-radius: 18px 18px 0 0;
+    border-radius: 16px 16px 0 0;
     background: var(--material-popover);
     box-shadow: var(--glass-edge), var(--shadow-lg);
     outline: none;
@@ -145,11 +145,11 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
-    padding: var(--space-1) var(--space-4) var(--space-2);
+    padding: var(--space-1) var(--m-page-x, 16px) var(--space-2);
   }
   h2 {
     margin: 0;
-    font-size: var(--text-title);
+    font-size: var(--m-text-nav, 16px);
     font-weight: 600;
   }
   .body {
@@ -158,7 +158,7 @@
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
-    padding: 2px var(--space-4);
+    padding: 2px var(--m-page-x, 16px);
   }
   .tools-grid {
     display: grid;
@@ -176,13 +176,13 @@
     align-items: center;
     justify-content: center;
     gap: var(--space-1);
-    min-height: 76px;
+    min-height: 68px;
     padding: var(--space-2);
     border: 0;
-    border-radius: var(--radius-md);
+    border-radius: var(--m-card-radius, 12px);
     background: var(--fill);
     color: var(--fg);
-    font: 500 var(--text-footnote) var(--font-ui);
+    font: 500 var(--m-text-sub, 12.5px) var(--font-ui);
     text-align: center;
     overflow-wrap: anywhere;
     cursor: pointer;
@@ -190,13 +190,16 @@
   .tile:active {
     background: var(--fill-pressed);
   }
+  .tile > span {
+    max-width: 100%;
+  }
   .tile-icon {
     position: relative;
     display: grid;
     place-items: center;
-    width: 32px;
-    height: 32px;
-    border-radius: var(--radius-sm);
+    width: var(--m-icon-tile, 32px);
+    height: var(--m-icon-tile, 32px);
+    border-radius: var(--space-2);
     background: color-mix(in srgb, var(--tile-tint) 18%, transparent);
     color: var(--tile-tint);
   }

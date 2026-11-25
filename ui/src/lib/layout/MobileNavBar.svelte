@@ -25,7 +25,7 @@
   {#each destinations as { id, icon } (id)}
     <button type="button" aria-current={active === id ? 'page' : undefined} onclick={() => onselect(id)}>
       <span class="icon">
-        <Icon name={icon} size={19} />
+        <Icon name={icon} size={20} />
         {#if id === 'tools' && toolsBadge > 0}
           <span class="badge" role="img" aria-label={t('mobile.tools.activeCount', { n: toolsBadge })}>{toolsBadge}</span>
         {:else if id === 'settings' && settingsBadge}
@@ -41,7 +41,7 @@
   .nav-bar {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    flex: 0 0 52px;
+    flex: 0 0 54px;
     padding-top: 0.5px;
     background: var(--material-bar);
     box-shadow: inset 0 0.5px 0 var(--separator);
@@ -51,7 +51,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: var(--space-1);
+    gap: 3px;
     min-height: 48px;
     min-width: 0;
     border: 0;
@@ -79,7 +79,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: var(--text-caption);
+    font-size: var(--m-text-meta, 11px);
     font-weight: 600;
   }
   .badge {

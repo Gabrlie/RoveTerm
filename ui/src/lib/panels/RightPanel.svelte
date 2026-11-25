@@ -69,14 +69,14 @@
   }
   .tabs.compact {
     flex: none;
-    min-height: 48px;
-    padding: 0 var(--space-2);
+    gap: var(--space-2);
+    min-height: var(--m-header-nav, 48px);
+    padding: 0 var(--space-3);
     background: var(--material-bar);
     box-shadow: inset 0 -0.5px 0 var(--separator);
   }
-  .tabs.compact :global(.icon-button) {
-    min-width: var(--touch-target, 44px);
-    min-height: var(--touch-target, 44px);
+  .tabs.compact .title {
+    font-size: var(--m-text-nav, 16px);
   }
   .spacer {
     flex: 1;

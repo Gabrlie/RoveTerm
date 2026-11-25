@@ -131,6 +131,35 @@
   }
 }
 
+@media (max-width: 767px) {
+  :root {
+    --m-text-page: calc(22px * var(--ui-scale));
+    --m-text-nav: calc(16px * var(--ui-scale));
+    --m-text-body: calc(14.5px * var(--ui-scale));
+    --m-text-sub: calc(12.5px * var(--ui-scale));
+    --m-text-meta: calc(11px * var(--ui-scale));
+    --text-large: var(--m-text-page);
+    --text-title: var(--m-text-nav);
+    --text-body: var(--m-text-body);
+    --text-footnote: var(--m-text-sub);
+    --text-caption: var(--m-text-meta);
+
+    --m-header-large: 52px;
+    --m-header-nav: 48px;
+    --m-row-two-line: 54px;
+    --m-row-single: 46px;
+    --m-icon-tile: 32px;
+    --m-icon-tile-sm: 28px;
+    --m-icon-btn: 36px;
+    --m-card-radius: 12px;
+    --m-page-x: 16px;
+    --m-section-gap: 18px;
+    --control-height: calc(40px * var(--ui-scale));
+    --row-height: 46px;
+    --touch-target: 36px;
+  }
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     --window: #1b1b1d;

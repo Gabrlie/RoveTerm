@@ -1,5 +1,6 @@
 <script lang="ts">
   // Every icon-only action uses this button. `label` is both the tooltip and the accessible name.
+  import { viewport } from '../layout/viewport.svelte';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
 
@@ -28,7 +29,7 @@
   {disabled}
   {onclick}
 >
-  <Icon name={icon} size={small ? 14 : 16} />
+  <Icon name={icon} size={viewport.compact ? 18 : small ? 14 : 16} />
 </button>
 
 <style>
@@ -62,6 +63,15 @@
     .icon-button.small {
       min-width: 34px;
       min-height: 34px;
+    }
+  }
+  @media (max-width: 767px) {
+    .icon-button,
+    .icon-button.small {
+      flex: none;
+      width: var(--m-icon-btn, 36px);
+      height: var(--m-icon-btn, 36px);
+      border-radius: 9px;
     }
   }
   .icon-button:hover:not(:disabled) {

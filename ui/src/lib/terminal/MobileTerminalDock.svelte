@@ -31,7 +31,7 @@
     onpointerdown={(event) => event.preventDefault()}
     onclick={onback}
   >
-    <Icon name="back" size={18} />
+    <Icon name="back" size={17} />
   </button>
 
   <div class="session-pill">
@@ -55,7 +55,7 @@
       onpointerdown={(event) => event.preventDefault()}
       onclick={ondisconnect}
     >
-      <Icon name="close" size={14} />
+      <Icon name="close" size={17} />
     </button>
   </div>
 
@@ -67,7 +67,7 @@
     onpointerdown={(event) => event.preventDefault()}
     onclick={ontools}
   >
-    <Icon name="add" size={18} />
+    <Icon name="add" size={17} />
     {#if toolsBadge > 0}<span class="badge" aria-hidden="true">{toolsBadge}</span>{/if}
   </button>
 
@@ -80,7 +80,7 @@
     onpointerdown={(event) => event.preventDefault()}
     onclick={ontogglekeyboard}
   >
-    <Icon name="keyboard" size={18} />
+    <Icon name="keyboard" size={17} />
   </button>
 </div>
 
@@ -91,9 +91,9 @@
     flex: none;
     display: flex;
     align-items: center;
-    gap: var(--space-1);
+    gap: 6px;
     min-width: 0;
-    height: 44px;
+    height: 42px;
     padding: 0 var(--space-2);
     background: var(--term-bg);
     color: var(--term-fg);
@@ -114,9 +114,9 @@
   .dock-button {
     flex: none;
     position: relative;
-    width: 38px;
+    width: var(--m-icon-btn, 36px);
     height: 34px;
-    border-radius: 10px;
+    border-radius: 9px;
     background: var(--dock-fill);
   }
   .dock-button.active {
@@ -130,7 +130,7 @@
     display: flex;
     align-items: center;
     overflow: hidden;
-    border-radius: 10px;
+    border-radius: 9px;
     background: var(--dock-fill);
   }
   .session {
@@ -154,7 +154,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-family: var(--font-mono);
-    font-size: var(--text-footnote);
+    font-size: var(--m-text-sub, 12.5px);
     font-weight: 500;
   }
   .status-dot {
@@ -175,7 +175,7 @@
   }
   .disconnect {
     flex: none;
-    width: 32px;
+    width: var(--m-icon-btn, 36px);
     height: 34px;
   }
   .badge {

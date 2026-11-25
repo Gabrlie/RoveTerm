@@ -15,7 +15,6 @@
 
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { t } from '../i18n';
   import { viewport } from '../layout/viewport.svelte';
   import { handleBack, pushBackHandler } from './backStack';
   import Icon from './Icon.svelte';
@@ -35,6 +34,7 @@
   let menu = $state<HTMLDivElement>();
   let highlighted = $state(0);
   let position = $state({ left: 0, top: 0 });
+  let backdropPressed = false;
 
   function portal(node: HTMLElement) {
     document.body.appendChild(node);
@@ -47,7 +47,7 @@
   }
 
   function onKeydown(event: KeyboardEvent): void {
-    const itemCount = items.length + (viewport.compact ? 1 : 0);
+    const itemCount = items.length;
     switch (event.key) {
       case 'ArrowDown':
         if (itemCount) highlighted = (highlighted + 1) % itemCount;
@@ -85,7 +85,20 @@
   }
 
   function onBackdropPointerDown(event: PointerEvent): void {
-    if (viewport.compact && event.target === event.currentTarget) onclose();
+    if (!viewport.compact) return;
+    event.stopPropagation();
+    backdropPressed = event.target === event.currentTarget;
+  }
+
+  function onBackdropClick(event: MouseEvent): void {
+    if (!viewport.compact) return;
+    event.stopPropagation();
+    const dismiss = backdropPressed && event.target === event.currentTarget;
+    backdropPressed = false;
+    if (dismiss) {
+      event.preventDefault();
+      onclose();
+    }
   }
 
   function onResize(): void {
@@ -109,7 +122,15 @@
 
 <svelte:window onpointerdowncapture={onPointerDown} onresize={onResize} />
 
-<div class="menu-layer" class:compact={viewport.compact} role="presentation" use:portal onpointerdown={onBackdropPointerDown}>
+<div
+  class="menu-layer"
+  class:compact={viewport.compact}
+  role="presentation"
+  use:portal
+  onpointerdown={onBackdropPointerDown}
+  onpointercancel={() => (backdropPressed = false)}
+  onclick={onBackdropClick}
+>
   <div
     bind:this={menu}
     class="menu"
@@ -134,25 +155,12 @@
           onpointerenter={() => (highlighted = index)}
           onclick={() => choose(item)}
         >
-          <span class="icon">{#if item.icon}<Icon name={item.icon} size={viewport.compact ? 16 : 14} />{/if}</span>
+          <span class="icon">{#if item.icon}<Icon name={item.icon} size={viewport.compact ? 17 : 14} />{/if}</span>
           <span class="label">{item.label}</span>
           {#if item.hint}<span class="hint">{item.hint}</span>{/if}
         </button>
       {/each}
     </div>
-    {#if viewport.compact}
-      <button
-        type="button"
-        role="menuitem"
-        class="separated cancel"
-        class:highlighted={highlighted === items.length}
-        onfocus={() => (highlighted = items.length)}
-        onpointerenter={() => (highlighted = items.length)}
-        onclick={onclose}
-      >
-        {t('common.cancel')}
-      </button>
-    {/if}
   </div>
 </div>
 
@@ -190,7 +198,7 @@
     max-height: 100dvh;
     padding: var(--space-2) max(var(--space-3), var(--safe-right))
       max(var(--space-3), var(--safe-bottom)) max(var(--space-3), var(--safe-left));
-    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    border-radius: 16px 16px 0 0;
   }
   .grab-handle {
     flex: none;
@@ -229,16 +237,22 @@
     cursor: default;
   }
   .compact button {
-    min-height: var(--touch-target, 44px);
+    gap: var(--space-3);
+    min-height: var(--m-row-single, 46px);
     height: auto;
-    padding: var(--space-2) var(--space-3);
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    font-size: var(--m-text-body, 14.5px);
   }
   .compact .icon {
-    flex: 0 0 16px;
+    flex: 0 0 17px;
   }
-  .cancel {
-    flex: none;
-    justify-content: center;
+  .compact .label {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .compact .hint {
+    margin-left: 0;
   }
   button.highlighted {
     background: var(--accent);

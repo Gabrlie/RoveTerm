@@ -86,7 +86,7 @@
     {#if hosts.items.length > 0}
       <div class="form-group">
         <button type="button" class="row fleet" onclick={onfleet}>
-          <span class="glyph"><Icon name="bot" size={18} /></span>
+          <span class="glyph"><Icon name="bot" size={17} /></span>
           <span class="copy">
             <strong>{t('fleet.title')}</strong>
             <small>{t('mobile.hosts.fleetHint')}</small>
@@ -101,7 +101,7 @@
             {@const count = forwardStatuses.running(host.id)}
             <div class="host-row">
               <button type="button" class="row" onclick={() => onconnect(host)}>
-                <HostIcon os={host.os} size={30} />
+                <HostIcon os={host.os} size={32} />
                 <span class="copy">
                   <span class="name">
                     <strong>{host.name}</strong>
@@ -133,7 +133,7 @@
     {@const status = pane.failure ? 'failed' : pane.exited ? 'ended' : pane.sessionId ? 'live' : 'connecting'}
     <div class="resume">
       <button type="button" class="row" onclick={() => onresume(pane.id)}>
-        {#if backgroundHost}<HostIcon os={backgroundHost.os} size={26} />{/if}
+        {#if backgroundHost}<HostIcon os={backgroundHost.os} size={28} />{/if}
         <span class="status-dot {status}" role="img" aria-label={t(`status.state.${status}`)}></span>
         <span class="copy">
           <strong>{pane.title}</strong>
@@ -168,9 +168,9 @@
     display: flex;
     flex: 1;
     flex-direction: column;
-    gap: var(--space-3);
+    gap: var(--m-section-gap, 18px);
     min-height: 0;
-    padding: var(--space-3) var(--space-4) var(--space-6);
+    padding: var(--space-3) var(--m-page-x, 16px) var(--space-6);
     overflow-y: auto;
   }
   .content > * {
@@ -180,18 +180,19 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    min-height: 44px;
     padding: 0 var(--space-3);
     border-radius: var(--radius-md);
     color: var(--fg-muted);
   }
   .search {
+    height: var(--control-height, 40px);
+    min-height: 40px;
     background: var(--fill);
   }
   .search input {
     flex: 1;
     width: 0;
-    min-height: 44px;
+    height: 100%;
   }
   .search:focus-within {
     box-shadow: var(--focus-ring);
@@ -200,6 +201,7 @@
     margin-inline-end: calc(-1 * var(--space-2));
   }
   .unlock {
+    min-height: var(--m-row-single, 46px);
     padding-block: var(--space-2);
     background: var(--accent-soft);
     color: var(--fg);
@@ -217,12 +219,13 @@
     align-items: center;
     gap: var(--space-3);
     min-width: 0;
-    min-height: 58px;
-    padding: var(--space-2) var(--space-3);
+    min-height: var(--m-row-two-line, 54px);
+    padding: 9px 14px;
     border: 0;
     background: transparent;
     color: var(--fg);
     font: inherit;
+    font-size: var(--m-text-body, 14.5px);
     text-align: start;
     cursor: pointer;
   }
@@ -242,19 +245,16 @@
     box-shadow: inset 0 0.5px 0 var(--separator);
   }
   .row-action {
+    flex: none;
     display: flex;
     align-items: center;
-    padding-inline-end: var(--space-2);
-  }
-  .row-action :global(.icon-button) {
-    width: var(--touch-target, 44px);
-    height: var(--touch-target, 44px);
+    padding-inline-end: 6px;
   }
   .copy {
     display: flex;
     flex: 1;
     flex-direction: column;
-    gap: var(--space-1);
+    gap: 2px;
     min-width: 0;
   }
   .name {
@@ -269,15 +269,15 @@
   }
   small, .trailing, .no-match, .empty {
     color: var(--fg-muted);
-    font-size: var(--text-footnote);
+    font-size: var(--m-text-sub, 12.5px);
   }
   .glyph, .empty-glyph {
     display: grid;
     flex: none;
     place-items: center;
-    width: 32px;
-    height: 32px;
-    border-radius: var(--radius-sm);
+    width: var(--m-icon-tile, 32px);
+    height: var(--m-icon-tile, 32px);
+    border-radius: var(--space-2);
     background: color-mix(in srgb, var(--sys-purple) 18%, transparent);
     color: var(--sys-purple);
   }
@@ -324,7 +324,8 @@
     box-shadow: inset 0 0.5px 0 var(--separator);
   }
   .resume .row {
-    padding-inline-start: var(--space-4);
+    min-height: var(--m-header-large, 52px);
+    padding-inline-start: var(--m-page-x, 16px);
   }
   .status-dot {
     flex: none;

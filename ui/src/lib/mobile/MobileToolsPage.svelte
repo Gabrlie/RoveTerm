@@ -42,7 +42,7 @@
 
 {#snippet tool(icon: IconName, tint: string, title: string, description: string, action: () => void, summary = '', count = 0)}
   <button type="button" class="row" onclick={action}>
-    <span class="glyph" style:--tint={tint}><Icon name={icon} size={16} /></span>
+    <span class="glyph" style:--tint={tint}><Icon name={icon} size={17} /></span>
     <span class="copy">
       <strong>{title}</strong>
       <small>{description}</small>
@@ -80,7 +80,7 @@
     <div class="form-group">
       {#each hosts.items as host (host.id)}
         <button type="button" class="row" onclick={() => { choosingHost = false; onforwards(host); }}>
-          <HostIcon os={host.os} size={28} />
+          <HostIcon os={host.os} size={32} />
           <span class="copy">
             <strong>{host.name}</strong>
             <small>{hostSubtitle(host)}</small>
@@ -107,9 +107,9 @@
     display: flex;
     flex: 1;
     flex-direction: column;
-    gap: var(--space-5);
+    gap: var(--m-section-gap, 18px);
     min-height: 0;
-    padding: var(--space-3) var(--space-4) var(--space-6);
+    padding: var(--space-3) var(--m-page-x, 16px) var(--space-6);
     overflow-y: auto;
   }
   section {
@@ -121,14 +121,15 @@
   .row {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
+    gap: var(--space-3);
     width: 100%;
-    min-height: 58px;
-    padding: var(--space-2) var(--space-3);
+    min-height: var(--m-row-two-line, 54px);
+    padding: 9px 14px;
     border: 0;
     background: transparent;
     color: var(--fg);
     font: inherit;
+    font-size: var(--m-text-body, 14.5px);
     text-align: start;
     cursor: pointer;
   }
@@ -146,9 +147,9 @@
     display: grid;
     flex: none;
     place-items: center;
-    width: 28px;
-    height: 28px;
-    border-radius: var(--radius-sm);
+    width: var(--m-icon-tile, 32px);
+    height: var(--m-icon-tile, 32px);
+    border-radius: var(--space-2);
     background: var(--tint);
     color: white;
   }
@@ -156,15 +157,21 @@
     display: flex;
     flex: 1;
     flex-direction: column;
-    gap: var(--space-1);
+    gap: 2px;
     min-width: 0;
-    overflow-wrap: anywhere;
+  }
+  strong, small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   small, .summary, .chevron {
     color: var(--fg-muted);
-    font-size: var(--text-footnote);
+    font-size: var(--m-text-sub, 12.5px);
   }
   .summary {
+    max-width: 30%;
+    overflow-wrap: anywhere;
     text-align: end;
   }
   .chevron, .badge {

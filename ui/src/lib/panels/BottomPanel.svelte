@@ -76,13 +76,14 @@
     display: flex;
     flex: none;
     align-items: center;
-    min-height: 48px;
-    padding: 0 var(--space-2);
+    gap: var(--space-2);
+    min-height: var(--m-header-nav, 48px);
+    padding: 0 var(--space-3);
     background: var(--material-bar);
     box-shadow: inset 0 -0.5px 0 var(--separator);
   }
-  .mobile-nav :global(.icon-button) {
-    min-width: var(--touch-target, 44px);
-    min-height: var(--touch-target, 44px);
+  .mobile-nav strong {
+    font-size: var(--m-text-nav, 16px);
+    font-weight: 600;
   }
 </style>

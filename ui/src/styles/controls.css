@@ -118,23 +118,40 @@
 }
 
 /* Thin overlay-style scroll bars that widen on hover. */
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-  background: transparent;
+@media (hover: hover) and (pointer: fine) {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--fg) 22%, transparent);
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    border-width: 2px;
+    background-color: color-mix(in srgb, var(--fg) 38%, transparent);
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
 }
-::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--fg) 22%, transparent);
-  background-clip: padding-box;
-}
-::-webkit-scrollbar-thumb:hover {
-  border-width: 2px;
-  background-color: color-mix(in srgb, var(--fg) 38%, transparent);
-}
-::-webkit-scrollbar-corner {
-  background: transparent;
+@media (pointer: coarse) {
+  ::-webkit-scrollbar {
+    width: 3px;
+    height: 0;
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    border-radius: var(--radius-pill);
+    background: color-mix(in srgb, var(--fg) 18%, transparent);
+  }
+  ::-webkit-scrollbar-thumb:horizontal,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
 }
 
 /* Small uppercase heading for groups in lists and forms. */
@@ -210,6 +227,24 @@
   color: var(--fg-muted);
   font-size: var(--text-caption);
   line-height: 1.45;
+}
+
+@media (max-width: 767px) {
+  .form-group {
+    border-radius: var(--m-card-radius, 12px);
+  }
+  .form-row {
+    min-height: var(--m-row-single, 46px);
+    padding: 10px 14px;
+  }
+  :where(button.primary, button.secondary) {
+    border-radius: var(--radius-md);
+    font-size: var(--m-text-body, 14.5px);
+  }
+  :where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'])) {
+    border-radius: var(--radius-md);
+    padding: 0 var(--space-3);
+  }
 }
 
 /* A text field inside a component's own framed box (search fields, path bars) draws no frame. */

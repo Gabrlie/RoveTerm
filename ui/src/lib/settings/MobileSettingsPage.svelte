@@ -3,6 +3,7 @@
   import { getVersion } from '@tauri-apps/api/app';
   import { t, type MessageKey } from '../i18n';
   import type { Theme } from '../ipc';
+  import MobilePageHeader from '../mobile/MobilePageHeader.svelte';
   import { capabilities, isMobile } from '../platform';
   import { sync } from '../sync/sync.svelte';
   import { updater } from '../update/updater.svelte';
@@ -72,13 +73,7 @@
 
 <section class="settings-page" aria-label={t('settings.title')}>
   {#if selected}
-    <header class="navigation">
-      <button type="button" class="plain back-button" onclick={() => select(null)}>
-        <Icon name="back" size={18} />
-        {t('settings.title')}
-      </button>
-      <h1>{t(selected.label)}</h1>
-    </header>
+    <MobilePageHeader title={t(selected.label)} onback={() => select(null)} />
     {#key selected.id}
       <div class="content detail">
         {#if settingsError.text}
@@ -88,9 +83,7 @@
       </div>
     {/key}
   {:else}
-    <header class="navigation root-title">
-      <h1>{t('settings.title')}</h1>
-    </header>
+    <MobilePageHeader title={t('settings.title')} large />
     <div class="content">
       {#each groups as group (group.id)}
         <div class="section-group">
@@ -99,7 +92,7 @@
             {#each group.items as entry (entry.id)}
               {@const value = summary(entry.id)}
               <button type="button" class="section-row" onclick={() => select(entry.id)}>
-                <span class="glyph" style:--tint="var(--sys-{entry.tint})"><Icon name={entry.icon} size={16} /></span>
+                <span class="glyph" style:--tint="var(--sys-{entry.tint})"><Icon name={entry.icon} size={15} /></span>
                 <span class="label">{t(entry.label)}</span>
                 {#if value}<span class="summary">{value}</span>{/if}
                 {#if entry.id === 'about' && updateAvailable}
@@ -125,40 +118,13 @@
     min-height: 0;
     background: var(--surface);
   }
-  .navigation {
-    display: flex;
-    flex: none;
-    align-items: center;
-    gap: var(--space-2);
-    min-height: 48px;
-    padding: 0 var(--space-4);
-    background: var(--material-bar);
-    box-shadow: inset 0 -0.5px 0 var(--separator);
-  }
-  h1 {
-    margin: 0;
-    font-size: var(--text-title);
-    font-weight: 700;
-  }
-  .root-title {
-    padding-block: var(--space-3);
-  }
-  .root-title h1 {
-    font-size: var(--text-large);
-  }
-  .back-button {
-    flex: none;
-    min-height: 44px;
-    margin-inline-start: calc(-1 * var(--space-2));
-    color: var(--accent);
-  }
   .content {
     display: flex;
     flex: 1;
     flex-direction: column;
-    gap: var(--space-5);
+    gap: var(--m-section-gap, 18px);
     min-height: 0;
-    padding: var(--space-3) var(--space-4) var(--space-6);
+    padding: var(--space-3) var(--m-page-x, 16px) var(--space-6);
     overflow-y: auto;
   }
   .detail {
@@ -176,14 +142,15 @@
   .section-row {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
+    gap: var(--space-3);
     width: 100%;
-    min-height: 50px;
-    padding: var(--space-2) var(--space-3);
+    min-height: var(--m-row-single, 46px);
+    padding: 10px 14px;
     border: 0;
     background: transparent;
     color: var(--fg);
     font: inherit;
+    font-size: var(--m-text-body, 14.5px);
     text-align: start;
     cursor: pointer;
   }
@@ -201,19 +168,22 @@
     display: grid;
     flex: none;
     place-items: center;
-    width: 28px;
-    height: 28px;
-    border-radius: var(--radius-sm);
+    width: var(--m-icon-tile-sm, 28px);
+    height: var(--m-icon-tile-sm, 28px);
+    border-radius: 7px;
     background: var(--tint);
     color: white;
   }
   .label {
     flex: 1;
     min-width: 0;
+    overflow-wrap: anywhere;
   }
   .summary {
     color: var(--fg-muted);
-    font-size: var(--text-footnote);
+    max-width: 40%;
+    font-size: var(--m-text-sub, 12.5px);
+    overflow-wrap: anywhere;
     text-align: end;
   }
   .chevron {

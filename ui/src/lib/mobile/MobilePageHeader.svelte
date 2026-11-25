@@ -30,8 +30,8 @@
     flex: none;
     align-items: center;
     gap: var(--space-2);
-    min-height: 48px;
-    padding-inline: var(--space-4);
+    min-height: var(--m-header-nav, 48px);
+    padding: 0 var(--space-3);
     background: var(--material-bar);
     box-shadow: inset 0 -0.5px 0 var(--separator);
   }
@@ -42,22 +42,21 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: var(--text-title);
-    font-weight: 700;
+    font-size: var(--m-text-nav, 16px);
+    font-weight: 600;
   }
   .large {
-    padding-block: var(--space-2);
+    min-height: var(--m-header-large, 52px);
+    padding: 0 var(--m-page-x, 16px);
   }
   .large h1 {
-    font-size: var(--text-large);
+    font-size: var(--m-text-page, 22px);
+    font-weight: 700;
+    letter-spacing: -0.02em;
   }
   .actions {
     display: flex;
     flex: none;
     gap: var(--space-1);
-  }
-  header :global(.icon-button) {
-    width: var(--touch-target, 44px);
-    height: var(--touch-target, 44px);
   }
 </style>
