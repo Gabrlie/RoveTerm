@@ -162,4 +162,24 @@
     color: var(--fg-muted);
     text-align: center;
   }
+  @media (max-width: 767px) {
+    .backdrop {
+      padding-top: calc(var(--safe-top) + var(--space-3));
+      padding-bottom: max(var(--safe-bottom), var(--ime-bottom));
+    }
+    .palette {
+      width: calc(100vw - 2 * var(--space-3));
+      max-height: calc(100dvh - var(--safe-top) - max(var(--safe-bottom), var(--ime-bottom)) - var(--space-6));
+    }
+  }
+  @media (pointer: coarse) {
+    li button {
+      min-height: var(--row-height);
+      height: auto;
+      padding-block: var(--space-2);
+    }
+    kbd {
+      display: none;
+    }
+  }
 </style>
