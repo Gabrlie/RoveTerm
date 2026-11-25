@@ -389,11 +389,34 @@
   .checks li span { display: block; color: var(--fg-muted); }
   .checks li + li { margin-top: var(--space-1); }
   .muted { margin: 0; color: var(--fg-muted); }
+  @container ops-card (width < 460px) {
+    .host-row {
+      flex-wrap: wrap;
+      padding-block: var(--space-2);
+      row-gap: var(--space-1);
+    }
+    .host { max-width: 48%; }
+    .host-status { min-width: 80px; }
+    .host-row .actions {
+      width: 100%;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+    .host-row .actions:empty { display: none; }
+  }
   @container ops-card (width < 420px) { .track { display: none; } }
   @container ops-card (width < 310px) {
     .task-count { padding-inline: var(--space-1); }
     .toggle { gap: var(--space-1); }
     .host-row { gap: var(--space-1); }
+  }
+  @media (pointer: coarse) {
+    .toggle { min-height: var(--row-height); }
+    .action {
+      min-height: 34px;
+      height: auto;
+      padding-inline: var(--space-2);
+    }
   }
   @media (prefers-reduced-motion: reduce) { .dot.running { animation: none; } }
 </style>

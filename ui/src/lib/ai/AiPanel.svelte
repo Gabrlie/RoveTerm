@@ -8,8 +8,11 @@
   import AgentLoginDialog from './AgentLoginDialog.svelte';
   import UsageMeter from './UsageMeter.svelte';
   import ModelPopover from './ModelPopover.svelte';
-  import { capabilities, isMobile } from '../platform';
+  import { capabilities } from '../platform';
+  import { viewport } from '../layout/viewport.svelte';
+  import { pushBackHandler } from '../ui/backStack';
   import { builtinCommands, canPrestart, choiceKey, optionKey, slashItems, slashQuery, splitOptions, type SlashItem } from './composer';
+  import { enterKeyHint, shouldSendOnEnter } from './composerTouch';
   import { ai, contextKey, type Chat } from './ai.svelte';
   import { formatToolOutput, isLeadTool, LEAD_TOOL_ICONS, OPERATION_ICONS, outcomeState, rows, subject, toolSubject, type ApprovalItem } from './chatview';
   import { hostOf, workspace } from '../workspace/workspace.svelte';
@@ -108,6 +111,10 @@
     ai.requestedSubagent = null;
   }
 
+  $effect(() => {
+    if (viewport.compact && selectedSubagent) return pushBackHandler(closeSubagents);
+  });
+
   function toggleSubagents(): void {
     if (selectedSubagent) closeSubagents();
     else {
@@ -135,7 +142,9 @@
   });
   const hostInText = $derived(context.kind === 'local' ? t('ai.localInText') : hostName);
 
-  const agents = $derived((ai.agents?.agents ?? []).filter((entry) => entry.enabled && (!fleet || entry.kind === 'builtin')));
+  const agents = $derived((ai.agents?.agents ?? []).filter((entry) =>
+    entry.enabled && (entry.kind === 'builtin' || (!fleet && capabilities.localAgents)),
+  ));
   const agentRef = $derived(chat.agent ?? (fleet ? ai.fleetAgent : ai.defaultAgent));
   const agent = $derived(agents.find((entry) => entry.agent === agentRef) ?? null);
   const waiting = $derived(chat.waiting);
@@ -146,6 +155,7 @@
   $effect(() => {
     const target = chat;
     const ref = agentRef;
+    if (!capabilities.localAgents && ref?.startsWith('acp:')) return;
     if (!canPrestart(ref, !!agent, target)) return;
     const terminal = terminalPane?.sessionId ?? null;
     untrack(() => {
@@ -212,6 +222,13 @@
   let modeOpen = $state(false);
   let modePicker = $state<HTMLDivElement>();
   let modeTrigger = $state<HTMLButtonElement>();
+  $effect(() => {
+    if (pickerOpen) return pushBackHandler(() => { pickerOpen = false; });
+  });
+  $effect(() => {
+    if (modeOpen) return pushBackHandler(() => { modeOpen = false; });
+  });
+
   let slashMenu = $state<HTMLDivElement>();
   let historyOpen = $state(false);
   let loginTarget = $state<{ agent: string; name: string } | null>(null);
@@ -239,6 +256,7 @@
     { kind: 'builtin', title: 'ai.group.builtin' },
     { kind: 'acp', title: 'ai.group.acp' },
   ];
+  const agentGroups = capabilities.localAgents ? GROUPS : GROUPS.filter((group) => group.kind !== 'acp');
 
   function send(): void {
     const text = draft.trim();
@@ -255,7 +273,7 @@
       event.stopPropagation();
       return;
     }
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    if (shouldSendOnEnter(event, viewport.coarse)) {
       event.preventDefault();
       send();
     }
@@ -322,6 +340,18 @@
   const slashOpen = $derived(query !== null && slashClosed !== draft);
   const slashList = $derived(query === null ? [] : slashItems(query, commands, split.others));
 
+  $effect(() => {
+    if (slashOpen) return pushBackHandler(closeSlash);
+  });
+  $effect(() => {
+    if (slashOpen && !!slashSetting) return pushBackHandler(() => { slashSetting = null; });
+  });
+
+  function closeSlash(): void {
+    slashSetting = null;
+    slashClosed = draft;
+  }
+
   /** A choice's name; the built-in assistant's effort levels in the user's language. */
   function entryName(option: ConfigOption, entry: { value: string; name: string }): string {
     const key = choiceKey(option, entry.value);
@@ -338,7 +368,9 @@
    *  models, settings and commands. Returns whether they can be shown. */
   async function prepareAgent(): Promise<boolean> {
     const target = chat;
-    if (!target.id && agentRef?.startsWith('acp:')) {
+    if (agentRef?.startsWith('acp:')) {
+      if (!capabilities.localAgents) return false;
+      if (target.id) return true;
       if (!agent) return false;
       await target.prepare(terminalPane?.sessionId ?? null);
       return chat === target && !!target.id;
@@ -377,7 +409,7 @@
     const count = slashSetting ? slashSetting.choices.length : slashList.length;
     if (event.key === 'Escape') {
       if (slashSetting) slashSetting = null;
-      else slashClosed = draft;
+      else closeSlash();
       return true;
     }
     if (count === 0) return false;
@@ -385,7 +417,7 @@
       slashAt = (slashAt + (event.key === 'ArrowDown' ? 1 : count - 1)) % count;
       return true;
     }
-    if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
+    if (shouldSendOnEnter(event, viewport.coarse) || event.key === 'Tab') {
       if (slashSetting) {
         const choice = slashSetting.choices[slashAt];
         if (choice) pickSettingChoice(slashSetting, choice.value);
@@ -489,10 +521,7 @@
     const target = event.target as Node;
     if (pickerOpen && picker && !picker.contains(target)) pickerOpen = false;
     if (modeOpen && modePicker && !modePicker.contains(target)) modeOpen = false;
-    if (slashOpen && target !== input && !slashMenu?.contains(target)) {
-      slashClosed = draft;
-      slashSetting = null;
-    }
+    if (slashOpen && target !== input && !slashMenu?.contains(target)) closeSlash();
   }
 
   function onPopoverKey(event: KeyboardEvent): void {
@@ -648,7 +677,7 @@
           <div class="notice">
             <Icon name="warning" size={13} />
             <span class="selectable">{item.text}</span>
-            {#if item.code === 'ai.auth_required' && !isMobile && agentRef?.startsWith('acp:') && target === chat}
+            {#if item.code === 'ai.auth_required' && capabilities.localAgents && agentRef?.startsWith('acp:') && target === chat}
               <button type="button" class="link" onclick={() => (loginTarget = { agent: agentRef, name: agent?.name ?? agentRef })}>{t('ai.login.action')}</button>
             {/if}
             {#if item.code === 'ai.no_agent' || item.code === 'ai.spawn' || item.code === 'ai.no_key' || item.code === 'ai.auth_required' || item.code === 'ai.model'}
@@ -697,7 +726,7 @@
       </button>
       {#if pickerOpen}
         <div class="menu down" role="menu" aria-label={t('ai.agent')}>
-          {#each GROUPS as group (group.kind)}
+          {#each agentGroups as group (group.kind)}
             {@const entries = agents.filter((entry) => entry.kind === group.kind)}
             {#if entries.length > 0}
               <p class="menu-title">{t(group.title)}</p>
@@ -855,7 +884,7 @@
           {/if}
         </div>
       {/if}
-      <textarea bind:this={input} bind:value={draft} rows="1" placeholder={fleet ? t('fleet.placeholder') : t('ai.placeholder', { host: hostInText })} aria-label={fleet ? t('fleet.placeholder') : t('ai.placeholder', { host: hostInText })} oninput={onInput} onkeydown={onKeydown}></textarea>
+      <textarea bind:this={input} bind:value={draft} rows="1" enterkeyhint={enterKeyHint(viewport.coarse)} placeholder={fleet ? t('fleet.placeholder') : t('ai.placeholder', { host: hostInText })} aria-label={fleet ? t('fleet.placeholder') : t('ai.placeholder', { host: hostInText })} oninput={onInput} onkeydown={onKeydown}></textarea>
       <div class="card-foot">
         <div class="foot-controls">
           {#key chat}
@@ -1996,6 +2025,39 @@
     background: var(--fg);
     box-shadow: none;
     color: var(--surface);
+  }
+  @media (pointer: coarse) {
+    .approval-buttons button {
+      min-height: var(--control-height);
+      height: auto;
+      padding-block: var(--space-1);
+    }
+    .ack { min-height: 36px; }
+    .send {
+      width: var(--control-height);
+      height: var(--control-height);
+    }
+    .op {
+      min-height: 36px;
+      padding-block: var(--space-1);
+    }
+    .dispatch {
+      min-height: 52px;
+      padding-block: var(--space-2);
+    }
+    .pick, .mode-trigger {
+      min-height: 36px;
+      height: auto;
+    }
+    .menu-item, .example { min-height: var(--row-height); }
+    .toolbar { gap: var(--space-1); }
+    .agent-pick { min-width: 0; }
+  }
+  @media (pointer: coarse), (max-width: 767px) {
+    .menu, .menu.down {
+      max-width: min(320px, calc(100vw - 2 * var(--space-3)));
+      max-height: min(340px, 50dvh);
+    }
   }
   @container ai (max-width: 260px) {
     .toolbar {

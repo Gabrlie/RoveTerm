@@ -6,6 +6,8 @@
   import { t } from '../i18n';
   import { aiRecords, aiSessions, type AiRecord, type AiSessionSummary } from '../ipc';
   import { ai } from '../ai/ai.svelte';
+  import { enterKeyHint, shouldSendOnEnter } from '../ai/composerTouch';
+  import { viewport } from '../layout/viewport.svelte';
   import { capabilities } from '../platform';
 
   interface Props {
@@ -75,10 +77,11 @@
     <textarea
       bind:value={draft}
       rows="2"
+      enterkeyhint={enterKeyHint(viewport.coarse)}
       placeholder={t('fleet.placeholder')}
       aria-label={t('fleet.placeholder')}
       onkeydown={(event) => {
-        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+        if (shouldSendOnEnter(event, viewport.coarse)) {
           event.preventDefault();
           send();
         }
@@ -208,5 +211,23 @@
   }
   .chip:hover {
     background: var(--fill-hover);
+  }
+  @media (max-width: 520px) {
+    .head {
+      flex-wrap: wrap;
+      gap: var(--space-2);
+    }
+    .titles { flex-basis: 60%; }
+    textarea { min-width: 0; }
+  }
+  @media (pointer: coarse) {
+    .send {
+      width: var(--control-height);
+      height: var(--control-height);
+    }
+    .chip {
+      min-height: 32px;
+      padding: var(--space-1) var(--space-3);
+    }
   }
 </style>

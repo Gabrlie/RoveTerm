@@ -5,6 +5,9 @@
   import Icon from '../ui/Icon.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import type { IconName } from '../ui/icons';
+  import { viewport } from '../layout/viewport.svelte';
+  import { pushBackHandler } from '../ui/backStack';
+  import { initialCompactDetail, masterDetailView } from '../ui/masterDetail';
   import { shortHostName } from '../ops/taskview';
   import { auditLine, filterSessions, formatAuditDetail, formatSessionTime, groupSessionsByDate, type AuditLine, type FormattedAuditDetail } from './audit';
   import { isLeadTool, itemsFromRecords, LEAD_TOOL_ICONS, OPERATION_ICONS, outcomeState, rows, subject, toolSubject, type ApprovalItem, type GroupItem } from './chatview';
@@ -43,9 +46,11 @@
   let { initial = null, role, onclose, onresume }: Props = $props();
   // svelte-ignore state_referenced_locally
   let filter = $state<(typeof filters)[number]>(role ?? 'all');
+  // svelte-ignore state_referenced_locally
+  let compactDetail = $state(initialCompactDetail(!!initial));
   let view = $state<(typeof views)[number]>('conversation');
   let query = $state('');
-  let searchInput: HTMLInputElement;
+  let searchInput = $state<HTMLInputElement>();
   let sessions = $state<AiSessionSummary[]>([]);
   let selected = $state<string | null>(null);
   let records = $state<AiRecord[]>([]);
@@ -54,12 +59,14 @@
   let detailCache = $state<Record<string, DetailEntry>>({});
   let loadRevision = 0;
   let listLoading = $state(true);
+  let listError = $state('');
   let loading = $state(false);
   let error = $state('');
 
   const filteredSessions = $derived(filterSessions(sessions, query));
   const groups = $derived(groupSessionsByDate(filteredSessions));
   const parent = $derived(sessions.find((s) => s.id === selected || s.children.some((c) => c.id === selected)) ?? null);
+  const layoutMode = $derived(masterDetailView(viewport.compact, compactDetail && !!parent));
   const current = $derived(parent?.children.find((s) => s.id === selected) ?? parent);
   const chatRows = $derived(rows(itemsFromRecords(records, { asSubagent: current?.role === 'subagent' })));
   const lines = $derived(records.flatMap((row) => {
@@ -76,17 +83,20 @@
   $effect(() => {
     let active = true;
     listLoading = true;
+    listError = '';
     sessions = [];
     void load(null);
     aiSessions(filter === 'all' ? null : filter).then((found) => {
       if (!active) return;
       sessions = found;
-      const first = found.some((entry) => entry.id === initial || entry.children.some((child) => child.id === initial))
+      const requested = found.some((entry) => entry.id === initial || entry.children.some((child) => child.id === initial))
         ? initial
-        : found[0]?.id ?? null;
+        : null;
+      compactDetail = initialCompactDetail(!!requested);
+      const first = requested ?? found[0]?.id;
       if (first) void load(first);
     }).catch((caught: unknown) => {
-      if (active) error = errorText(caught);
+      if (active) listError = errorText(caught);
     }).finally(() => {
       if (active) listLoading = false;
     });
@@ -95,6 +105,15 @@
       ++loadRevision;
     };
   });
+
+  $effect(() => {
+    if (layoutMode === 'detail') return pushBackHandler(() => { compactDetail = false; });
+  });
+
+  function selectSession(id: string): void {
+    if (selected !== id) void load(id);
+    compactDetail = true;
+  }
 
   async function load(id: string | null): Promise<void> {
     const revision = ++loadRevision;
@@ -153,7 +172,7 @@
 
   function clearSearch(): void {
     query = '';
-    searchInput.focus();
+    searchInput?.focus();
   }
 
   function startRename(): void {
@@ -222,7 +241,13 @@
     const at = sessions.findIndex((entry) => entry.id === session.id);
     const wasSelected = parent?.id === session.id;
     sessions = sessions.filter((entry) => entry.id !== session.id);
-    if (wasSelected) void load(sessions[Math.min(at, sessions.length - 1)]?.id ?? null);
+    if (!wasSelected) return;
+    if (!sessions.length || viewport.compact) {
+      compactDetail = false;
+      void load(null);
+    } else {
+      void load(sessions[Math.min(at, sessions.length - 1)]?.id ?? null);
+    }
   }
 
   function time(ts: number): string {
@@ -324,7 +349,8 @@
 {/snippet}
 
 <Dialog title={t('ai.history')} {onclose} width={960}>
-  <div class="audit">
+  <div class="audit" class:compact={viewport.compact}>
+    {#if layoutMode !== 'detail'}
     <nav aria-label={t('ai.history')}>
       <div class="search-box">
         <Icon name="search" size={13} />
@@ -337,7 +363,11 @@
         {/each}
       </div>
       <div class="session-list">
-        {#if !listLoading}
+        {#if layoutMode === 'list' && listError}
+          <p class="error" role="alert">{listError}</p>
+        {:else if layoutMode === 'list' && listLoading}
+          <p class="empty" role="status">{t('ai.historyLoading')}</p>
+        {:else if !listLoading}
           {#if sessions.length === 0}
             <p class="empty">{t('ai.historyEmpty')}</p>
           {:else if filteredSessions.length === 0}
@@ -349,7 +379,7 @@
               {#each group.sessions as session (session.id)}
                 {@const title = sessionTitle(session)}
                 {@const meta = sessionMeta(session, title)}
-                <button type="button" class="session" class:active={session.id === parent?.id} aria-current={session.id === parent?.id ? 'true' : undefined} onclick={() => selected !== session.id && void load(session.id)}>
+                <button type="button" class="session" class:active={session.id === parent?.id} aria-current={session.id === parent?.id ? 'true' : undefined} onclick={() => selectSession(session.id)}>
                   <span class="session-top">
                     <span class="session-title" title={title}>{title}</span>
                     <span class="session-time" title={time(session.started)}>{formatSessionTime(session.started)}</span>
@@ -362,8 +392,17 @@
         {/if}
       </div>
     </nav>
+    {/if}
 
+    {#if layoutMode !== 'list'}
     <section class="pane" aria-label={t('ai.history')}>
+      {#if layoutMode === 'detail'}
+        <div class="compact-bar">
+          <button type="button" class="plain back-btn" onclick={() => (compactDetail = false)}>
+            <Icon name="back" size={16} />{t('ai.history.backToList')}
+          </button>
+        </div>
+      {/if}
       {#if parent}
         <header class="pane-head">
           <div class="head-info">
@@ -408,11 +447,11 @@
       {/if}
       {#key selected}
         <div class="content">
-          {#if error}<p class="error" role="alert">{error}</p>{/if}
+          {#if listError || error}<p class="error" role="alert">{listError || error}</p>{/if}
           {#if loading || listLoading}
             <p class="empty" role="status">{t('ai.historyLoading')}</p>
           {:else if !current}
-            {#if !error}<p class="empty">{t('ai.historySelect')}</p>{/if}
+            {#if !listError && !error}<p class="empty">{t('ai.historySelect')}</p>{/if}
           {:else if view === 'conversation'}
             <div class="conversation">
               {#each chatRows as row (row.key)}
@@ -492,6 +531,7 @@
         </div>
       {/key}
     </section>
+    {/if}
   </div>
   {#snippet actions()}
     <button type="button" class="primary" onclick={onclose}>{t('settings.done')}</button>
@@ -790,5 +830,32 @@
     .head-meta > span + span::before { display: none; }
     .line { grid-template-columns: max-content minmax(0, 1fr); }
     .line .body { grid-column: 2; }
+  }
+  .audit.compact { height: min(72dvh, 660px); }
+  .compact nav {
+    flex: 1;
+    border-inline-end: none;
+  }
+  .compact .session {
+    min-height: 48px;
+    justify-content: center;
+  }
+  .compact .segmented > button {
+    min-height: 36px;
+    height: auto;
+  }
+  .compact .switcher button { min-height: 36px; }
+  .compact .op { min-height: 44px; }
+  .compact-bar {
+    flex: none;
+    padding: var(--space-1) var(--space-2);
+    border-bottom: 1px solid var(--separator);
+    background: var(--material-bar);
+  }
+  .back-btn {
+    min-height: 36px;
+    height: auto;
+    gap: var(--space-2);
+    color: var(--accent);
   }
 </style>

@@ -56,7 +56,7 @@
     {#if active && onstop}
       <IconButton icon="stop" small label={t('ai.subagents.stop')} onclick={() => onstop?.(selected)} />
     {/if}
-    <IconButton icon="close" small label={t('ai.subagents.close')} onclick={onclose} />
+    <span class="close-action"><IconButton icon="close" small label={t('ai.subagents.close')} onclick={onclose} /></span>
   </header>
   {#if chats.length > 1}
     <nav aria-label={t('ai.subagents.title')}>
@@ -116,7 +116,11 @@
     border-bottom: 1px solid var(--separator);
   }
   .back { display: none; }
-  @container ai-split (width < 960px) { .back { display: inline-flex; } }
+  .close-action { display: inline-flex; }
+  @container ai-split (width < 960px) {
+    .back { display: inline-flex; }
+    .close-action { display: none; }
+  }
   .heading {
     flex: 1;
     min-width: 0;
@@ -209,4 +213,14 @@
   }
   .error { color: var(--danger); overflow-wrap: anywhere; }
   .retry { align-self: flex-start; }
+  @media (pointer: coarse) {
+    nav {
+      touch-action: pan-x;
+      scrollbar-width: none;
+    }
+    nav button {
+      min-height: 36px;
+      padding: var(--space-1) var(--space-3);
+    }
+  }
 </style>

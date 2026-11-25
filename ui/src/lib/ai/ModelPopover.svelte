@@ -4,6 +4,8 @@
   import Switch from '../ui/Switch.svelte';
   import { t, type MessageKey } from '../i18n';
   import type { ConfigOption } from '../ipc';
+  import { viewport } from '../layout/viewport.svelte';
+  import { pushBackHandler } from '../ui/backStack';
   import { currentChoice, effortPill, fastIndicator, fastValue, modelGroups, optionKey, speedToggle } from './composer';
 
   interface Props {
@@ -30,6 +32,15 @@
   let selector = $state<HTMLButtonElement>();
   let back = $state<HTMLButtonElement>();
   let search = $state<HTMLInputElement>();
+
+  $effect(() => {
+    if (!open) return;
+    const page = view;
+    return pushBackHandler(() => {
+      if (page === 'models') void showMain();
+      else open = false;
+    });
+  });
 
   const chosenModel = $derived(currentChoice(model, value));
   const modelName = $derived(model && chosenModel ? label(model, chosenModel) : t('ai.model'));
@@ -71,7 +82,7 @@
     query = '';
     view = 'models';
     await tick();
-    (search ?? back)?.focus();
+    (viewport.coarse ? back : (search ?? back))?.focus();
   }
 
   async function showMain(): Promise<void> {
@@ -488,5 +499,24 @@
   }
   .group-title {
     padding-top: var(--space-2);
+  }
+  @media (pointer: coarse) {
+    .trigger {
+      min-height: 36px;
+      height: auto;
+    }
+    .model-row, .toggle-row { min-height: var(--row-height); }
+    .segmented button {
+      min-height: 34px;
+      padding: var(--space-1) var(--space-2);
+    }
+    .back {
+      width: 36px;
+      height: 36px;
+    }
+    .popover {
+      max-width: calc(100vw - 2 * var(--space-3));
+      max-height: min(360px, 52dvh);
+    }
   }
 </style>
