@@ -44,27 +44,31 @@
 
 `layout/insets.ts` 读取 `mobile_insets` 并订阅 `rove-mobile://insets`，将安全区域和键盘遮挡高度写入 `--safe-top`、`--safe-right`、`--safe-bottom`、`--safe-left` 与 `--ime-bottom`。浏览器的 CSS 安全区域和 Visual Viewport 提供回退值。
 
-视口宽度小于 768px 时，工作区把各组标签平铺为一个标签栏，一次显示一个视图。`MobileTopBar` 和 `MobileNavBar` 提供导航入口，主机侧栏以滑入式抽屉显示，工作区面板覆盖当前视图。宽度达到 768px 时按分屏树显示各组，可自由分屏。两种布局共用标签和会话。
+视口宽度小于 768px 时，手机布局用「主机」「工具」「设置」三项底部导航。终端、总管、独立文件浏览器和编辑器占满工作区。宽度达到 768px 时，平板和桌面按分屏树显示各组，提供标签栏和主机侧栏。两种布局复用已挂载的面板和会话。
 
-`Dialog`、`ContextMenu` 和工作区覆盖层通过 `backStack` 注册关闭回调。Android 的 `rove-mobile://back` 事件优先关闭最近打开的覆盖层，栈为空时调用 `mobile_back_default` 执行原生返回。
+`MobileHostsPage` 按最近连接时间排列已保存主机，提供搜索、快速连接、主机管理和一行运维总管入口。打开同一终端目标会继续已有会话，连接不同目标时先处理相关草稿，再关闭原终端。返回主机页后，终端保持连接并保留滚动记录，可从底部会话条恢复或断开。
 
-视口宽度小于 768px 时，`AuditDialog`、`SettingsDialog` 和 `KeysDialog` 一次显示列表或详情。选择列表项进入详情，返回操作通过 `backStack` 先回到列表。
+`MobileToolsPage` 提供密钥库、SSH 配置导入、快速连接、传输、端口转发和快捷指令。传输和快捷指令可直接打开全屏面板。管理端口转发时，有多台已保存主机则先显示主机选择面板。工具导航角标统计活跃传输与运行中的转发，设置导航圆点提示应用更新。
+
+`MobileSettingsPage` 是独立的全屏设置页，分组列表与详情逐级切换。主机编辑、快速连接、密钥库、端口转发、AI 审计与服务商编辑、终端快捷键编辑使用全屏 `Dialog`（`presentation="page"`）。
+
+`Dialog`、`ContextMenu` 和工作区覆盖层通过 `backStack` 注册关闭回调。Android 的 `rove-mobile://back` 事件先关闭最近打开的覆盖层，再返回上一级页面。设置详情返回设置列表，工具与设置根页返回主机。栈为空时调用 `mobile_back_default` 执行原生返回。
 
 AI 对话和总管的输入框共用 `composerTouch`。触控模式下 Enter 换行，Ctrl/Cmd+Enter 或「发送」按钮提交消息。`OpsTasks`、`SubagentPanel` 和 `ModelPopover` 适配窄屏布局和触控操作，打开后通过 `backStack` 响应返回。
 
 `CommandPalette` 在窄屏上根据安全区域和输入法遮挡高度限制弹层高度，触控模式下增大操作行的点击区域。
 
-`TerminalKeyBar` 支持自定义主行和附加行，可配置常用按键、组合键和文本，并提供粘贴、快捷指令和软键盘入口。终端轻点聚焦，长按打开菜单，单指上下滑动滚动，双指捏合调整并保存终端字号。
+`MobileTerminalDock` 位于手机终端底部，提供返回、会话状态、断开、工具和软键盘操作。`TerminalToolsSheet` 从底部打开，提供 AI、文件、服务器状态、快捷指令、端口转发、终端状态条开关和快捷键编辑。`TerminalKeyBar` 默认展开两行，右侧固定展开／折叠与自定义按钮。快捷键可配置常用按键、组合键和文本。终端轻点聚焦，长按打开菜单，单指上下滑动滚动，双指捏合调整并保存终端字号。
 
 `FileBrowser` 在紧凑布局中使用双行列表。触控时轻点打开目录或编辑可编辑文件，其他文件轻点打开操作面板，长按 450 ms 打开操作面板。多选模式下，轻点条目切换其选中状态。移动端隐藏上传文件夹和选择下载目录的入口。
 
-移动端打开 `TransfersPanel` 时订阅传输进度，成功且未跳过的下载在 `TransferRow` 中提供「分享」和「保存到设备」。文件设置说明下载存放在应用目录及传输面板的导出入口。`MobileTopBar` 的更多菜单提供 SSH 配置导入，通过系统文件选择器选取单个配置文件。
+手机布局订阅传输进度，成功且未跳过的下载在 `TransferRow` 中提供「分享」和「保存到设备」。文件设置说明下载存放在应用目录及传输面板的导出入口。Android 与 iOS 的 SSH 配置导入通过系统文件选择器选取单个配置文件。
 
 `TextEditor` 提供自动换行开关，移动端及粗指针设备可在符号栏输入常用符号。粗指针设备打开编辑器时由用户轻点聚焦。紧凑布局中的 `DraftsHost` 一次显示草稿列表或编辑器，可从编辑器返回列表。
 
 移动端设置的「安全」页显示 vault 锁定状态，提供解锁、密钥丢失后的凭据重置，以及生物识别或屏幕锁保护开关。
 
-移动端 AI 设置隐藏本地 ACP 智能体和 `--mcp-bridge` 外部接入。同步设置隐藏文件夹选择，直接显示 WebDAV 表单，已有文件夹目标可在编辑时切换至 WebDAV。`LogsSettings` 和 `AboutSettings` 通过系统分享面板分享最新日志。
+移动端 AI 设置隐藏本地 ACP 智能体和 `--mcp-bridge` 外部接入。同步设置隐藏文件夹选择，直接显示 WebDAV 表单，已有文件夹目标可在编辑时切换至 WebDAV。编辑已连接的 WebDAV 目标时，密码框显示掩码占位符，留空保存会保留现有密码。`LogsSettings` 和 `AboutSettings` 通过系统分享面板分享最新日志。
 
 ## TermView
 
@@ -266,7 +270,7 @@ AI 对话和总管的输入框共用 `composerTouch`。触控模式下 Enter 换
 
 主机的右键菜单由 `src/lib/hosts/hostMenu.ts` 的 `hostMenuItems` 生成，侧栏与主页卡片共用；主页空白处右键提供新建主机、快速连接、从系统导入、新建本地终端。文件管理器在行上右键作用于选择（未选中的行先被选中）：打开目录、下载、下载到、重命名、复制路径、删除；空白处右键：新建文件夹、上传文件或文件夹、刷新、显示隐藏文件。在空白处单击或右键会清除选择。
 
-`Dialog` 和 `ContextMenu` 挂载到 `<body>`，在窄屏显示为适配安全区域的底部弹层。宽屏的 `Dialog` 居中，`ContextMenu` 从指定坐标弹出并避开窗口边缘。菜单支持方向键和 Enter，选中、Escape、点击别处或窗口缩放时关闭。
+`Dialog` 和 `ContextMenu` 挂载到 `<body>`。窄屏菜单和 `presentation="sheet"` 的对话框适配安全区域，从底部弹出。`presentation="page"` 的对话框填满可用区域并提供返回按钮。宽屏的 `Dialog` 居中，`ContextMenu` 从指定坐标弹出并避开窗口边缘。菜单支持方向键和 Enter，选中、Escape、点击别处或窗口缩放时关闭。
 
 不需要用户回答的通知统一用右上角的悬浮通知（`src/lib/ui/toast.svelte.ts` 的 `notify(message, kind)`，由 `Toaster` 绘制在对话框之上）：`info` / `success` 停留 4 秒，`error` 停留 8 秒且文字可选中；指针悬停时不消失，可手动关闭；最多同时显示 4 条，相同内容只重新计时。
 

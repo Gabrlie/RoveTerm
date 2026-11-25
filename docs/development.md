@@ -58,6 +58,8 @@ Android 使用 Keystore 保护凭据库的设备主密钥，可在应用的安�
 
 `file_paths.xml` 通过 `files-path`、`external-files-path` 和 `external-cache-path` 为 `FileProvider` 注册应用文件及外部缓存目录，供系统分享面板读取下载文件。
 
+移动端启动图标以 [RoveTerm 图标](../src-tauri/icons/icon.png) 为源。Android 提供自适应图标与各密度的回退资源，iOS 的 AppIcon 使用不透明 PNG。
+
 ### iOS / iPadOS（用户自签名）
 
 iOS / iPadOS 由用户自签名安装，App Store 和 `pnpm release:prepare` 的官方发布包均不提供安装包。在装有 Xcode 的 macOS 上运行 `pnpm tauri ios init` 生成 Xcode 工程。工作区插件 [`tauri-plugin-rove-mobile`](../src-tauri/plugins/tauri-plugin-rove-mobile/README.md) 在构建时接入 Swift Keychain 和 Insets 代码，并补齐 `Info.plist` 的 Face ID 和本地网络用途说明。使用 Xcode 构建并签名，或通过侧载工具签名和安装。

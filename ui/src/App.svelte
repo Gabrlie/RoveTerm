@@ -5,6 +5,7 @@
   import DraftsHost from './lib/files/DraftsHost.svelte';
   import ExternalEdits from './lib/files/ExternalEdits.svelte';
   import { externalEdits } from './lib/files/external.svelte';
+  import { isFinal, transfers } from './lib/files/transfers.svelte';
   import { capabilities, isMacDesktop, isMobile } from './lib/platform';
   import Dialog from './lib/ui/Dialog.svelte';
   import { ask } from './lib/ui/confirm.svelte';
@@ -12,7 +13,6 @@
   import UpdateDialog from './lib/update/UpdateDialog.svelte';
   import { updater } from './lib/update/updater.svelte';
   import TitleBar from './lib/layout/TitleBar.svelte';
-  import MobileTopBar from './lib/layout/MobileTopBar.svelte';
   import MobileNavBar, { type MobileDestination } from './lib/layout/MobileNavBar.svelte';
   import ActivityRail from './lib/layout/ActivityRail.svelte';
   import StatusBar from './lib/layout/StatusBar.svelte';
@@ -22,6 +22,9 @@
   import HostEditor from './lib/hosts/HostEditor.svelte';
   import PasswordPrompt from './lib/hosts/PasswordPrompt.svelte';
   import SettingsDialog, { type SettingsSection } from './lib/settings/SettingsDialog.svelte';
+  import MobileSettingsPage from './lib/settings/MobileSettingsPage.svelte';
+  import MobileHostsPage from './lib/mobile/MobileHostsPage.svelte';
+  import MobileToolsPage from './lib/mobile/MobileToolsPage.svelte';
   import ConfirmHost from './lib/ui/ConfirmHost.svelte';
   import EditMenu from './lib/ui/EditMenu.svelte';
   import Toaster from './lib/ui/Toaster.svelte';
@@ -50,6 +53,7 @@
   import { remoteSourceOf, workspace, type PaneTarget } from './lib/workspace/workspace.svelte';
   import { aiRecords, aiSessions, logsReveal, menuSet, type AiRecord, type AiSessionSummary, onHostKeyPrompt, onMenuAction, workspaceLoad, workspaceSave, type CredentialKind, type HostEntry, type HostKeyPrompt } from './lib/ipc';
   import { parseSnapshot } from './lib/workspace/snapshot';
+  import { findBackgroundTerminal, findReusableTerminalPane, isTerminalTarget } from './lib/workspace/singleSession';
   import { errorText, t } from './lib/i18n';
   import { arePanelsSuspended, type PaneId } from './lib/layout/layout';
   import { viewport } from './lib/layout/viewport.svelte';
@@ -96,13 +100,24 @@
 
   let sidebarOpen = $state(stored('ui.sidebar', true));
   $effect(() => store('ui.sidebar', sidebarOpen));
-  let drawerOpen = $state(false);
-  function closeDrawer(): void {
-    drawerOpen = false;
-  }
+  let mobileTab = $state<MobileDestination>('hosts');
+  let mobileSettingsSection = $state<SettingsSection | null>(null);
+
+  const activeCompactPane = $derived(viewport.compact ? workspace.focusedPane : undefined);
+  const showingMobileTerminal = $derived(!!activeCompactPane && isTerminalTarget(activeCompactPane.target));
+  const backgroundTerminal = $derived(viewport.compact
+    ? findBackgroundTerminal(Object.values(workspace.panes), activeCompactPane?.id ?? null)
+    : undefined);
+  const activeTransfersCount = $derived(Object.values(transfers.byId).filter((transfer) => !isFinal(transfer)).length);
+  const activeForwardsCount = $derived(forwardStatuses.runningTotal);
+  const toolsBadge = $derived(activeTransfersCount + activeForwardsCount);
   $effect(() => {
-    if (!viewport.compact) closeDrawer();
-    else if (drawerOpen) return pushBackHandler(closeDrawer);
+    if (viewport.compact) transfers.start().catch((error: unknown) => console.warn('transfer events unavailable', error));
+  });
+  $effect.pre(() => {
+    if (viewport.compact && !activeCompactPane && mobileTab !== 'hosts') {
+      return pushBackHandler(() => selectMobileDestination('hosts'));
+    }
   });
 
   const RIGHT_PAGES: RightPage[] = ['status', 'ai', 'snippets', 'transfers'];
@@ -118,9 +133,11 @@
   let rightPage = $state<RightPage | null>(storedPage('ui.panel.rightPage'));
   const panelsSuspended = $derived(arePanelsSuspended(workspace.focusedPane?.target.kind));
   let suspendedTransfersOpen = $state(false);
-  const effectiveRightPage = $derived<RightPage | null>(
-    panelsSuspended ? (suspendedTransfersOpen || rightPage === 'transfers' ? 'transfers' : null) : rightPage,
-  );
+  const effectiveRightPage = $derived.by((): RightPage | null => {
+    if (!panelsSuspended) return rightPage;
+    if (viewport.compact) return rightPage === 'transfers' || rightPage === 'snippets' ? rightPage : null;
+    return suspendedTransfersOpen || rightPage === 'transfers' ? 'transfers' : null;
+  });
   $effect(() => {
     if (!panelsSuspended) suspendedTransfersOpen = false;
   });
@@ -136,23 +153,22 @@
 
   /** Opens `page`, or closes the panel when `page` is already open. */
   function toggleRight(page: RightPage): void {
-    if (panelsSuspended) return;
+    if (panelsSuspended && !(viewport.compact && (page === 'snippets' || page === 'transfers'))) return;
     if (rightPage === page) closeRight();
     else openRight(page);
   }
 
   function openRight(page: RightPage): void {
-    if (viewport.compact) {
-      closeDrawer();
-      closeBottom();
-    }
+    if (viewport.compact) closeBottom();
     rightPage = page;
     lastRightPage = page;
   }
 
   function closeRight(): void {
-    if (viewport.compact) closeBottom();
-    if (panelsSuspended) {
+    if (viewport.compact) {
+      rightPage = null;
+      suspendedTransfersOpen = false;
+    } else if (panelsSuspended) {
       suspendedTransfersOpen = false;
       if (rightPage === 'transfers') rightPage = null;
     } else {
@@ -195,19 +211,20 @@
     return !!pane && remoteSourceOf(pane.target) !== null;
   });
   let bottomOpen = $state(stored('ui.panel.bottom', false));
-  const effectiveBottomOpen = $derived(bottomOpen && !panelsSuspended && (!viewport.compact || effectiveRightPage === null));
+  const effectiveBottomOpen = $derived(bottomOpen && !panelsSuspended
+    && (!viewport.compact || (showingMobileTerminal && effectiveRightPage === null)));
+  const terminalImmersion = $derived(showingMobileTerminal && !effectiveRightPage && !effectiveBottomOpen);
+  const showMobileNav = $derived(viewport.compact && !viewport.keyboardOpen && !activeCompactPane
+    && !effectiveRightPage && !effectiveBottomOpen && !(mobileTab === 'settings' && mobileSettingsSection !== null));
   function closeBottom(): void {
     bottomOpen = false;
   }
   function toggleBottom(): void {
-    if (panelsSuspended) return;
+    if (panelsSuspended || (viewport.compact && !showingMobileTerminal)) return;
     if (effectiveBottomOpen) {
       closeBottom();
     } else {
-      if (viewport.compact) {
-        closeDrawer();
-        closeRight();
-      }
+      if (viewport.compact) closeRight();
       bottomOpen = true;
     }
   }
@@ -267,53 +284,48 @@
 
   /** Opens settings on `section` (the first one when unset). */
   function openSettings(section?: SettingsSection): void {
-    closeDrawer();
+    if (viewport.compact) {
+      selectMobileDestination('settings');
+      mobileSettingsSection = section ?? null;
+      return;
+    }
     settingsSection = section;
     settingsOpen = true;
   }
 
-  const workspaceTabs = $derived(workspace.flatTabs.filter(({ paneId }) => workspace.panes[paneId]?.target.kind !== 'fleet'));
-  const mobileDestination = $derived<MobileDestination>(settingsOpen
-    ? 'settings'
-    : !workspace.focusedPane ? 'home' : workspace.focusedPane.target.kind === 'fleet' ? 'fleet' : 'workspace');
   const fleetWaiting = $derived.by(() => {
     const fleet = ai.chat({ kind: 'fleet' });
     return fleet.waiting + ai.subagentsOf(fleet.id).reduce((count, chat) => count + chat.waiting, 0);
   });
-  let lastWorkspacePane: PaneId | undefined;
-  $effect(() => {
-    const pane = workspace.focusedPane;
-    if (pane && pane.target.kind !== 'fleet') lastWorkspacePane = pane.id;
-  });
 
   function selectMobileDestination(destination: MobileDestination): void {
-    if (destination === 'settings') {
-      openSettings();
-      return;
-    }
-    closeDrawer();
+    closeRight();
     closeBottom();
-    rightPage = null;
-    suspendedTransfersOpen = false;
     paletteOpen = false;
-    switch (destination) {
-      case 'home':
-        workspace.activateHome();
-        break;
-      case 'workspace': {
-        const tab = workspaceTabs.find(({ paneId }) => paneId === lastWorkspacePane) ?? workspaceTabs[0];
-        if (tab) workspace.reveal(tab.paneId);
-        else drawerOpen = true;
-        break;
-      }
-      case 'fleet':
-        openFleet();
-        break;
-    }
+    workspace.activateHome();
+    mobileTab = destination;
+    mobileSettingsSection = null;
+  }
+
+  function showMobileHosts(): void {
+    selectMobileDestination('hosts');
+  }
+
+  function prepareMobilePane(): void {
+    closeRight();
+    closeBottom();
+    mobileTab = 'hosts';
+  }
+
+  function disconnectMobileTerminal(paneId: PaneId): void {
+    const focused = workspace.focusedPane?.id === paneId;
+    workspace.closePane(paneId);
+    if (focused) showMobileHosts();
   }
 
   /** Shows the fleet lead's tab; sends `text` to it when given. */
   function openFleet(text: string | null = null): void {
+    if (viewport.compact) prepareMobilePane();
     ai.listen();
     workspace.openFleet();
     if (text) {
@@ -343,7 +355,7 @@
   async function resumeFleet(summary: AiSessionSummary, records: AiRecord[]): Promise<void> {
     ai.listen();
     await ai.resume(summary, records);
-    workspace.openFleet();
+    openFleet();
   }
 
   /** Opens the folder of the log files, to send them along with a problem. */
@@ -380,22 +392,32 @@
     return pane ? terminals.get(pane.id) : undefined;
   }
 
+  function openTerminal(target: Extract<PaneTarget, { kind: 'ssh' | 'quick' | 'local' }>, password: string | null = null, remember = false): void {
+    if (viewport.compact) {
+      prepareMobilePane();
+      void workspace.openSingleTerminal(target, password, remember).catch((error) => showNotice(errorText(error), 'error'));
+    } else {
+      workspace.openTab(target, password, remember);
+    }
+  }
+
   function connect(host: HostEntry): void {
-    closeDrawer();
-    if (needsPassword(host)) {
+    const target = { kind: 'ssh', hostId: host.id, title: host.name } as const;
+    const reusable = viewport.compact && findReusableTerminalPane(Object.values(workspace.panes), target);
+    if (!reusable && needsPassword(host)) {
       passwordRequest = { kind: 'host', host };
       return;
     }
-    workspace.openTab({ kind: 'ssh', hostId: host.id, title: host.name });
+    openTerminal(target);
   }
 
-  function openFiles(host: HostEntry): void {
-    closeDrawer();
-    if (needsPassword(host)) {
+  function openFiles(host: HostEntry, password: string | null = null, remember = false): void {
+    if (password === null && needsPassword(host)) {
       passwordRequest = { kind: 'files', host };
       return;
     }
-    workspace.openTab({ kind: 'sftp', source: { hostId: host.id }, title: host.name });
+    if (viewport.compact) prepareMobilePane();
+    workspace.openTab({ kind: 'sftp', source: { hostId: host.id }, title: host.name }, password, remember);
   }
 
   function hostIdOf(target: PaneTarget): string | undefined {
@@ -432,11 +454,8 @@
     if (!request) return;
     if (request.kind === 'host' || request.kind === 'files') {
       const { host } = request;
-      const target: PaneTarget =
-        request.kind === 'host'
-          ? { kind: 'ssh', hostId: host.id, title: host.name }
-          : { kind: 'sftp', source: { hostId: host.id }, title: host.name };
-      workspace.openTab(target, password, remember);
+      if (request.kind === 'host') openTerminal({ kind: 'ssh', hostId: host.id, title: host.name }, password, remember);
+      else openFiles(host, password, remember);
       if (remember) setTimeout(() => void hosts.refresh(), 3000);
     } else {
       workspace.reopen(request.paneId, password, remember, request.override ? 'password' : 'natural');
@@ -470,7 +489,7 @@
         break;
       case 'tab.newLocal':
         if (!capabilities.localPty) break;
-        workspace.openTab({ kind: 'local' });
+        openTerminal({ kind: 'local' });
         break;
       case 'tab.close':
         if (document.activeElement?.closest('.text-editor') && editors.run('editor.close')) break;
@@ -509,8 +528,7 @@
         openSettings();
         break;
       case 'help.shortcuts':
-        settingsSection = 'shortcuts';
-        settingsOpen = true;
+        openSettings(viewport.compact ? undefined : 'shortcuts');
         break;
       case 'fleet.open':
         openFleet();
@@ -530,19 +548,17 @@
         void updater.check({ silent: false, interactive: true });
         break;
       case 'help.about':
-        settingsSection = 'about';
-        settingsOpen = true;
+        openSettings('about');
         break;
       case 'host.import':
         void importSshConfig();
         break;
       case 'keys.manage':
-        closeDrawer();
         keysOpen = true;
         break;
       case 'panel.right':
         if (panelsSuspended) {
-          if (effectiveRightPage === 'transfers') closeRight();
+          if (effectiveRightPage) closeRight();
         } else if (rightPage) closeRight();
         else openRight(lastRightPage);
         break;
@@ -554,11 +570,7 @@
         break;
       case 'panel.transfers':
         // Opened from the downloads popover too: it shows the page rather than toggling it.
-        if (panelsSuspended) {
-          if (viewport.compact) {
-            closeDrawer();
-            closeBottom();
-          }
+        if (panelsSuspended && !viewport.compact) {
           suspendedTransfersOpen = true;
         } else {
           openRight('transfers');
@@ -574,16 +586,13 @@
         showWaiting();
         break;
       case 'host.quickConnect':
-        closeDrawer();
         quickOpen = true;
         break;
       case 'host.new':
-        closeDrawer();
         editing = null;
         break;
       case 'sidebar.toggle':
-        if (viewport.compact) drawerOpen = !drawerOpen;
-        else sidebarOpen = !sidebarOpen;
+        if (!viewport.compact) sidebarOpen = !sidebarOpen;
         break;
       case 'files.open':
         if (!workspace.openFilesBesideFocused(!viewport.compact)) showNotice(t('files.noRemote'));
@@ -592,10 +601,7 @@
         const pane = workspace.focusedPane;
         const hostId = pane ? hostIdOf(pane.target) : undefined;
         const host = hostId ? hosts.find(hostId) : undefined;
-        if (host) {
-          closeDrawer();
-          forwardsHost = host;
-        }
+        if (host) forwardsHost = host;
         else showNotice(t('forward.noHost'));
         break;
       }
@@ -772,56 +778,73 @@
 <svelte:window onkeydowncapture={onKeydown} onbeforeunload={protectReload} />
 <svelte:document oncopy={onCopy} />
 
-{#snippet hostSidebar(drawer: boolean)}
-  <HostSidebar
-    {drawer}
-    onclose={closeDrawer}
-    onconnect={connect}
-    onfiles={openFiles}
-    onforwards={(host) => { closeDrawer(); forwardsHost = host; }}
-    onedit={(host) => { closeDrawer(); editing = host; }}
-    onnotice={(message) => showNotice(message, 'error')}
-    onsettings={() => { closeDrawer(); settingsOpen = true; }}
-    ontailscale={() => { closeDrawer(); tailscaleOpen = true; }}
-    onkeys={() => run('keys.manage')}
-  />
-{/snippet}
-
-<div class="app" class:compact={viewport.compact}>
-  {#if viewport.compact}
-    <MobileTopBar
-      pane={workspace.focusedPane}
-      {drawerOpen}
-      {focusedRemote}
-      {panelsSuspended}
-      rightPage={effectiveRightPage}
-      bottomOpen={effectiveBottomOpen}
-      onaction={run}
-      ontheme={() => openSettings('appearance')}
-    />
-  {:else}
+<div class="app" class:compact={viewport.compact} class:terminal-immersion={terminalImmersion}>
+  {#if !viewport.compact}
     <TitleBar {sidebarOpen} rightOpen={effectiveRightPage !== null} bottomOpen={effectiveBottomOpen} panelsDisabled={panelsSuspended} onaction={run} />
   {/if}
   <div class="body">
     {#if !viewport.compact && sidebarOpen}
-      {@render hostSidebar(false)}
+      <HostSidebar
+        onconnect={connect}
+        onfiles={openFiles}
+        onforwards={(host) => (forwardsHost = host)}
+        onedit={(host) => (editing = host)}
+        onnotice={(message) => showNotice(message, 'error')}
+        onsettings={() => (settingsOpen = true)}
+        ontailscale={() => (tailscaleOpen = true)}
+        onkeys={() => run('keys.manage')}
+      />
     {/if}
-    <div class="main" inert={viewport.compact && drawerOpen}>
+    <div class="main">
       <div class="workarea">
         <div class="center">
           {#snippet home()}
-            <HomePage
-              onconnect={connect}
-              onfiles={openFiles}
-              onedit={(host) => (editing = host)}
-              onquick={() => (quickOpen = true)}
-              onlocal={() => run('tab.newLocal')}
-              onforwards={(host) => (forwardsHost = host)}
-              onnotice={(message) => showNotice(message, 'error')}
-              onaction={run}
-              onfleet={openFleet}
-              onfleetresume={(summary, records) => void resumeFleet(summary, records)}
-            />
+            {#if !viewport.compact}
+              <HomePage
+                onconnect={connect}
+                onfiles={openFiles}
+                onedit={(host) => (editing = host)}
+                onquick={() => (quickOpen = true)}
+                onlocal={() => run('tab.newLocal')}
+                onforwards={(host) => (forwardsHost = host)}
+                onnotice={(message) => showNotice(message, 'error')}
+                onaction={run}
+                onfleet={openFleet}
+                onfleetresume={(summary, records) => void resumeFleet(summary, records)}
+              />
+            {:else if mobileTab === 'settings'}
+              <MobileSettingsPage
+                section={mobileSettingsSection}
+                onselect={(section) => (mobileSettingsSection = section)}
+                onopentailscale={() => (tailscaleOpen = true)}
+              />
+            {:else if mobileTab === 'tools'}
+              <MobileToolsPage
+                activeTransfers={activeTransfersCount}
+                activeForwards={activeForwardsCount}
+                onkeys={() => (keysOpen = true)}
+                onimport={() => void importSshConfig()}
+                onquick={() => (quickOpen = true)}
+                ontransfers={() => openRight('transfers')}
+                onforwards={(host) => (forwardsHost = host)}
+                onsnippets={() => openRight('snippets')}
+                onnotice={showNotice}
+              />
+            {:else}
+              <MobileHostsPage
+                {fleetWaiting}
+                {backgroundTerminal}
+                onconnect={connect}
+                onfiles={openFiles}
+                onforwards={(host) => (forwardsHost = host)}
+                onedit={(host) => (editing = host)}
+                onquick={() => (quickOpen = true)}
+                onfleet={() => openFleet()}
+                onresume={(paneId) => workspace.reveal(paneId)}
+                ondisconnect={disconnectMobileTerminal}
+                onnotice={(message) => showNotice(message, 'error')}
+              />
+            {/if}
           {/snippet}
           <EditorGroups
             {home}
@@ -834,6 +857,12 @@
             onaisettings={() => openSettings('ai')}
             ontailscalesettings={() => openSettings('tailscale')}
             onschedules={() => run('fleet.schedules')}
+            onback={showMobileHosts}
+            ondisconnect={disconnectMobileTerminal}
+            onai={() => openRight('ai')}
+            onfiles={toggleBottom}
+            onstatus={() => openRight('status')}
+            onforwards={(host) => (forwardsHost = host)}
           />
           {#if effectiveBottomOpen && !viewport.compact}
             <div class="edge horizontal" role="separator" aria-orientation="horizontal" onpointerdown={resizeBottom}></div>
@@ -857,19 +886,12 @@
     </div>
     {#if !viewport.compact}
       <ActivityRail page={effectiveRightPage} bottomOpen={effectiveBottomOpen} suspended={panelsSuspended} remote={focusedRemote} onaction={run} />
-    {:else if drawerOpen}
-      <div class="drawer-backdrop">
-        <button class="drawer-dismiss" type="button" aria-label={t('mobile.drawer.close')} onclick={closeDrawer}></button>
-        <div class="drawer-content">
-          {@render hostSidebar(true)}
-        </div>
-      </div>
     {/if}
   </div>
   {#if !viewport.compact}
     <StatusBar onaction={run} />
-  {:else if !viewport.keyboardOpen}
-    <MobileNavBar active={mobileDestination} tabCount={workspaceTabs.length} {fleetWaiting} onselect={selectMobileDestination} />
+  {:else if showMobileNav}
+    <MobileNavBar active={mobileTab} {toolsBadge} settingsBadge={updater.badgeVisible} onselect={selectMobileDestination} />
   {/if}
 </div>
 
@@ -897,7 +919,7 @@
     onclose={() => (quickOpen = false)}
     onsubmit={(address, password) => {
       quickOpen = false;
-      workspace.openTab({ kind: 'quick', address }, password);
+      openTerminal({ kind: 'quick', address }, password);
     }}
   />
 {/if}
@@ -926,7 +948,7 @@
 <ConfirmHost />
 <EditMenu />
 
-{#if settingsOpen}
+{#if settingsOpen && !viewport.compact}
   <SettingsDialog initial={settingsSection} onclose={() => (settingsOpen = false)} onopentailscale={() => { settingsOpen = false; tailscaleOpen = true; }} />
 {/if}
 
@@ -955,6 +977,9 @@
     padding: var(--safe-top) var(--safe-right) max(var(--safe-bottom), var(--ime-bottom)) var(--safe-left);
     display: flex;
     flex-direction: column;
+  }
+  .app.terminal-immersion {
+    background: var(--term-bg);
   }
   /* The sidebar, the work area and the right panel float as rounded cards over the window
      background (and its system material), separated by narrow gaps. */
@@ -1013,28 +1038,6 @@
     border-radius: 0;
     box-shadow: none;
     background: var(--surface);
-  }
-  .drawer-backdrop {
-    position: absolute;
-    inset: 0;
-    z-index: 5;
-    display: flex;
-  }
-  .drawer-dismiss {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    border: 0;
-    background: var(--overlay);
-  }
-  .drawer-content {
-    position: relative;
-    display: flex;
-    animation: drawer-in var(--dur) var(--ease-out);
-  }
-  @keyframes drawer-in {
-    from { transform: translateX(-100%); }
   }
   /* Panel edges are the gaps between cards; a line shows only while hovering. */
   .edge {

@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  export type MobileDestination = 'home' | 'workspace' | 'fleet' | 'settings';
+  export type MobileDestination = 'hosts' | 'tools' | 'settings';
 </script>
 
 <script lang="ts">
@@ -7,29 +7,29 @@
   import Icon from '../ui/Icon.svelte';
   import type { IconName } from '../ui/icons';
 
-  let { active, tabCount, fleetWaiting, onselect }: {
+  let { active, toolsBadge = 0, settingsBadge = false, onselect }: {
     active: MobileDestination;
-    tabCount: number;
-    fleetWaiting: number;
+    toolsBadge?: number;
+    settingsBadge?: boolean;
     onselect: (destination: MobileDestination) => void;
   } = $props();
 
   const destinations: { id: MobileDestination; icon: IconName }[] = [
-    { id: 'home', icon: 'home' },
-    { id: 'workspace', icon: 'terminal' },
-    { id: 'fleet', icon: 'bot' },
+    { id: 'hosts', icon: 'server' },
+    { id: 'tools', icon: 'wrench' },
     { id: 'settings', icon: 'settings' },
   ];
 </script>
 
 <nav class="nav-bar" aria-label={t('mobile.nav.label')}>
   {#each destinations as { id, icon } (id)}
-    {@const count = id === 'workspace' ? tabCount : id === 'fleet' ? fleetWaiting : 0}
     <button type="button" aria-current={active === id ? 'page' : undefined} onclick={() => onselect(id)}>
       <span class="icon">
         <Icon name={icon} size={19} />
-        {#if count > 0}
-          <span class="badge" class:waiting={id === 'fleet'} aria-label={id === 'fleet' ? t('status.waiting', { n: count }) : undefined}>{count}</span>
+        {#if id === 'tools' && toolsBadge > 0}
+          <span class="badge" role="img" aria-label={t('mobile.tools.activeCount', { n: toolsBadge })}>{toolsBadge}</span>
+        {:else if id === 'settings' && settingsBadge}
+          <span class="update-dot" role="img" aria-label={t('mobile.settings.updateAvailable')}></span>
         {/if}
       </span>
       <span class="caption">{t(`mobile.nav.${id}`)}</span>
@@ -40,7 +40,7 @@
 <style>
   .nav-bar {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     flex: 0 0 52px;
     padding-top: 0.5px;
     background: var(--material-bar);
@@ -94,8 +94,13 @@
     text-align: center;
     font: 600 var(--text-caption) var(--font-ui);
   }
-  .badge.waiting {
+  .update-dot {
+    position: absolute;
+    top: calc(-1 * var(--space-1));
+    left: 100%;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
     background: var(--danger);
-    color: var(--accent-fg);
   }
 </style>

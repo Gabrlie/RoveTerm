@@ -6,7 +6,7 @@
   import PaneView from './PaneView.svelte';
   import { workspace, type GroupId } from '../workspace/workspace.svelte';
   import { tabDrag } from '../tabs/tabDrag.svelte';
-  import type { CredentialKind } from '../ipc';
+  import type { CredentialKind, HostEntry } from '../ipc';
   import type { Divider, PaneId, Rect } from './layout';
   import { isMobile } from '../platform';
 
@@ -25,9 +25,19 @@
     /** Opens the fleet lead's scheduled tasks. */
     onschedules: () => void;
     onsnippets?: () => void;
+    onback?: () => void;
+    ondisconnect?: (paneId: PaneId) => void;
+    onai?: () => void;
+    onfiles?: () => void;
+    onstatus?: () => void;
+    onforwards?: (host: HostEntry) => void;
   }
 
-  let { compact = false, coarse = false, inert = false, home, oncredentials, onedithost, onaisettings, ontailscalesettings, onschedules, onsnippets }: Props = $props();
+  let {
+    compact = false, coarse = false, inert = false, home,
+    oncredentials, onedithost, onaisettings, ontailscalesettings, onschedules, onsnippets,
+    onback, ondisconnect, onai, onfiles, onstatus, onforwards,
+  }: Props = $props();
 
   /** Space between group cards, in CSS pixels; matches `--gap-panel`. */
   const GAP = 6;
@@ -35,7 +45,7 @@
   const EPSILON = 1e-6;
 
   let area: HTMLDivElement;
-  const tabBarHeight = $derived(compact || coarse ? 44 : 40);
+  const tabBarHeight = $derived(coarse ? 44 : 40);
   const focusedGroup = $derived(workspace.focusedGroup);
   const activePaneId = $derived(workspace.focusedPane?.id ?? null);
   const layout = $derived(workspace.layout());
@@ -126,7 +136,6 @@
   {#if compact}
     {#if focusedGroup}
       <section class="group compact" role="group">
-        <GroupTabBar group={focusedGroup} focused={true} closable={false} compact={true} {coarse} flatTabs={workspace.flatTabs} {activePaneId} />
         <div class="stage">
           {#if activePaneId === null}
             <div class="home">{@render home()}</div>
@@ -156,9 +165,13 @@
     {#if group && rect}
       {@const shown = compact ? activePaneId === pane.id : group.active === pane.id}
       {@const focused = shown && (compact || workspace.focusedGroupId === group.id)}
-      {@const style = compact ? `left: 0; top: ${tabBarHeight}px; width: 100%; height: calc(100% - ${tabBarHeight}px);` : stageStyle(rect)}
+      {@const style = compact ? undefined : stageStyle(rect)}
       <div class="slot" class:compact class:hidden={!shown} {style} data-stage={compact ? undefined : group.id} role="presentation" onpointerdown={() => focusGroup(group.id)}>
-        <PaneView {pane} {shown} {focused} showKeyBar={isMobile || coarse} {coarse} {onsnippets} {oncredentials} {onedithost} {onaisettings} {ontailscalesettings} {onschedules} />
+        <PaneView
+          {pane} {shown} {focused} showKeyBar={compact || isMobile || coarse} {coarse} {compact}
+          {onsnippets} {oncredentials} {onedithost} {onaisettings} {ontailscalesettings} {onschedules}
+          {onback} {ondisconnect} {onai} {onfiles} {onstatus} {onforwards}
+        />
       </div>
     {/if}
   {/each}
@@ -229,6 +242,7 @@
     pointer-events: none;
   }
   .slot.compact {
+    inset: 0;
     border-radius: 0;
   }
   /* Where a dragged tab would go: the whole group, or the half that becomes a new group. */
