@@ -3,8 +3,7 @@
 </script>
 
 <script lang="ts">
-  // Preferences, grouped like the system settings: sections on the left, grouped rows on the
-  // right. Every change applies and is stored at once.
+  // Preference changes apply and are stored immediately.
   import Dialog from '../ui/Dialog.svelte';
   import Icon from '../ui/Icon.svelte';
   import type { IconName } from '../ui/icons';
@@ -22,8 +21,11 @@
   import TailscaleSettings from './sections/TailscaleSettings.svelte';
   import SecuritySettings from './sections/SecuritySettings.svelte';
   import { capabilities, isMobile } from '../platform';
+  import { viewport } from '../layout/viewport.svelte';
+  import { pushBackHandler } from '../ui/backStack';
+  import { initialCompactDetail, masterDetailView } from '../ui/masterDetail';
 
-  let { initial = 'appearance', onclose, onopentailscale }: { initial?: SettingsSection; onclose: () => void; onopentailscale?: () => void } = $props();
+  let { initial, onclose, onopentailscale }: { initial?: SettingsSection; onclose: () => void; onopentailscale?: () => void } = $props();
 
   type Section = SettingsSection;
 
@@ -42,46 +44,75 @@
   ];
 
   // svelte-ignore state_referenced_locally
-  let section = $state<Section>(initial);
+  let section = $state<Section>(initial ?? 'appearance');
+  // svelte-ignore state_referenced_locally
+  let compactDetail = $state(initialCompactDetail(initial !== undefined));
+  const layoutMode = $derived(masterDetailView(viewport.compact, compactDetail));
+
+  $effect(() => {
+    if (layoutMode === 'detail') return pushBackHandler(() => { compactDetail = false; });
+  });
+
   settingsError.text = '';
 </script>
 
 <Dialog title={t('settings.title')} {onclose} width={780}>
-  <div class="settings" class:mobile={isMobile}>
-    <nav aria-label={t('settings.title')}>
-      {#each SECTIONS as entry (entry.id)}
-        <button type="button" class:active={section === entry.id} aria-current={section === entry.id ? 'page' : undefined} onclick={() => (section = entry.id)}>
-          <span class="glyph" style:--tint="var(--sys-{entry.tint})"><Icon name={entry.icon} size={13} /></span>
-          {t(entry.label)}
-        </button>
-      {/each}
-    </nav>
-    <div class="pane">
-      <h2>{t(SECTIONS.find((entry) => entry.id === section)?.label ?? 'settings.title')}</h2>
-      {#if section === 'appearance'}
-        <AppearanceSettings />
-      {:else if section === 'terminal'}
-        <TerminalSettings />
-      {:else if section === 'files'}
-        <FilesSettings />
-      {:else if section === 'status'}
-        <StatusSettings />
-      {:else if section === 'ai'}
-        <AiSettings />
-      {:else if section === 'sync'}
-        <SyncSettings />
-      {:else if section === 'security' && capabilities.biometricVault}
-        <SecuritySettings />
-      {:else if section === 'tailscale' && !isMobile}
-        <TailscaleSettings {onopentailscale} />
-      {:else if section === 'shortcuts'}
-        <ShortcutsSettings />
-      {:else if section === 'logs'}
-        <LogsSettings />
-      {:else}
-        <AboutSettings onopenlogs={() => (section = 'logs')} />
-      {/if}
-    </div>
+  <div class="settings" class:compact={viewport.compact}>
+    {#if layoutMode !== 'detail'}
+      <nav aria-label={t('settings.title')}>
+        {#each SECTIONS as entry (entry.id)}
+          {@const active = layoutMode === 'both' && section === entry.id}
+          <button type="button" class:active aria-current={active ? 'page' : undefined} onclick={() => {
+            section = entry.id;
+            compactDetail = true;
+          }}>
+            <span class="glyph" style:--tint="var(--sys-{entry.tint})"><Icon name={entry.icon} size={13} /></span>
+            {t(entry.label)}
+            {#if layoutMode === 'list'}
+              <span class="nav-chevron"><Icon name="chevron" size={14} /></span>
+            {/if}
+          </button>
+        {/each}
+      </nav>
+    {/if}
+    {#if layoutMode !== 'list'}
+      <div class="pane">
+        {#if layoutMode === 'detail'}
+          <div class="compact-bar">
+            <button type="button" class="plain back-btn" onclick={() => (compactDetail = false)}>
+              <Icon name="back" size={16} />{t('settings.backToSections')}
+            </button>
+          </div>
+        {/if}
+        <h2>{t(SECTIONS.find((entry) => entry.id === section)?.label ?? 'settings.title')}</h2>
+        {#if section === 'appearance'}
+          <AppearanceSettings />
+        {:else if section === 'terminal'}
+          <TerminalSettings />
+        {:else if section === 'files'}
+          <FilesSettings />
+        {:else if section === 'status'}
+          <StatusSettings />
+        {:else if section === 'ai'}
+          <AiSettings />
+        {:else if section === 'sync'}
+          <SyncSettings />
+        {:else if section === 'security' && capabilities.biometricVault}
+          <SecuritySettings />
+        {:else if section === 'tailscale' && !isMobile}
+          <TailscaleSettings {onopentailscale} />
+        {:else if section === 'shortcuts'}
+          <ShortcutsSettings />
+        {:else if section === 'logs'}
+          <LogsSettings />
+        {:else}
+          <AboutSettings onopenlogs={() => {
+            section = 'logs';
+            compactDetail = true;
+          }} />
+        {/if}
+      </div>
+    {/if}
   </div>
   {#snippet actions()}
     {#if settingsError.text}<p class="error problem">{settingsError.text}</p>{/if}
@@ -165,18 +196,34 @@
     flex: 1;
     margin-right: auto;
   }
-  @media (max-width: 560px) {
-    .settings.mobile {
-      flex-direction: column;
-    }
-    .mobile nav {
-      flex: none;
-      flex-direction: row;
-      overflow-x: auto;
-      box-shadow: inset 0 -1px 0 var(--separator);
-    }
-    .mobile nav button {
-      flex: none;
-    }
+  .settings.compact {
+    flex-direction: column;
+    height: min(72dvh, 620px);
+  }
+  .compact nav {
+    flex: 1;
+    min-height: 0;
+    box-shadow: none;
+  }
+  .compact nav button {
+    flex-shrink: 0;
+    min-height: max(44px, var(--row-height));
+    cursor: pointer;
+  }
+  .compact .glyph,
+  .nav-chevron {
+    flex: none;
+  }
+  .nav-chevron {
+    display: inline-flex;
+    margin-inline-start: auto;
+    color: var(--fg-muted);
+  }
+  .compact .pane {
+    min-height: 0;
+    padding: var(--space-3) var(--space-3) var(--space-5);
+  }
+  .back-btn {
+    min-height: var(--control-height);
   }
 </style>

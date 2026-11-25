@@ -9,6 +9,9 @@
   import Icon from '../ui/Icon.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import { ask } from '../ui/confirm.svelte';
+  import { viewport } from '../layout/viewport.svelte';
+  import { pushBackHandler } from '../ui/backStack';
+  import { initialCompactDetail, masterDetailView } from '../ui/masterDetail';
   import {
     credentialKindOf,
     hostUpdate,
@@ -34,6 +37,9 @@
 
   // svelte-ignore state_referenced_locally
   let selectedId = $state<string | null>(initial);
+  // svelte-ignore state_referenced_locally
+  let compactDetail = $state(initialCompactDetail(!!initial));
+  const layoutMode = $derived(masterDetailView(viewport.compact, compactDetail));
   let mode = $state<Mode>('view');
   let error = $state('');
   let notice = $state('');
@@ -81,6 +87,10 @@
   const installOptions = $derived(installableHosts.map((host) => ({ value: host.id, label: `${host.name} (${host.username}@${host.hostname})` })));
 
   $effect(() => {
+    if (layoutMode === 'detail') return pushBackHandler(() => { compactDetail = false; });
+  });
+
+  $effect(() => {
     if (!selected?.id || !installHost || !installableHosts.some((host) => host.id === installHost)) {
       installHost = installableHosts[0]?.id ?? '';
       clearInstallPassword();
@@ -126,10 +136,16 @@
     installFeedback = null;
   }
 
-  function select(key: SshKey): void {
+  function select(key: SshKey, showDetail = true): void {
     reset('view');
     selectedId = key.id;
     name = key.name;
+    compactDetail = showDetail;
+  }
+
+  function openMode(next: 'generate' | 'import'): void {
+    reset(next);
+    compactDetail = true;
   }
 
   async function submitNew(event: SubmitEvent): Promise<void> {
@@ -142,7 +158,7 @@
           ? await keyGenerate(name, kind, comment, passphrase || null)
           : await keyImport(name, privateKey, passphrase || null, publicKey.trim() || null);
       await keys.refresh();
-      select(created);
+      select(created, compactDetail);
     } catch (caught) {
       if (credentialKindOf(caught) === 'passphrase') needsPassphrase = true;
       error = errorText(caught);
@@ -324,11 +340,12 @@
       await keyDelete(selected.id);
       await keys.refresh();
       const first = keys.items[0];
-      if (first) select(first);
+      if (first) select(first, compactDetail);
       else {
         selectedId = null;
         reset('generate');
       }
+      if (viewport.compact) compactDetail = false;
     } catch (caught) {
       error = errorText(caught);
     }
@@ -336,9 +353,16 @@
 
   onMount(() => {
     void keys.refresh().then(() => {
-      const first = (selectedId ? keys.find(selectedId) : null) ?? keys.items[0];
-      if (first) select(first);
-      else reset('generate');
+      if (mode !== 'view' || selectedId !== initial) return;
+      const target = initial ? keys.find(initial) : undefined;
+      const first = keys.items[0];
+      if (target) select(target, compactDetail);
+      else if (first) select(first, false);
+      else {
+        selectedId = null;
+        reset('generate');
+        compactDetail = false;
+      }
     });
   });
 
@@ -346,35 +370,48 @@
 </script>
 
 <Dialog title={t('keys.title')} {onclose} width={800}>
-  <div class="layout">
-    <nav aria-label={t('keys.title')}>
-      <div class="search">
-        <Icon name="search" size={13} />
-        <input bind:value={query} placeholder={t('keys.search')} aria-label={t('keys.search')} spellcheck="false" />
-      </div>
-      <div class="list">
-        {#each shown as key (key.id)}
-          {@const count = hostsByKey.get(key.id)?.length ?? 0}
-          <button type="button" class="item" class:active={mode === 'view' && key.id === selectedId} disabled={busy} onclick={() => select(key)}>
-            <span class="glyph"><Icon name="key" size={12} /></span>
-            <span class="text">
-              <span class="name" title={key.name}>{key.name}</span>
-              <span class="meta">
-                <span class="tag">{algorithmTag(key.algorithm)}</span>
-                {#if count > 0}
-                  <span class="tag count" title={t('keys.usageCount', { count })} aria-label={t('keys.usageCount', { count })}>{count}</span>
-                {/if}
-                {#if !key.has_private}<span class="warn">{t('keys.missingPrivate')}</span>{/if}
+  <div class="layout" class:compact={viewport.compact}>
+    {#if layoutMode !== 'detail'}
+      <nav aria-label={t('keys.title')}>
+        <div class="search">
+          <Icon name="search" size={13} />
+          <input bind:value={query} placeholder={t('keys.search')} aria-label={t('keys.search')} spellcheck="false" />
+        </div>
+        <div class="list">
+          {#each shown as key (key.id)}
+            {@const count = hostsByKey.get(key.id)?.length ?? 0}
+            <button type="button" class="item" class:active={layoutMode === 'both' && mode === 'view' && key.id === selectedId} disabled={busy} onclick={() => select(key)}>
+              <span class="glyph"><Icon name="key" size={12} /></span>
+              <span class="text">
+                <span class="name" title={key.name}>{key.name}</span>
+                <span class="meta">
+                  <span class="tag">{algorithmTag(key.algorithm)}</span>
+                  {#if count > 0}
+                    <span class="tag count" title={t('keys.usageCount', { count })} aria-label={t('keys.usageCount', { count })}>{count}</span>
+                  {/if}
+                  {#if !key.has_private}<span class="warn">{t('keys.missingPrivate')}</span>{/if}
+                </span>
               </span>
-            </span>
-          </button>
-        {:else}
-          <p class="empty">{keys.items.length === 0 ? t('keys.empty') : t('host.noMatch')}</p>
-        {/each}
-      </div>
-    </nav>
+              {#if layoutMode === 'list'}
+                <span class="item-chevron"><Icon name="chevron" size={14} /></span>
+              {/if}
+            </button>
+          {:else}
+            <p class="empty">{keys.items.length === 0 ? t('keys.empty') : t('host.noMatch')}</p>
+          {/each}
+        </div>
+      </nav>
+    {/if}
 
-    <div class="pane">
+    {#if layoutMode !== 'list'}
+      <div class="pane">
+        {#if layoutMode === 'detail'}
+          <div class="compact-bar">
+            <button type="button" class="plain back-btn" onclick={() => (compactDetail = false)}>
+              <Icon name="back" size={16} />{t('keys.backToList')}
+            </button>
+          </div>
+        {/if}
         {#if mode === 'view' && selected}
           <section class="card summary">
             <div class="head">
@@ -562,17 +599,20 @@
         {/if}
         {#if error}<p class="message error">{error}</p>{/if}
         {#if notice}<p class="message notice">{notice}</p>{/if}
-    </div>
+      </div>
+    {/if}
   </div>
   {#snippet actions()}
-    <div class="footer-actions">
-      <button type="button" class="secondary" class:active={mode === 'generate'} disabled={busy} onclick={() => reset('generate')}>
-        <Icon name="add" size={13} />{t('keys.generate')}
-      </button>
-      <button type="button" class="secondary" class:active={mode === 'import'} disabled={busy} onclick={() => reset('import')}>
-        <Icon name="importConfig" size={13} />{t('keys.import')}
-      </button>
-    </div>
+    {#if layoutMode !== 'detail'}
+      <div class="footer-actions" class:compact={viewport.compact}>
+        <button type="button" class="secondary" class:active={layoutMode === 'both' && mode === 'generate'} disabled={busy} onclick={() => openMode('generate')}>
+          <Icon name="add" size={13} />{t('keys.generate')}
+        </button>
+        <button type="button" class="secondary" class:active={layoutMode === 'both' && mode === 'import'} disabled={busy} onclick={() => openMode('import')}>
+          <Icon name="importConfig" size={13} />{t('keys.import')}
+        </button>
+      </div>
+    {/if}
     <button type="button" class="primary" onclick={onclose}>{t('settings.done')}</button>
   {/snippet}
 </Dialog>
@@ -774,24 +814,6 @@
   .rename .field {
     flex: 1;
   }
-  @media (max-width: 600px) {
-    nav {
-      flex: 0 0 clamp(120px, 32%, 180px);
-      padding: var(--space-3) var(--space-2);
-    }
-    .footer-actions {
-      display: flex;
-      flex-wrap: wrap;
-      width: auto;
-      margin-left: 0;
-    }
-    .pane {
-      padding-inline: var(--space-2);
-    }
-    .item .glyph {
-      display: none;
-    }
-  }
   .card {
     display: flex;
     flex-direction: column;
@@ -955,5 +977,73 @@
   }
   .notice {
     color: var(--success);
+  }
+  .layout.compact {
+    flex-direction: column;
+    height: min(72dvh, 640px);
+  }
+  .compact nav {
+    flex: 1;
+    min-width: 0;
+    box-shadow: none;
+  }
+  .compact .search,
+  .compact .item {
+    flex-shrink: 0;
+  }
+  .compact .item {
+    min-height: 48px;
+    cursor: pointer;
+  }
+  .item-chevron {
+    display: inline-flex;
+    flex: none;
+    margin-inline-start: auto;
+    color: var(--fg-muted);
+  }
+  .footer-actions.compact {
+    display: flex;
+    flex-wrap: wrap;
+    width: auto;
+    min-width: 0;
+    margin-left: 0;
+  }
+  .footer-actions.compact button,
+  .compact .pane button {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    height: auto;
+    min-height: var(--control-height);
+  }
+  .compact .pane {
+    padding: var(--space-3) var(--space-3) var(--space-5);
+  }
+  .compact :is(.head, .card-header, .fingerprint, .install-field, .rename, .actions) {
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+  .compact .head h2 {
+    flex: 1 1 8rem;
+    min-width: 0;
+  }
+  .compact .install-field > span,
+  .compact .control {
+    min-width: 0;
+  }
+  @media (max-width: 560px) {
+    .compact :is(.control, .field) {
+      width: 100%;
+      max-width: 100%;
+    }
+    .compact .rename .field {
+      flex-basis: 100%;
+    }
+  }
+  @media (pointer: coarse) {
+    .compact .pane :global(.icon-button) {
+      min-width: var(--control-height);
+      min-height: var(--control-height);
+    }
   }
 </style>
