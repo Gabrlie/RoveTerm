@@ -5,6 +5,24 @@ This file documents notable changes to RoveTerm in both Simplified Chinese and E
 
 ## [Unreleased]
 
+## [0.3.0-beta.1] - 2026-11-25
+
+### 中文更新日志
+
+- **稳定版与测试版双通道发布与更新**：新增「稳定版 / 测试版」更新通道，可在「设置 → 关于 → 更新通道」按需切换；测试版安装包默认订阅测试通道，支持直接接收带签名校验的应用内预发布更新并在正式版发布后平滑升级。
+- **移动端安全基础与系统桥接**：接入 `tauri-plugin-rove-mobile` 原生桥接，支持 Android Keystore 与 iOS Keychain 主密钥托管、应用内生物识别 / 屏幕锁保护切换，以及原生安全区域与输入法遮挡高度适配。
+- **移动端工作区、后台保活与终端触控**：小于 768px 屏幕自动平铺标签栏并提供底部导航与侧栏抽屉，平板及以上保留自由分屏；新增 Android 前台保活服务（支持通知展示待审批任务与一键断开）与 iOS 后台任务保活；新增可自定义主行与附加行的 `TerminalKeyBar`、长按菜单、单指滑动滚动与双指捏合调整字号。
+- **移动端 SFTP 文件、代码编辑器与系统分享导出**：`FileBrowser` 适配窄屏双行列表、轻点编辑/操作、长按菜单与多选模式，支持通过系统选择器暂存上传；`TextEditor` 默认在窄屏开启自动换行并新增符号输入栏；传输面板与日志页支持原生分享与保存到设备，顶部菜单支持从系统文件选择器导入 SSH 配置。
+- **移动端 AI 助手、运维任务与设置重构**：`SettingsDialog`、`KeysDialog` 与 `AuditDialog` 在窄屏采用列表/详情两级推入导航并联动 Android 返回键；AI 对话与总管输入框在触控模式下支持 Enter 换行与按钮/快捷键发送，移动端自动隐藏桌面专用本地能力（本地 PTY、本地 ACP、定时任务与外部 MCP 桥接）。
+
+### English Changelog
+
+- **Dual Stable & Beta Release Channels**: Added separate Stable and Beta update channels selectable under **Settings → About → Release channel**. Beta builds follow the Beta channel by default, receive signed in-app pre-release updates via per-tag manifests, and transition smoothly to Stable once the final release ships.
+- **Mobile Security Foundation & Native Bridge**: Added `tauri-plugin-rove-mobile` providing Android Keystore and iOS Keychain master-key storage, biometric/device-credential vault protection, and native safe-area plus IME keyboard inset tracking.
+- **Mobile Workspace, Background Keep-Alive & Touch Terminal**: Compact viewports (`< 768px`) flatten workspace tabs with bottom navigation and a slide-in host drawer while tablets keep full split panes. Added Android foreground service keep-alive (including pending approval counts and quick disconnect) and iOS background task keep-alive, plus a customizable `TerminalKeyBar`, long-press context menus, touch scrolling, and pinch-to-zoom font sizing.
+- **Mobile SFTP, Code Editor & Native Share/Export**: Adapted `FileBrowser` with compact two-line rows, touch actions, 450 ms long-press menus, multi-select mode, and staged system file uploads; added narrow-screen default word wrap and a symbol bar to `TextEditor`; enabled native share sheets and export-to-device for downloads and logs, plus system-picker SSH config import.
+- **Mobile AI Assistant, Fleet Ops & Settings Overhaul**: Converted `SettingsDialog`, `KeysDialog`, and `AuditDialog` to Master-Detail navigation with Android Back support on compact screens; updated touch composers so Enter inserts newlines; gated desktop-only capabilities (local PTY, local CLI ACP agents, schedules, and external MCP bridge) cleanly on mobile.
+
 ## [0.2.1] - 2026-11-24
 
 ### 中文更新日志
