@@ -123,4 +123,10 @@
     width: 16em;
     max-width: 62%;
   }
+  @media (max-width: 560px) {
+    .control {
+      width: 100%;
+      max-width: 100%;
+    }
+  }
 </style>

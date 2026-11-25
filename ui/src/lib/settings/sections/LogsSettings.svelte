@@ -8,6 +8,7 @@
   import { notify } from '../../ui/toast.svelte';
   import { errorText, t } from '../../i18n';
   import { logsList, logsRead, logsReveal, type LogFileInfo } from '../../ipc';
+  import { isMobile } from '../../platform';
   import { filterLogEntries, formatLogSize, parseLogLines, type LogEntry, type LogLevelFilter } from '../logs';
 
   const TAIL_LINES = 800;
@@ -163,7 +164,7 @@
         <Icon name="copy" size={13} />
         {t('logs.copy')}
       </button>
-      <IconButton icon="folder" label={t('action.help.logs')} onclick={revealFolder} />
+      <IconButton icon={isMobile ? 'share' : 'folder'} label={t(isMobile ? 'logs.share' : 'action.help.logs')} onclick={revealFolder} />
     </div>
   </div>
 
@@ -414,6 +415,26 @@
     .line-copy:focus-within,
     .line-copy.copied {
       opacity: 1;
+    }
+  }
+  @media (max-width: 560px) {
+    .file-picker,
+    .search-input {
+      min-width: 0;
+      width: 100%;
+      flex-basis: 100%;
+    }
+    .toolbar-actions {
+      flex-wrap: wrap;
+      width: 100%;
+    }
+    .filter-bar .segmented {
+      width: 100%;
+      max-width: 100%;
+      overflow-x: auto;
+    }
+    .log-viewport {
+      height: min(44dvh, 310px);
     }
   }
 </style>

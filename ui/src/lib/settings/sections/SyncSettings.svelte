@@ -7,6 +7,7 @@
   import IconButton from '../../ui/IconButton.svelte';
   import { errorText, t } from '../../i18n';
   import { syncRevealSecret, type SyncTarget } from '../../ipc';
+  import { isMobile } from '../../platform';
   import { draft, sync } from '../../sync/sync.svelte';
   import { splitWebdavUrl, webdavUrl } from '../../sync/webdav';
   import { notify } from '../../ui/toast.svelte';
@@ -19,6 +20,7 @@
   let revealingPassword = $state(false);
   let loadedSavedPassword = $state(false);
   let revealedSummaryPassword = $state<string | null>(null);
+  const editingMobileFolder = $derived(isMobile && editing && draft.storage === 'folder');
 
   function reportError(message: string): void {
     panelError = message;
@@ -118,7 +120,7 @@
 
   /** The storage as typed, or null with an inline error and notification when something is missing. */
   function typedTarget(): SyncTarget | null {
-    if (draft.storage === 'folder') {
+    if (!isMobile && draft.storage === 'folder') {
       if (draft.folder.trim()) return { kind: 'folder', path: draft.folder.trim() };
       reportError(t('sync.folderRequired'));
       return null;
@@ -205,6 +207,10 @@
   // Connected but not syncing yet: find out whether to join or create.
   $effect(() => {
     if (!editing && status?.connected && !status.ready && sync.spaceExists === null && !sync.connecting && !probeFailed) probe();
+  });
+
+  $effect(() => {
+    if (isMobile && !editing && draft.storage === 'folder') draft.storage = 'webdav';
   });
 
   onMount(() => {
@@ -318,14 +324,21 @@
   {/if}
   <p class="section-label">{editing ? t('sync.edit') : t('sync.space')}</p>
   <div class="form-group">
-    <div class="form-row">
-      <span class="form-label">{t('sync.storage')}</span>
-      <div class="segmented" role="group" aria-label={t('sync.storage')}>
-        <button type="button" aria-pressed={draft.storage === 'folder'} onclick={() => { draft.storage = 'folder'; clearError(); }}>{t('sync.storageFolder')}</button>
-        <button type="button" aria-pressed={draft.storage === 'webdav'} onclick={() => { draft.storage = 'webdav'; clearError(); }}>{t('sync.storageWebdav')}</button>
+    {#if !isMobile}
+      <div class="form-row">
+        <span class="form-label">{t('sync.storage')}</span>
+        <div class="segmented" role="group" aria-label={t('sync.storage')}>
+          <button type="button" aria-pressed={draft.storage === 'folder'} onclick={() => { draft.storage = 'folder'; clearError(); }}>{t('sync.storageFolder')}</button>
+          <button type="button" aria-pressed={draft.storage === 'webdav'} onclick={() => { draft.storage = 'webdav'; clearError(); }}>{t('sync.storageWebdav')}</button>
+        </div>
       </div>
-    </div>
-    {#if draft.storage === 'folder'}
+    {/if}
+    {#if editingMobileFolder}
+      <div class="form-row">
+        <span class="form-label">{t('sync.folder')}<small class="path" title={draft.folder}>{draft.folder}</small></span>
+        <button type="button" class="secondary" onclick={() => { draft.storage = 'webdav'; clearError(); }}>{t('sync.storageWebdav')}</button>
+      </div>
+    {:else if !isMobile && draft.storage === 'folder'}
       <div class="form-row">
         <span class="form-label">{t('sync.folder')}<small>{t('sync.folderHint')}</small></span>
         <input class="field path-input" bind:value={draft.folder} oninput={clearError} spellcheck="false" placeholder="/Users/me/Dropbox/RoveTerm" aria-label={t('sync.folder')} />
@@ -371,9 +384,11 @@
     {#if editing}
       <button type="button" class="secondary" disabled={sync.connecting} onclick={cancelEdit}>{t('common.cancel')}</button>
     {/if}
-    <button type="button" class="primary" disabled={sync.connecting} onclick={() => void connect()}>
-      {sync.connecting ? t('sync.connecting') : editing ? t('sync.editSave') : t('sync.connect')}
-    </button>
+    {#if !editingMobileFolder}
+      <button type="button" class="primary" disabled={sync.connecting} onclick={() => void connect()}>
+        {sync.connecting ? t('sync.connecting') : editing ? t('sync.editSave') : t('sync.connect')}
+      </button>
+    {/if}
   </div>
   {#if !editing}<p class="form-note">{t('sync.what')}</p>{/if}
 {/if}
@@ -452,5 +467,35 @@
   }
   .failed {
     color: var(--danger);
+  }
+  @media (max-width: 560px) {
+    .field,
+    .secret-input,
+    .secret-input .field {
+      width: 100%;
+      max-width: 100%;
+    }
+    .secret-input {
+      display: flex;
+      flex: 1 1 100%;
+    }
+    .secret-input .field {
+      flex: 1;
+      min-width: 0;
+    }
+    .secret-input :global(.icon-button),
+    .secret-display :global(.icon-button) {
+      flex: none;
+    }
+    .secret-display {
+      width: 100%;
+      justify-content: space-between;
+    }
+    .secret {
+      max-width: 100%;
+    }
+    .actions {
+      flex-wrap: wrap;
+    }
   }
 </style>

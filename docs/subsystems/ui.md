@@ -48,6 +48,12 @@
 
 `Dialog`、`ContextMenu` 和工作区覆盖层通过 `backStack` 注册关闭回调。Android 的 `rove-mobile://back` 事件优先关闭最近打开的覆盖层，栈为空时调用 `mobile_back_default` 执行原生返回。
 
+视口宽度小于 768px 时，`AuditDialog`、`SettingsDialog` 和 `KeysDialog` 一次显示列表或详情。选择列表项进入详情，返回操作通过 `backStack` 先回到列表。
+
+AI 对话和总管的输入框共用 `composerTouch`。触控模式下 Enter 换行，Ctrl/Cmd+Enter 或「发送」按钮提交消息。`OpsTasks`、`SubagentPanel` 和 `ModelPopover` 适配窄屏布局和触控操作，打开后通过 `backStack` 响应返回。
+
+`CommandPalette` 在窄屏上根据安全区域和输入法遮挡高度限制弹层高度，触控模式下增大操作行的点击区域。
+
 `TerminalKeyBar` 支持自定义主行和附加行，可配置常用按键、组合键和文本，并提供粘贴、快捷指令和软键盘入口。终端轻点聚焦，长按打开菜单，单指上下滑动滚动，双指捏合调整并保存终端字号。
 
 `FileBrowser` 在紧凑布局中使用双行列表。触控时轻点打开目录或编辑可编辑文件，其他文件轻点打开操作面板，长按 450 ms 打开操作面板。多选模式下，轻点条目切换其选中状态。移动端隐藏上传文件夹和选择下载目录的入口。
@@ -57,6 +63,8 @@
 `TextEditor` 提供自动换行开关，移动端及粗指针设备可在符号栏输入常用符号。粗指针设备打开编辑器时由用户轻点聚焦。紧凑布局中的 `DraftsHost` 一次显示草稿列表或编辑器，可从编辑器返回列表。
 
 移动端设置的「安全」页显示 vault 锁定状态，提供解锁、密钥丢失后的凭据重置，以及生物识别或屏幕锁保护开关。
+
+移动端 AI 设置隐藏本地 ACP 智能体和 `--mcp-bridge` 外部接入。同步设置隐藏文件夹选择，直接显示 WebDAV 表单，已有文件夹目标可在编辑时切换至 WebDAV。`LogsSettings` 和 `AboutSettings` 通过系统分享面板分享最新日志。
 
 ## TermView
 

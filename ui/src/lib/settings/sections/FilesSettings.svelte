@@ -90,4 +90,10 @@
     white-space: nowrap;
     font-family: var(--font-mono);
   }
+  @media (max-width: 560px) {
+    .control,
+    .control.narrow {
+      width: 100%;
+    }
+  }
 </style>

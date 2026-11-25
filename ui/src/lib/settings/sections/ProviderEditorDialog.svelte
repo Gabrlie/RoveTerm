@@ -264,4 +264,14 @@
   .test { margin-right: auto; }
   .result { margin: 0 0 var(--space-2); padding: var(--space-2); border-radius: var(--radius-sm); background: var(--fill); color: var(--success); overflow-wrap: anywhere; }
   .result.failed { color: var(--danger); background: var(--danger-soft); }
+  @media (max-width: 520px) {
+    .field-grid { grid-template-columns: minmax(0, 1fr); }
+    .section-header { flex-wrap: wrap; }
+    .footer-buttons { flex-wrap: wrap; justify-content: flex-end; }
+    .test { margin-right: 0; }
+  }
+  @media (pointer: coarse) {
+    .model-row { min-height: var(--row-height); }
+    .star { min-width: 36px; min-height: 36px; }
+  }
 </style>

@@ -1,12 +1,12 @@
 <script lang="ts">
   import Icon from '../../ui/Icon.svelte';
-  import { actions, bindingsOf, displayBinding } from '../../actions';
+  import { actions, bindingsOf, displayBinding, isActionAvailable } from '../../actions';
   import { t } from '../../i18n';
 
   let query = $state('');
   const listed = $derived(
     actions
-      .filter((action) => !action.hidden)
+      .filter((action) => !action.hidden && isActionAvailable(action.id))
       .filter((action) => {
         const needle = query.trim().toLowerCase();
         return !needle || t(action.label).toLowerCase().includes(needle) || bindingsOf(action).some((binding) => binding.toLowerCase().includes(needle));
@@ -73,5 +73,10 @@
   .none {
     color: var(--fg-subtle);
     font-size: var(--text-footnote);
+  }
+  @media (max-width: 560px) {
+    .keys {
+      flex-wrap: wrap;
+    }
   }
 </style>

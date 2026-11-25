@@ -266,4 +266,25 @@
   .sep.b {
     color: var(--fg-muted);
   }
+  @media (max-width: 560px) {
+    .control,
+    .control.wide {
+      width: 100%;
+    }
+    .scheme {
+      width: 100%;
+      flex-wrap: wrap;
+    }
+    .scheme .control {
+      flex: 1 1 160px;
+      width: auto;
+      min-width: 0;
+    }
+    .number {
+      width: 96px;
+    }
+    .preview {
+      overflow-x: auto;
+    }
+  }
 </style>

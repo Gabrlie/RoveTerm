@@ -5,6 +5,7 @@
   import Switch from '../../ui/Switch.svelte';
   import { errorText, t } from '../../i18n';
   import { logsReveal } from '../../ipc';
+  import { isMobile } from '../../platform';
   import { notify } from '../../ui/toast.svelte';
   import AutostartRow from '../AutostartRow.svelte';
   import { editDevice } from '../edit.svelte';
@@ -103,7 +104,7 @@
       {#if onopenlogs}
         <button type="button" class="secondary" onclick={onopenlogs}>{t('settings.viewLogs')}</button>
       {/if}
-      <button type="button" class="secondary" onclick={() => void logsReveal().catch((error: unknown) => notify(errorText(error), 'error'))}>{t('action.help.logs')}</button>
+      <button type="button" class="secondary" onclick={() => void logsReveal().catch((error: unknown) => notify(errorText(error), 'error'))}>{t(isMobile ? 'logs.share' : 'action.help.logs')}</button>
     </div>
   </div>
 </div>
@@ -151,5 +152,10 @@
   p {
     margin: var(--space-2) 0 0;
     color: var(--fg);
+  }
+  @media (max-width: 560px) {
+    .log-buttons {
+      flex-wrap: wrap;
+    }
   }
 </style>

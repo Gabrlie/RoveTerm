@@ -178,4 +178,24 @@
       0 0 0 2px var(--surface-raised),
       0 0 0 3.5px var(--tint);
   }
+  @media (max-width: 560px) {
+    .control {
+      width: 100%;
+    }
+    .themes {
+      flex-wrap: wrap;
+      width: 100%;
+      gap: var(--space-2);
+    }
+    .swatches {
+      flex-wrap: wrap;
+      gap: var(--space-2);
+    }
+  }
+  @media (pointer: coarse) {
+    .swatch {
+      width: 28px;
+      height: 28px;
+    }
+  }
 </style>

@@ -15,7 +15,7 @@
   } from '../../ipc';
   import { ai } from '../../ai/ai.svelte';
   import AgentLoginDialog from '../../ai/AgentLoginDialog.svelte';
-  import { isMobile } from '../../platform';
+  import { capabilities } from '../../platform';
   import { prefs } from '../prefs.svelte';
   import { editDevice, editPrefs, settingsError } from '../edit.svelte';
   import { isKeylessProvider } from '../providers';
@@ -23,8 +23,9 @@
   import CustomAgentDialog from './CustomAgentDialog.svelte';
   import ProviderEditorDialog from './ProviderEditorDialog.svelte';
 
-  const TABS = ['models', 'safety', 'external'] as const;
+  const TABS = capabilities.localAgents ? (['models', 'safety', 'external'] as const) : (['models', 'safety'] as const);
   let tab = $state<(typeof TABS)[number]>('models');
+  const activeTab = $derived(tab === 'external' && !capabilities.localAgents ? 'models' : tab);
   let providerEditor = $state<{ provider: ProviderPrefs | null } | null>(null);
   let customEditor = $state<{ agent: CustomAgent | null } | null>(null);
   let keyFor = $state<string | null>(null);
@@ -210,19 +211,21 @@
 
   onMount(() => {
     void refresh();
-    externalStatus()
-      .then((status) => (external = status))
-      .catch((error: unknown) => notify(errorText(error), 'error'));
+    if (capabilities.localAgents) {
+      externalStatus()
+        .then((status) => (external = status))
+        .catch((error: unknown) => notify(errorText(error), 'error'));
+    }
   });
 </script>
 
 <div class="segmented ai-tabs" role="group" aria-label={t('ai.settingsTabs')}>
   {#each TABS as item}
-    <button type="button" aria-pressed={tab === item} onclick={() => (tab = item)}>{t(`ai.tab.${item}`)}</button>
+    <button type="button" aria-pressed={activeTab === item} onclick={() => (tab = item)}>{t(`ai.tab.${item}`)}</button>
   {/each}
 </div>
 
-{#if tab === 'models'}
+{#if activeTab === 'models'}
   <div class="section-heading">
     <h3 class="section-label">{t('ai.providers')}</h3>
     <button type="button" class="primary" onclick={() => (providerEditor = { provider: null })}>+ {t('ai.addProvider')}</button>
@@ -249,40 +252,40 @@
     {/each}
   </div>
 
-  <div class="section-heading">
-    <h3 class="section-label">{t('ai.localAgents')}</h3>
-    <button type="button" class="primary" onclick={() => (customEditor = { agent: null })}>+ {t('ai.addAgent')}</button>
-  </div>
-  <div class="form-group">
-    {#each localAgents as agent (agent.agent)}
-      <div class="form-row item">
-        <span class="form-label" class:off={!agent.enabled}>
-          {agent.name}
-          <small class="mono agent-command" title={agent.detail}>{agent.via_npx ? t('ai.viaNpx') : agent.detail}</small>
-        </span>
-        <span class="badge" class:stored={agent.has_key}>{t(agent.has_key ? 'ai.keyStoredShort' : 'ai.noKey')}</span>
-        <div class="row-actions">
-          {#if !isMobile}
-            <IconButton icon="logIn" small label={t('ai.login.action')} onclick={() => (loginAgent = agent)} />
-          {/if}
-          <IconButton icon="key" small label={t('ai.key')} disabled={keySaving} onclick={() => (keyFor = agent.agent)} />
-          {#if agent.custom}
-            <IconButton icon="edit" small label={t('ai.edit')} onclick={() => startEditingCustom(agent)} />
-            <IconButton icon="remove" small danger label={t('ai.remove')} onclick={() => void removeCustom(agent)} />
-          {:else}
-            <Switch label={agent.name} checked={agent.enabled} onchange={(checked) => void setEnabled(agent, checked)} />
-          {/if}
-        </div>
-      </div>
-    {:else}
-      <div class="form-row"><span class="form-label"><small>{ai.agents ? t('ai.noLocalAgents') : t('ai.loadingAgents')}</small></span></div>
-    {/each}
-    <div class="form-row">
-      <span class="form-label">{t('ai.auth')}<small>{t('ai.authHint')}</small></span>
-      <div class="control"><Select label={t('ai.auth')} value={prefs.device.agents.auth} options={AUTH} onchange={(value) => void editDevice((draft) => (draft.agents.auth = value))} /></div>
+  {#if capabilities.localAgents}
+    <div class="section-heading">
+      <h3 class="section-label">{t('ai.localAgents')}</h3>
+      <button type="button" class="primary" onclick={() => (customEditor = { agent: null })}>+ {t('ai.addAgent')}</button>
     </div>
-  </div>
-{:else if tab === 'safety'}
+    <div class="form-group">
+      {#each localAgents as agent (agent.agent)}
+        <div class="form-row item">
+          <span class="form-label" class:off={!agent.enabled}>
+            {agent.name}
+            <small class="mono agent-command" title={agent.detail}>{agent.via_npx ? t('ai.viaNpx') : agent.detail}</small>
+          </span>
+          <span class="badge" class:stored={agent.has_key}>{t(agent.has_key ? 'ai.keyStoredShort' : 'ai.noKey')}</span>
+          <div class="row-actions">
+            <IconButton icon="logIn" small label={t('ai.login.action')} onclick={() => (loginAgent = agent)} />
+            <IconButton icon="key" small label={t('ai.key')} disabled={keySaving} onclick={() => (keyFor = agent.agent)} />
+            {#if agent.custom}
+              <IconButton icon="edit" small label={t('ai.edit')} onclick={() => startEditingCustom(agent)} />
+              <IconButton icon="remove" small danger label={t('ai.remove')} onclick={() => void removeCustom(agent)} />
+            {:else}
+              <Switch label={agent.name} checked={agent.enabled} onchange={(checked) => void setEnabled(agent, checked)} />
+            {/if}
+          </div>
+        </div>
+      {:else}
+        <div class="form-row"><span class="form-label"><small>{ai.agents ? t('ai.noLocalAgents') : t('ai.loadingAgents')}</small></span></div>
+      {/each}
+      <div class="form-row">
+        <span class="form-label">{t('ai.auth')}<small>{t('ai.authHint')}</small></span>
+        <div class="control"><Select label={t('ai.auth')} value={prefs.device.agents.auth} options={AUTH} onchange={(value) => void editDevice((draft) => (draft.agents.auth = value))} /></div>
+      </div>
+    </div>
+  {/if}
+{:else if activeTab === 'safety'}
   <p class="section-label">{t('ai.defaults')}</p>
   <div class="form-group">
     <div class="form-row">
@@ -433,4 +436,9 @@
   .install-note.failed { background: var(--danger-soft); }
   .failed, .danger-text { color: var(--danger); }
   .remove-key { margin-right: auto; }
+  @media (max-width: 560px) {
+    .control { width: 100%; max-width: 100%; }
+    .section-heading, .item { flex-wrap: wrap; }
+    .row-actions { margin-inline-start: auto; }
+  }
 </style>
