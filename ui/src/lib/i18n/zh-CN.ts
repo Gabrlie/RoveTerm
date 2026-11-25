@@ -1320,6 +1320,11 @@ export const zhCN: Messages = {
   // Application updates
   'update.dialogTitle': '软件更新',
   'update.sectionTitle': '应用更新',
+  'update.channel': '更新通道',
+  'update.channelHint': '稳定版仅接收正式发布；测试版同时接收包含新特性的预发布版本。',
+  'update.channelStable': '稳定版',
+  'update.channelBeta': '测试版',
+  'update.prereleaseBadge': '测试版',
   'update.autoCheck': '启动时自动检查更新',
   'update.autoCheckHint': '启动后延迟静默检查 GitHub 新版本，不弹窗打断输入。',
   'update.checkNow': '检查更新',

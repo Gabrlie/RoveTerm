@@ -51,7 +51,7 @@ const DEVICE_DEFAULTS: DevicePrefs = {
   connection: { connect_timeout_secs: 15, keepalive_secs: 30, keepalive_max: 3 },
   external_editor: { program: '', args: [] },
   tailscale: { configured: false, auto_connect: true, control_url: '', hostname: 'RoveTerm' },
-  updates: { auto_check: true, skipped_version: '' },
+  updates: { auto_check: true, skipped_version: '', channel: null },
   vault_biometric: false,
 };
 

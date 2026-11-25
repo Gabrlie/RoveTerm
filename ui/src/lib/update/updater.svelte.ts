@@ -62,6 +62,16 @@ class UpdaterStore {
     this.dialogOpen = false;
   }
 
+  /** Clears stale check results when the user switches between stable and beta channels. */
+  resetForChannelChange(): void {
+    if (this.phase === 'downloading' || this.phase === 'installing' || this.phase === 'ready') {
+      return;
+    }
+    this.phase = 'idle';
+    this.info = null;
+    this.error = '';
+  }
+
   async check(options: CheckOptions = {}): Promise<void> {
     const { silent = false, interactive = false } = options;
     if (this.phase === 'downloading' || this.phase === 'installing' || this.phase === 'ready') {

@@ -1318,6 +1318,11 @@ export const en = {
   // Application updates
   'update.dialogTitle': 'Software update',
   'update.sectionTitle': 'Updates',
+  'update.channel': 'Release channel',
+  'update.channelHint': 'Stable receives formal releases only; Beta also includes preview builds.',
+  'update.channelStable': 'Stable',
+  'update.channelBeta': 'Beta',
+  'update.prereleaseBadge': 'Beta',
   'update.autoCheck': 'Check for updates automatically',
   'update.autoCheckHint': 'Silently checks for new releases shortly after startup.',
   'update.checkNow': 'Check for updates',

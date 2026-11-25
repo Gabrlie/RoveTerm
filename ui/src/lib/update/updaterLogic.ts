@@ -1,4 +1,5 @@
-// Pure helpers for update state presentation, skipped-version checks and download progress.
+// Pure helpers for update state presentation, channel resolution, skipped-version checks and download progress.
+import type { UpdateChannel } from '../ipc';
 
 export type UpdatePhase =
   | 'idle'
@@ -14,6 +15,22 @@ export type UpdatePhase =
 export function normalizeVersion(version: string | null | undefined): string {
   if (!version) return '';
   return version.trim().replace(/^v/i, '');
+}
+
+/** `true` when the normalized SemVer version carries a pre-release identifier (e.g. `-beta.1`). */
+export function isPrereleaseVersion(version: string | null | undefined): boolean {
+  const normalized = normalizeVersion(version);
+  const core = normalized.split('+', 1)[0] ?? '';
+  return core.includes('-');
+}
+
+/** Resolves the active update channel from stored preference or the running binary's version. */
+export function effectiveUpdateChannel(
+  stored: UpdateChannel | null | undefined,
+  currentVersion: string | null | undefined,
+): UpdateChannel {
+  if (stored === 'stable' || stored === 'beta') return stored;
+  return isPrereleaseVersion(currentVersion) ? 'beta' : 'stable';
 }
 
 /** `true` when `version` matches the user's skipped version. */

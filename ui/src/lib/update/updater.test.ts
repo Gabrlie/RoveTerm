@@ -2,8 +2,10 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   downloadPercent,
+  effectiveUpdateChannel,
   formatReleaseDate,
   formatUpdateBytes,
+  isPrereleaseVersion,
   isSkippedVersion,
   normalizeVersion,
   shouldShowUpdateBadge,
@@ -14,6 +16,18 @@ describe('updaterLogic', () => {
     assert.equal(normalizeVersion('v0.2.0'), '0.2.0');
     assert.equal(normalizeVersion('  V1.0.0-rc.1 '), '1.0.0-rc.1');
     assert.equal(normalizeVersion(null), '');
+  });
+
+  it('detects prerelease versions and resolves effective update channels', () => {
+    assert.equal(isPrereleaseVersion('0.2.1'), false);
+    assert.equal(isPrereleaseVersion('0.2.1+build.1'), false);
+    assert.equal(isPrereleaseVersion('v0.3.0-beta.1'), true);
+    assert.equal(isPrereleaseVersion('0.3.0-rc.2+meta'), true);
+
+    assert.equal(effectiveUpdateChannel(null, '0.2.1'), 'stable');
+    assert.equal(effectiveUpdateChannel(undefined, '0.3.0-beta.1'), 'beta');
+    assert.equal(effectiveUpdateChannel('beta', '0.2.1'), 'beta');
+    assert.equal(effectiveUpdateChannel('stable', '0.3.0-beta.1'), 'stable');
   });
 
   it('tracks skipped version visibility for the status bar badge', () => {

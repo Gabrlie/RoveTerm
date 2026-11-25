@@ -41,7 +41,8 @@ pub use prefs::{
     ConflictChoice, ConnectionPrefs, CpuDisplay, CursorStyle, CustomAgent, DevicePrefs,
     ExternalEditorPrefs, FilePrefs, Language, MemoryDisplay, NetworkDisplay, NetworkUnit,
     Preferences, ProviderFormat, ProviderPrefs, ReasoningEffort, Repeat, ReviewModel, ReviewerKind,
-    RightClick, Schedule, StatusPrefs, TailscalePrefs, TerminalPrefs, Theme, UpdatePrefs,
+    RightClick, Schedule, StatusPrefs, TailscalePrefs, TerminalPrefs, Theme, UpdateChannel,
+    UpdatePrefs,
 };
 pub use snippets::{Snippet, SnippetDraft, SnippetId};
 pub use store::{LockReason, LockState, MAX_JUMP_DEPTH, SCHEMA_VERSION, Vault};

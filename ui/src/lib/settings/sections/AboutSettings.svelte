@@ -4,16 +4,32 @@
   import Icon from '../../ui/Icon.svelte';
   import Switch from '../../ui/Switch.svelte';
   import { errorText, t } from '../../i18n';
-  import { logsReveal } from '../../ipc';
+  import { logsReveal, type UpdateChannel } from '../../ipc';
   import { isMobile } from '../../platform';
   import { notify } from '../../ui/toast.svelte';
   import AutostartRow from '../AutostartRow.svelte';
   import { editDevice } from '../edit.svelte';
   import { prefs } from '../prefs.svelte';
   import { updater } from '../../update/updater.svelte';
+  import { effectiveUpdateChannel, isPrereleaseVersion } from '../../update/updaterLogic';
 
   let { onopenlogs }: { onopenlogs?: () => void } = $props();
   let version = $state('');
+
+  const activeChannel = $derived(effectiveUpdateChannel(prefs.device.updates.channel, version));
+  const channelBusy = $derived(
+    updater.phase === 'downloading' || updater.phase === 'installing' || updater.phase === 'ready',
+  );
+
+  async function selectChannel(next: UpdateChannel): Promise<void> {
+    if (channelBusy) return;
+    if (prefs.device.updates.channel === next) return;
+    await editDevice((draft) => {
+      draft.updates.channel = next;
+    });
+    updater.resetForChannelChange();
+    void updater.check({ silent: false, interactive: false });
+  }
 
   const updateSummary = $derived.by(() => {
     switch (updater.phase) {
@@ -56,10 +72,36 @@
 <div class="about">
   <div class="mark"><Icon name="terminal" size={34} /></div>
   <h3>RoveTerm</h3>
-  <p class="version">{t('settings.version')} {version || '…'}</p>
+  <p class="version">
+    {t('settings.version')} {version || '…'}
+    {#if isPrereleaseVersion(version)}
+      <span class="beta-badge">{t('update.prereleaseBadge')}</span>
+    {/if}
+  </p>
   <p>{t('settings.aboutText')}</p>
 </div>
 <div class="form-group">
+  <div class="form-row">
+    <span class="form-label">{t('update.channel')}<small>{t('update.channelHint')}</small></span>
+    <div class="segmented" role="group" aria-label={t('update.channel')}>
+      <button
+        type="button"
+        disabled={channelBusy}
+        aria-pressed={activeChannel === 'stable'}
+        onclick={() => void selectChannel('stable')}
+      >
+        {t('update.channelStable')}
+      </button>
+      <button
+        type="button"
+        disabled={channelBusy}
+        aria-pressed={activeChannel === 'beta'}
+        onclick={() => void selectChannel('beta')}
+      >
+        {t('update.channelBeta')}
+      </button>
+    </div>
+  </div>
   <div class="form-row">
     <span class="form-label">{t('update.autoCheck')}<small>{t('update.autoCheckHint')}</small></span>
     <Switch
@@ -144,10 +186,21 @@
     font-weight: 700;
   }
   .version {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     margin: 0;
     color: var(--fg-muted);
     font-size: var(--text-footnote);
     font-variant-numeric: tabular-nums;
+  }
+  .beta-badge {
+    padding: 1px 6px;
+    border-radius: var(--radius-pill);
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: var(--text-caption);
+    font-weight: 600;
   }
   p {
     margin: var(--space-2) 0 0;

@@ -58,6 +58,9 @@
           <span class="current">v{info.current_version}</span>
           <span class="arrow">→</span>
           <span class="latest">v{info.version}</span>
+          {#if info.prerelease}
+            <span class="channel-tag">{t('update.prereleaseBadge')}</span>
+          {/if}
           <span class="mode-tag">
             {info.install_mode === 'in_app' ? t('update.modeInApp') : t('update.modeExternal')}
           </span>
@@ -185,6 +188,14 @@
   }
   .latest {
     color: var(--fg);
+  }
+  .channel-tag {
+    padding: 2px 7px;
+    border-radius: var(--radius-pill);
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: var(--text-caption);
+    font-weight: 600;
   }
   .mode-tag {
     margin-left: auto;

@@ -525,9 +525,12 @@ export interface DevicePrefs {
   vault_biometric: boolean;
 }
 
+export type UpdateChannel = 'stable' | 'beta';
+
 export interface UpdatePrefs {
   auto_check: boolean;
   skipped_version: string;
+  channel?: UpdateChannel | null;
 }
 
 export interface TailscalePrefs {
@@ -1553,8 +1556,10 @@ export type UpdateInstallMode = 'in_app' | 'external';
 
 export interface UpdateInfo {
   current_version: string;
+  channel: UpdateChannel;
   available: boolean;
   version: string | null;
+  prerelease: boolean;
   notes: string;
   published_at: string | null;
   release_url: string;

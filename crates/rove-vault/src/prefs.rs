@@ -688,6 +688,17 @@ pub struct DevicePrefs {
     pub updates: UpdatePrefs,
 }
 
+/// Release track followed by the application updater.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateChannel {
+    /// Stable releases only (`vX.Y.Z`).
+    #[default]
+    Stable,
+    /// Pre-releases and stable releases (`vX.Y.Z-beta.N` and `vX.Y.Z`).
+    Beta,
+}
+
 /// Device-local update check settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -696,6 +707,8 @@ pub struct UpdatePrefs {
     pub auto_check: bool,
     /// Release version the user chose to skip; empty means none skipped.
     pub skipped_version: String,
+    /// Explicit release channel preference; `None` follows the running build's channel.
+    pub channel: Option<UpdateChannel>,
 }
 
 impl Default for UpdatePrefs {
@@ -703,6 +716,7 @@ impl Default for UpdatePrefs {
         Self {
             auto_check: true,
             skipped_version: String::new(),
+            channel: None,
         }
     }
 }
@@ -1610,27 +1624,36 @@ mod tests {
             UpdatePrefs {
                 auto_check: true,
                 skipped_version: String::new(),
+                channel: None,
             }
         );
 
         let trimmed = UpdatePrefs {
             auto_check: false,
             skipped_version: "  0.2.0-beta.1  ".into(),
+            channel: Some(UpdateChannel::Beta),
         }
         .validate()
         .unwrap();
         assert!(!trimmed.auto_check);
         assert_eq!(trimmed.skipped_version, "0.2.0-beta.1");
+        assert_eq!(trimmed.channel, Some(UpdateChannel::Beta));
+
+        let roundtrip: UpdatePrefs =
+            serde_json::from_str(&serde_json::to_string(&trimmed).unwrap()).unwrap();
+        assert_eq!(roundtrip, trimmed);
 
         let control = UpdatePrefs {
             auto_check: true,
             skipped_version: "0.2.0\n".into(),
+            channel: None,
         };
         assert!(control.validate().is_err());
 
         let too_long = UpdatePrefs {
             auto_check: true,
             skipped_version: "1".repeat(65),
+            channel: Some(UpdateChannel::Stable),
         };
         assert!(too_long.validate().is_err());
     }

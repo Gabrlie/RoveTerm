@@ -79,7 +79,7 @@ Tailscale 设备身份用本机 vault 密钥加密，留在当前设备。注册
 
 ## 应用更新
 
-桌面端更新经 `tauri-plugin-updater` 读取签名清单 `latest.json`，安装前使用 `src-tauri/tauri.conf.json` 内置的 minisign 公钥校验包体签名；私钥只留在构建机本地（如 `~/.tauri/roveterm.key`），不进入仓库、不写日志。Rust 命令不接受前端传入任意下载地址，跳转发布页及 Android 清单 `latest-android.json` 的包体链接均限制在 `https://github.com/Gabrlie/RoveTerm/releases` 下，且 Android 清单校验 64 位十六进制 SHA-256 摘要。
+桌面端更新经 `tauri-plugin-updater` 读取签名清单 `latest.json`，安装前使用 `src-tauri/tauri.conf.json` 内置的 minisign 公钥校验包体签名；私钥只留在构建机本地（如 `~/.tauri/roveterm.key`），不进入仓库、不写日志。稳定通道读取 `/releases/latest/download/latest.json`，测试通道先通过 GitHub Releases API 选取版本最高的非草稿发布并校验标签格式，再将桌面更新器定向到该标签下的 `latest.json`（同样校验 minisign 签名）。Rust 命令不接受前端传入任意下载地址，跳转发布页及 Android 清单 `latest-android.json` 的包体链接均限制在 `https://github.com/Gabrlie/RoveTerm/releases` 下，且 Android 清单校验 64 位十六进制 SHA-256 摘要。
 
 ## 日志
 
