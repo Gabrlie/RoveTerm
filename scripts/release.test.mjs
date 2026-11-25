@@ -10,8 +10,12 @@ import {
   bumpWorkspaceVersion,
   collectArtifacts,
   extractChangelogSection,
+  inferChannel,
+  nextVersion,
   parseVersion,
   renderReleaseNotes,
+  resolveChannel,
+  selectPreviousTag,
 } from './release.mjs';
 
 function withTempDir(fn) {
@@ -128,6 +132,8 @@ describe('scripts/release.mjs', () => {
         androidApks: collected.androidApks,
       });
       assert.equal(android.version, '0.2.0');
+      assert.equal(android.channel, 'stable');
+      assert.equal(android.prerelease, false);
       assert.match(android.platforms['arm64-v8a'].url, /RoveTerm-0\.2\.0-android-arm64\.apk$/);
       assert.match(android.platforms['arm64-v8a'].sha256, /^[a-f0-9]{64}$/);
       assert.equal(android.platforms['arm64-v8a'].size, 'android-apk'.length);
@@ -215,5 +221,87 @@ describe('scripts/release.mjs', () => {
       'dist/release/v0.2.0/RELEASE_NOTES.md',
       '--draft',
     ]);
+  });
+
+  it('manages stable and beta channels, nextVersion, tag baselines and signed release APKs', () => {
+    assert.equal(inferChannel('v0.2.1'), 'stable');
+    assert.equal(inferChannel('0.3.0-beta.1'), 'beta');
+    assert.equal(resolveChannel('0.3.0', 'stable'), 'stable');
+    assert.equal(resolveChannel('0.3.0-beta.1', 'beta'), 'beta');
+    assert.throws(() => resolveChannel('0.3.0-beta.1', 'stable'));
+    assert.throws(() => resolveChannel('0.3.0', 'beta'));
+    assert.throws(() => resolveChannel('0.3.0', 'canary'));
+
+    assert.equal(nextVersion('0.2.1', { channel: 'beta' }), '0.3.0-beta.1');
+    assert.equal(nextVersion('0.2.1', { channel: 'beta', part: 'patch' }), '0.2.2-beta.1');
+    assert.equal(nextVersion('0.3.0-beta.1', { channel: 'beta' }), '0.3.0-beta.2');
+    assert.equal(nextVersion('0.2.1', { channel: 'beta', base: '0.4.0' }), '0.4.0-beta.1');
+    assert.equal(nextVersion('0.3.0-beta.2', { channel: 'stable' }), '0.3.0');
+    assert.equal(nextVersion('0.2.1', { channel: 'stable' }), '0.2.2');
+    assert.equal(nextVersion('0.2.1', { channel: 'stable', part: 'minor' }), '0.3.0');
+
+    const tags = ['v0.3.0-beta.2', 'v0.3.0-beta.1', 'v0.2.1', 'v0.2.0'];
+    assert.equal(selectPreviousTag(tags, 'v0.3.0', 'stable'), 'v0.2.1');
+    assert.equal(selectPreviousTag(tags, 'v0.3.0-beta.2', 'beta'), 'v0.3.0-beta.1');
+    assert.equal(selectPreviousTag(tags, 'v0.3.0-beta.1', 'beta'), 'v0.3.0-beta.2');
+
+    const stableGh = buildGhReleaseCommand({
+      tag: 'v0.3.0',
+      title: 'RoveTerm v0.3.0',
+      notesFile: 'notes.md',
+      files: ['latest.json'],
+      channel: 'stable',
+    });
+    assert.ok(stableGh.includes('--latest'));
+    assert.ok(!stableGh.includes('--prerelease'));
+
+    const betaGh = buildGhReleaseCommand({
+      tag: 'v0.3.0-beta.1',
+      title: 'RoveTerm v0.3.0-beta.1',
+      notesFile: 'notes.md',
+      files: ['latest.json'],
+      channel: 'beta',
+      target: 'release/v0.3.0-beta.1',
+    });
+    assert.ok(betaGh.includes('--prerelease'));
+    assert.ok(!betaGh.includes('--latest'));
+    assert.ok(betaGh.includes('--target'));
+
+    withTempDir((dir) => {
+      const debugDir = join(dir, 'aarch64', 'debug');
+      const releaseDir = join(dir, 'aarch64', 'release');
+      mkdirSync(debugDir, { recursive: true });
+      mkdirSync(releaseDir, { recursive: true });
+      writeFileSync(join(debugDir, 'app-aarch64-debug.apk'), 'debug');
+      writeFileSync(join(releaseDir, 'app-aarch64-release-unsigned.apk'), 'unsigned');
+      writeFileSync(join(releaseDir, 'app-aarch64-release.apk'), 'signed-release');
+
+      const collected = collectArtifacts([dir], { version: '0.3.0-beta.1' });
+      assert.equal(collected.androidApks.length, 1);
+      assert.equal(collected.androidApks[0].name, 'RoveTerm-0.3.0-beta.1-android-arm64.apk');
+      assert.equal(collected.androidApks[0].size, 'signed-release'.length);
+
+      const android = buildAndroidManifest({
+        version: '0.3.0-beta.1',
+        tag: 'v0.3.0-beta.1',
+        channel: 'beta',
+        notes: 'Beta notes',
+        pubDate: '2026-11-25T04:00:00Z',
+        androidApks: collected.androidApks,
+      });
+      assert.equal(android.channel, 'beta');
+      assert.equal(android.prerelease, true);
+
+      const betaNotes = renderReleaseNotes({
+        version: '0.3.0-beta.1',
+        tag: 'v0.3.0-beta.1',
+        channel: 'beta',
+        previousTag: 'v0.2.1',
+        changelogSection: '### 中文更新日志\n- 移动端测试',
+        installers: collected.installers,
+      });
+      assert.match(betaNotes, /Beta Pre-release/);
+      assert.match(betaNotes, /更新通道/);
+    });
   });
 });

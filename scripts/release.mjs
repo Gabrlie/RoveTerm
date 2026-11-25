@@ -19,6 +19,7 @@ import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const DEFAULT_REPO = 'Gabrlie/RoveTerm';
+export const RELEASE_CHANNELS = ['stable', 'beta'];
 
 const SEMVER_RE =
   /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
@@ -33,8 +34,7 @@ const DEFAULT_SCAN_DIRS = [
   'src-tauri/gen/android/app/build/outputs/apk',
 ];
 
-/** Validates and normalizes a SemVer 2.0 string (strips an optional leading `v`). */
-export function parseVersion(raw) {
+function parseVersionParts(raw) {
   if (typeof raw !== 'string') {
     throw new Error('版本号不能为空 / Version is required.');
   }
@@ -45,8 +45,93 @@ export function parseVersion(raw) {
       `非法版本号 "${trimmed}"：须符合 SemVer 2.0（例如 0.2.0 或 0.3.0-beta.1）。`,
     );
   }
-  const [, major, minor, patch, pre, build] = match;
-  return `${major}.${minor}.${patch}${pre ? `-${pre}` : ''}${build ? `+${build}` : ''}`;
+  const [, major, minor, patch, pre = null, build = null] = match;
+  return {
+    major: Number(major),
+    minor: Number(minor),
+    patch: Number(patch),
+    pre,
+    build,
+    normalized: `${major}.${minor}.${patch}${pre ? `-${pre}` : ''}${build ? `+${build}` : ''}`,
+  };
+}
+
+/** Validates and normalizes a SemVer 2.0 string (strips an optional leading `v`). */
+export function parseVersion(raw) {
+  return parseVersionParts(raw).normalized;
+}
+
+/** Infers release channel (`stable` or `beta`) from whether the SemVer carries a pre-release tag. */
+export function inferChannel(rawVersion) {
+  return parseVersionParts(rawVersion).pre ? 'beta' : 'stable';
+}
+
+/** Resolves and validates the release channel against the SemVer version. */
+export function resolveChannel(rawVersion, explicitChannel = null) {
+  const inferred = inferChannel(rawVersion);
+  if (!explicitChannel) return inferred;
+  const normalized = String(explicitChannel).trim().toLowerCase();
+  if (!RELEASE_CHANNELS.includes(normalized)) {
+    throw new Error(
+      `非法发布通道 "${explicitChannel}"：仅支持 ${RELEASE_CHANNELS.join(' / ')}。`,
+    );
+  }
+  if (normalized !== inferred) {
+    const version = parseVersion(rawVersion);
+    throw new Error(
+      normalized === 'stable'
+        ? `版本 ${version} 含预发布标识，不能以 stable 通道发布；请去掉预发布后缀或改用 --channel beta。`
+        : `版本 ${version} 不含预发布标识，不能以 beta 通道发布；请使用例如 ${version}-beta.1 或改用 --channel stable。`,
+    );
+  }
+  return normalized;
+}
+
+/** Computes the next version for `stable` or `beta` channel bumps. */
+export function nextVersion(currentRaw, { channel = 'stable', part = null, base = null } = {}) {
+  const normalizedChannel = String(channel).trim().toLowerCase();
+  if (!RELEASE_CHANNELS.includes(normalizedChannel)) {
+    throw new Error(
+      `非法发布通道 "${channel}"：仅支持 ${RELEASE_CHANNELS.join(' / ')}。`,
+    );
+  }
+  if (part && !['major', 'minor', 'patch'].includes(part)) {
+    throw new Error(`非法递增级别 "${part}"：仅支持 major / minor / patch。`);
+  }
+
+  const current = parseVersionParts(currentRaw);
+  const bumpCore = (bumpPart) => {
+    if (bumpPart === 'major') return `${current.major + 1}.0.0`;
+    if (bumpPart === 'minor') return `${current.major}.${current.minor + 1}.0`;
+    return `${current.major}.${current.minor}.${current.patch + 1}`;
+  };
+
+  if (base) {
+    const baseParts = parseVersionParts(base);
+    if (baseParts.pre || baseParts.build) {
+      throw new Error(`基础版本 "${base}" 不能包含预发布或构建元数据后缀。`);
+    }
+    return normalizedChannel === 'beta' ? `${baseParts.normalized}-beta.1` : baseParts.normalized;
+  }
+
+  if (normalizedChannel === 'beta') {
+    if (part) {
+      return `${bumpCore(part)}-beta.1`;
+    }
+    if (current.pre) {
+      const betaMatch = /^beta\.(\d+)$/i.exec(current.pre);
+      if (betaMatch) {
+        return `${current.major}.${current.minor}.${current.patch}-beta.${Number(betaMatch[1]) + 1}`;
+      }
+      return `${current.major}.${current.minor}.${current.patch}-beta.1`;
+    }
+    return `${bumpCore('minor')}-beta.1`;
+  }
+
+  if (!part && current.pre) {
+    return `${current.major}.${current.minor}.${current.patch}`;
+  }
+  return bumpCore(part ?? 'patch');
 }
 
 /** Reads the workspace version from root Cargo.toml. */
@@ -331,6 +416,9 @@ export function classifyArtifact(filePath) {
   }
 
   if (lower.endsWith('.apk')) {
+    if (lower.includes('-unsigned.') || lower.includes('-debug.') || /(?:^|[/\\])debug(?:[/\\]|$)/.test(context)) {
+      return null;
+    }
     const rawArch = detectArch(`${name} ${context}`, 'universal');
     const abi =
       rawArch === 'aarch64' || rawArch === 'arm64-v8a'
@@ -519,6 +607,7 @@ export function buildLatestManifest({
 export function buildAndroidManifest({
   version,
   tag,
+  channel = null,
   repo = DEFAULT_REPO,
   notes,
   pubDate,
@@ -526,6 +615,7 @@ export function buildAndroidManifest({
   existing = null,
 }) {
   const normalized = parseVersion(version);
+  const resolvedChannel = resolveChannel(normalized, channel);
   const platforms = { ...(existing?.platforms ?? {}) };
   for (const apk of androidApks) {
     const url = `https://github.com/${repo}/releases/download/${tag}/${encodeURIComponent(apk.name)}`;
@@ -537,6 +627,8 @@ export function buildAndroidManifest({
   }
   return {
     version: normalized,
+    channel: resolvedChannel,
+    prerelease: resolvedChannel === 'beta',
     notes: notes.trim(),
     pub_date: pubDate,
     release_url: `https://github.com/${repo}/releases/tag/${tag}`,
@@ -560,13 +652,27 @@ function shieldsBadge(label, message, color, logo) {
 export function renderReleaseNotes({
   version,
   tag,
+  channel = null,
   previousTag = null,
   repo = DEFAULT_REPO,
   changelogSection,
   installers,
 }) {
-  parseVersion(version);
-  const lines = [
+  const normalized = parseVersion(version);
+  const resolvedChannel = resolveChannel(normalized, channel);
+  const lines = [];
+
+  if (resolvedChannel === 'beta') {
+    lines.push(
+      '> [!NOTE]',
+      '> **测试版 / Beta Pre-release**：本版本属于测试通道，包含仍在迭代中的新特性；正式环境建议继续使用稳定版。应用内可在「设置 → 关于 → 更新通道」切换至「测试版」接收后续签名测试更新。',
+      '>',
+      '> This is a **Beta pre-release** for testing upcoming changes. Stable users can opt in under **Settings → About → Release channel → Beta** to receive signed beta updates.',
+      '',
+    );
+  }
+
+  lines.push(
     changelogSection.trim(),
     '',
     '---',
@@ -579,7 +685,7 @@ export function renderReleaseNotes({
     '',
     '**按操作系统点击图标下载 / Download based on your OS:**',
     '',
-  ];
+  );
 
   if (installers.length === 0) {
     lines.push(
@@ -668,6 +774,23 @@ export function renderReleaseNotes({
   return `${lines.join('\n').trimEnd()}\n`;
 }
 
+/** Selects the comparison baseline tag for Release Notes (stable skips pre-release tags). */
+export function selectPreviousTag(tags, excludeTag, channel = 'stable') {
+  for (const raw of tags) {
+    const tag = raw.trim();
+    if (!tag || tag === excludeTag) continue;
+    let parsedChannel;
+    try {
+      parsedChannel = inferChannel(tag);
+    } catch {
+      continue;
+    }
+    if (channel === 'stable' && parsedChannel !== 'stable') continue;
+    return tag;
+  }
+  return null;
+}
+
 /** Builds the `gh release create` argument array for manual review or `--publish`. */
 export function buildGhReleaseCommand({
   tag,
@@ -677,7 +800,10 @@ export function buildGhReleaseCommand({
   repo = DEFAULT_REPO,
   draft = false,
   prerelease = false,
+  channel = null,
+  target = null,
 }) {
+  const isPrerelease = channel ? channel === 'beta' : prerelease;
   const args = [
     'release',
     'create',
@@ -690,8 +816,10 @@ export function buildGhReleaseCommand({
     '--notes-file',
     notesFile,
   ];
+  if (target) args.push('--target', target);
   if (draft) args.push('--draft');
-  if (prerelease) args.push('--prerelease');
+  if (isPrerelease) args.push('--prerelease');
+  else if (!draft && channel === 'stable') args.push('--latest');
   return args;
 }
 
@@ -711,22 +839,58 @@ async function loadJsonSource(source) {
   return JSON.parse(readFileSync(source, 'utf8'));
 }
 
-function latestGitTag(rootDir, excludeTag) {
+function latestGitTag(rootDir, excludeTag, channel = 'stable') {
   const result = spawnSync('git', ['tag', '--sort=-v:refname'], {
     cwd: rootDir,
     encoding: 'utf8',
   });
   if (result.status !== 0) return null;
-  const tags = result.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((tag) => tag && tag !== excludeTag);
-  return tags[0] ?? null;
+  const tags = result.stdout.split(/\r?\n/);
+  return selectPreviousTag(tags, excludeTag, channel);
+}
+
+function parseBumpFlags(args) {
+  const options = {
+    version: null,
+    channel: null,
+    part: null,
+    base: null,
+  };
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    const next = () => {
+      if (i + 1 >= args.length) throw new Error(`参数 ${arg} 缺少取值`);
+      i += 1;
+      return args[i];
+    };
+    switch (arg) {
+      case '--channel':
+        options.channel = next();
+        break;
+      case '--major':
+      case '--minor':
+      case '--patch':
+        if (options.part) throw new Error('只能指定一个递增级别（--major / --minor / --patch）');
+        options.part = arg.slice(2);
+        break;
+      case '--base':
+        options.base = next();
+        break;
+      default:
+        if (arg.startsWith('-')) throw new Error(`未知参数: ${arg}`);
+        if (options.version) throw new Error(`重复指定版本号: ${arg}`);
+        options.version = arg;
+        break;
+    }
+  }
+  return options;
 }
 
 function parsePrepareFlags(args) {
   const options = {
     tag: null,
+    channel: null,
+    target: null,
     repo: DEFAULT_REPO,
     from: [],
     out: null,
@@ -748,6 +912,12 @@ function parsePrepareFlags(args) {
     switch (arg) {
       case '--tag':
         options.tag = next();
+        break;
+      case '--channel':
+        options.channel = next();
+        break;
+      case '--target':
+        options.target = next();
         break;
       case '--repo':
         options.repo = next();
@@ -791,7 +961,11 @@ async function runPrepare(rootDir, rawArgs) {
   const workspaceVersion = readWorkspaceVersion(rootDir);
   const version = opts.tag ? parseVersion(opts.tag) : workspaceVersion;
   const tag = opts.tag?.startsWith('v') ? opts.tag : `v${version}`;
-  const prerelease = opts.prerelease || version.includes('-');
+  if (opts.prerelease && opts.channel && opts.channel.trim().toLowerCase() !== 'beta') {
+    throw new Error('--prerelease 不能与 --channel stable 同时使用。');
+  }
+  const channel = resolveChannel(version, opts.channel ?? (opts.prerelease ? 'beta' : null));
+  const prerelease = channel === 'beta';
   const pubDate = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
   const scanDirs =
@@ -831,6 +1005,7 @@ async function runPrepare(rootDir, rawArgs) {
       ? buildAndroidManifest({
           version,
           tag,
+          channel,
           repo: opts.repo,
           notes: changelogSection,
           pubDate,
@@ -839,10 +1014,11 @@ async function runPrepare(rootDir, rawArgs) {
         })
       : null;
 
-  const previousTag = opts.previousTag ?? latestGitTag(rootDir, tag);
+  const previousTag = opts.previousTag ?? latestGitTag(rootDir, tag, channel);
   const releaseNotes = renderReleaseNotes({
     version,
     tag,
+    channel,
     previousTag,
     repo: opts.repo,
     changelogSection,
@@ -850,6 +1026,7 @@ async function runPrepare(rootDir, rawArgs) {
   });
 
   if (opts.dryRun) {
+    console.log(`=== Channel: ${channel} (${prerelease ? 'pre-release' : 'latest'}) ===\n`);
     console.log('=== RELEASE_NOTES.md (dry-run) ===\n');
     console.log(releaseNotes);
     if (latestManifest) {
@@ -905,9 +1082,12 @@ async function runPrepare(rootDir, rawArgs) {
     repo: opts.repo,
     draft: opts.draft,
     prerelease,
+    channel,
+    target: opts.target,
   });
 
   console.log(`Prepared release artifacts in ${relative(rootDir, outDir)}`);
+  console.log(`- Channel: ${channel} (${prerelease ? 'pre-release' : 'latest'})`);
   console.log(`- Installers: ${collected.installers.length}`);
   console.log(
     `- Desktop updater platforms: ${latestManifest ? Object.keys(latestManifest.platforms).join(', ') || 'none' : 'none'}`,
@@ -930,8 +1110,9 @@ async function runPrepare(rootDir, rawArgs) {
 function usage() {
   return [
     'Usage:',
-    '  node scripts/release.mjs bump <version>',
-    '  node scripts/release.mjs prepare [--tag vX.Y.Z] [--from <dir>...] [--merge-latest <path|url>] [--merge-android <path|url>] [--out <dir>] [--prev-tag <tag>] [--dry-run] [--publish] [--draft] [--prerelease]',
+    '  node scripts/release.mjs bump <version> [--channel stable|beta]',
+    '  node scripts/release.mjs bump --channel <stable|beta> [--major|--minor|--patch] [--base X.Y.Z]',
+    '  node scripts/release.mjs prepare [--channel stable|beta] [--tag vX.Y.Z] [--target <ref>] [--from <dir>...] [--merge-latest <path|url>] [--merge-android <path|url>] [--out <dir>] [--prev-tag <tag>] [--dry-run] [--publish] [--draft] [--prerelease]',
   ].join('\n');
 }
 
@@ -944,9 +1125,23 @@ async function main() {
   }
   switch (command) {
     case 'bump': {
-      if (rest.length !== 1) throw new Error('用法: pnpm release:bump <version>');
-      const { version } = bumpWorkspaceVersion(rootDir, rest[0]);
-      console.log(`Updated Cargo.toml and package.json to ${version}`);
+      const opts = parseBumpFlags(rest);
+      let targetVersion;
+      if (opts.version) {
+        resolveChannel(opts.version, opts.channel);
+        targetVersion = parseVersion(opts.version);
+      } else if (opts.channel) {
+        const current = readWorkspaceVersion(rootDir);
+        targetVersion = nextVersion(current, {
+          channel: opts.channel,
+          part: opts.part,
+          base: opts.base,
+        });
+      } else {
+        throw new Error('用法: pnpm release:bump <version> 或 pnpm release:bump --channel <stable|beta>');
+      }
+      const { version } = bumpWorkspaceVersion(rootDir, targetVersion);
+      console.log(`Updated Cargo.toml and package.json to ${version} (${inferChannel(version)})`);
       break;
     }
     case 'prepare': {

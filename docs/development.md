@@ -34,22 +34,23 @@
 
 ### 版本号与手动签名发布（`gh`）
 
-版本号遵循 SemVer 2.0（`MAJOR.MINOR.PATCH[-prerelease]`），以根目录 `Cargo.toml` 的 `[workspace.package].version` 为单一真源（`src-tauri/tauri.conf.json` 自动继承）：Pre-1.0 阶段仅在新增独立功能模块、跨平台里程碑或配置/同步格式变更时递增 `MINOR`（如 `0.2.0`、`0.3.0`）；缺陷修复、UI 交互打磨与既有子系统的体验重构递增 `PATCH`（如 `0.2.1`）；尝鲜版使用 `-beta.N` / `-rc.N`。
+版本号遵循 SemVer 2.0（`MAJOR.MINOR.PATCH[-prerelease]`），以根目录 `Cargo.toml` 的 `[workspace.package].version` 为单一真源（`src-tauri/tauri.conf.json` 自动继承）：Pre-1.0 阶段仅在新增独立功能模块、跨平台里程碑或配置/同步格式变更时递增 `MINOR`（如 `0.2.0`、`0.3.0`）；缺陷修复、UI 交互打磨与既有子系统的体验重构递增 `PATCH`（如 `0.2.1`）。发版分为**稳定版**（`stable`，无预发布后缀，如 `0.3.0`）与**测试版**（`beta`，带 `-beta.N` 预发布后缀，如 `0.3.0-beta.1`）两个通道：稳定版发布为 GitHub `Latest`，测试版发布为 GitHub `Pre-release`（不覆盖 `Latest`），应用内可在「设置 → 关于 → 更新通道」切换订阅，测试版安装包默认跟踪测试通道并在升级到正式版时平滑过渡。
 
 本地构建带签名更新包并经 GitHub CLI（`gh`）发布：
 
-1. 同步递增版本号：`pnpm release:bump 0.2.0`，并在 [CHANGELOG.md](../CHANGELOG.md) 记录中英双语更新日志。
+1. 同步递增版本号：显式指定版本 `pnpm release:bump 0.3.0-beta.1`，或按通道自动递增 `pnpm release:bump:beta`（`0.2.1` → `0.3.0-beta.1` → `0.3.0-beta.2`）/ `pnpm release:bump:stable`（`0.3.0-beta.2` → `0.3.0`，或递增 `PATCH`），并在 [CHANGELOG.md](../CHANGELOG.md) 记录中英双语更新日志。
 2. 签名密钥保存在构建机本机（如 `~/.tauri/roveterm.key`，权限 `0600`），私钥绝不入库。公钥写入 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`。构建时传入 `TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/roveterm.key)"` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，无密码时传空字符串。打包开源 macOS 版本时同时设置 `APPLE_SIGNING_IDENTITY="-"`。
-3. 汇总产物、生成 `latest.json`（若含 `.apk` 则同步生成 `latest-android.json`）、`SHA256SUMS.txt` 与带平台图标下载表的双语 `RELEASE_NOTES.md`：`pnpm release:prepare --tag v0.2.0`。多台机器分批补建其他平台时，传入 `--merge-latest <已有 latest.json 路径或 URL>` 合并平台签名条目，再使用 `gh release upload --clobber` 更新。
-4. 审阅并按需微调生成的 `RELEASE_NOTES.md`，执行脚本输出的 `gh release create` 命令（或附加 `--publish --draft` 直接创建草稿发布）。
+3. 汇总产物、生成 `latest.json`（若含已签名发布 `.apk` 则同步生成带通道标记的 `latest-android.json`）、`SHA256SUMS.txt` 与带平台图标下载表的双语 `RELEASE_NOTES.md`：稳定版运行 `pnpm release:prepare:stable --tag v0.3.0`（对比基准默认取上一个稳定 tag，发布命令附带 `--latest`），测试版运行 `pnpm release:prepare:beta --tag v0.3.0-beta.1`（自动附带双语测试版说明与 `--prerelease`）。多台机器分批补建其他平台时，传入 `--merge-latest <已有 latest.json 路径或 URL>` 或 `--merge-android` 合并平台条目，再使用 `gh release upload --clobber` 更新。
+4. 审阅并按需微调生成的 `RELEASE_NOTES.md`，执行脚本输出的 `gh release create` 命令（或附加 `--publish --draft` 先创建草稿发布）。
 
 发布三个 macOS 安装包时，用多个 `--from` 指定各架构的 `bundle/dmg` 和通用包的 `bundle/macos`。通用包的更新归档及签名供两种 macOS 架构共用。
 
 ### Android
 
-1. 确认已设置 `ANDROID_HOME`、`NDK_HOME`，并安装 JDK 17。
+1. 确认已设置 `ANDROID_HOME`、`NDK_HOME`，并安装 JDK 17+。
 2. 构建调试 APK：`pnpm tauri android build --debug --apk --target aarch64`，产物位于 `src-tauri/gen/android/app/build/outputs/apk/`。
-3. 连接设备调试：`pnpm tauri android dev`。
+3. 构建已签名发布 APK：通过环境变量 `ROVETERM_ANDROID_KEYSTORE_PATH`、`ROVETERM_ANDROID_KEYSTORE_PASSWORD`、`ROVETERM_ANDROID_KEY_ALIAS`、`ROVETERM_ANDROID_KEY_PASSWORD` 或本地未入库的 `src-tauri/gen/android/keystore.properties` 提供本机签名密钥库，再运行 `pnpm tauri android build --apk --target aarch64`。`scripts/release.mjs` 仅收录已签名的发布 APK，自动跳过 `debug` 与 `unsigned` 包。
+4. 连接设备调试：`pnpm tauri android dev`。
 
 Android 使用 Keystore 保护凭据库的设备主密钥，可在应用的安全设置中启用生物识别或屏幕锁验证。也可在装有 Android SDK、NDK、JDK 17、Rust 与 Node.js / pnpm 的 Docker 容器中挂载工作区，使用相同命令构建 APK。
 

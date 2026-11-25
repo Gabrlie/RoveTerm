@@ -14,6 +14,27 @@ val tauriProperties = Properties().apply {
     }
 }
 
+val keystoreProperties = Properties().apply {
+    val propFile = rootProject.file("keystore.properties")
+    if (propFile.exists()) {
+        propFile.inputStream().use { load(it) }
+    }
+}
+
+fun signingProp(propKey: String, envKey: String): String? =
+    System.getenv(envKey)?.takeIf { it.isNotBlank() }
+        ?: keystoreProperties.getProperty(propKey)?.takeIf { it.isNotBlank() }
+
+val releaseKeystorePath = signingProp("storeFile", "ROVETERM_ANDROID_KEYSTORE_PATH")
+val releaseKeystorePassword = signingProp("storePassword", "ROVETERM_ANDROID_KEYSTORE_PASSWORD")
+val releaseKeyAlias = signingProp("keyAlias", "ROVETERM_ANDROID_KEY_ALIAS")
+val releaseKeyPassword = signingProp("keyPassword", "ROVETERM_ANDROID_KEY_PASSWORD")
+val hasReleaseSigning =
+    releaseKeystorePath != null &&
+        releaseKeystorePassword != null &&
+        releaseKeyAlias != null &&
+        releaseKeyPassword != null
+
 android {
     compileSdk = 37
     namespace = "dev.roveterm.app"
@@ -24,6 +45,16 @@ android {
         targetSdk = 37
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -39,6 +70,9 @@ android {
             }
         }
         getByName("release") {
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             optimization {
                enable = true
             }
