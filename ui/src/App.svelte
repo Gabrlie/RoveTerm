@@ -130,7 +130,7 @@
     }
   }
   /** The right panel's open page; `null` when closed. One page at a time, as in VSCode. */
-  let rightPage = $state<RightPage | null>(storedPage('ui.panel.rightPage'));
+  let rightPage = $state<RightPage | null>(viewport.compact ? null : storedPage('ui.panel.rightPage'));
   const panelsSuspended = $derived(arePanelsSuspended(workspace.focusedPane?.target.kind));
   let suspendedTransfersOpen = $state(false);
   const effectiveRightPage = $derived.by((): RightPage | null => {
@@ -144,6 +144,7 @@
   /** The page `panel.right` reopens. */
   let lastRightPage: RightPage = storedPage('ui.panel.rightPage') ?? 'status';
   $effect(() => {
+    if (viewport.compact) return;
     try {
       localStorage.setItem('ui.panel.rightPage', rightPage ?? '');
     } catch {
@@ -210,7 +211,7 @@
     const pane = workspace.focusedPane;
     return !!pane && remoteSourceOf(pane.target) !== null;
   });
-  let bottomOpen = $state(stored('ui.panel.bottom', false));
+  let bottomOpen = $state(viewport.compact ? false : stored('ui.panel.bottom', false));
   const effectiveBottomOpen = $derived(bottomOpen && !panelsSuspended
     && (!viewport.compact || (showingMobileTerminal && effectiveRightPage === null)));
   const terminalImmersion = $derived(showingMobileTerminal && !effectiveRightPage && !effectiveBottomOpen);
@@ -237,7 +238,9 @@
   $effect(() => {
     if (paletteOpen) return pushBackHandler(() => (paletteOpen = false));
   });
-  $effect(() => store('ui.panel.bottom', bottomOpen));
+  $effect(() => {
+    if (!viewport.compact) store('ui.panel.bottom', bottomOpen);
+  });
   let bottomMounted = $state(false);
   $effect(() => {
     if (effectiveBottomOpen) bottomMounted = true;
@@ -321,6 +324,11 @@
     const focused = workspace.focusedPane?.id === paneId;
     workspace.closePane(paneId);
     if (focused) showMobileHosts();
+  }
+
+  function resumeMobileTerminal(paneId: PaneId): void {
+    prepareMobilePane();
+    workspace.reveal(paneId);
   }
 
   /** Shows the fleet lead's tab; sends `text` to it when given. */
@@ -754,13 +762,15 @@
   });
 
   onMount(() => {
-    workspaceLoad()
-      .then((stored) => {
-        const snapshot = parseSnapshot(stored);
-        if (snapshot) workspace.restore(snapshot);
-      })
-      .catch((error: unknown) => console.warn('workspace restore unavailable', error))
-      .finally(() => (restored = true));
+    if (!viewport.compact) {
+      workspaceLoad()
+        .then((stored) => {
+          const snapshot = parseSnapshot(stored);
+          if (snapshot) workspace.restore(snapshot);
+        })
+        .catch((error: unknown) => console.warn('workspace restore unavailable', error))
+        .finally(() => (restored = true));
+    }
     vault.init().catch((error: unknown) => console.warn('vault state unavailable', error));
     hosts.refresh().catch((error: unknown) => showNotice(errorText(error), 'error'));
     keys.refresh().catch((error: unknown) => console.warn('key library unavailable', error));
@@ -840,7 +850,7 @@
                 onedit={(host) => (editing = host)}
                 onquick={() => (quickOpen = true)}
                 onfleet={() => openFleet()}
-                onresume={(paneId) => workspace.reveal(paneId)}
+                onresume={resumeMobileTerminal}
                 ondisconnect={disconnectMobileTerminal}
                 onnotice={(message) => showNotice(message, 'error')}
               />

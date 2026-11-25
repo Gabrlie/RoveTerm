@@ -277,8 +277,8 @@
     toolsBadge={hostAiWaiting}
     onback={returnHome}
     ondisconnect={disconnect}
-    onpillclick={pane.target.kind !== 'local' && pane.sessionId ? onstatus : undefined}
-    ontools={() => (toolsOpen = true)}
+    onpillclick={pane.target.kind !== 'local' && pane.sessionId && onstatus ? () => { view?.dismissKeyboard(); onstatus(); } : undefined}
+    ontools={() => { view?.dismissKeyboard(); toolsOpen = true; }}
     ontogglekeyboard={toggleKeyboard}
   />
 {/snippet}
