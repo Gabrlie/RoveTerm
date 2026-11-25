@@ -21,6 +21,7 @@
     type TermSize,
   } from '../ipc';
   import { errorText, t } from '../i18n';
+  import { viewport } from '../layout/viewport.svelte';
   import { currentTheme } from './theme';
   import { formatStep } from './connectLog';
   import { isAppShortcut } from '../actions';
@@ -62,6 +63,8 @@
   let sessionId: SessionId | undefined;
   let observer: ResizeObserver | undefined;
   let frame = 0;
+  let keepPromptVisible = false;
+  let lastImeBottom = viewport.imeBottom;
   let destroyed = false;
   /** Connection steps are on screen; the first terminal output replaces them. */
   let showingLog = false;
@@ -108,6 +111,17 @@
 
   export function isFocused(): boolean {
     return !!container?.contains(document.activeElement);
+  }
+
+  export function summonKeyboard(): void {
+    if (!term) return;
+    // Android can dismiss the IME while xterm's textarea keeps focus.
+    if (!viewport.keyboardOpen && isFocused()) term.blur();
+    term.focus();
+  }
+
+  export function dismissKeyboard(): void {
+    term?.blur();
   }
 
   /** Sends an already encoded key or sequence. Enter reconnects an ended session. */
@@ -268,7 +282,7 @@
       savePinch(previous);
     } else if (previous?.kind === 'single' && !previous.scrolling) {
       const touch = Array.from(event.changedTouches).find((touch) => touch.identifier === previous.id);
-      if (touch && !exceededTouchSlop(previous.x, previous.y, touch.clientX, touch.clientY)) focus();
+      if (touch && !exceededTouchSlop(previous.x, previous.y, touch.clientX, touch.clientY)) summonKeyboard();
     }
     // A remaining pinch finger cannot become a tap, long press or scroll.
     gesture = touches.length ? { kind: 'blocked' } : undefined;
@@ -337,7 +351,11 @@
 
   function scheduleRefit(): void {
     cancelAnimationFrame(frame);
-    frame = requestAnimationFrame(refresh);
+    frame = requestAnimationFrame(() => {
+      refresh();
+      if (keepPromptVisible && active) term?.scrollToBottom();
+      keepPromptVisible = false;
+    });
   }
 
   /**
@@ -499,6 +517,16 @@
       scheduleRefit();
       if (!coarse) term?.focus();
     }
+  });
+
+  $effect(() => {
+    const imeBottom = viewport.imeBottom;
+    if (imeBottom === lastImeBottom) return;
+    lastImeBottom = imeBottom;
+    if (!active || !term) return;
+    const { viewportY, baseY } = term.buffer.active;
+    keepPromptVisible = viewportY >= baseY;
+    scheduleRefit();
   });
 
   onDestroy(() => {

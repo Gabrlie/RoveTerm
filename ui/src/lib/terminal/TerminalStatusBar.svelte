@@ -183,10 +183,13 @@
   }
   @media (max-width: 767px) {
     .status-bar {
+      flex-basis: 22px;
+      min-height: 22px;
       min-width: 0;
       overflow-x: auto;
       scrollbar-width: none;
       touch-action: pan-x;
+      background: var(--bar-term-bg);
     }
     .metric,
     .path-badge {

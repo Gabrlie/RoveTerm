@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import {
   addKeyBarItem, applyModifiers, builtinKeyMeta, BUILTIN_KEY_CATALOG, consumeModifier,
   cycleModifier, decodeCustomSequence, DEFAULT_KEYBAR_LAYOUT, encodeKeyItem, MAX_KEYBAR_ROW_ITEMS,
-  moveKeyBarItem, moveKeyBarItemAcrossRows, parseKeyBarLayout, removeKeyBarItem, serializeKeyBarLayout,
+  migrateKeyBarV1, moveKeyBarItem, moveKeyBarItemAcrossRows, parseKeyBarLayout, removeKeyBarItem, serializeKeyBarLayout,
   type BuiltinKeyId, type KeyBarItem, type KeyBarLayout,
 } from './keybar.ts';
 
@@ -100,11 +100,12 @@ test('symbols and decoded custom keys apply modifiers once', () => {
 
 test('the catalog and default rows include the expected labels and repeatable keys', () => {
   assert.deepEqual(DEFAULT_KEYBAR_LAYOUT.primary.map((item) => item.id),
-    ['esc', 'tab', 'ctrl', 'alt', 'left', 'down', 'up', 'right', 'paste', 'snippets', 'toggleExtra', 'keyboard']);
+    ['esc', 'tab', 'shiftTab', 'ctrl', 'alt', 'left', 'down', 'up', 'right', 'paste', 'snippets', 'keyboard']);
   assert.deepEqual(DEFAULT_KEYBAR_LAYOUT.secondary.map((item) => item.id),
-    ['home', 'end', 'pgUp', 'pgDn', 'slash', 'dash', 'pipe', 'tilde', 'underscore', 'colon', 'star', 'amp', 'backslash', 'customize']);
-  assert.equal(DEFAULT_KEYBAR_LAYOUT.expanded, false);
+    ['ctrlC', 'ctrlD', 'ctrlZ', 'home', 'end', 'pgUp', 'pgDn', 'slash', 'dash', 'pipe', 'tilde', 'underscore', 'colon', 'star', 'amp', 'backslash']);
+  assert.equal(DEFAULT_KEYBAR_LAYOUT.expanded, true);
   assert.equal(new Set(BUILTIN_KEY_CATALOG.map((key) => key.id)).size, BUILTIN_KEY_CATALOG.length);
+  assert.equal(BUILTIN_KEY_CATALOG.some(({ id }) => id === 'toggleExtra' || id === 'customize'), false);
   assert.deepEqual(BUILTIN_KEY_CATALOG.filter((key) => key.repeatable).map((key) => key.id),
     ['left', 'down', 'up', 'right', 'pgUp', 'pgDn', 'backspace', 'delete']);
   assert.equal(builtinKeyMeta('f7').label, 'F7');
@@ -112,10 +113,12 @@ test('the catalog and default rows include the expected labels and repeatable ke
 });
 
 test('layout persistence round-trips and preserves custom sequence whitespace', () => {
-  const layout = { primary: [builtin('ctrl'), custom('sudo ')], secondary: [custom(' ')], expanded: true };
-  const loaded = parseKeyBarLayout(serializeKeyBarLayout(layout));
-  assert.deepEqual(loaded, layout);
-  assert.notEqual(loaded.primary[0], layout.primary[0]);
+  for (const expanded of [true, false]) {
+    const layout = { primary: [builtin('ctrl'), custom('sudo ')], secondary: [custom(' ')], expanded };
+    const loaded = parseKeyBarLayout(serializeKeyBarLayout(layout));
+    assert.deepEqual(loaded, layout);
+    assert.notEqual(loaded.primary[0], layout.primary[0]);
+  }
 });
 
 test('layout parsing filters invalid items, caps rows and defaults invalid primary layouts', () => {
@@ -129,13 +132,39 @@ test('layout parsing filters invalid items, caps rows and defaults invalid prima
   });
   assert.deepEqual(layout.primary, [builtin('tab'), custom('ls ')]);
   assert.equal(layout.secondary.length, MAX_KEYBAR_ROW_ITEMS);
-  assert.equal(layout.expanded, false);
-  assert.deepEqual(parseKeyBarLayout({ primary: [builtin('tab')], secondary: 'bad' }).secondary, []);
+  assert.equal(layout.expanded, true);
+  assert.deepEqual(parseKeyBarLayout({ primary: [builtin('tab')], secondary: 'bad' }), {
+    primary: [builtin('tab')], secondary: [], expanded: true,
+  });
   for (const value of [null, false, '[broken', {}, { primary: invalid, secondary: [builtin('ctrl')], expanded: true }]) {
     const fallback = parseKeyBarLayout(value);
     assert.deepEqual(fallback, DEFAULT_KEYBAR_LAYOUT);
     assert.notEqual(fallback.primary, DEFAULT_KEYBAR_LAYOUT.primary);
   }
+});
+
+test('v1 migration expands both rows and removes pinned actions while preserving key order', () => {
+  const userKey = { ...custom('sudo '), id: 'customize' };
+  const layout = {
+    primary: [builtin('esc'), builtin('toggleExtra'), userKey, builtin('customize'), builtin('keyboard')],
+    secondary: [builtin('customize'), custom('你好\\r'), builtin('toggleExtra'), builtin('home')],
+    expanded: false,
+  };
+  assert.deepEqual(migrateKeyBarV1(serializeKeyBarLayout(layout)), {
+    primary: [builtin('esc'), userKey, builtin('keyboard')],
+    secondary: [custom('你好\\r'), builtin('home')],
+    expanded: true,
+  });
+});
+
+test('v1 migration falls back to default keys when necessary and keeps a valid secondary row', () => {
+  const fallback = migrateKeyBarV1('[broken');
+  assert.deepEqual(fallback, DEFAULT_KEYBAR_LAYOUT);
+  assert.notEqual(fallback.primary[0], DEFAULT_KEYBAR_LAYOUT.primary[0]);
+  const layout = migrateKeyBarV1({ primary: [builtin('toggleExtra')], secondary: [custom('ls '), builtin('customize')] });
+  assert.deepEqual(layout.primary, DEFAULT_KEYBAR_LAYOUT.primary);
+  assert.deepEqual(layout.secondary, [custom('ls ')]);
+  assert.deepEqual(parseKeyBarLayout(serializeKeyBarLayout(layout)), layout);
 });
 
 test('immutable editors reorder, move across rows, append and remove', () => {

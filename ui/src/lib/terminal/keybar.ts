@@ -138,13 +138,17 @@ export function builtinKeyMeta(id: BuiltinKeyId): BuiltinKeyMeta {
   return { id, label, category, repeatable };
 }
 
+export function isPinnedKey(id: BuiltinKeyId): boolean {
+  return id === 'toggleExtra' || id === 'customize';
+}
+
 export const BUILTIN_KEY_CATALOG: readonly BuiltinKeyMeta[] =
-  (Object.keys(BUILTIN_KEYS) as BuiltinKeyId[]).map(builtinKeyMeta);
+  (Object.keys(BUILTIN_KEYS) as BuiltinKeyId[]).filter((id) => !isPinnedKey(id)).map(builtinKeyMeta);
 
 export const DEFAULT_KEYBAR_LAYOUT: KeyBarLayout = {
-  primary: builtinRow('esc', 'tab', 'ctrl', 'alt', 'left', 'down', 'up', 'right', 'paste', 'snippets', 'toggleExtra', 'keyboard'),
-  secondary: builtinRow('home', 'end', 'pgUp', 'pgDn', 'slash', 'dash', 'pipe', 'tilde', 'underscore', 'colon', 'star', 'amp', 'backslash', 'customize'),
-  expanded: false,
+  primary: builtinRow('esc', 'tab', 'shiftTab', 'ctrl', 'alt', 'left', 'down', 'up', 'right', 'paste', 'snippets', 'keyboard'),
+  secondary: builtinRow('ctrlC', 'ctrlD', 'ctrlZ', 'home', 'end', 'pgUp', 'pgDn', 'slash', 'dash', 'pipe', 'tilde', 'underscore', 'colon', 'star', 'amp', 'backslash'),
+  expanded: true,
 };
 
 function builtinRow(...ids: BuiltinKeyId[]): KeyBarItem[] {
@@ -219,7 +223,22 @@ export function parseKeyBarLayout(raw: unknown): KeyBarLayout {
   const layout = raw as Partial<Record<keyof KeyBarLayout, unknown>>;
   const primary = parseRow(layout.primary);
   if (!primary.length) return structuredClone(DEFAULT_KEYBAR_LAYOUT);
-  return { primary, secondary: parseRow(layout.secondary), expanded: layout.expanded === true };
+  return {
+    primary,
+    secondary: parseRow(layout.secondary),
+    expanded: typeof layout.expanded === 'boolean' ? layout.expanded : DEFAULT_KEYBAR_LAYOUT.expanded,
+  };
+}
+
+export function migrateKeyBarV1(rawV1: unknown): KeyBarLayout {
+  const layout = parseKeyBarLayout(rawV1);
+  const isRowKey = (item: KeyBarItem) => item.kind === 'custom' || !isPinnedKey(item.id);
+  const primary = layout.primary.filter(isRowKey);
+  return {
+    primary: primary.length ? primary : structuredClone(DEFAULT_KEYBAR_LAYOUT.primary),
+    secondary: layout.secondary.filter(isRowKey),
+    expanded: true,
+  };
 }
 
 export function serializeKeyBarLayout(layout: KeyBarLayout): string {

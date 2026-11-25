@@ -67,7 +67,7 @@
   }
 </script>
 
-<Dialog title={t('keybar.title')} width={560} {onclose}>
+<Dialog title={t('keybar.title')} width={560} presentation="page" {onclose}>
   <div class="row-picker" role="group" aria-label={t('keybar.title')}>
     {#each rowOrder as key}
       <button
