@@ -9,7 +9,13 @@
   import { syncRevealSecret, type SyncTarget } from '../../ipc';
   import { isMobile } from '../../platform';
   import { draft, sync } from '../../sync/sync.svelte';
-  import { splitWebdavUrl, webdavUrl } from '../../sync/webdav';
+  import {
+    MASKED_PASSWORD_PLACEHOLDER,
+    shouldClearHiddenWebdavPassword,
+    splitWebdavUrl,
+    webdavPasswordPlaceholder,
+    webdavUrl,
+  } from '../../sync/webdav';
   import { notify } from '../../ui/toast.svelte';
 
   const status = $derived(sync.status);
@@ -20,6 +26,8 @@
   let revealingPassword = $state(false);
   let loadedSavedPassword = $state(false);
   let revealedSummaryPassword = $state<string | null>(null);
+  let draftPasswordRevision = 0;
+  const hasSavedWebdavPassword = $derived(editing && status?.target?.kind === 'webdav' && status.connected);
   const editingMobileFolder = $derived(isMobile && editing && draft.storage === 'folder');
 
   function reportError(message: string): void {
@@ -32,6 +40,7 @@
   }
 
   function clearRevealedPasswords(clearDraftSecret = false): void {
+    draftPasswordRevision += 1;
     revealedSummaryPassword = null;
     showStoragePassword = false;
     if (clearDraftSecret || loadedSavedPassword) {
@@ -90,21 +99,27 @@
   async function toggleDraftPassword(): Promise<void> {
     if (showStoragePassword) {
       showStoragePassword = false;
+      if (shouldClearHiddenWebdavPassword(loadedSavedPassword)) {
+        draft.storagePassword = '';
+        loadedSavedPassword = false;
+      }
       return;
     }
-    if (editing && status?.target?.kind === 'webdav' && status.connected && !draft.storagePassword && !loadedSavedPassword) {
+    if (hasSavedWebdavPassword && !draft.storagePassword && !loadedSavedPassword) {
       if (revealingPassword) return;
       clearError();
       revealingPassword = true;
+      const revision = draftPasswordRevision;
       try {
         const saved = await syncRevealSecret();
+        if (revision !== draftPasswordRevision || !hasSavedWebdavPassword || draft.storage !== 'webdav') return;
         if (saved !== null) {
           draft.storagePassword = saved;
           loadedSavedPassword = true;
         }
         showStoragePassword = true;
       } catch (error) {
-        reportError(errorText(error));
+        if (revision === draftPasswordRevision) reportError(errorText(error));
       } finally {
         revealingPassword = false;
       }
@@ -114,6 +129,7 @@
   }
 
   function onStoragePasswordInput(): void {
+    draftPasswordRevision += 1;
     clearError();
     if (loadedSavedPassword) loadedSavedPassword = false;
   }
@@ -236,7 +252,7 @@
           {#if revealedSummaryPassword !== null}
             <code class="secret selectable">{revealedSummaryPassword}</code>
           {:else}
-            <span class="secret masked" aria-hidden="true">••••••••</span>
+            <span class="secret masked" aria-hidden="true">{MASKED_PASSWORD_PLACEHOLDER}</span>
           {/if}
           <IconButton
             icon={revealedSummaryPassword !== null ? 'eyeOff' : 'eye'}
@@ -358,9 +374,18 @@
         <input class="field" bind:value={draft.username} oninput={clearError} spellcheck="false" autocomplete="off" aria-label={t('sync.username')} />
       </div>
       <div class="form-row">
-        <span class="form-label">{t('sync.storagePassword')}<small>{editing && status?.target?.kind === 'webdav' && status.connected ? t('sync.storagePasswordKeepHint') : t('sync.storagePasswordHint')}</small></span>
+        <span class="form-label">{t('sync.storagePassword')}<small>{t(hasSavedWebdavPassword ? 'sync.storagePasswordKeepHint' : 'sync.storagePasswordHint')}</small></span>
         <div class="secret-input">
-          <input class="field" type={showStoragePassword ? 'text' : 'password'} bind:value={draft.storagePassword} oninput={onStoragePasswordInput} autocomplete="off" aria-label={t('sync.storagePassword')} />
+          <input
+            class="field"
+            class:saved-mask={hasSavedWebdavPassword && !draft.storagePassword}
+            type={showStoragePassword ? 'text' : 'password'}
+            bind:value={draft.storagePassword}
+            oninput={onStoragePasswordInput}
+            placeholder={webdavPasswordPlaceholder({ editing, isWebdav: status?.target?.kind === 'webdav', connected: !!status?.connected })}
+            autocomplete="off"
+            aria-label={t('sync.storagePassword')}
+          />
           <IconButton
             icon={showStoragePassword ? 'eyeOff' : 'eye'}
             label={t(showStoragePassword ? 'sync.hidePassword' : 'sync.showPassword')}
@@ -429,6 +454,11 @@
   .secret.masked {
     color: var(--fg-muted);
     letter-spacing: 0.08em;
+  }
+  .saved-mask::placeholder {
+    color: var(--fg-muted);
+    letter-spacing: 0.08em;
+    opacity: 1;
   }
   .path-input {
     font-family: var(--font-mono);

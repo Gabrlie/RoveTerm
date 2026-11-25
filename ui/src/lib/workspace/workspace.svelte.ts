@@ -7,6 +7,7 @@ import { terminals } from '../terminal/registry';
 import { editors } from '../files/editors.svelte';
 import { baseName } from '../files/format';
 import { cycleFlatTarget, flatTabAt, flattenTabs, type FlatTab } from './flatTabs';
+import { findReusableTerminalPane, isTerminalTarget, panesToCloseForSingleTerminal } from './singleSession';
 import { SNAPSHOT_VERSION, snapshotGroup, type Snapshot, type SnapshotNode } from './snapshot';
 import { computeLayout, pane, paneIds, removePane, setRatio, splitPane, type LayoutNode, type PaneId, type Path, type SplitDir } from '../layout/layout';
 
@@ -127,6 +128,7 @@ class Workspace {
   groups = $state<Record<GroupId, Group>>({ 'group-0': { id: 'group-0', tabs: [], active: null } });
   panes = $state<Record<PaneId, PaneState>>({});
   focusedGroupId = $state<GroupId>('group-0');
+  private singleTerminalOpen = Promise.resolve(true);
 
   /** Group ids in reading order. */
   get groupIds(): GroupId[] {
@@ -198,6 +200,38 @@ class Workspace {
     const group = this.focusedGroup;
     if (!group) return;
     this.insertTab(group, this.createPane(target, password, remember));
+  }
+
+  /** Reuses a matching terminal or replaces the current session after resolving its drafts. */
+  async openSingleTerminal(target: PaneTarget, password: string | null = null, remember = false): Promise<boolean> {
+    if (!isTerminalTarget(target)) return false;
+    const open = async (): Promise<boolean> => {
+      const panes = Object.values(this.panes);
+      const reusable = findReusableTerminalPane(panes, target);
+      if (reusable) {
+        this.reveal(reusable.id);
+        return true;
+      }
+
+      const closing = panesToCloseForSingleTerminal(panes, target);
+      if (!await this.closeDraftsFor(closing)) return false;
+      for (const id of closing) this.closePane(id);
+      if (!this.focusedGroup) {
+        let groupId = this.groupIds.find((id) => this.groups[id]);
+        if (!groupId) {
+          groupId = this.createGroup().id;
+          this.root = pane(groupId);
+        }
+        this.focusedGroupId = groupId;
+      }
+      this.openTab(target, password, remember);
+      return true;
+    };
+
+    // Serialize switches across the draft confirmation and tab replacement.
+    const opening = this.singleTerminalOpen.then(open, open);
+    this.singleTerminalOpen = opening;
+    return opening;
   }
 
   /**

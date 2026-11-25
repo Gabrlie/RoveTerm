@@ -22,6 +22,7 @@ import command from 'lucide-static/icons/command.svg?raw';
 import more from 'lucide-static/icons/ellipsis.svg?raw';
 import chevron from 'lucide-static/icons/chevron-right.svg?raw';
 import chevronDown from 'lucide-static/icons/chevron-down.svg?raw';
+import chevronUp from 'lucide-static/icons/chevron-up.svg?raw';
 import chevronsUpDown from 'lucide-static/icons/chevrons-up-down.svg?raw';
 import check from 'lucide-static/icons/check.svg?raw';
 import folder from 'lucide-static/icons/folder.svg?raw';
@@ -62,6 +63,8 @@ import maximize from 'lucide-static/icons/square.svg?raw';
 import restore from 'lucide-static/icons/copy.svg?raw';
 import winClose from 'lucide-static/icons/x.svg?raw';
 import network from 'lucide-static/icons/network.svg?raw';
+import wrench from 'lucide-static/icons/wrench.svg?raw';
+import sparkles from 'lucide-static/icons/sparkles.svg?raw';
 
 import history from 'lucide-static/icons/history.svg?raw';
 import bot from 'lucide-static/icons/bot-message-square.svg?raw';
@@ -132,6 +135,7 @@ export const icons = {
   more,
   chevron,
   chevronDown,
+  chevronUp,
   chevronsUpDown,
   check,
   folder,
@@ -172,6 +176,8 @@ export const icons = {
   restore,
   winClose,
   network,
+  wrench,
+  sparkles,
 } as const;
 
 export type IconName = keyof typeof icons;

@@ -1,25 +1,15 @@
 <script lang="ts" module>
-  export type SettingsSection = 'appearance' | 'terminal' | 'files' | 'status' | 'ai' | 'sync' | 'security' | 'tailscale' | 'shortcuts' | 'logs' | 'about';
+  export type { SettingsSection } from './sections';
 </script>
 
 <script lang="ts">
   // Preference changes apply and are stored immediately.
   import Dialog from '../ui/Dialog.svelte';
   import Icon from '../ui/Icon.svelte';
-  import type { IconName } from '../ui/icons';
-  import { t, type MessageKey } from '../i18n';
+  import { t } from '../i18n';
   import { settingsError } from './edit.svelte';
-  import AppearanceSettings from './sections/AppearanceSettings.svelte';
-  import TerminalSettings from './sections/TerminalSettings.svelte';
-  import FilesSettings from './sections/FilesSettings.svelte';
-  import StatusSettings from './sections/StatusSettings.svelte';
-  import ShortcutsSettings from './sections/ShortcutsSettings.svelte';
-  import SyncSettings from './sections/SyncSettings.svelte';
-  import AiSettings from './sections/AiSettings.svelte';
-  import LogsSettings from './sections/LogsSettings.svelte';
-  import AboutSettings from './sections/AboutSettings.svelte';
-  import TailscaleSettings from './sections/TailscaleSettings.svelte';
-  import SecuritySettings from './sections/SecuritySettings.svelte';
+  import { settingsSections, type SettingsSection } from './sections';
+  import SettingsSectionContent from './SettingsSectionContent.svelte';
   import { capabilities, isMobile } from '../platform';
   import { viewport } from '../layout/viewport.svelte';
   import { pushBackHandler } from '../ui/backStack';
@@ -27,27 +17,14 @@
 
   let { initial, onclose, onopentailscale }: { initial?: SettingsSection; onclose: () => void; onopentailscale?: () => void } = $props();
 
-  type Section = SettingsSection;
-
-  const SECTIONS: { id: Section; label: MessageKey; icon: IconName; tint: string }[] = [
-    { id: 'appearance', label: 'settings.section.appearance', icon: 'palette', tint: 'blue' },
-    { id: 'terminal', label: 'settings.section.terminal', icon: 'terminal', tint: 'graphite' },
-    { id: 'files', label: 'settings.section.files', icon: 'folder', tint: 'teal' },
-    { id: 'status', label: 'settings.section.status', icon: 'pulse', tint: 'green' },
-    { id: 'ai', label: 'settings.section.ai', icon: 'command', tint: 'pink' },
-    { id: 'sync', label: 'settings.section.sync', icon: 'cloud', tint: 'teal' },
-    ...(capabilities.biometricVault ? [{ id: 'security', label: 'settings.section.security', icon: 'lock', tint: 'green' } as const] : []),
-    ...(!isMobile ? [{ id: 'tailscale' as const, label: 'settings.section.tailscale' as const, icon: 'network' as const, tint: 'blue' }] : []),
-    { id: 'shortcuts', label: 'settings.section.shortcuts', icon: 'keyboard', tint: 'orange' },
-    { id: 'logs', label: 'settings.section.logs', icon: 'snippets', tint: 'graphite' },
-    { id: 'about', label: 'settings.section.about', icon: 'info', tint: 'purple' },
-  ];
+  const entries = settingsSections({ isMobile, biometricVault: capabilities.biometricVault, includeShortcuts: true });
 
   // svelte-ignore state_referenced_locally
-  let section = $state<Section>(initial ?? 'appearance');
+  let section = $state<SettingsSection>(initial ?? 'appearance');
   // svelte-ignore state_referenced_locally
   let compactDetail = $state(initialCompactDetail(initial !== undefined));
   const layoutMode = $derived(masterDetailView(viewport.compact, compactDetail));
+  const activeSection = $derived(entries.find((entry) => entry.id === section));
 
   $effect(() => {
     if (layoutMode === 'detail') return pushBackHandler(() => { compactDetail = false; });
@@ -60,7 +37,7 @@
   <div class="settings" class:compact={viewport.compact}>
     {#if layoutMode !== 'detail'}
       <nav aria-label={t('settings.title')}>
-        {#each SECTIONS as entry (entry.id)}
+        {#each entries as entry (entry.id)}
           {@const active = layoutMode === 'both' && section === entry.id}
           <button type="button" class:active aria-current={active ? 'page' : undefined} onclick={() => {
             section = entry.id;
@@ -84,33 +61,15 @@
             </button>
           </div>
         {/if}
-        <h2>{t(SECTIONS.find((entry) => entry.id === section)?.label ?? 'settings.title')}</h2>
-        {#if section === 'appearance'}
-          <AppearanceSettings />
-        {:else if section === 'terminal'}
-          <TerminalSettings />
-        {:else if section === 'files'}
-          <FilesSettings />
-        {:else if section === 'status'}
-          <StatusSettings />
-        {:else if section === 'ai'}
-          <AiSettings />
-        {:else if section === 'sync'}
-          <SyncSettings />
-        {:else if section === 'security' && capabilities.biometricVault}
-          <SecuritySettings />
-        {:else if section === 'tailscale' && !isMobile}
-          <TailscaleSettings {onopentailscale} />
-        {:else if section === 'shortcuts'}
-          <ShortcutsSettings />
-        {:else if section === 'logs'}
-          <LogsSettings />
-        {:else}
-          <AboutSettings onopenlogs={() => {
+        <h2>{t(activeSection?.label ?? 'settings.title')}</h2>
+        <SettingsSectionContent
+          section={activeSection?.id ?? 'about'}
+          {onopentailscale}
+          onopenlogs={() => {
             section = 'logs';
             compactDetail = true;
-          }} />
-        {/if}
+          }}
+        />
       </div>
     {/if}
   </div>

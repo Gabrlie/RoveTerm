@@ -1,5 +1,19 @@
 // WebDAV addresses as the sync settings build them.
 
+export const MASKED_PASSWORD_PLACEHOLDER = '••••••••';
+
+export function webdavPasswordPlaceholder({ editing, isWebdav, connected }: {
+  editing: boolean;
+  isWebdav: boolean;
+  connected: boolean;
+}): string {
+  return editing && isWebdav && connected ? MASKED_PASSWORD_PLACEHOLDER : '';
+}
+
+export function shouldClearHiddenWebdavPassword(loadedSavedPassword: boolean): boolean {
+  return loadedSavedPassword;
+}
+
 /** The WebDAV directory URL for a server address and a folder name on it. */
 export function webdavUrl(server: string, folder: string): string {
   const base = server.trim().replace(/\/+$/, '');

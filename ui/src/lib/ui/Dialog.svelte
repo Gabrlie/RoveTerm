@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, type Snippet } from 'svelte';
+  import { t } from '../i18n';
   import { viewport } from '../layout/viewport.svelte';
+  import IconButton from './IconButton.svelte';
   import { handleBack, pushBackHandler } from './backStack';
 
   interface Props {
@@ -10,16 +12,18 @@
     actions?: Snippet;
     width?: number;
     autofocus?: boolean;
+    presentation?: 'sheet' | 'page';
   }
 
-  let { title, onclose, children, actions, width = 440, autofocus }: Props = $props();
+  let { title, onclose, children, actions, width = 440, autofocus, presentation = 'sheet' }: Props = $props();
+  const compactPage = $derived(viewport.compact && presentation === 'page');
   let panel: HTMLDivElement;
 
   onMount(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const disposeBack = pushBackHandler(() => onclose());
     if (autofocus ?? !viewport.coarse) {
-      const first = panel.querySelector<HTMLElement>('input, select, textarea, button:not(.close)');
+      const first = panel.querySelector<HTMLElement>('input, select, textarea, button:not(.close, :scope > header button)');
       first?.focus();
     } else {
       panel.focus();
@@ -43,9 +47,12 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="backdrop" class:compact={viewport.compact} role="presentation" use:portal>
+<div class="backdrop" class:compact={viewport.compact} class:page={compactPage} role="presentation" use:portal>
   <div class="dialog" role="dialog" aria-modal="true" aria-label={title} tabindex="-1" style:--dialog-width="{width}px" bind:this={panel}>
-    <header>{title}</header>
+    <header>
+      {#if compactPage}<IconButton icon="back" label={t('mobile.back')} onclick={onclose} />{/if}
+      {title}
+    </header>
     <div class="body">{@render children()}</div>
     {#if actions}
       <footer>{@render actions()}</footer>
@@ -115,6 +122,43 @@
     justify-content: flex-end;
     gap: var(--space-2);
     padding: var(--space-4) var(--space-5) var(--space-5);
+  }
+  .backdrop.page {
+    inset: 0;
+    padding: 0;
+    background: var(--surface);
+  }
+  .page .dialog {
+    width: 100%;
+    height: 100%;
+    max-height: 100dvh;
+    border-radius: 0;
+    box-shadow: none;
+    background: var(--surface);
+  }
+  .page header {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: calc(var(--safe-top) + 48px);
+    padding: calc(var(--safe-top) + var(--space-2)) var(--space-3) var(--space-2);
+    background: var(--material-bar);
+    box-shadow: inset 0 -0.5px 0 var(--separator);
+  }
+  .page .body {
+    flex: 1;
+    min-height: 0;
+    padding: var(--space-3) var(--space-4);
+  }
+  .page .body:last-child {
+    padding-bottom: calc(max(var(--safe-bottom), var(--ime-bottom)) + var(--space-3));
+  }
+  .page footer {
+    flex: none;
+    padding: var(--space-3) var(--space-4) calc(max(var(--safe-bottom), var(--ime-bottom)) + var(--space-3));
+    background: var(--material-bar);
+    box-shadow: inset 0 0.5px 0 var(--separator);
   }
   .dialog :global(label) {
     display: flex;
