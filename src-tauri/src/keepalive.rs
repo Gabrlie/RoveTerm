@@ -8,11 +8,16 @@ pub struct KeepAliveCounts {
     pub forwards: u32,
     pub transfers: u32,
     pub ops_tasks: u32,
+    pub ops_waiting: u32,
 }
 
 impl KeepAliveCounts {
     pub fn is_active(self) -> bool {
-        self.sessions > 0 || self.forwards > 0 || self.transfers > 0 || self.ops_tasks > 0
+        self.sessions > 0
+            || self.forwards > 0
+            || self.transfers > 0
+            || self.ops_tasks > 0
+            || self.ops_waiting > 0
     }
 
     pub fn to_update(self, zh: bool) -> KeepAliveUpdate {
@@ -20,9 +25,8 @@ impl KeepAliveCounts {
             (self.sessions, "session", "sessions", "个终端"),
             (self.forwards, "forward", "forwards", "个转发"),
             (self.transfers, "transfer", "transfers", "个传输"),
-            (self.ops_tasks, "ops task", "ops tasks", "个运维任务"),
         ];
-        let body = counters
+        let mut parts: Vec<String> = counters
             .into_iter()
             .filter(|(count, ..)| *count > 0)
             .map(|(count, singular, plural, chinese)| {
@@ -33,8 +37,22 @@ impl KeepAliveCounts {
                 };
                 format!("{count} {label}")
             })
-            .collect::<Vec<_>>()
-            .join(" · ");
+            .collect();
+        if self.ops_tasks > 0 {
+            let count = self.ops_tasks;
+            let waiting = self.ops_waiting.min(count);
+            let label = match (zh, count) {
+                (true, _) => "个运维任务",
+                (false, 1) => "ops task",
+                (false, _) => "ops tasks",
+            };
+            let part = match (zh, waiting) {
+                (_, 0) => format!("{count} {label}"),
+                (true, _) => format!("{count} {label}（{waiting} 待审批）"),
+                (false, _) => format!("{count} {label} ({waiting} awaiting approval)"),
+            };
+            parts.push(part);
+        }
         KeepAliveUpdate {
             active: self.is_active(),
             sessions: self.sessions,
@@ -42,7 +60,7 @@ impl KeepAliveCounts {
             transfers: self.transfers,
             ops_tasks: self.ops_tasks,
             title: "RoveTerm".into(),
-            body,
+            body: parts.join(" · "),
             disconnect_label: if zh { "断开全部" } else { "Disconnect all" }.into(),
         }
     }
@@ -99,6 +117,7 @@ mod mobile {
                 u32::try_from(rows.count()).unwrap_or(u32::MAX)
             }
 
+            let ops = self.ops.list().unwrap_or_default();
             KeepAliveCounts {
                 sessions: count(
                     self.sessions
@@ -118,12 +137,10 @@ mod mobile {
                         .into_iter()
                         .filter(|t| !t.state.is_final()),
                 ),
-                ops_tasks: count(
-                    self.ops
-                        .list()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter(|t| active_ops_task(&t.state)),
+                ops_tasks: count(ops.iter().filter(|t| active_ops_task(&t.state))),
+                ops_waiting: count(
+                    ops.iter()
+                        .filter(|t| t.state == OpsTaskState::WaitingApproval),
                 ),
             }
         }
@@ -313,6 +330,10 @@ mod tests {
                 ops_tasks: 1,
                 ..empty
             },
+            KeepAliveCounts {
+                ops_waiting: 1,
+                ..empty
+            },
         ] {
             assert!(counts.is_active(), "{counts:?}");
         }
@@ -325,6 +346,7 @@ mod tests {
             forwards: 1,
             transfers: 1,
             ops_tasks: 1,
+            ops_waiting: 0,
         };
         assert_eq!(
             single.to_update(false),
@@ -344,6 +366,7 @@ mod tests {
             forwards: 3,
             transfers: 4,
             ops_tasks: 5,
+            ops_waiting: 0,
         };
         assert_eq!(
             plural.to_update(false).body,
@@ -358,6 +381,7 @@ mod tests {
             forwards: 2,
             transfers: 3,
             ops_tasks: 4,
+            ops_waiting: 0,
         };
         let zh = counts.to_update(true);
         assert_eq!(zh.title, "RoveTerm");
@@ -376,6 +400,70 @@ mod tests {
             assert!(!empty.active);
             assert!(empty.body.is_empty());
         }
+    }
+
+    #[test]
+    fn ops_copy_includes_the_waiting_count_in_both_languages() {
+        for (ops_tasks, ops_waiting, en, zh) in [
+            (
+                1,
+                1,
+                "1 ops task (1 awaiting approval)",
+                "1 个运维任务（1 待审批）",
+            ),
+            (
+                3,
+                2,
+                "3 ops tasks (2 awaiting approval)",
+                "3 个运维任务（2 待审批）",
+            ),
+        ] {
+            let counts = KeepAliveCounts {
+                ops_tasks,
+                ops_waiting,
+                ..KeepAliveCounts::default()
+            };
+            assert_eq!(counts.to_update(false).body, en);
+            assert_eq!(counts.to_update(true).body, zh);
+            assert_eq!(counts.to_update(false).ops_tasks, ops_tasks);
+        }
+    }
+
+    #[test]
+    fn ops_copy_clamps_the_waiting_count_to_the_task_count() {
+        let counts = KeepAliveCounts {
+            ops_tasks: 1,
+            ops_waiting: 3,
+            ..KeepAliveCounts::default()
+        };
+        assert_eq!(
+            counts.to_update(false).body,
+            "1 ops task (1 awaiting approval)"
+        );
+        assert_eq!(counts.to_update(true).body, "1 个运维任务（1 待审批）");
+        assert_eq!(counts.to_update(false).ops_tasks, 1);
+    }
+
+    #[test]
+    fn tracker_sends_an_update_when_a_task_starts_waiting_for_approval() {
+        let mut tracker = UpdateTracker::default();
+        let running = KeepAliveCounts {
+            ops_tasks: 1,
+            ..KeepAliveCounts::default()
+        };
+        let waiting = KeepAliveCounts {
+            ops_waiting: 1,
+            ..running
+        };
+        let mut bodies = Vec::new();
+        for counts in [running, waiting, waiting] {
+            tracker.send_if_changed(counts.to_update(false), |update| {
+                assert_eq!(update.ops_tasks, 1);
+                bodies.push(update.body.clone());
+                true
+            });
+        }
+        assert_eq!(bodies, ["1 ops task", "1 ops task (1 awaiting approval)"]);
     }
 
     #[test]

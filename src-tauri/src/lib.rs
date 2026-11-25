@@ -192,12 +192,12 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             });
         }
     });
-    let handle = app.handle().clone();
-    tauri::async_runtime::spawn(async move {
-        commands::external::restore(&handle).await;
-    });
     #[cfg(desktop)]
     {
+        let handle = app.handle().clone();
+        tauri::async_runtime::spawn(async move {
+            commands::external::restore(&handle).await;
+        });
         schedule::start(app.handle());
         commands::autostart::apply(app);
     }
@@ -236,8 +236,8 @@ pub(crate) async fn shutdown_async(app: &tauri::AppHandle) {
     state.transfers.cancel_all();
     state.mobile_files.sweep_all();
     state.forwards.stop_all();
-    // The config file names a port that is about to close.
     state.fs_sessions.clear();
+    #[cfg(desktop)]
     state.external.disable().await;
     if let Err(error) = state.ops.shutdown() {
         tracing::error!(%error, "operations shutdown failed");
@@ -266,6 +266,7 @@ fn shutdown(app: &tauri::AppHandle) {
 
 /// Runs the MCP bridge for an agent: connects stdin and stdout to the running app named by the
 /// environment. Returns the process exit code.
+#[cfg(desktop)]
 pub fn mcp_bridge() -> i32 {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -291,6 +292,12 @@ pub fn mcp_bridge() -> i32 {
             1
         }
     }
+}
+
+#[cfg(mobile)]
+pub fn mcp_bridge() -> i32 {
+    eprintln!("roveterm --mcp-bridge: external MCP access is not available on this platform");
+    1
 }
 
 /// Starts the Tauri application. Shared by the desktop binary and the mobile entry point.

@@ -6,25 +6,36 @@
 //! leave the vault. Each connection gets one conversation per host it touches, shown in that
 //! host's AI panel and ended when the connection closes.
 
+#[cfg(desktop)]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+#[cfg(desktop)]
 use std::sync::Arc;
+#[cfg(desktop)]
 use std::time::Duration;
 
+#[cfg(desktop)]
 use async_trait::async_trait;
+#[cfg(desktop)]
 use rove_ai::detect;
+#[cfg(desktop)]
 use rove_ai::mcp::{McpListener, McpTools};
+#[cfg(desktop)]
 use rove_ai::session::AiSession;
 use rove_ai::tools::ToolResult;
+#[cfg(desktop)]
 use rove_vault::HostId;
 use serde::Serialize;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Manager, State};
+use tauri::State;
+#[cfg(desktop)]
+use tauri::{AppHandle, Manager};
 
 use crate::error::CommandError;
 use crate::state::AppState;
 
 /// The host tools an outside agent may use; each takes the host by name or id.
+#[cfg(desktop)]
 const HOST_TOOLS: [&str; 7] = [
     "run_command",
     "read_file",
@@ -35,12 +46,15 @@ const HOST_TOOLS: [&str; 7] = [
     "update_notes",
 ];
 /// Longest an install command may take.
+#[cfg(desktop)]
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// The running server, while access is on.
+/// Configuration path and desktop server state for external access.
 pub struct ExternalAccess {
     config: PathBuf,
+    #[cfg(desktop)]
     changes: tokio::sync::Mutex<()>,
+    #[cfg(desktop)]
     task: std::sync::Mutex<
         Option<(
             tokio_util::sync::CancellationToken,
@@ -53,11 +67,14 @@ impl ExternalAccess {
     pub fn new(data_dir: &Path) -> Self {
         Self {
             config: data_dir.join("mcp.json"),
+            #[cfg(desktop)]
             changes: tokio::sync::Mutex::new(()),
+            #[cfg(desktop)]
             task: std::sync::Mutex::new(None),
         }
     }
 
+    #[cfg(desktop)]
     fn running(&self) -> bool {
         self.task
             .lock()
@@ -66,6 +83,7 @@ impl ExternalAccess {
     }
 
     /// Starts serving and writes the config file; does nothing when already serving.
+    #[cfg(desktop)]
     async fn enable(&self, app: &AppHandle) -> Result<(), CommandError> {
         if self.running() {
             return Ok(());
@@ -100,6 +118,7 @@ impl ExternalAccess {
     /// Stops serving, which also drops the connections already open (their conversations end),
     /// and removes the config file (also on exit; the next start writes it again when access is
     /// on).
+    #[cfg(desktop)]
     pub async fn disable(&self) {
         let running = self.task.lock().ok().and_then(|mut task| task.take());
         if let Some((shutdown, task)) = running {
@@ -117,6 +136,7 @@ impl ExternalAccess {
 
 /// Writes `bytes` to `path`, readable and writable by the user only (Unix); on Windows the
 /// file inherits the user profile's access.
+#[cfg(desktop)]
 fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let mut options = std::fs::OpenOptions::new();
@@ -137,6 +157,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// Turns access on at startup when the device preferences say so.
+#[cfg(desktop)]
 pub async fn restore(app: &AppHandle) {
     let state = app.state::<AppState>();
     let _change = state.external.changes.lock().await;
@@ -204,6 +225,7 @@ pub(crate) fn list_hosts(state: &AppState) -> Result<ToolResult, (i64, String)> 
 }
 
 /// The tools of one outside agent's connection.
+#[cfg(desktop)]
 struct HostTools {
     app: AppHandle,
     client: std::sync::Mutex<String>,
@@ -211,6 +233,7 @@ struct HostTools {
     sessions: tokio::sync::Mutex<HashMap<HostId, (String, Arc<AiSession>)>>,
 }
 
+#[cfg(desktop)]
 impl HostTools {
     fn client(&self) -> String {
         self.client
@@ -242,6 +265,7 @@ impl HostTools {
     }
 }
 
+#[cfg(desktop)]
 #[async_trait]
 impl McpTools for HostTools {
     fn instructions(&self) -> String {
@@ -294,6 +318,7 @@ impl McpTools for HostTools {
 }
 
 /// `list_hosts`, and the host tools each with a required `host` argument.
+#[cfg(desktop)]
 fn host_specs() -> Value {
     let mut tools = vec![json!({
         "name": "list_hosts",
@@ -331,6 +356,7 @@ pub struct ExternalStatus {
     pub command: Vec<String>,
 }
 
+#[cfg(desktop)]
 fn command(config: &Path) -> Result<Vec<String>, CommandError> {
     let exe =
         std::env::current_exe().map_err(|error| CommandError::new("app.io", error.to_string()))?;
@@ -345,14 +371,19 @@ fn command(config: &Path) -> Result<Vec<String>, CommandError> {
 /// Whether agents the user runs may use the saved hosts, and the command they start.
 #[tauri::command]
 pub fn external_status(state: State<'_, AppState>) -> Result<ExternalStatus, CommandError> {
+    #[cfg(desktop)]
+    let (enabled, command) = (state.external.running(), command(&state.external.config)?);
+    #[cfg(mobile)]
+    let (enabled, command) = (false, Vec::new());
     Ok(ExternalStatus {
-        enabled: state.external.running(),
+        enabled,
         config: state.external.config.to_string_lossy().into_owned(),
-        command: command(&state.external.config)?,
+        command,
     })
 }
 
 /// Turns access for agents the user runs on or off, on this device.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn external_set(
     app: AppHandle,
@@ -378,8 +409,23 @@ pub async fn external_set(
     external_status(state)
 }
 
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn external_set(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<ExternalStatus, CommandError> {
+    let _ = (app, state, enabled);
+    Err(CommandError::new(
+        "app.unsupported",
+        "external MCP access is not available on this platform",
+    ))
+}
+
 /// Adds RoveTerm's MCP server to `client` (`claude` or `codex`) with that agent's own command;
 /// returns what it printed. An earlier entry is replaced.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn external_install(
     state: State<'_, AppState>,
@@ -453,7 +499,20 @@ pub async fn external_install(
     }
 }
 
-#[cfg(test)]
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn external_install(
+    state: State<'_, AppState>,
+    client: String,
+) -> Result<String, CommandError> {
+    let _ = (state, client);
+    Err(CommandError::new(
+        "app.unsupported",
+        "external MCP setup is not available on this platform",
+    ))
+}
+
+#[cfg(all(desktop, test))]
 mod tests {
     use super::*;
 

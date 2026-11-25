@@ -5,26 +5,37 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(desktop)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use rove_ai::acp::{self, AuthMethodKind, McpServer};
+use rove_ai::acp;
+#[cfg(desktop)]
+use rove_ai::acp::{AuthMethodKind, McpServer};
 use rove_ai::assistant::{Assistant, HostMeta};
 use rove_ai::audit::{self, Auditor, SessionInfo};
 use rove_ai::backend::{AgentBackend, AgentRef, BackendError};
+#[cfg(desktop)]
 use rove_ai::detect;
 use rove_ai::host::{ConnectionSource, Host, LocalHost, RemoteHost};
 use rove_ai::llm::{self, Client, Endpoint};
-use rove_ai::mcp::McpListener;
-use rove_ai::runner::{self, AgentSpec};
 use rove_ai::session::{AiEvent, AiSession, SessionSettings, TerminalSource};
 use rove_ai::{Answer, Mode, Rules};
+#[cfg(desktop)]
+use rove_ai::{
+    mcp::McpListener,
+    runner::{self, AgentSpec},
+};
 use rove_journal::{JournalError, JournalQuery, JournalRecord, JournalStore};
 use rove_ops::{OpsTaskId, TaskSource};
-use rove_session::{SessionId, SessionManager, TermSize};
+#[cfg(desktop)]
+use rove_session::TermSize;
+use rove_session::{SessionId, SessionManager};
 use rove_ssh::{SshConnection, SshConnector, SshTarget};
-use rove_vault::{AgentAuth, AiMode, ProviderFormat, ProviderPrefs, ReasoningEffort};
+#[cfg(desktop)]
+use rove_vault::AgentAuth;
+use rove_vault::{AiMode, ProviderFormat, ProviderPrefs, ReasoningEffort};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -35,6 +46,7 @@ use zeroize::Zeroizing;
 use crate::connect::{host_target, quick_target};
 use crate::error::CommandError;
 use crate::ops_runtime;
+#[cfg(desktop)]
 use crate::sink::ChannelSink;
 use crate::state::AppState;
 
@@ -43,10 +55,12 @@ pub const AI_EVENT: &str = "ai-update";
 pub const AI_TURN_EVENT: &str = "ai-turn";
 /// An agent the user runs on their own started (`{id, context, agent, host}`) or ended (`{id,
 /// ended: true}`) a conversation on a host.
+#[cfg(desktop)]
 pub const AI_EXTERNAL_EVENT: &str = "ai-external";
 /// Longest prompt accepted.
 const MAX_PROMPT: usize = 100_000;
 /// Agent modes that make an ACP agent ask before its own tools change anything.
+#[cfg(desktop)]
 const PREFERRED_MODES: &[&str] = &["read-only", "read_only", "readonly", "default", "plan"];
 
 /// One running AI session.
@@ -277,9 +291,12 @@ impl AgentBackend for InteractiveAssistant {
 pub struct AiSessions {
     entries: tokio::sync::Mutex<HashMap<String, Arc<Entry>>>,
     /// Server-verified ACP sign-in plans from the latest probe of each agent id.
+    #[cfg(desktop)]
     auth_plans: tokio::sync::Mutex<HashMap<String, Vec<ResolvedAuthMethod>>>,
     /// Active ACP probe or `authenticate` task that can be cancelled on demand or app exit.
+    #[cfg(desktop)]
     active_auth: tokio::sync::Mutex<Option<(u64, tokio::task::AbortHandle)>>,
+    #[cfg(desktop)]
     next_auth_op: AtomicU64,
     /// Working directory of agents whose host is remote: an empty scratch directory.
     workspace: PathBuf,
@@ -293,8 +310,11 @@ impl AiSessions {
     ) -> std::io::Result<Self> {
         Ok(Self {
             entries: tokio::sync::Mutex::new(HashMap::new()),
+            #[cfg(desktop)]
             auth_plans: tokio::sync::Mutex::new(HashMap::new()),
+            #[cfg(desktop)]
             active_auth: tokio::sync::Mutex::new(None),
+            #[cfg(desktop)]
             next_auth_op: AtomicU64::new(1),
             workspace: data_dir.join("ai-workspace"),
             recorder: rove_journal::Recorder::start(journal)?,
@@ -310,12 +330,14 @@ impl AiSessions {
             .ok_or_else(|| CommandError::new("ai.not_found", "no such AI session"))
     }
 
+    #[cfg(desktop)]
     async fn cancel_active_auth(&self) {
         if let Some((_, handle)) = self.active_auth.lock().await.take() {
             handle.abort();
         }
     }
 
+    #[cfg(desktop)]
     async fn register_active_auth(&self, handle: tokio::task::AbortHandle) -> u64 {
         let token = self.next_auth_op.fetch_add(1, Ordering::Relaxed);
         let mut slot = self.active_auth.lock().await;
@@ -325,6 +347,7 @@ impl AiSessions {
         token
     }
 
+    #[cfg(desktop)]
     async fn clear_active_auth(&self, token: u64) {
         let mut slot = self.active_auth.lock().await;
         if slot.as_ref().is_some_and(|(active, _)| *active == token) {
@@ -334,6 +357,7 @@ impl AiSessions {
 
     /// Stops every session; used on exit.
     pub async fn stop_all(&self) {
+        #[cfg(desktop)]
         self.cancel_active_auth().await;
         let entries: Vec<Arc<Entry>> = self
             .entries
@@ -519,6 +543,20 @@ fn agent_ref(text: &str) -> Result<AgentRef, CommandError> {
     }
 }
 
+fn local_cli_unsupported() -> CommandError {
+    CommandError::new(
+        "ai.unsupported",
+        "local CLI agents are not available on this platform",
+    )
+}
+
+fn check_agent_supported(agent: &AgentRef, mobile: bool) -> Result<(), CommandError> {
+    if mobile && matches!(agent, AgentRef::Acp(_)) {
+        return Err(local_cli_unsupported());
+    }
+    Ok(())
+}
+
 /// Where the AI session works.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -532,6 +570,16 @@ pub enum AiContext {
     },
     /// All saved hosts: the fleet lead, which hands work to a sub-agent per host.
     Fleet,
+}
+
+fn check_context_supported(context: &AiContext, mobile: bool) -> Result<(), CommandError> {
+    if mobile && matches!(context, AiContext::Local) {
+        return Err(CommandError::new(
+            "session.unsupported",
+            "local host context is not available on this platform",
+        ));
+    }
+    Ok(())
 }
 
 /// An agent the user can talk to, as the panel lists it.
@@ -579,6 +627,7 @@ pub struct AiStarted {
 }
 
 /// How an ACP agent runs.
+#[cfg(desktop)]
 struct AcpAgent {
     name: String,
     program: String,
@@ -591,6 +640,7 @@ struct AcpAgent {
 
 /// The ACP agents of this device: detected (with whether the user turned them off), then added
 /// by command.
+#[cfg(desktop)]
 fn acp_agents(vault: &rove_vault::Vault) -> Result<Vec<(String, AcpAgent)>, CommandError> {
     let agents = vault.device_preferences()?.agents;
     let mut list: Vec<(String, AcpAgent)> = detect::detect(&detect::search_path())
@@ -631,6 +681,7 @@ fn acp_agents(vault: &rove_vault::Vault) -> Result<Vec<(String, AcpAgent)>, Comm
 
 /// An enabled ACP agent of this device, with the environment and sign-in methods it starts
 /// with: its stored key (per the sign-in setting) goes into the agent's key variables.
+#[cfg(desktop)]
 async fn acp_launch(
     state: &AppState,
     agent_id: &str,
@@ -700,6 +751,7 @@ pub struct AcpAuthInfo {
     pub probe_error: Option<String>,
 }
 
+#[cfg(desktop)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ResolvedAuthAction {
     Agent,
@@ -711,6 +763,7 @@ enum ResolvedAuthAction {
     ApiKey,
 }
 
+#[cfg(desktop)]
 #[derive(Debug, Clone)]
 struct ResolvedAuthMethod {
     public: AcpAuthMethod,
@@ -718,10 +771,13 @@ struct ResolvedAuthMethod {
 }
 
 /// Timeout for probing an ACP agent's `initialize` (first `npx` download can be slow).
+#[cfg(desktop)]
 const ACP_PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Timeout for an interactive protocol `authenticate` (such as browser OAuth).
+#[cfg(desktop)]
 const ACP_AUTH_TIMEOUT: Duration = Duration::from_secs(300);
 
+#[cfg(desktop)]
 fn format_command_preview(program: &str, args: &[String]) -> String {
     let display = Path::new(program)
         .file_name()
@@ -740,6 +796,7 @@ fn format_command_preview(program: &str, args: &[String]) -> String {
     parts.join(" ")
 }
 
+#[cfg(desktop)]
 fn resolve_terminal_program(command: &str, path: &str) -> String {
     let candidate = Path::new(command);
     if candidate.is_absolute() || command.contains('/') || command.contains('\\') {
@@ -750,6 +807,7 @@ fn resolve_terminal_program(command: &str, path: &str) -> String {
         .unwrap_or_else(|| command.to_owned())
 }
 
+#[cfg(desktop)]
 fn build_auth_methods(
     found: &AcpAgent,
     discovered: Vec<acp::AuthMethod>,
@@ -849,6 +907,7 @@ fn build_auth_methods(
     resolved
 }
 
+#[cfg(desktop)]
 async fn find_acp_agent(state: &AppState, agent: &str) -> Result<(String, AcpAgent), CommandError> {
     let AgentRef::Acp(agent_id) = agent_ref(agent)? else {
         return Err(CommandError::new(
@@ -868,6 +927,7 @@ async fn find_acp_agent(state: &AppState, agent: &str) -> Result<(String, AcpAge
     Ok((agent_id, found))
 }
 
+#[cfg(desktop)]
 fn auth_cwd(state: &AppState) -> Result<PathBuf, CommandError> {
     if let Some(home) = std::env::home_dir().filter(|dir| dir.is_dir()) {
         return Ok(home);
@@ -880,6 +940,7 @@ fn auth_cwd(state: &AppState) -> Result<PathBuf, CommandError> {
 /// Probes an ACP agent's `initialize` response for available sign-in methods and caches the
 /// server-verified launch plans for subsequent `ai_acp_authenticate` or `ai_acp_login_terminal`
 /// calls.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn ai_acp_auth_methods(
     state: State<'_, AppState>,
@@ -929,7 +990,18 @@ pub async fn ai_acp_auth_methods(
     })
 }
 
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn ai_acp_auth_methods(
+    state: State<'_, AppState>,
+    agent: String,
+) -> Result<AcpAuthInfo, CommandError> {
+    let _ = (state, agent);
+    Err(local_cli_unsupported())
+}
+
 /// Runs an ACP agent's protocol-driven `authenticate(method_id)` flow (for example, OAuth).
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn ai_acp_authenticate(
     state: State<'_, AppState>,
@@ -981,15 +1053,30 @@ pub async fn ai_acp_authenticate(
     }
 }
 
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn ai_acp_authenticate(
+    state: State<'_, AppState>,
+    agent: String,
+    method_id: String,
+) -> Result<(), CommandError> {
+    let _ = (state, agent, method_id);
+    Err(local_cli_unsupported())
+}
+
 /// Cancels any in-flight ACP sign-in probe or protocol `authenticate` request.
 #[tauri::command]
 pub async fn ai_acp_cancel_auth(state: State<'_, AppState>) -> Result<(), CommandError> {
+    #[cfg(desktop)]
     state.ai.cancel_active_auth().await;
+    #[cfg(mobile)]
+    let _ = state;
     Ok(())
 }
 
 /// Opens a local interactive PTY running a server-verified ACP terminal sign-in command and
 /// streams its output to `on_output`.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn ai_acp_login_terminal(
     state: State<'_, AppState>,
@@ -1001,7 +1088,7 @@ pub async fn ai_acp_login_terminal(
 ) -> Result<SessionId, CommandError> {
     let size = TermSize::new(cols, rows)?;
     let (agent_id, _) = find_acp_agent(state.inner(), &agent).await?;
-    let launch = state
+    let (program, args, extra_env) = state
         .ai
         .auth_plans
         .lock()
@@ -1020,30 +1107,32 @@ pub async fn ai_acp_login_terminal(
                 "terminal sign-in method is not available; refresh and try again",
             )
         })?;
-    #[cfg(desktop)]
-    {
-        let (program, args, extra_env) = launch;
-        let mut env = vec![("PATH".to_owned(), detect::search_path())];
-        env.extend(extra_env);
-        let opened = state.pty.open(rove_pty::LocalRequest {
-            shell: Some(program),
-            args: Some(args),
-            cwd: std::env::home_dir(),
-            size: Some(size),
-            env,
-        })?;
-        Ok(state
-            .sessions
-            .attach(opened, Arc::new(ChannelSink(on_output))))
-    }
-    #[cfg(mobile)]
-    {
-        let _ = (launch, on_output, size);
-        Err(CommandError::new(
-            "session.unsupported",
-            "local terminals are not available on this platform",
-        ))
-    }
+    let mut env = vec![("PATH".to_owned(), detect::search_path())];
+    env.extend(extra_env);
+    let opened = state.pty.open(rove_pty::LocalRequest {
+        shell: Some(program),
+        args: Some(args),
+        cwd: std::env::home_dir(),
+        size: Some(size),
+        env,
+    })?;
+    Ok(state
+        .sessions
+        .attach(opened, Arc::new(ChannelSink(on_output))))
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn ai_acp_login_terminal(
+    state: State<'_, AppState>,
+    agent: String,
+    method_id: String,
+    on_output: Channel<InvokeResponseBody>,
+    cols: u16,
+    rows: u16,
+) -> Result<SessionId, CommandError> {
+    let _ = (state, agent, method_id, on_output, cols, rows);
+    Err(local_cli_unsupported())
 }
 
 /// Vault key of the Jev reviewer.
@@ -1178,7 +1267,7 @@ pub async fn ai_set_review_key(
 pub async fn ai_agents(state: State<'_, AppState>) -> Result<AgentList, CommandError> {
     let prefs = state.vault.preferences()?;
     let keys = state.vault.ai_key_ids()?;
-    let mut agents: Vec<AgentChoice> = prefs
+    let agents: Vec<AgentChoice> = prefs
         .ai
         .providers
         .iter()
@@ -1196,28 +1285,33 @@ pub async fn ai_agents(state: State<'_, AppState>) -> Result<AgentList, CommandE
             }
         })
         .collect();
-    // Looking at the PATH may run a login shell once: off the async threads.
-    let vault = state.vault.clone();
-    let found = tauri::async_runtime::spawn_blocking(move || acp_agents(&vault))
-        .await
-        .map_err(|error| CommandError::new("app.task", error.to_string()))??;
-    for (id, found) in found {
-        let agent = format!("acp:{id}");
-        let detail = [found.program, found.args.join(" ")]
-            .join(" ")
-            .trim()
-            .to_owned();
-        agents.push(AgentChoice {
-            has_key: keys.contains(&agent),
-            agent,
-            kind: "acp",
-            name: found.name,
-            detail,
-            via_npx: found.via_npx,
-            enabled: found.enabled,
-            custom: found.custom,
-        });
-    }
+    #[cfg(desktop)]
+    let agents = {
+        let mut agents = agents;
+        // PATH discovery may start a login shell and must run off the async threads.
+        let vault = state.vault.clone();
+        let found = tauri::async_runtime::spawn_blocking(move || acp_agents(&vault))
+            .await
+            .map_err(|error| CommandError::new("app.task", error.to_string()))??;
+        for (id, found) in found {
+            let agent = format!("acp:{id}");
+            let detail = [found.program, found.args.join(" ")]
+                .join(" ")
+                .trim()
+                .to_owned();
+            agents.push(AgentChoice {
+                has_key: keys.contains(&agent),
+                agent,
+                kind: "acp",
+                name: found.name,
+                detail,
+                via_npx: found.via_npx,
+                enabled: found.enabled,
+                custom: found.custom,
+            });
+        }
+        agents
+    };
     Ok(AgentList {
         agents,
         default: prefs.ai.default_agent,
@@ -1442,6 +1536,7 @@ fn host_of(
     state: &AppState,
     context: &AiContext,
 ) -> Result<(Arc<dyn Host>, HostMeta, PathBuf), CommandError> {
+    check_context_supported(context, cfg!(mobile))?;
     Ok(match context {
         AiContext::Local => {
             let meta = HostMeta {
@@ -1538,6 +1633,8 @@ pub async fn ai_start(
 ) -> Result<AiStarted, CommandError> {
     let agent_text = agent;
     let agent = agent_ref(&agent_text)?;
+    check_agent_supported(&agent, cfg!(mobile))?;
+    check_context_supported(&context, cfg!(mobile))?;
     state.ensure_unlocked().await?;
     let prefs = state.vault.preferences()?;
     let (host, meta, cwd) = host_of(&app, state.inner(), &context)?;
@@ -1631,10 +1728,7 @@ pub async fn ai_start(
         }));
     }
 
-    let mut builtin = None;
-    let mut operations = None;
-    let mut agent_session = None;
-    let (backend, mcp, started): (Arc<dyn AgentBackend>, _, AiStarted) = match agent {
+    let (backend, builtin, mcp, started, agent_session) = match agent {
         AgentRef::Builtin(provider_id) => {
             let provider = prefs
                 .ai
@@ -1674,6 +1768,7 @@ pub async fn ai_start(
             let client = Client::new(endpoint(&provider), &key, idle)
                 .map_err(|error| CommandError::new("ai.model", error.to_string()))?
                 .with_cache_key(&id);
+            let mut operations = None;
             let assistant = if matches!(context, AiContext::Fleet) {
                 let tools = Arc::new(crate::ops_tools::OpsTools::new(
                     app.clone(),
@@ -1755,15 +1850,22 @@ pub async fn ai_start(
                     parent: None,
                 }),
             });
-            builtin = Some(active.clone());
-            (active as Arc<dyn AgentBackend>, None, started)
+            (
+                active.clone() as Arc<dyn AgentBackend>,
+                Some(active),
+                None,
+                started,
+                None,
+            )
         }
+        #[cfg(desktop)]
         AgentRef::Acp(_) if matches!(context, AiContext::Fleet) => {
             return Err(CommandError::new(
                 "input.invalid",
                 "the fleet lead is RoveTerm's own assistant",
             ));
         }
+        #[cfg(desktop)]
         AgentRef::Acp(agent_id) => {
             let (found, extra, auth_methods) = acp_launch(state.inner(), &agent_id).await?;
             let listener = McpListener::bind()
@@ -1819,13 +1921,16 @@ pub async fn ai_start(
                     .collect(),
                 resumed: info.resumed,
             };
-            agent_session = info.agent_session;
             (
                 Arc::new(running) as Arc<dyn AgentBackend>,
+                None,
                 Some(mcp),
                 started,
+                info.agent_session,
             )
         }
+        #[cfg(mobile)]
+        AgentRef::Acp(_) => return Err(local_cli_unsupported()),
     };
     let mode_value = serde_json::to_value(prefs.ai.mode)
         .ok()
@@ -1856,8 +1961,10 @@ pub async fn ai_start(
 
 /// The backend of a conversation an agent the user runs drives through RoveTerm's MCP server:
 /// there is nothing to prompt here; stopping withdraws its approvals and stops its commands.
+#[cfg(desktop)]
 struct ExternalBackend(Arc<AiSession>);
 
+#[cfg(desktop)]
 #[async_trait]
 impl AgentBackend for ExternalBackend {
     async fn prompt(&self, _text: &str) -> Result<String, BackendError> {
@@ -1893,6 +2000,7 @@ impl AgentBackend for ExternalBackend {
 /// Starts a conversation for `client` (an agent the user runs, by the name it gave) on saved
 /// host `host_id`: a session with the user's approval rules and reviewer, recorded like any
 /// other, and announced to the UI. Returns its id and session.
+#[cfg(desktop)]
 pub(crate) async fn start_external(
     app: &AppHandle,
     state: &AppState,
@@ -2241,6 +2349,7 @@ async fn run_lead_wakeup_locked(turn: LeadTurn, batch: WakeupBatch) {
 }
 
 /// The provider the fleet lead uses: the default agent when it is a provider, else the first.
+#[cfg(desktop)]
 pub(crate) fn fleet_provider(prefs: &rove_vault::Preferences) -> Option<ProviderPrefs> {
     let wanted = prefs
         .ai
@@ -2260,6 +2369,7 @@ pub(crate) fn fleet_provider(prefs: &rove_vault::Preferences) -> Option<Provider
 /// task's name, whose sub-agents run unattended (making changes only when the task allows and
 /// the judge is sure). Returns the conversation's id, and its report (the lead's last reply) or
 /// why it failed.
+#[cfg(desktop)]
 pub(crate) async fn run_scheduled(
     app: &AppHandle,
     schedule: &rove_vault::Schedule,
@@ -2508,6 +2618,7 @@ pub(crate) async fn end_subagent(
 }
 
 /// Ends conversation `id` of an agent the user runs (its connection closed).
+#[cfg(desktop)]
 pub(crate) async fn end_external(app: &AppHandle, state: &AppState, id: &str) {
     let entry = state.ai.entries.lock().await.remove(id);
     if let Some(entry) = entry {
@@ -3311,13 +3422,17 @@ pub struct AiQuota {
 }
 
 /// How long a read quota is reused before reading it again.
+#[cfg(desktop)]
 const QUOTA_REUSE: Duration = Duration::from_secs(300);
 /// Longest the Claude Code probe may take to start, and to answer `/usage`.
+#[cfg(desktop)]
 const QUOTA_PROBE: Duration = Duration::from_secs(30);
 
+#[cfg(desktop)]
 static QUOTAS: std::sync::Mutex<Option<HashMap<String, (std::time::Instant, AiQuota)>>> =
     std::sync::Mutex::new(None);
 
+#[cfg(desktop)]
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -3328,6 +3443,7 @@ fn now_ms() -> i64 {
 /// The rate-limit windows of local agent `agent` (Codex: from its session logs, with the context
 /// of its latest session; Claude Code: from its `/usage` report, which starts it briefly);
 /// `None` for agents that report none. A recent Claude Code answer is reused unless `refresh`.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn ai_quota(
     state: State<'_, AppState>,
@@ -3383,8 +3499,21 @@ pub async fn ai_quota(
     Ok(Some(quota))
 }
 
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn ai_quota(
+    state: State<'_, AppState>,
+    agent: String,
+    refresh: bool,
+) -> Result<Option<AiQuota>, CommandError> {
+    let _ = (state, refresh);
+    check_agent_supported(&agent_ref(&agent)?, cfg!(mobile))?;
+    Ok(None)
+}
+
 /// Starts Claude Code on its own, without tools, asks its local `/usage` command (which does not
 /// reach the model) and reads the limits from the report.
+#[cfg(desktop)]
 async fn claude_usage(
     state: &AppState,
     agent_id: &str,
@@ -3431,6 +3560,51 @@ async fn claude_usage(
     }
     let text = report.lock().map(|text| text.clone()).unwrap_or_default();
     Ok(rove_ai::quota::claude_limits(&text))
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::*;
+
+    #[test]
+    fn local_cli_agents_are_desktop_only() {
+        let builtin = AgentRef::Builtin("provider".into());
+        let acp = AgentRef::Acp("codex".into());
+        for mobile in [false, true] {
+            check_agent_supported(&builtin, mobile).unwrap();
+        }
+        check_agent_supported(&acp, false).unwrap();
+        let error = check_agent_supported(&acp, true).unwrap_err();
+        assert_eq!(error.code, "ai.unsupported");
+        assert_eq!(
+            error.message,
+            "local CLI agents are not available on this platform"
+        );
+    }
+
+    #[test]
+    fn only_local_context_is_desktop_only() {
+        for context in [
+            AiContext::Host {
+                host_id: "host".into(),
+            },
+            AiContext::Quick {
+                address: "user@example.com".into(),
+            },
+            AiContext::Fleet,
+        ] {
+            for mobile in [false, true] {
+                check_context_supported(&context, mobile).unwrap();
+            }
+        }
+        check_context_supported(&AiContext::Local, false).unwrap();
+        let error = check_context_supported(&AiContext::Local, true).unwrap_err();
+        assert_eq!(error.code, "session.unsupported");
+        assert_eq!(
+            error.message,
+            "local host context is not available on this platform"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -3944,6 +4118,7 @@ mod history_tests {
         assert_eq!(title(&locked, fleet).as_deref(), Some(manual));
     }
 
+    #[cfg(desktop)]
     #[test]
     fn builds_acp_auth_methods_with_terminal_agent_key_and_fallback() {
         let dir = tempfile::tempdir().unwrap();
