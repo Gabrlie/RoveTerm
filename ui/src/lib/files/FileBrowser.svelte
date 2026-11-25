@@ -55,7 +55,7 @@
     visible: boolean;
     onopened?: () => void;
     onerror?: (error: unknown) => void;
-    /** Shows a close button at the right end of the toolbar (the bottom panel). */
+    /** Shows a navigation control for dismissing the file panel. */
     onclose?: () => void;
   }
 
@@ -212,6 +212,10 @@
       return;
     }
     if (!viewport.coarse) list?.focus({ preventScroll: true });
+    if (selectMode) {
+      selected = toggleSelection(selected, entry.name);
+      return;
+    }
     if (event.shiftKey && anchor >= 0) {
       const [from, to] = anchor < index ? [anchor, index] : [index, anchor];
       selected = new Set(shown.slice(from, to + 1).map((row) => row.name));
@@ -357,6 +361,31 @@
       { label: t('files.showHidden'), icon: showHidden ? 'eye' : 'eyeOff', onselect: toggleHidden },
     );
     menu = { x: event.clientX, y: event.clientY, items };
+  }
+
+  function openToolbarMenu(event: MouseEvent): void {
+    const items: MenuItem[] = [];
+    const names = selection.map((entry) => entry.name);
+    if (!isMobile) {
+      if (fsId) items.push({ label: t('files.uploadFolder'), icon: 'folderUpload', onselect: () => void pickUpload(true) });
+      if (names.length) items.push({ label: t('files.downloadTo'), icon: 'folderDownload', onselect: () => void download(names, true) });
+      items.push({ label: t('external.title', { n: externalEdits.all.length }), icon: 'externalEdits', onselect: () => (externalEdits.dialog = true) });
+    }
+    if (!isMobile && !selectMode && names.length) {
+      items.push({ label: t('files.download'), icon: 'download', onselect: () => void download(names, false) });
+    }
+    if (names.length === 1) {
+      if (editable && !openingEditor) {
+        items.push({ label: t('files.editBuiltin'), icon: 'fileCode', onselect: () => void editFile() });
+        if (!isMobile) items.push({ label: t('files.editExternal'), icon: 'externalEdit', onselect: () => void editFile(true) });
+      }
+      items.push({ label: t('files.rename'), icon: 'edit', onselect: askRename });
+    }
+    if (!isMobile && !selectMode && names.length) {
+      items.push({ label: t('common.delete'), icon: 'remove', danger: true, onselect: askDelete });
+    }
+    const { left, bottom } = (event.currentTarget as HTMLButtonElement).getBoundingClientRect();
+    menu = { x: left, y: bottom, items };
   }
 
   function openEntry(entry: DirEntry): void {
@@ -645,7 +674,7 @@
   });
 
   $effect(() => {
-    if (!touchUi) {
+    if (!touchUi && !compactList) {
       if (selectMode) exitSelectMode();
       cancelLongPress();
       clearClickSuppression();
@@ -667,45 +696,92 @@
   });
 </script>
 
+{#snippet up(small: boolean)}
+  <IconButton icon="up" label={t('files.up')} {small} disabled={!fsId || parentPath(cwd) === null} onclick={goUp} />
+{/snippet}
+{#snippet refreshButton(small: boolean)}
+  <span class:spinning={loading && entries.length > 0}>
+    <IconButton icon="refresh" label={t('files.refresh')} {small} disabled={!fsId} onclick={() => void refresh()} />
+  </span>
+{/snippet}
+{#snippet pathField()}
+  <form class="path" onsubmit={submitPath}>
+    <input class="bare" bind:value={pathInput} spellcheck="false" disabled={!fsId} aria-label={t('files.path')} />
+  </form>
+{/snippet}
+{#snippet uploadActions(small: boolean)}
+  <IconButton icon="folderAdd" label={t('files.newFolder')} {small} disabled={!fsId} onclick={askMkdir} />
+  <IconButton icon="upload" label={t('files.upload')} {small} disabled={!fsId} onclick={() => void pickUpload(false)} />
+{/snippet}
+{#snippet draftButton(small: boolean)}
+  <IconButton icon="drafts" label={t('editor.drafts')} {small} active={editors.dirty.length > 0} onclick={() => (editors.showDrafts = true)} />
+{/snippet}
+{#snippet hiddenButton(small: boolean)}
+  <IconButton icon={showHidden ? 'eye' : 'eyeOff'} label={t('files.showHidden')} {small} active={showHidden} onclick={toggleHidden} />
+{/snippet}
+{#snippet selectionButton(small: boolean)}
+  <IconButton icon="listChecks" label={t('files.selectMode')} {small} active={selectMode} disabled={!fsId} onclick={toggleSelectMode} />
+{/snippet}
+
 <div class="browser" class:dropping class:touch={touchUi} class:compact={compactList} bind:this={root}>
-  <div class="toolbar">
-    <IconButton icon="up" label={t('files.up')} small disabled={!fsId || parentPath(cwd) === null} onclick={goUp} />
-    <span class:spinning={loading && entries.length > 0}>
-      <IconButton icon="refresh" label={t('files.refresh')} small disabled={!fsId} onclick={() => void refresh()} />
-    </span>
-    <form class="path" onsubmit={submitPath}>
-      <input class="bare" bind:value={pathInput} spellcheck="false" disabled={!fsId} aria-label={t('files.path')} />
-    </form>
-    <IconButton icon="folderAdd" label={t('files.newFolder')} small disabled={!fsId} onclick={askMkdir} />
-    <IconButton icon="upload" label={t('files.upload')} small disabled={!fsId} onclick={() => void pickUpload(false)} />
-    {#if !isMobile}
-      <IconButton icon="folderUpload" label={t('files.uploadFolder')} small disabled={!fsId} onclick={() => void pickUpload(true)} />
-    {/if}
-    {#if !selectMode}
-      <IconButton icon="download" label={t('files.download')} small disabled={selection.length === 0} onclick={() => void download(selection.map((entry) => entry.name), false)} />
-    {/if}
-    {#if !isMobile}
-      <IconButton icon="folderDownload" label={t('files.downloadTo')} small disabled={selection.length === 0} onclick={() => void download(selection.map((entry) => entry.name), true)} />
-    {/if}
-    <IconButton icon="fileCode" label={t('files.editBuiltin')} small disabled={!editable || openingEditor} onclick={() => void editFile()} />
-    {#if !isMobile}
-      <IconButton icon="externalEdit" label={t('files.editExternal')} small disabled={!editable} onclick={() => void editFile(true)} />
-      <IconButton icon="externalEdits" label={t('external.title', { n: externalEdits.all.length })} small active={externalEdits.all.length > 0} onclick={() => (externalEdits.dialog = true)} />
-    {/if}
-    <IconButton icon="drafts" label={t('editor.drafts')} small active={editors.dirty.length > 0} onclick={() => (editors.showDrafts = true)} />
-    <IconButton icon="edit" label={t('files.rename')} small disabled={selection.length !== 1} onclick={askRename} />
-    {#if !selectMode}
-      <IconButton icon="remove" label={t('common.delete')} small danger disabled={selection.length === 0} onclick={askDelete} />
-    {/if}
-    <IconButton icon={showHidden ? 'eye' : 'eyeOff'} label={t('files.showHidden')} small active={showHidden} onclick={toggleHidden} />
-    {#if touchUi}
-      <IconButton icon="listChecks" label={t('files.selectMode')} small active={selectMode} disabled={!fsId} onclick={toggleSelectMode} />
-    {/if}
-    {#if onclose}
-      <span class="toolbar-gap"></span>
-      <IconButton icon="close" label={t('common.close')} small onclick={onclose} />
-    {/if}
-  </div>
+  {#if compactList}
+    <header class="mobile-nav">
+      {#if onclose}
+        <IconButton icon="back" label={t('mobile.back')} onclick={onclose} />
+        <strong class="mobile-title">{label || t('action.panel.bottom')}</strong>
+      {/if}
+      <div class="mobile-actions">
+        {@render uploadActions(false)}
+        {@render selectionButton(false)}
+        {#if !isMobile || (selectMode && selection.length === 1)}
+          <IconButton icon="more" label={t('files.moreActions')} onclick={openToolbarMenu} />
+        {/if}
+      </div>
+    </header>
+    <div class="toolbar path-toolbar">
+      {@render up(false)}
+      {@render pathField()}
+      {@render refreshButton(false)}
+      {@render hiddenButton(false)}
+      {#if editors.dirty.length > 0}
+        {@render draftButton(false)}
+      {/if}
+    </div>
+  {:else}
+    <div class="toolbar">
+      {@render up(true)}
+      {@render refreshButton(true)}
+      {@render pathField()}
+      {@render uploadActions(true)}
+      {#if !isMobile}
+        <IconButton icon="folderUpload" label={t('files.uploadFolder')} small disabled={!fsId} onclick={() => void pickUpload(true)} />
+      {/if}
+      {#if !selectMode}
+        <IconButton icon="download" label={t('files.download')} small disabled={selection.length === 0} onclick={() => void download(selection.map((entry) => entry.name), false)} />
+      {/if}
+      {#if !isMobile}
+        <IconButton icon="folderDownload" label={t('files.downloadTo')} small disabled={selection.length === 0} onclick={() => void download(selection.map((entry) => entry.name), true)} />
+      {/if}
+      <IconButton icon="fileCode" label={t('files.editBuiltin')} small disabled={!editable || openingEditor} onclick={() => void editFile()} />
+      {#if !isMobile}
+        <IconButton icon="externalEdit" label={t('files.editExternal')} small disabled={!editable} onclick={() => void editFile(true)} />
+        <IconButton icon="externalEdits" label={t('external.title', { n: externalEdits.all.length })} small active={externalEdits.all.length > 0} onclick={() => (externalEdits.dialog = true)} />
+      {/if}
+      {@render draftButton(true)}
+      <IconButton icon="edit" label={t('files.rename')} small disabled={selection.length !== 1} onclick={askRename} />
+      {#if !selectMode}
+        <IconButton icon="remove" label={t('common.delete')} small danger disabled={selection.length === 0} onclick={askDelete} />
+      {/if}
+      {@render hiddenButton(true)}
+      {#if touchUi}
+        {@render selectionButton(true)}
+      {/if}
+      {#if onclose}
+        <span class="toolbar-gap"></span>
+        <IconButton icon="close" label={t('common.close')} small onclick={onclose} />
+      {/if}
+    </div>
+  {/if}
 
   {#if selectMode}
     <div class="select-bar">
@@ -753,7 +829,7 @@
         tabindex="-1"
         data-index={index}
         onclick={(event) => clickRow(event, index)}
-        ondblclick={() => { if (!touchUi) openEntry(entry); }}
+        ondblclick={() => { if (!touchUi && !selectMode) openEntry(entry); }}
         oncontextmenu={(event) => onRowContextMenu(event, entry, index)}
         onpointerdown={(event) => startLongPress(event, entry, index)}
         onpointermove={moveLongPress}
@@ -870,6 +946,49 @@
     height: 16px;
     margin: 0 var(--space-1);
     background: var(--separator);
+  }
+  .mobile-nav,
+  .mobile-actions {
+    display: flex;
+    align-items: center;
+  }
+  .mobile-nav {
+    flex: none;
+    min-height: 48px;
+    padding: 0 var(--space-2);
+    background: var(--material-bar);
+    box-shadow: inset 0 -0.5px 0 var(--separator);
+  }
+  .mobile-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mobile-actions {
+    flex: none;
+    margin-inline-start: auto;
+  }
+  .mobile-nav :global(.icon-button) {
+    flex: none;
+    min-width: var(--touch-target, 44px);
+    min-height: var(--touch-target, 44px);
+  }
+  .path-toolbar {
+    flex-wrap: nowrap;
+  }
+  .path-toolbar .path {
+    min-width: 0;
+  }
+  .path-toolbar input,
+  .path-toolbar :global(.icon-button) {
+    min-height: 36px;
+  }
+  .path-toolbar :global(.icon-button) {
+    flex: none;
+    min-width: 36px;
   }
   .select-bar {
     display: flex;

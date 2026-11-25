@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { viewport } from '../../layout/viewport.svelte';
   import Dialog from '../../ui/Dialog.svelte';
   import Select from '../../ui/Select.svelte';
   import { errorText, t } from '../../i18n';
@@ -152,7 +153,7 @@
   }
 </script>
 
-<Dialog title={t(provider ? 'ai.editProvider' : 'ai.addProvider')} width={560} onclose={() => { if (!saving) onclose(); }}>
+<Dialog presentation="page" title={t(provider ? 'ai.editProvider' : 'ai.addProvider')} width={560} onclose={() => { if (!saving) onclose(); }}>
   {#if !provider && !persistedId}
     <div class="presets" role="group" aria-label={t('ai.presets')}>
       {#each PRESETS as preset (preset.id)}
@@ -225,7 +226,7 @@
   {#snippet actions()}
     <div class="footer">
       {#if testResult}<p class="result" class:failed={!testResult.ok} role="status">{testResult.text}</p>{/if}
-      <div class="footer-buttons">
+      <div class="footer-buttons" class:compact={viewport.compact}>
         <button type="button" class="secondary test" disabled={saving || testing || !canRequest || !chosen.model} onclick={() => void testProvider()}>{t(testing ? 'ai.testing' : 'ai.test')}</button>
         <button type="button" class="secondary" disabled={saving} onclick={onclose}>{t('ai.cancel')}</button>
         <button type="button" class="primary" disabled={saving || !canSave} onclick={() => void save()}>{t('ai.save')}</button>
@@ -273,5 +274,12 @@
   @media (pointer: coarse) {
     .model-row { min-height: var(--row-height); }
     .star { min-width: 36px; min-height: 36px; }
+  }
+
+  .footer-buttons.compact {
+    flex-wrap: wrap;
+  }
+  .footer-buttons.compact button {
+    min-height: var(--touch-target, 44px);
   }
 </style>

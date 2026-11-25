@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { viewport } from '../layout/viewport.svelte';
   import { onMount } from 'svelte';
   import Dialog from '../ui/Dialog.svelte';
   import Icon from '../ui/Icon.svelte';
@@ -139,8 +140,8 @@
   }
 </script>
 
-<Dialog title={t('tailscale.title')} {onclose} width={760}>
-  <div class="ts-dialog">
+<Dialog presentation="page" title={t('tailscale.title')} {onclose} width={760}>
+  <div class="ts-dialog" class:compact={viewport.compact}>
     <section class="status-card">
       <div class="status-main">
         <span
@@ -296,7 +297,7 @@
     </div>
   </div>
 
-  {#snippet actions()}<button type="button" class="secondary" onclick={onclose}>{t('common.close')}</button>{/snippet}
+  {#snippet actions()}<button class:page-action={viewport.compact} type="button" class="secondary" onclick={onclose}>{t('common.close')}</button>{/snippet}
 </Dialog>
 
 {#if selected}
@@ -621,5 +622,25 @@
     text-align: center;
     color: var(--fg-muted);
     font-size: var(--text-footnote);
+  }
+
+  .page-action {
+    min-height: var(--touch-target, 44px);
+    height: auto;
+    white-space: normal;
+  }
+  .compact .devices {
+    max-height: none;
+    overflow: visible;
+  }
+  .compact :is(.status-card, .device-row, .device-actions) {
+    flex-wrap: wrap;
+  }
+  .compact .device-info {
+    flex-basis: 100%;
+  }
+  .compact .device-actions {
+    max-width: 100%;
+    margin-inline-start: auto;
   }
 </style>

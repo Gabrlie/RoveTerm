@@ -3,6 +3,9 @@
   import { untrack } from 'svelte';
   import FileBrowser from '../files/FileBrowser.svelte';
   import FilesSkeleton from '../files/FilesSkeleton.svelte';
+  import { t } from '../i18n';
+  import { viewport } from '../layout/viewport.svelte';
+  import IconButton from '../ui/IconButton.svelte';
   import { remoteSourceOf, sourceKey, workspace } from '../workspace/workspace.svelte';
   import type { RemoteSource } from '../ipc';
 
@@ -42,7 +45,15 @@
     </div>
   {/each}
   {#if !source}
-    <FilesSkeleton toolbar {onclose} />
+    {#if viewport.compact}
+      <header class="mobile-nav">
+        <IconButton icon="back" label={t('mobile.back')} onclick={onclose} />
+        <strong>{t('action.panel.bottom')}</strong>
+      </header>
+      <FilesSkeleton />
+    {:else}
+      <FilesSkeleton toolbar {onclose} />
+    {/if}
   {/if}
 </section>
 
@@ -60,5 +71,18 @@
   }
   .browser[hidden] {
     display: none;
+  }
+  .mobile-nav {
+    display: flex;
+    flex: none;
+    align-items: center;
+    min-height: 48px;
+    padding: 0 var(--space-2);
+    background: var(--material-bar);
+    box-shadow: inset 0 -0.5px 0 var(--separator);
+  }
+  .mobile-nav :global(.icon-button) {
+    min-width: var(--touch-target, 44px);
+    min-height: var(--touch-target, 44px);
   }
 </style>

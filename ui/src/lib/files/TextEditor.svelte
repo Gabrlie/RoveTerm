@@ -50,19 +50,38 @@
   $effect(() => { if (active && shouldAutoFocusEditor(viewport.coarse)) controller?.focus(); });
 </script>
 
+{#snippet editTools()}
+  <IconButton icon="undo" small={!viewport.compact} label={t('editor.undo')} disabled={locked || !controller} onclick={() => controller?.undo()} />
+  <IconButton icon="redo" small={!viewport.compact} label={t('editor.redo')} disabled={locked || !controller} onclick={() => controller?.redo()} />
+  <IconButton icon="search" small={!viewport.compact} label={t('editor.find')} disabled={!controller} onclick={() => controller?.find()} />
+  <IconButton icon="wrapText" small={!viewport.compact} label={t('editor.wrap')} active={wordWrap} disabled={!controller} onclick={() => (wordWrap = !wordWrap)} />
+{/snippet}
+{#snippet reloadButton()}
+  <IconButton icon="refresh" small={!viewport.compact} label={t('editor.reload')} disabled={locked} onclick={() => void editors.reload(draft)} />
+{/snippet}
+
 <section class="text-editor" onfocusin={() => editors.focus(draft.id, command)}>
-  <header>
-    <Icon name="fileCode" size={15} />
+  <header class:compact={viewport.compact}>
+    {#if viewport.compact}
+      <IconButton icon="back" label={t('editor.close')} disabled={locked} onclick={() => void close()} />
+    {:else}
+      <Icon name="fileCode" size={15} />
+    {/if}
     <div class="identity"><strong title={draft.path}>{draft.path.split('/').at(-1)}</strong><span title={draft.label}>{draft.label}</span></div>
     {#if dirty}<span class="dot" title={t('editor.unsaved')} aria-label={t('editor.unsaved')}></span>{/if}
-    <IconButton icon="undo" small label={t('editor.undo')} disabled={locked || !controller} onclick={() => controller?.undo()} />
-    <IconButton icon="redo" small label={t('editor.redo')} disabled={locked || !controller} onclick={() => controller?.redo()} />
-    <IconButton icon="search" small label={t('editor.find')} disabled={!controller} onclick={() => controller?.find()} />
-    <IconButton icon="wrapText" small label={t('editor.wrap')} active={wordWrap} disabled={!controller} onclick={() => (wordWrap = !wordWrap)} />
-    <button class="secondary save" disabled={locked || !dirty} onclick={() => void editors.save(draft)}>{t(draft.busy ? 'editor.saving' : 'common.save')}</button>
-    <IconButton icon="refresh" small label={t('editor.reload')} disabled={locked} onclick={() => void editors.reload(draft)} />
-    <IconButton icon="close" small label={t('editor.close')} disabled={locked} onclick={() => void close()} />
+    {#if !viewport.compact}{@render editTools()}{/if}
+    <button class="save" class:primary={viewport.compact} class:secondary={!viewport.compact} disabled={locked || !dirty} onclick={() => void editors.save(draft)}>{t(draft.busy ? 'editor.saving' : 'common.save')}</button>
+    {#if !viewport.compact}
+      {@render reloadButton()}
+      <IconButton icon="close" small label={t('editor.close')} disabled={locked} onclick={() => void close()} />
+    {/if}
   </header>
+  {#if viewport.compact}
+    <div class="editor-tools">
+      {@render editTools()}
+      {@render reloadButton()}
+    </div>
+  {/if}
   <div class="location" title={draft.path}>{draft.path}</div>
   {#if draft.conflict}
     <div class="notice conflict" role="alert"><Icon name="warning" size={16} /><span>{t('editor.conflict')}</span>
@@ -125,5 +144,35 @@
   }
   @media (pointer: coarse) {
     .save { min-height: var(--control-height); }
+  }
+  header.compact {
+    flex: none;
+    flex-wrap: nowrap;
+    min-height: 48px;
+  }
+  .compact .identity {
+    flex: 1;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+  }
+  .editor-tools {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 0 var(--space-2);
+    box-shadow: inset 0 -0.5px 0 var(--separator);
+  }
+  .compact :global(.icon-button),
+  .editor-tools :global(.icon-button),
+  .compact .save {
+    flex: none;
+    min-height: var(--touch-target, 44px);
+    min-width: var(--touch-target, 44px);
+  }
+  .compact .save {
+    min-width: 76px;
+    margin-inline-start: var(--space-1);
   }
 </style>

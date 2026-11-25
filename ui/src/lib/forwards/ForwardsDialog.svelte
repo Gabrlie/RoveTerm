@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { viewport } from '../layout/viewport.svelte';
   // Port forwarding rules of one host: list with live status, start/stop, and an editor.
   import { onMount } from 'svelte';
   import Dialog from '../ui/Dialog.svelte';
@@ -165,7 +166,7 @@
   });
 </script>
 
-<Dialog title={t('forward.title', { host: host.name })} {onclose} width={560}>
+<Dialog presentation="page" title={t('forward.title', { host: host.name })} {onclose} width={560}>
   {#if rules.length === 0 && editing === null}
     <p class="empty">{t('forward.empty')}</p>
   {/if}
@@ -252,11 +253,11 @@
 
   {#snippet actions()}
     {#if editing === null}
-      <button type="button" class="secondary" onclick={onclose}>{t('common.close')}</button>
-      <button type="button" class="primary" onclick={() => openEditor(null)}>{t('forward.add')}</button>
+      <button class:page-action={viewport.compact} type="button" class="secondary" onclick={onclose}>{t('common.close')}</button>
+      <button class:page-action={viewport.compact} type="button" class="primary" onclick={() => openEditor(null)}>{t('forward.add')}</button>
     {:else}
-      <button type="button" class="secondary" onclick={() => (editing = null)}>{t('common.cancel')}</button>
-      <button type="submit" class="primary" form="forward-form">{t('common.save')}</button>
+      <button class:page-action={viewport.compact} type="button" class="secondary" onclick={() => (editing = null)}>{t('common.cancel')}</button>
+      <button class:page-action={viewport.compact} type="submit" class="primary" form="forward-form">{t('common.save')}</button>
     {/if}
   {/snippet}
 </Dialog>
@@ -403,5 +404,11 @@
     .password input[type='password'] {
       flex: 1 1 100%;
     }
+  }
+
+  .page-action {
+    min-height: var(--touch-target, 44px);
+    height: auto;
+    white-space: normal;
   }
 </style>

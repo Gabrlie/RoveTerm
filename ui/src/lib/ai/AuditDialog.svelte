@@ -107,8 +107,13 @@
   });
 
   $effect(() => {
-    if (layoutMode === 'detail') return pushBackHandler(() => { compactDetail = false; });
+    if (layoutMode === 'detail') return pushBackHandler(back);
   });
+
+  function back(): void {
+    if (layoutMode === 'detail') compactDetail = false;
+    else onclose();
+  }
 
   function selectSession(id: string): void {
     if (selected !== id) void load(id);
@@ -348,7 +353,11 @@
   {#if expanded[key]}{@render formattedDetail(detail, item.bodyRef)}{/if}
 {/snippet}
 
-<Dialog title={t('ai.history')} {onclose} width={960}>
+{#snippet footer()}
+  <button type="button" class="primary" onclick={onclose}>{t('settings.done')}</button>
+{/snippet}
+
+<Dialog presentation="page" title={t('ai.history')} onclose={back} width={960} actions={viewport.compact ? undefined : footer}>
   <div class="audit" class:compact={viewport.compact}>
     {#if layoutMode !== 'detail'}
     <nav aria-label={t('ai.history')}>
@@ -396,13 +405,6 @@
 
     {#if layoutMode !== 'list'}
     <section class="pane" aria-label={t('ai.history')}>
-      {#if layoutMode === 'detail'}
-        <div class="compact-bar">
-          <button type="button" class="plain back-btn" onclick={() => (compactDetail = false)}>
-            <Icon name="back" size={16} />{t('ai.history.backToList')}
-          </button>
-        </div>
-      {/if}
       {#if parent}
         <header class="pane-head">
           <div class="head-info">
@@ -533,9 +535,6 @@
     </section>
     {/if}
   </div>
-  {#snippet actions()}
-    <button type="button" class="primary" onclick={onclose}>{t('settings.done')}</button>
-  {/snippet}
 </Dialog>
 
 <style>
@@ -831,7 +830,13 @@
     .line { grid-template-columns: max-content minmax(0, 1fr); }
     .line .body { grid-column: 2; }
   }
-  .audit.compact { height: min(72dvh, 660px); }
+  .audit.compact {
+    flex: 1;
+    height: auto;
+    min-height: 0;
+    margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-4));
+    border-block: none;
+  }
   .compact nav {
     flex: 1;
     border-inline-end: none;
@@ -846,16 +851,4 @@
   }
   .compact .switcher button { min-height: 36px; }
   .compact .op { min-height: 44px; }
-  .compact-bar {
-    flex: none;
-    padding: var(--space-1) var(--space-2);
-    border-bottom: 1px solid var(--separator);
-    background: var(--material-bar);
-  }
-  .back-btn {
-    min-height: 36px;
-    height: auto;
-    gap: var(--space-2);
-    color: var(--accent);
-  }
 </style>

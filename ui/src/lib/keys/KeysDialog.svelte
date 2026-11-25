@@ -87,8 +87,13 @@
   const installOptions = $derived(installableHosts.map((host) => ({ value: host.id, label: `${host.name} (${host.username}@${host.hostname})` })));
 
   $effect(() => {
-    if (layoutMode === 'detail') return pushBackHandler(() => { compactDetail = false; });
+    if (layoutMode === 'detail') return pushBackHandler(back);
   });
+
+  function back(): void {
+    if (layoutMode === 'detail') compactDetail = false;
+    else onclose();
+  }
 
   $effect(() => {
     if (!selected?.id || !installHost || !installableHosts.some((host) => host.id === installHost)) {
@@ -369,7 +374,21 @@
   onDestroy(clearCopyFeedback);
 </script>
 
-<Dialog title={t('keys.title')} {onclose} width={800}>
+{#snippet footer()}
+  <div class="footer-actions" class:compact={viewport.compact}>
+    <button type="button" class="secondary" class:active={layoutMode === 'both' && mode === 'generate'} disabled={busy} onclick={() => openMode('generate')}>
+      <Icon name="add" size={13} />{t('keys.generate')}
+    </button>
+    <button type="button" class="secondary" class:active={layoutMode === 'both' && mode === 'import'} disabled={busy} onclick={() => openMode('import')}>
+      <Icon name="importConfig" size={13} />{t('keys.import')}
+    </button>
+  </div>
+  {#if !viewport.compact}
+    <button type="button" class="primary" onclick={onclose}>{t('settings.done')}</button>
+  {/if}
+{/snippet}
+
+<Dialog presentation="page" title={t('keys.title')} onclose={back} width={800} actions={layoutMode === 'detail' ? undefined : footer}>
   <div class="layout" class:compact={viewport.compact}>
     {#if layoutMode !== 'detail'}
       <nav aria-label={t('keys.title')}>
@@ -405,13 +424,6 @@
 
     {#if layoutMode !== 'list'}
       <div class="pane">
-        {#if layoutMode === 'detail'}
-          <div class="compact-bar">
-            <button type="button" class="plain back-btn" onclick={() => (compactDetail = false)}>
-              <Icon name="back" size={16} />{t('keys.backToList')}
-            </button>
-          </div>
-        {/if}
         {#if mode === 'view' && selected}
           <section class="card summary">
             <div class="head">
@@ -602,19 +614,6 @@
       </div>
     {/if}
   </div>
-  {#snippet actions()}
-    {#if layoutMode !== 'detail'}
-      <div class="footer-actions" class:compact={viewport.compact}>
-        <button type="button" class="secondary" class:active={layoutMode === 'both' && mode === 'generate'} disabled={busy} onclick={() => openMode('generate')}>
-          <Icon name="add" size={13} />{t('keys.generate')}
-        </button>
-        <button type="button" class="secondary" class:active={layoutMode === 'both' && mode === 'import'} disabled={busy} onclick={() => openMode('import')}>
-          <Icon name="importConfig" size={13} />{t('keys.import')}
-        </button>
-      </div>
-    {/if}
-    <button type="button" class="primary" onclick={onclose}>{t('settings.done')}</button>
-  {/snippet}
 </Dialog>
 
 {#if keyMenu}
@@ -980,7 +979,11 @@
   }
   .layout.compact {
     flex-direction: column;
-    height: min(72dvh, 640px);
+    flex: 1;
+    height: auto;
+    min-height: 0;
+    margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-4));
+    box-shadow: none;
   }
   .compact nav {
     flex: 1;
@@ -1002,13 +1005,17 @@
     color: var(--fg-muted);
   }
   .footer-actions.compact {
-    display: flex;
-    flex-wrap: wrap;
+    flex: 1;
     width: auto;
     min-width: 0;
     margin-left: 0;
   }
-  .footer-actions.compact button,
+  .footer-actions.compact button {
+    min-height: var(--touch-target, 44px);
+    height: auto;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
   .compact .pane button {
     max-width: 100%;
     white-space: normal;

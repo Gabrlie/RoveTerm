@@ -28,10 +28,15 @@
 </script>
 
 <aside class="panel">
-  <div class="tabs">
+  <div class="tabs" class:compact={viewport.compact}>
+    {#if viewport.compact}
+      <IconButton icon="back" label={t('mobile.back')} onclick={onclose} />
+    {/if}
     <h3 class="title">{t(TITLES[page])}</h3>
-    <span class="spacer"></span>
-    <IconButton icon="close" label={t('common.close')} small onclick={onclose} />
+    {#if !viewport.compact}
+      <span class="spacer"></span>
+      <IconButton icon="close" label={t('common.close')} small onclick={onclose} />
+    {/if}
   </div>
   <div class="body" class:fill={page === 'ai'}>
     {#if page === 'ai'}
@@ -61,6 +66,17 @@
     gap: var(--space-1);
     height: 44px;
     padding: 0 var(--space-2) 0 var(--space-3);
+  }
+  .tabs.compact {
+    flex: none;
+    min-height: 48px;
+    padding: 0 var(--space-2);
+    background: var(--material-bar);
+    box-shadow: inset 0 -0.5px 0 var(--separator);
+  }
+  .tabs.compact :global(.icon-button) {
+    min-width: var(--touch-target, 44px);
+    min-height: var(--touch-target, 44px);
   }
   .spacer {
     flex: 1;

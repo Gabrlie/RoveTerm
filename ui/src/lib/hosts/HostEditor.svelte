@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { viewport } from '../layout/viewport.svelte';
   // Create or edit a host. The draft stays in the form when saving fails (for example a denied unlock).
   import Dialog from '../ui/Dialog.svelte';
   import Select from '../ui/Select.svelte';
@@ -231,7 +232,7 @@
   }
 </script>
 
-<Dialog title={initial ? t('host.edit') : t('host.new')} {onclose}>
+<Dialog presentation="page" title={initial ? t('host.edit') : t('host.new')} {onclose}>
   <form id="host-form" onsubmit={save}>
     <div class="row">
       {#if useTailscaleSelect}
@@ -328,11 +329,11 @@
     {#if duplicateMatch}<p class="hint" role="status">{t('tailscale.duplicate', { name: duplicateMatch.name })}</p>{/if}
   </form>
   {#snippet actions()}
-    <button type="button" class="secondary" onclick={onclose}>{t('common.cancel')}</button>
+    <button class:page-action={viewport.compact} type="button" class="secondary" onclick={onclose}>{t('common.cancel')}</button>
     {#if duplicateMatch && onreuse}
-      <button type="button" class="primary" onclick={() => duplicateMatch && onreuse?.(duplicateMatch)}>{t('tailscale.useExisting')}</button>
+      <button class:page-action={viewport.compact} type="button" class="primary" onclick={() => duplicateMatch && onreuse?.(duplicateMatch)}>{t('tailscale.useExisting')}</button>
     {:else}
-      <button type="submit" class="primary" form="host-form" disabled={saving}>{submitLabel ?? t('common.save')}</button>
+      <button class:page-action={viewport.compact} type="submit" class="primary" form="host-form" disabled={saving}>{submitLabel ?? t('common.save')}</button>
     {/if}
   {/snippet}
 </Dialog>
@@ -378,5 +379,11 @@
     margin: calc(-1 * var(--space-2)) 0 0;
     color: var(--fg-muted);
     font-size: var(--text-footnote);
+  }
+
+  .page-action {
+    min-height: var(--touch-target, 44px);
+    height: auto;
+    white-space: normal;
   }
 </style>
