@@ -191,6 +191,9 @@
       touch-action: pan-x;
       background: var(--bar-term-bg);
     }
+    .status-bar::-webkit-scrollbar {
+      display: none;
+    }
     .metric,
     .path-badge {
       flex: none;

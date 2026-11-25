@@ -3,8 +3,8 @@
   import { t } from '../i18n';
   import Icon from '../ui/Icon.svelte';
   import type { IconName } from '../ui/icons';
-  import KeyBarCustomizeDialog, { keyBarItemLabel } from './KeyBarCustomizeDialog.svelte';
-  import { builtinKeyMeta, encodeKeyItem, isPinnedKey, type KeyBarItem, type ModifierState } from './keybar';
+  import { keyBarItemLabel } from './KeyBarCustomizeDialog.svelte';
+  import { builtinKeyMeta, encodeKeyItem, type KeyBarItem, type ModifierState } from './keybar';
   import { keybarPrefs } from './keybarPrefs.svelte';
 
   interface Props {
@@ -24,12 +24,9 @@
 
   let {
     ctrl, alt, keyboardOpen = false, compactDock = false,
-    onctrl, onalt, onsend, onpaste, onsnippets, ontogglekeyboard, oncustomize,
+    onctrl, onalt, onsend, onpaste, onsnippets, ontogglekeyboard,
   }: Props = $props();
-  let customizing = $state(false);
-  const { primary, secondary, expanded } = $derived(keybarPrefs.layout);
-  const toggleLabel = $derived(t(expanded ? 'terminal.dock.collapseKeys' : 'terminal.dock.expandKeys'));
-  const customizeLabel = $derived(t('terminal.dock.customizeKeys'));
+  const { primary, secondary } = $derived(keybarPrefs.layout);
 
   const actionIcons: Partial<Record<Extract<KeyBarItem, { kind: 'builtin' }>['id'], IconName>> = {
     paste: 'paste',
@@ -96,11 +93,6 @@
     press(item);
   }
 
-  function customize(): void {
-    if (oncustomize) oncustomize();
-    else customizing = true;
-  }
-
   onDestroy(stopRepeat);
 </script>
 
@@ -109,16 +101,14 @@
   {@const modifier = id === 'ctrl' ? ctrl : id === 'alt' ? alt : undefined}
   {@const icon = id && actionIcons[id]}
   {@const label = keyBarItemLabel(item)}
-  {@const accessibleLabel = modifier === 'locked' ? t(id === 'ctrl' ? 'keybar.ctrlLocked' : 'keybar.altLocked') : label}
   <button
     type="button"
     class="keycap"
     class:armed={modifier === 'armed'}
-    class:locked={modifier === 'locked'}
     class:active={id === 'keyboard' && keyboardOpen}
-    title={accessibleLabel}
-    aria-label={accessibleLabel}
-    aria-pressed={modifier ? (modifier === 'armed' ? 'mixed' : modifier === 'locked') : id === 'keyboard' ? keyboardOpen : undefined}
+    title={label}
+    aria-label={label}
+    aria-pressed={modifier ? modifier === 'armed' : id === 'keyboard' ? keyboardOpen : undefined}
     disabled={id === 'snippets' && !onsnippets}
     onpointerdown={(event) => keyDown(event, item)}
     onpointerup={keyUp}
@@ -126,66 +116,29 @@
     onpointercancel={keyUp}
     onclick={(event) => clickKey(event, item)}
   >
-    {#if icon}<Icon name={icon} size={16} />{:else}{label}{/if}
+    {#if icon}<Icon name={icon} size={16} />{:else}<span class="key-label">{label}</span>{/if}
   </button>
 {/snippet}
 
-{#snippet keyStrip(items: KeyBarItem[])}
-  <div class="key-strip">
+{#snippet keyRow(items: KeyBarItem[])}
+  <div class="key-row" style:--cols={Math.max(1, items.length)}>
     {#each items as item}
-      {#if item.kind === 'custom' || (!isPinnedKey(item.id) && !(compactDock && item.id === 'keyboard'))}
-        {@render keycap(item)}
-      {/if}
+      {@render keycap(item)}
     {/each}
   </div>
 {/snippet}
 
 <div class="keybar" class:immersion={compactDock} role="group" aria-label={t('keybar.title')}>
-  {#if expanded}
-    <div class="key-row">
-      {@render keyStrip(secondary)}
-      <div class="pinned-actions">
-        <button
-          type="button"
-          class="keycap"
-          title={customizeLabel}
-          aria-label={customizeLabel}
-          aria-haspopup="dialog"
-          onpointerdown={(event) => event.preventDefault()}
-          onclick={customize}
-        >
-          <Icon name="settings" size={16} />
-        </button>
-      </div>
-    </div>
+  {@render keyRow(primary)}
+  {#if secondary.length}
+    {@render keyRow(secondary)}
   {/if}
-  <div class="key-row">
-    {@render keyStrip(primary)}
-    <div class="pinned-actions">
-      <button
-        type="button"
-        class="keycap"
-        title={toggleLabel}
-        aria-label={toggleLabel}
-        aria-expanded={expanded}
-        onpointerdown={(event) => event.preventDefault()}
-        onclick={() => keybarPrefs.setExpanded(!expanded)}
-      >
-        <Icon name={expanded ? 'chevronDown' : 'chevronUp'} size={16} />
-      </button>
-    </div>
-  </div>
 </div>
-
-{#if customizing}
-  <KeyBarCustomizeDialog onclose={() => (customizing = false)} />
-{/if}
 
 <style>
   .keybar {
     --keycap-bg: var(--fill);
     --keycap-pressed: var(--fill-pressed);
-    --keybar-separator: var(--separator);
     flex: none;
     min-width: 0;
     color: var(--fg);
@@ -201,75 +154,52 @@
     box-shadow: inset 0 1px 0 var(--keybar-separator);
   }
   .key-row {
-    display: flex;
-    align-items: center;
-    height: 40px;
-    padding-inline-end: var(--space-2);
-  }
-  .immersion .key-row {
-    height: 38px;
-  }
-  .key-strip {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: var(--space-1);
-    padding: 3px 6px 3px var(--space-2);
-    overflow-x: auto;
-    touch-action: pan-x;
-    scrollbar-width: none;
-  }
-  .pinned-actions {
-    flex: none;
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
     align-items: center;
     gap: 4px;
-    padding-left: 6px;
-    box-shadow: inset 1px 0 0 var(--keybar-separator);
+    height: 36px;
+    padding-inline: var(--space-2);
+    overflow: hidden;
   }
   .keycap {
-    flex: none;
+    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: var(--space-1);
-    min-width: var(--space-8);
-    height: var(--space-8);
-    padding: 0 var(--space-2);
+    min-width: 0;
+    height: 30px;
+    padding: 0 2px;
     border: 1px solid transparent;
-    border-radius: var(--radius-sm);
+    border-radius: 7px;
     background: var(--keycap-bg);
     color: inherit;
-    font: 600 var(--text-body) var(--font-mono);
+    font: 600 11.5px var(--font-mono);
     white-space: nowrap;
     cursor: pointer;
     -webkit-touch-callout: none;
   }
-  .immersion .keycap {
-    height: 32px;
-    border-radius: 7px;
+  .key-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .keycap:active:not(:disabled) {
     background: var(--keycap-pressed);
   }
-  .keycap.armed, .keycap.active {
+  .keycap.active {
     background: var(--accent-soft);
     color: var(--accent);
   }
-  .keycap.armed {
-    border-color: var(--accent);
-  }
   .keycap.armed::after {
     content: '';
-    width: var(--space-1);
-    height: var(--space-1);
-    border-radius: var(--radius-pill);
-    background: currentColor;
-  }
-  .keycap.locked {
+    position: absolute;
+    left: 22%;
+    right: 22%;
+    bottom: 3px;
+    height: 2px;
+    border-radius: 1px;
     background: var(--accent);
-    color: var(--accent-fg);
+    pointer-events: none;
   }
   .keycap:disabled {
     opacity: 0.45;

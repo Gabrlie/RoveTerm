@@ -1,8 +1,7 @@
-export type ModifierState = 'off' | 'armed' | 'locked';
+export type ModifierState = 'off' | 'armed';
 
 export function cycleModifier(state: ModifierState): ModifierState {
-  if (state === 'off') return 'armed';
-  return state === 'armed' ? 'locked' : 'off';
+  return state === 'off' ? 'armed' : 'off';
 }
 
 export function consumeModifier(state: ModifierState): ModifierState {
@@ -69,19 +68,19 @@ interface KeyDefinition extends Omit<BuiltinKeyMeta, 'id'> {
 }
 
 const BUILTIN_KEYS: Record<BuiltinKeyId, KeyDefinition> = {
-  ctrl: { label: 'Ctrl', category: 'modifier' },
-  alt: { label: 'Alt', category: 'modifier' },
-  esc: { label: 'Esc', category: 'nav', sequence: '\x1b' },
-  tab: { label: 'Tab', category: 'nav', sequence: '\t' },
+  ctrl: { label: 'CTRL', category: 'modifier' },
+  alt: { label: 'ALT', category: 'modifier' },
+  esc: { label: 'ESC', category: 'nav', sequence: '\x1b' },
+  tab: { label: 'TAB', category: 'nav', sequence: '\t' },
   shiftTab: { label: 'Shift+Tab', category: 'nav', sequence: '\x1b[Z' },
   left: { label: '←', category: 'nav', direction: 'D', repeatable: true },
   down: { label: '↓', category: 'nav', direction: 'B', repeatable: true },
   up: { label: '↑', category: 'nav', direction: 'A', repeatable: true },
   right: { label: '→', category: 'nav', direction: 'C', repeatable: true },
-  home: { label: 'Home', category: 'nav', sequence: '\x1b[H' },
-  end: { label: 'End', category: 'nav', sequence: '\x1b[F' },
-  pgUp: { label: 'PgUp', category: 'nav', sequence: '\x1b[5~', repeatable: true },
-  pgDn: { label: 'PgDn', category: 'nav', sequence: '\x1b[6~', repeatable: true },
+  home: { label: 'HOME', category: 'nav', sequence: '\x1b[H' },
+  end: { label: 'END', category: 'nav', sequence: '\x1b[F' },
+  pgUp: { label: 'PGUP', category: 'nav', sequence: '\x1b[5~', repeatable: true },
+  pgDn: { label: 'PGDN', category: 'nav', sequence: '\x1b[6~', repeatable: true },
   enter: { label: 'Enter', category: 'nav', sequence: '\r' },
   backspace: { label: '⌫', category: 'nav', sequence: '\x7f', repeatable: true },
   delete: { label: 'Del', category: 'nav', sequence: '\x1b[3~', repeatable: true },
@@ -146,8 +145,8 @@ export const BUILTIN_KEY_CATALOG: readonly BuiltinKeyMeta[] =
   (Object.keys(BUILTIN_KEYS) as BuiltinKeyId[]).filter((id) => !isPinnedKey(id)).map(builtinKeyMeta);
 
 export const DEFAULT_KEYBAR_LAYOUT: KeyBarLayout = {
-  primary: builtinRow('esc', 'tab', 'shiftTab', 'ctrl', 'alt', 'left', 'down', 'up', 'right', 'paste', 'snippets', 'keyboard'),
-  secondary: builtinRow('ctrlC', 'ctrlD', 'ctrlZ', 'home', 'end', 'pgUp', 'pgDn', 'slash', 'dash', 'pipe', 'tilde', 'underscore', 'colon', 'star', 'amp', 'backslash'),
+  primary: builtinRow('esc', 'slash', 'dash', 'home', 'up', 'end', 'pgUp'),
+  secondary: builtinRow('tab', 'ctrl', 'alt', 'left', 'down', 'right', 'pgDn'),
   expanded: true,
 };
 
@@ -187,19 +186,20 @@ export function encodeKeyItem(item: KeyBarItem, ctrl: ModifierState, alt: Modifi
   return applyModifiers(key.sequence, ctrl, alt);
 }
 
-export const MAX_KEYBAR_ROW_ITEMS = 32;
+export const MAX_KEYBAR_ROW_ITEMS = 7;
 export type KeyBarRow = 'primary' | 'secondary';
 
-function parseRow(raw: unknown): KeyBarItem[] {
+function parseRow(raw: unknown, limit = MAX_KEYBAR_ROW_ITEMS): KeyBarItem[] {
   if (!Array.isArray(raw)) return [];
   const row: KeyBarItem[] = [];
   for (const value of raw as unknown[]) {
-    if (row.length === MAX_KEYBAR_ROW_ITEMS) break;
+    if (row.length === limit) break;
     if (typeof value !== 'object' || value === null) continue;
     const item = value as Partial<Record<'kind' | 'id' | 'label' | 'sequence', unknown>>;
     if (typeof item.id !== 'string') continue;
     if (item.kind === 'builtin' && Object.hasOwn(BUILTIN_KEYS, item.id)) {
-      row.push({ kind: 'builtin', id: item.id as BuiltinKeyId });
+      const id = item.id as BuiltinKeyId;
+      if (!isPinnedKey(id)) row.push({ kind: 'builtin', id });
     } else if (
       item.kind === 'custom' && item.id.trim() &&
       typeof item.label === 'string' && item.label.trim() &&
@@ -211,16 +211,19 @@ function parseRow(raw: unknown): KeyBarItem[] {
   return row;
 }
 
-export function parseKeyBarLayout(raw: unknown): KeyBarLayout {
+function readLayout(raw: unknown): Partial<Record<keyof KeyBarLayout, unknown>> {
   if (typeof raw === 'string') {
     try {
       raw = JSON.parse(raw);
     } catch {
-      return structuredClone(DEFAULT_KEYBAR_LAYOUT);
+      return {};
     }
   }
-  if (typeof raw !== 'object' || raw === null) return structuredClone(DEFAULT_KEYBAR_LAYOUT);
-  const layout = raw as Partial<Record<keyof KeyBarLayout, unknown>>;
+  return typeof raw === 'object' && raw !== null ? raw : {};
+}
+
+export function parseKeyBarLayout(raw: unknown): KeyBarLayout {
+  const layout = readLayout(raw);
   const primary = parseRow(layout.primary);
   if (!primary.length) return structuredClone(DEFAULT_KEYBAR_LAYOUT);
   return {
@@ -230,13 +233,35 @@ export function parseKeyBarLayout(raw: unknown): KeyBarLayout {
   };
 }
 
-export function migrateKeyBarV1(rawV1: unknown): KeyBarLayout {
-  const layout = parseKeyBarLayout(rawV1);
-  const isRowKey = (item: KeyBarItem) => item.kind === 'custom' || !isPinnedKey(item.id);
-  const primary = layout.primary.filter(isRowKey);
+const LEGACY_DEFAULT_ROWS: readonly Record<KeyBarRow, readonly BuiltinKeyId[]>[] = [
+  {
+    primary: ['esc', 'tab', 'ctrl', 'alt', 'left', 'down', 'up', 'right', 'paste', 'snippets', 'keyboard'],
+    secondary: ['home', 'end', 'pgUp', 'pgDn', 'slash', 'dash', 'pipe', 'tilde', 'underscore', 'colon', 'star', 'amp', 'backslash'],
+  },
+  {
+    primary: ['esc', 'tab', 'shiftTab', 'ctrl', 'alt', 'left', 'down', 'up', 'right', 'paste', 'snippets', 'keyboard'],
+    secondary: ['ctrlC', 'ctrlD', 'ctrlZ', 'home', 'end', 'pgUp', 'pgDn', 'slash', 'dash', 'pipe', 'tilde', 'underscore', 'colon', 'star', 'amp', 'backslash'],
+  },
+];
+
+function matchesBuiltinRow(row: KeyBarItem[], ids: readonly BuiltinKeyId[]): boolean {
+  return row.length === ids.length && row.every((item, index) => item.kind === 'builtin' && item.id === ids[index]);
+}
+
+/** Upgrades saved v1 or v2 layouts, comparing the full key order before applying the v3 cap. */
+export function migrateKeyBarV2ToV3(rawV2: unknown): KeyBarLayout {
+  const layout = readLayout(rawV2);
+  const primary = parseRow(layout.primary, Infinity);
+  const secondary = parseRow(layout.secondary, Infinity);
+  if (
+    (!primary.length && !secondary.length) ||
+    LEGACY_DEFAULT_ROWS.some((defaults) => matchesBuiltinRow(primary, defaults.primary) && matchesBuiltinRow(secondary, defaults.secondary))
+  ) {
+    return structuredClone(DEFAULT_KEYBAR_LAYOUT);
+  }
   return {
-    primary: primary.length ? primary : structuredClone(DEFAULT_KEYBAR_LAYOUT.primary),
-    secondary: layout.secondary.filter(isRowKey),
+    primary: primary.length ? primary.slice(0, MAX_KEYBAR_ROW_ITEMS) : structuredClone(DEFAULT_KEYBAR_LAYOUT.primary),
+    secondary: secondary.slice(0, MAX_KEYBAR_ROW_ITEMS),
     expanded: true,
   };
 }

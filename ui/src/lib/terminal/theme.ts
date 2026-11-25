@@ -27,5 +27,13 @@ export function currentTheme(): ITheme {
   const root = document.documentElement.style;
   if (theme.background) root.setProperty('--term-bg', theme.background);
   if (theme.foreground) root.setProperty('--term-fg', theme.foreground);
-  return theme;
+  // Terminal palettes use six-digit hex colors. xterm accepts the alpha channel in hex form.
+  const foreground = theme.foreground ?? '#ffffff';
+  return {
+    ...theme,
+    overviewRulerBorder: '#00000000',
+    scrollbarSliderBackground: foreground + '38',
+    scrollbarSliderHoverBackground: foreground + '52',
+    scrollbarSliderActiveBackground: foreground + '6b',
+  };
 }

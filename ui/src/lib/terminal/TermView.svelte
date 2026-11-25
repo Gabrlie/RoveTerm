@@ -447,6 +447,7 @@
       fontSize,
       lineHeight,
       scrollback,
+      overviewRuler: { width: coarse ? 4 : 8 },
       theme: currentTheme(),
       // Programs that assume a dark terminal print light text; keep it readable on any background.
       minimumContrastRatio: 4.5,
@@ -520,6 +521,13 @@
   });
 
   $effect(() => {
+    const width = coarse ? 4 : 8;
+    if (!term || term.options.overviewRuler?.width === width) return;
+    term.options.overviewRuler = { width };
+    scheduleRefit();
+  });
+
+  $effect(() => {
     const imeBottom = viewport.imeBottom;
     if (imeBottom === lastImeBottom) return;
     lastImeBottom = imeBottom;
@@ -578,5 +586,16 @@
   }
   .term :global(.xterm-viewport) {
     background: transparent !important;
+    overflow-x: hidden !important;
+    scrollbar-width: none;
+  }
+  .term :global(.xterm-viewport::-webkit-scrollbar) {
+    display: none;
+  }
+  .term :global(.xterm-scrollable-element > .scrollbar.horizontal) {
+    display: none !important;
+  }
+  .term :global(.xterm-scrollable-element > .scrollbar.vertical > .slider) {
+    border-radius: 999px;
   }
 </style>

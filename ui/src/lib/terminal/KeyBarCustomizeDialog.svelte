@@ -7,7 +7,6 @@
     switch (item.id) {
       case 'paste': return t('terminal.menu.paste');
       case 'snippets': return t('action.panel.snippets');
-      case 'toggleExtra': return t('keybar.symbols');
       case 'keyboard': return t('keybar.keyboard');
       case 'customize': return t('keybar.customize');
       default: return builtinKeyMeta(item.id).label;
@@ -76,7 +75,7 @@
         class:selected={row === key}
         aria-pressed={row === key}
         onclick={() => (row = key)}
-      >{t(`keybar.${key}`)}</button>
+      >{t(`keybar.${key}`)} ({draft[key].length}/{MAX_KEYBAR_ROW_ITEMS})</button>
     {/each}
   </div>
 
@@ -87,7 +86,7 @@
         <div class="item-actions">
           <IconButton icon="back" label={t('tab.moveLeft')} disabled={index === 0} onclick={() => (draft = moveKeyBarItem(draft, row, index, -1))} />
           <IconButton icon="chevron" label={t('tab.moveRight')} disabled={index === items.length - 1} onclick={() => (draft = moveKeyBarItem(draft, row, index, 1))} />
-          <IconButton icon={row === 'primary' ? 'up' : 'chevronDown'} label={t(otherRow === 'primary' ? 'keybar.moveToPrimary' : 'keybar.moveToSecondary')} disabled={!canMoveAcross} onclick={() => (draft = moveKeyBarItemAcrossRows(draft, row, index))} />
+          <IconButton icon={otherRow === 'primary' ? 'up' : 'chevronDown'} label={t(otherRow === 'primary' ? 'keybar.moveToPrimary' : 'keybar.moveToSecondary')} disabled={!canMoveAcross} onclick={() => (draft = moveKeyBarItemAcrossRows(draft, row, index))} />
           <IconButton icon="remove" label={t('common.delete')} danger disabled={lockItem} onclick={() => (draft = removeKeyBarItem(draft, row, index))} />
         </div>
       </li>

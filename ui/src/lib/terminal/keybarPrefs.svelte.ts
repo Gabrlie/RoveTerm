@@ -1,7 +1,6 @@
-import { migrateKeyBarV1, parseKeyBarLayout, serializeKeyBarLayout, type KeyBarLayout } from './keybar';
+import { migrateKeyBarV2ToV3, parseKeyBarLayout, serializeKeyBarLayout, type KeyBarLayout } from './keybar';
 
-const STORAGE_KEY = 'ui.keybar.layout.v2';
-const LEGACY_STORAGE_KEY = 'ui.keybar.layout.v1';
+const STORAGE_KEY = 'ui.keybar.layout.v3';
 
 function storeLayout(layout: KeyBarLayout): void {
   try {
@@ -15,9 +14,9 @@ function loadLayout(): KeyBarLayout {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved !== null) return parseKeyBarLayout(saved);
-    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+    const legacy = localStorage.getItem('ui.keybar.layout.v2') ?? localStorage.getItem('ui.keybar.layout.v1');
     if (legacy !== null) {
-      const layout = migrateKeyBarV1(legacy);
+      const layout = migrateKeyBarV2ToV3(legacy);
       storeLayout(layout);
       return layout;
     }
@@ -32,10 +31,6 @@ class KeyBarPrefs {
 
   get layout(): KeyBarLayout {
     return this.#layout;
-  }
-
-  setExpanded(expanded: boolean): void {
-    this.save({ ...this.#layout, expanded });
   }
 
   save(next: KeyBarLayout): void {
