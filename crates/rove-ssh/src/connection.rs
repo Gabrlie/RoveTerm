@@ -17,6 +17,7 @@ use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{ChannelMsg, ChannelWriteHalf, Disconnect};
 use russh_sftp::client::SftpSession;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::forward::RemoteRoutes;
 use crate::keys;
@@ -429,16 +430,26 @@ impl SshConnection {
         channel.request_shell(false).await.map_err(channel_error)?;
         let (mut reader, writer) = channel.split();
         let (tx, rx) = mpsc::channel(OUTPUT_QUEUE);
+        let cancel = CancellationToken::new();
+        let reader_cancel = cancel.clone();
         tokio::spawn(async move {
             let mut status = ExitStatus::default();
-            while let Some(message) = reader.wait().await {
+            loop {
+                let message = tokio::select! {
+                    biased;
+                    () = reader_cancel.cancelled() => break,
+                    message = reader.wait() => message,
+                };
+                let Some(message) = message else { break };
                 match message {
                     ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
-                        if tx
-                            .send(TerminalOutput::Data(Bytes::copy_from_slice(&data)))
-                            .await
-                            .is_err()
-                        {
+                        let output = TerminalOutput::Data(Bytes::copy_from_slice(&data));
+                        let sent = tokio::select! {
+                            biased;
+                            () = reader_cancel.cancelled() => break,
+                            result = tx.send(output) => result,
+                        };
+                        if sent.is_err() {
                             return;
                         }
                     }
@@ -452,6 +463,7 @@ impl SshConnection {
                     _ => {}
                 }
             }
+            drop(reader);
             let _receiver_may_be_gone = tx.send(TerminalOutput::Exit(status)).await;
         });
         let address = self.target.address();
@@ -459,6 +471,7 @@ impl SshConnection {
             session: Arc::new(SshTerminal {
                 writer,
                 closed: AtomicBool::new(false),
+                cancel,
                 _lease: self.lease(),
             }),
             output: rx,
@@ -933,6 +946,7 @@ where
 struct SshTerminal {
     writer: ChannelWriteHalf<client::Msg>,
     closed: AtomicBool,
+    cancel: CancellationToken,
     _lease: ChannelLease,
 }
 
@@ -991,9 +1005,126 @@ impl TerminalSession for SshTerminal {
         if self.closed.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
+        self.cancel.cancel();
         if let Err(error) = self.writer.close().await {
             tracing::debug!(%error, "closing ssh channel failed; connection already gone");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use russh::server;
+    use tokio::io::DuplexStream;
+    use tokio::sync::oneshot;
+
+    struct InMemoryTransport(Mutex<Option<DuplexStream>>);
+
+    #[async_trait]
+    impl TransportDialer for InMemoryTransport {
+        async fn dial(&self, _: &str, _: u16) -> Result<Box<dyn SshTransport>, SshError> {
+            Ok(Box::new(self.0.lock().take().unwrap()))
+        }
+    }
+
+    struct TrustTestKey;
+
+    #[async_trait]
+    impl HostKeyVerifier for TrustTestKey {
+        async fn verify(
+            &self,
+            _: &str,
+            _: u16,
+            _: &str,
+            _: &HostKey,
+        ) -> Result<(), HostKeyRejection> {
+            Ok(())
+        }
+    }
+
+    struct StalledShell(Option<oneshot::Sender<()>>);
+
+    impl server::Handler for StalledShell {
+        type Error = russh::Error;
+
+        async fn auth_password(&mut self, _: &str, _: &str) -> Result<server::Auth, Self::Error> {
+            Ok(server::Auth::Accept)
+        }
+
+        async fn channel_open_session(
+            &mut self,
+            _: russh::Channel<server::Msg>,
+            reply: server::ChannelOpenHandle,
+            _: &mut server::Session,
+        ) -> Result<(), Self::Error> {
+            reply.accept().await;
+            Ok(())
+        }
+
+        async fn shell_request(
+            &mut self,
+            _: russh::ChannelId,
+            _: &mut server::Session,
+        ) -> Result<(), Self::Error> {
+            self.0.take().unwrap().send(()).unwrap();
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn closing_shell_ends_output_without_a_remote_close() {
+        let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
+        let (shell_requested, shell_started) = oneshot::channel();
+        let _server = tokio::spawn(server::run_stream(
+            Arc::new(server::Config {
+                keys: vec![devsshd::generate_key()],
+                ..server::Config::default()
+            }),
+            server_stream,
+            StalledShell(Some(shell_requested)),
+        ));
+        let target = SshTarget {
+            hostname: "in-memory".into(),
+            port: 22,
+            username: "test".into(),
+            host_id: None,
+            title: None,
+            route: String::new(),
+        };
+        let via = Via::Custom {
+            label: "in-memory".into(),
+            dialer: Arc::new(InMemoryTransport(Mutex::new(Some(client_stream)))),
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let connection = SshConnection::connect(
+                &target,
+                &AuthSpec::Password(zeroize::Zeroizing::new(String::new())),
+                &via,
+                Arc::new(TrustTestKey),
+                &crate::SshConfig::default().options(),
+                None,
+            )
+            .await
+            .unwrap();
+            let connection = Arc::new(connection);
+            let mut terminal = connection
+                .open_shell(TermSize::new(80, 24).unwrap())
+                .await
+                .unwrap();
+            shell_started.await.unwrap();
+
+            terminal.session.close().await.unwrap();
+
+            assert!(matches!(
+                terminal.output.recv().await,
+                Some(TerminalOutput::Exit(_))
+            ));
+            assert!(terminal.output.recv().await.is_none());
+            assert!(!connection.is_closed());
+        })
+        .await
+        .expect("shell output should end while the server is stalled");
     }
 }

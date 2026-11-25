@@ -1,4 +1,6 @@
+use std::future::Future;
 use std::sync::Arc;
+use std::task::{Context, Waker};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -6,12 +8,13 @@ use bytes::Bytes;
 use parking_lot::Mutex;
 use rove_kernel::EventBus;
 use rove_session::*;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 
 #[derive(Default)]
 struct FakeSession {
     written: Mutex<Vec<u8>>,
     closed: Mutex<bool>,
+    close_gate: Option<Arc<Notify>>,
 }
 
 #[async_trait]
@@ -24,6 +27,9 @@ impl TerminalSession for FakeSession {
         Ok(())
     }
     async fn close(&self) -> Result<(), SessionError> {
+        if let Some(gate) = &self.close_gate {
+            gate.notified().await;
+        }
         *self.closed.lock() = true;
         Ok(())
     }
@@ -66,7 +72,15 @@ fn open(
     manager: &SessionManager,
     sink: Arc<RecordingSink>,
 ) -> (SessionId, Arc<FakeSession>, mpsc::Sender<TerminalOutput>) {
-    let session = Arc::new(FakeSession::default());
+    open_with_session(manager, sink, FakeSession::default())
+}
+
+fn open_with_session(
+    manager: &SessionManager,
+    sink: Arc<RecordingSink>,
+    session: FakeSession,
+) -> (SessionId, Arc<FakeSession>, mpsc::Sender<TerminalOutput>) {
+    let session = Arc::new(session);
     let (tx, rx) = mpsc::channel(64);
     let id = manager.attach(
         OpenedTerminal {
@@ -215,6 +229,90 @@ async fn write_close_and_unknown_ids() {
         Err(SessionError::NotFound(_))
     ));
     assert!(manager.list().is_empty());
+}
+
+#[tokio::test]
+async fn close_announces_removal_before_the_provider_finishes() {
+    let events = EventBus::default();
+    let manager = Arc::new(SessionManager::new(
+        SessionConfig::default(),
+        events.clone(),
+    ));
+    let gate = Arc::new(Notify::new());
+    let (id, _, _output) = open_with_session(
+        &manager,
+        Arc::new(RecordingSink::default()),
+        FakeSession {
+            close_gate: Some(gate.clone()),
+            ..FakeSession::default()
+        },
+    );
+    let (tx, mut removed) = mpsc::unbounded_channel();
+    let sessions = manager.clone();
+    let _listener = events.on::<SessionClosed>(move |event| {
+        assert!(sessions.list().is_empty());
+        tx.send(event.id).unwrap();
+    });
+    let _exit_listener = events.on::<SessionExited>(|_| panic!("output is still open"));
+
+    let mut close = std::pin::pin!(manager.close(id));
+    assert!(
+        close
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+    assert_eq!(removed.try_recv().unwrap(), id);
+    gate.notify_one();
+    close.await.unwrap();
+    assert!(matches!(
+        manager.close(id).await,
+        Err(SessionError::NotFound(_))
+    ));
+    assert!(removed.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn close_all_announces_every_removal_before_any_provider_finishes() {
+    let events = EventBus::default();
+    let manager = Arc::new(SessionManager::new(
+        SessionConfig::default(),
+        events.clone(),
+    ));
+    let sink = Arc::new(RecordingSink::default());
+    let gates = [Arc::new(Notify::new()), Arc::new(Notify::new())];
+    let [(first, _, _first_output), (second, _, _second_output)] = gates.each_ref().map(|gate| {
+        open_with_session(
+            &manager,
+            sink.clone(),
+            FakeSession {
+                close_gate: Some(gate.clone()),
+                ..FakeSession::default()
+            },
+        )
+    });
+    let (tx, mut removed) = mpsc::unbounded_channel();
+    let sessions = manager.clone();
+    let _listener = events.on::<SessionClosed>(move |event| {
+        assert!(sessions.list().is_empty());
+        tx.send(event.id).unwrap();
+    });
+    let _exit_listener = events.on::<SessionExited>(|_| panic!("output is still open"));
+
+    let mut close = std::pin::pin!(manager.close_all());
+    assert!(
+        close
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+    let announced = [removed.try_recv().unwrap(), removed.try_recv().unwrap()];
+    assert!(announced.contains(&first) && announced.contains(&second));
+    for gate in gates {
+        gate.notify_one();
+    }
+    close.await;
+    assert!(removed.try_recv().is_err());
 }
 
 #[test]

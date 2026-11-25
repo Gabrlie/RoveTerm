@@ -52,6 +52,10 @@
 3. 构建已签名发布 APK：通过环境变量 `ROVETERM_ANDROID_KEYSTORE_PATH`、`ROVETERM_ANDROID_KEYSTORE_PASSWORD`、`ROVETERM_ANDROID_KEY_ALIAS`、`ROVETERM_ANDROID_KEY_PASSWORD` 或本地未入库的 `src-tauri/gen/android/keystore.properties` 提供本机签名密钥库，再运行 `pnpm tauri android build --apk --target aarch64`。`scripts/release.mjs` 仅收录已签名的发布 APK，自动跳过 `debug` 与 `unsigned` 包。
 4. 连接设备调试：`pnpm tauri android dev`。
 
+`build.gradle.kts` 默认读取根目录 `Cargo.toml` 的 `[workspace.package].version` 作为 `versionName`，并派生随发行版本递增的 `versionCode`。例如 `0.3.0-beta.1`、`0.3.0-beta.2` 和 `0.3.0` 分别对应 `300301`、`300302` 和 `300999`。`tauri.properties` 中的 `tauri.android.versionName` 和 `tauri.android.versionCode` 各自优先。
+
+派生编码要求主版本号在 `0..=209` 范围内，次版本号和修订号在 `0..=99` 范围内。超过各自编码上限的预发布序号共用该上限，其他预发布标签共用偏移值 `1`。
+
 Android 使用 Keystore 保护凭据库的设备主密钥，可在应用的安全设置中启用生物识别或屏幕锁验证。也可在装有 Android SDK、NDK、JDK 17、Rust 与 Node.js / pnpm 的 Docker 容器中挂载工作区，使用相同命令构建 APK。
 
 `src-tauri/gen/android/app/src/main/AndroidManifest.xml` 声明 `SessionKeepAliveService` 为 `specialUse` 类型的前台服务，登记用途及 `FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_SPECIAL_USE`、`POST_NOTIFICATIONS` 和 `WAKE_LOCK` 权限。有活动会话等工作时，服务通过带「断开全部」操作的通知展示保活状态。

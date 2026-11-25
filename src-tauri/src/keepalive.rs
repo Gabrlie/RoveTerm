@@ -204,6 +204,7 @@ mod mobile {
         let mut disposers = vec![
             wake_on::<rove_session::SessionOpened>(ctx, &notify),
             wake_on::<rove_session::SessionExited>(ctx, &notify),
+            wake_on::<rove_session::SessionClosed>(ctx, &notify),
             wake_on::<rove_ssh::ForwardStatus>(ctx, &notify),
             wake_on::<rove_fs::TransferUpdate>(ctx, &notify),
         ];

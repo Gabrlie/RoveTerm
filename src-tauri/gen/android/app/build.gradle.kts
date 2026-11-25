@@ -1,5 +1,11 @@
 import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.tomlj.Toml
+
+buildscript {
+    repositories { mavenCentral() }
+    dependencies { classpath("org.tomlj:tomlj:1.1.1") }
+}
 
 plugins {
     id("com.android.application")
@@ -12,6 +18,50 @@ val tauriProperties = Properties().apply {
     if (propFile.exists()) {
         propFile.inputStream().use { load(it) }
     }
+}
+
+val workspaceVersion by lazy {
+    val cargoFile = rootProject.file("../../../Cargo.toml")
+    if (!cargoFile.isFile) throw GradleException("Workspace manifest is missing: $cargoFile")
+    val manifest = Toml.parse(cargoFile.toPath())
+    if (manifest.hasErrors()) {
+        throw GradleException("Invalid workspace manifest $cargoFile: ${manifest.errors()}")
+    }
+    val version = manifest.get("workspace.package.version") as? String
+        ?: throw GradleException("Expected [workspace.package].version to be a string in $cargoFile")
+    val number = "(0|[1-9][0-9]*)"
+    val identifiers = "[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*"
+    val semver = Regex("$number\\.$number\\.$number(?:-($identifiers))?(?:\\+$identifiers)?")
+    val parsed = semver.matchEntire(version)
+        ?: throw GradleException("Invalid workspace SemVer in $cargoFile: $version")
+    val prerelease = parsed.groupValues[4]
+    if (prerelease.split('.').any { it.length > 1 && it.startsWith('0') && it.all(Char::isDigit) }) {
+        throw GradleException("Invalid workspace SemVer in $cargoFile: $version")
+    }
+    parsed
+}
+
+fun workspaceVersionCode(version: MatchResult): Int {
+    val (_, majorText, minorText, patchText, prerelease) = version.groupValues
+    val major = majorText.toIntOrNull()
+    val minor = minorText.toIntOrNull()
+    val patch = patchText.toIntOrNull()
+    if (major == null || major > 210 || minor == null || minor > 99 || patch == null || patch > 99) {
+        throw GradleException("Workspace version ${version.value} exceeds the Android versionCode fields")
+    }
+    val numbered = Regex("(alpha|beta|rc)\\.([0-9]+)").matchEntire(prerelease)
+    val iteration = numbered?.groupValues?.get(2)?.toIntOrNull() ?: Int.MAX_VALUE
+    val preOffset = when (numbered?.groupValues?.get(1)) {
+        "alpha" -> 100 + iteration.coerceAtMost(199)
+        "beta" -> 300 + iteration.coerceAtMost(299)
+        "rc" -> 600 + iteration.coerceAtMost(299)
+        else -> if (prerelease.isEmpty()) 999 else 1
+    }
+    val code = major * 10_000_000 + minor * 100_000 + patch * 1_000 + preOffset
+    if (code > 2_100_000_000) {
+        throw GradleException("Workspace version ${version.value} exceeds the Android versionCode limit")
+    }
+    return code
 }
 
 val keystoreProperties = Properties().apply {
@@ -43,8 +93,9 @@ android {
         applicationId = "dev.roveterm.app"
         minSdk = 24
         targetSdk = 37
-        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
-        versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+        versionCode = tauriProperties.getProperty("tauri.android.versionCode")?.toInt()
+            ?: workspaceVersionCode(workspaceVersion)
+        versionName = tauriProperties.getProperty("tauri.android.versionName") ?: workspaceVersion.value
     }
     signingConfigs {
         if (hasReleaseSigning) {

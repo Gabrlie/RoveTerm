@@ -109,6 +109,14 @@ pub struct SessionExited {
 }
 impl Event for SessionExited {}
 
+/// Live event emitted after a session is removed from the table, before closing its transport.
+#[derive(Debug, Clone)]
+pub struct SessionClosed {
+    /// The removed session.
+    pub id: SessionId,
+}
+impl Event for SessionClosed {}
+
 /// A listing row returned by [`SessionManager::list`].
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionSummary {
@@ -206,6 +214,7 @@ impl SessionManager {
             .lock()
             .remove(&id)
             .ok_or(SessionError::NotFound(id))?;
+        self.events.emit(&SessionClosed { id });
         entry.output.lock().sink = None;
         entry.session.close().await
     }
@@ -246,13 +255,11 @@ impl SessionManager {
 
     /// Closes every session. Used on shutdown.
     pub async fn close_all(&self) {
-        let entries: Vec<_> = self
-            .sessions
-            .lock()
-            .drain()
-            .map(|(_, entry)| entry)
-            .collect();
-        for entry in entries {
+        let entries: Vec<_> = self.sessions.lock().drain().collect();
+        for &(id, _) in &entries {
+            self.events.emit(&SessionClosed { id });
+        }
+        for (_, entry) in entries {
             if let Err(error) = entry.session.close().await {
                 tracing::warn!(%error, "closing session during shutdown failed");
             }

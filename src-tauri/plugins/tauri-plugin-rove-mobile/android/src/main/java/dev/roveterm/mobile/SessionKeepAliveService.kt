@@ -13,6 +13,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import androidx.annotation.MainThread
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 
 class SessionKeepAliveService : Service() {
@@ -52,8 +53,13 @@ class SessionKeepAliveService : Service() {
             if (pendingUpdates > 0) {
                 stopAfterUpdates = true
             } else {
-                context.stopService(Intent(context, SessionKeepAliveService::class.java))
+                val stopped = context.stopService(Intent(context, SessionKeepAliveService::class.java))
+                if (!stopped) cancelNotification(context)
             }
+        }
+
+        private fun cancelNotification(context: Context) {
+            context.getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
         }
     }
 
@@ -89,8 +95,11 @@ class SessionKeepAliveService : Service() {
         return START_NOT_STICKY
     }
 
+    @MainThread
     override fun onDestroy() {
-        releaseWakeLock()
+        clearForeground()
+        pendingUpdates = 0
+        stopAfterUpdates = false
         super.onDestroy()
     }
 
@@ -138,8 +147,13 @@ class SessionKeepAliveService : Service() {
     }
 
     private fun stopKeepAlive(startId: Int) {
-        releaseWakeLock()
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        clearForeground()
         stopSelf(startId)
+    }
+
+    private fun clearForeground() {
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        cancelNotification(this)
+        releaseWakeLock()
     }
 }

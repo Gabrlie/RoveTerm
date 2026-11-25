@@ -15,8 +15,8 @@ use async_trait::async_trait;
 use rove_kernel::{Context, Disposer, KernelError, Plugin, PluginConfig};
 
 pub use manager::{
-    OpenedTerminal, OutputChunk, OutputSink, SessionConfig, SessionExited, SessionManager,
-    SessionOpened, SessionSummary,
+    OpenedTerminal, OutputChunk, OutputSink, SessionClosed, SessionConfig, SessionExited,
+    SessionManager, SessionOpened, SessionSummary,
 };
 pub use monitor::{CpuTimes, Disk, NetInterface, ServerStats};
 pub use types::{ExitStatus, SessionId, SessionInfo, SessionKind, TermSize, TerminalOutput};

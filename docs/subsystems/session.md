@@ -30,11 +30,11 @@ pub trait TerminalSession: Send + Sync {
 |---|---|
 | `attach(opened, sink) -> SessionId` | 登记会话、启动输出泵、发出 `SessionOpened` |
 | `write` / `resize` | 转发给对应的 `TerminalSession`；未知 ID 返回 `NotFound` |
-| `close(id)` | 从表中移除、断开 sink、调用 `TerminalSession::close` |
+| `close(id)` | 从表中移除、发出 `SessionClosed`、断开 sink、调用 `TerminalSession::close` |
 | `reattach(id, sink) -> (Bytes, Option<ExitStatus>)` | 原子地取回放快照并替换 sink |
 | `snapshot(id) -> Bytes` | 只读取回放缓冲，sink 不变 |
 | `list()` | 列出会话及其退出状态 |
-| `close_all()` | 关闭全部会话，用于退出应用时 |
+| `close_all()` | 清空会话表并发出所有 `SessionClosed`，再关闭各终端 |
 
 ## 输出合并
 
@@ -46,5 +46,6 @@ pub trait TerminalSession: Send + Sync {
 |---|---|
 | `SessionOpened { id, info }` | `attach` 完成登记后 |
 | `SessionExited { id, status }` | 输出 channel 结束后；没有收到 `Exit` 时 `status` 为默认值 |
+| `SessionClosed { id }` | 从会话表移除后立即发出，监听器此时可通过 `list()` 读取更新后的列表 |
 
-[rove-journal](journal.md) 监听这两个事件并把它们写成 Journal 事件。
+[rove-journal](journal.md) 持久化 `SessionOpened` 和 `SessionExited`。
