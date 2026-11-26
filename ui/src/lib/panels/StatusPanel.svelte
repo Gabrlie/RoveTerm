@@ -392,11 +392,15 @@
   }
   .up {
     color: var(--success);
-    overflow-wrap: anywhere;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
   }
   .down {
     color: var(--accent);
-    overflow-wrap: anywhere;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
   }
   .disk {
     display: flex;
@@ -415,13 +419,72 @@
     font: inherit;
     cursor: pointer;
   }
-  @media (max-width: 520px) {
+  @media (max-width: 767px) {
+    .status {
+      gap: 12px;
+      padding: 12px var(--m-page-x, 16px) 24px;
+      font-size: calc(13.5px * var(--ui-scale));
+    }
+    .card {
+      gap: 8px;
+      padding: 14px 16px;
+      border-radius: var(--m-card-radius, 12px);
+    }
+    h4 {
+      gap: 6px;
+      margin: 0 0 4px;
+      font-size: calc(15px * var(--ui-scale));
+    }
+    h4 :global(svg) {
+      width: 16px;
+      height: 16px;
+    }
+    .aside {
+      font-size: calc(13px * var(--ui-scale));
+    }
+    .facts {
+      gap: 10px 14px;
+    }
+    .facts dt {
+      margin-bottom: 2px;
+      font-size: calc(12px * var(--ui-scale));
+    }
+    .facts dd {
+      font-size: calc(14px * var(--ui-scale));
+      line-height: 1.35;
+    }
+    .headline strong {
+      font-size: 28px;
+    }
+    .mono {
+      font-size: calc(12.5px * var(--ui-scale));
+    }
+    .bar {
+      height: 7px;
+      border-radius: 4px;
+    }
+    .cores {
+      gap: 6px;
+      margin: 4px 0;
+    }
     .net {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      row-gap: var(--space-1);
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
     }
     .net .name {
-      grid-column: 1 / -1;
+      font-size: calc(13px * var(--ui-scale));
+      font-weight: 500;
+    }
+    .disk {
+      gap: 4px;
+    }
+    .disk + .disk {
+      margin-top: 10px;
+    }
+    .more {
+      font-size: calc(13px * var(--ui-scale));
+      font-weight: 500;
     }
   }
   @media (pointer: coarse) {

@@ -230,6 +230,10 @@
 }
 
 @media (max-width: 767px) {
+  .section-label {
+    padding: 0 4px;
+    font-size: calc(12px * var(--ui-scale));
+  }
   .form-group {
     border-radius: var(--m-card-radius, 12px);
   }
@@ -237,13 +241,42 @@
     min-height: var(--m-row-single, 46px);
     padding: 10px 14px;
   }
+  .form-row > .form-label small {
+    font-size: var(--m-text-sub, 12.5px);
+    line-height: 1.4;
+  }
   :where(button.primary, button.secondary) {
-    border-radius: var(--radius-md);
-    font-size: var(--m-text-body, 14.5px);
+    min-width: 64px;
+    padding: 0 14px;
+    border-radius: 9px;
+    font-size: calc(13.5px * var(--ui-scale));
+  }
+  :where(button.plain) {
+    border-radius: 8px;
+    padding: 0 10px;
+    font-size: calc(13px * var(--ui-scale));
+  }
+  :where(.form-row button.primary, .form-row button.secondary, .form-row button.plain) {
+    height: var(--m-btn-inline-height, 30px);
+    min-width: 0;
+    padding: 0 12px;
+    border-radius: 8px;
+    font-size: calc(12.5px * var(--ui-scale));
   }
   :where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'])) {
-    border-radius: var(--radius-md);
-    padding: 0 var(--space-3);
+    border-radius: 9px;
+    padding: 0 12px;
+  }
+  .segmented {
+    padding: 3px;
+    border-radius: 9px;
+  }
+  .segmented > button {
+    height: 26px;
+    padding: 0 11px;
+    border-radius: 6.5px;
+    font-size: calc(12.5px * var(--ui-scale));
+    white-space: nowrap;
   }
 }
 

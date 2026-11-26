@@ -202,4 +202,30 @@
   .reset {
     margin-inline-end: auto;
   }
+  @media (max-width: 767px) {
+    .row-picker {
+      gap: 6px;
+    }
+    .row-picker > button {
+      height: 32px;
+      min-width: 0;
+      padding: 0 10px;
+      border-radius: 8px;
+      font-size: calc(13px * var(--ui-scale));
+    }
+    .item-actions > :global(button) {
+      width: 34px;
+      height: 34px;
+    }
+    .chips {
+      gap: 6px;
+    }
+    .chips > button {
+      height: 32px;
+      min-width: 40px;
+      padding: 0 11px;
+      border-radius: 8px;
+      font-size: calc(13px * var(--ui-scale));
+    }
+  }
 </style>

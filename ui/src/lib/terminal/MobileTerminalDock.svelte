@@ -93,8 +93,7 @@
     align-items: center;
     gap: 6px;
     min-width: 0;
-    height: 42px;
-    padding: 0 var(--space-2);
+    padding: 4px var(--space-2) 2px;
     background: var(--term-bg);
     color: var(--term-fg);
   }

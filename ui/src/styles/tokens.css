@@ -125,7 +125,7 @@
 
 @media (pointer: coarse) {
   :root {
-    --control-height: calc(38px * var(--ui-scale));
+    --control-height: calc(36px * var(--ui-scale));
     --row-height: calc(44px * var(--ui-scale));
     --touch-target: 44px;
   }
@@ -135,9 +135,9 @@
   :root {
     --m-text-page: calc(22px * var(--ui-scale));
     --m-text-nav: calc(16px * var(--ui-scale));
-    --m-text-body: calc(14.5px * var(--ui-scale));
+    --m-text-body: calc(14px * var(--ui-scale));
     --m-text-sub: calc(12.5px * var(--ui-scale));
-    --m-text-meta: calc(11px * var(--ui-scale));
+    --m-text-meta: calc(11.5px * var(--ui-scale));
     --text-large: var(--m-text-page);
     --text-title: var(--m-text-nav);
     --text-body: var(--m-text-body);
@@ -151,10 +151,12 @@
     --m-icon-tile: 32px;
     --m-icon-tile-sm: 28px;
     --m-icon-btn: 36px;
+    --m-btn-inline-height: calc(30px * var(--ui-scale));
+    --m-btn-heading-height: calc(28px * var(--ui-scale));
     --m-card-radius: 12px;
     --m-page-x: 16px;
     --m-section-gap: 18px;
-    --control-height: calc(40px * var(--ui-scale));
+    --control-height: calc(36px * var(--ui-scale));
     --row-height: 46px;
     --touch-target: 36px;
   }

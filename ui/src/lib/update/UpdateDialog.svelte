@@ -4,6 +4,7 @@
   import Icon from '../ui/Icon.svelte';
   import Markdown from '../ai/Markdown.svelte';
   import { t } from '../i18n';
+  import { isAndroid } from '../platform';
   import { updater } from './updater.svelte';
   import { formatReleaseDate, formatUpdateBytes } from './updaterLogic';
 
@@ -19,7 +20,7 @@
   const releaseDate = $derived(formatReleaseDate(info?.published_at));
   const busy = $derived(updater.phase === 'downloading' || updater.phase === 'installing');
   const progressLabel = $derived.by(() => {
-    if (updater.phase === 'installing') return t('update.installing');
+    if (updater.phase === 'installing') return t(isAndroid ? 'update.androidInstalling' : 'update.installing');
     if (updater.total && updater.total > 0) {
       return t('update.downloadingProgress', {
         done: formatUpdateBytes(updater.downloaded),
@@ -61,9 +62,6 @@
           {#if info.prerelease}
             <span class="channel-tag">{t('update.prereleaseBadge')}</span>
           {/if}
-          <span class="mode-tag">
-            {info.install_mode === 'in_app' ? t('update.modeInApp') : t('update.modeExternal')}
-          </span>
         </div>
         {#if releaseDate}
           <p class="date">{t('update.publishedOn', { date: releaseDate })}</p>
@@ -98,7 +96,7 @@
     {:else if updater.phase === 'ready'}
       <div class="ready-banner" role="status">
         <Icon name="check" size={15} />
-        <span>{t('update.readyBanner')}</span>
+        <span>{t(isAndroid ? 'update.androidReadyBanner' : 'update.readyBanner')}</span>
       </div>
     {/if}
   {:else if updater.phase === 'up_to_date' && info}
@@ -114,31 +112,55 @@
 
   {#snippet actions()}
     {#if updater.phase === 'ready'}
-      <button type="button" class="secondary" disabled={restarting} onclick={onclose}>
-        {t('update.later')}
-      </button>
-      <button type="button" class="primary" disabled={restarting} onclick={() => void restart()}>
-        {restarting ? t('update.restarting') : t('update.restartNow')}
-      </button>
+      {#if isAndroid}
+        <div class="action-bar">
+          <div class="action-links">
+            <button type="button" class="plain" onclick={() => void updater.openRelease()}>
+              {t('update.openGithubDownload')}
+            </button>
+          </div>
+          <div class="action-buttons">
+            <button type="button" class="secondary" onclick={onclose}>{t('update.later')}</button>
+            <button type="button" class="primary" onclick={() => void updater.install()}>
+              {t('update.androidReopenInstaller')}
+            </button>
+          </div>
+        </div>
+      {:else}
+        <button type="button" class="secondary" disabled={restarting} onclick={onclose}>
+          {t('update.later')}
+        </button>
+        <button type="button" class="primary" disabled={restarting} onclick={() => void restart()}>
+          {restarting ? t('update.restarting') : t('update.restartNow')}
+        </button>
+      {/if}
     {:else if busy}
       <button type="button" class="secondary" onclick={onclose}>{t('update.hideWhileDownloading')}</button>
     {:else if info?.available && info.version}
-      <button type="button" class="plain skip" onclick={() => void updater.skipCurrent()}>
-        {t('update.skipVersion')}
-      </button>
-      <button type="button" class="secondary" onclick={onclose}>{t('update.later')}</button>
-      {#if info.install_mode === 'in_app'}
-        <button type="button" class="secondary" onclick={() => void updater.openRelease()}>
-          {t('update.viewRelease')}
-        </button>
-        <button type="button" class="primary" onclick={() => void updater.install()}>
-          {updater.phase === 'error' ? t('update.retry') : t('update.downloadAndInstall')}
-        </button>
-      {:else}
-        <button type="button" class="primary" onclick={() => void updater.openRelease()}>
-          {t('update.openReleasePage')}
-        </button>
-      {/if}
+      <div class="action-bar">
+        <div class="action-links">
+          <button type="button" class="plain skip" onclick={() => void updater.skipCurrent()}>
+            {t('update.skipVersion')}
+          </button>
+          {#if info.install_mode === 'in_app'}
+            <button type="button" class="plain" onclick={() => void updater.openRelease()}>
+              {t('update.openGithubDownload')}
+            </button>
+          {/if}
+        </div>
+        <div class="action-buttons">
+          <button type="button" class="secondary" onclick={onclose}>{t('update.later')}</button>
+          {#if info.install_mode === 'in_app'}
+            <button type="button" class="primary" onclick={() => void updater.install()}>
+              {updater.phase === 'error' ? t('update.retry') : t('update.downloadAndInstall')}
+            </button>
+          {:else}
+            <button type="button" class="primary" onclick={() => void updater.openRelease()}>
+              {t('update.openGithubDownload')}
+            </button>
+          {/if}
+        </div>
+      </div>
     {:else}
       {#if updater.phase === 'error'}
         <button type="button" class="secondary" onclick={() => void updater.check({ silent: false, interactive: true })}>
@@ -196,15 +218,6 @@
     color: var(--accent);
     font-size: var(--text-caption);
     font-weight: 600;
-  }
-  .mode-tag {
-    margin-left: auto;
-    padding: 2px 8px;
-    border-radius: var(--radius-pill);
-    background: var(--fill);
-    color: var(--fg-muted);
-    font-size: var(--text-caption);
-    font-weight: 500;
   }
   .date {
     margin: 3px 0 0;
@@ -296,8 +309,56 @@
       transform: rotate(360deg);
     }
   }
+  .action-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    width: 100%;
+  }
+  .action-links,
+  .action-buttons {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
   .skip {
-    margin-right: auto;
     color: var(--fg-muted);
+  }
+  @media (max-width: 767px) {
+    .mark {
+      width: 36px;
+      height: 36px;
+      border-radius: 9px;
+    }
+    .notes-box {
+      max-height: min(46dvh, 360px);
+      padding: 12px 14px;
+      font-size: calc(13px * var(--ui-scale));
+      line-height: 1.55;
+    }
+    .action-bar {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+    }
+    .action-links {
+      justify-content: space-between;
+      gap: var(--space-2);
+    }
+    .action-links button {
+      height: 28px;
+      padding: 0 4px;
+      font-size: calc(12.5px * var(--ui-scale));
+    }
+    .action-buttons {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
+      gap: var(--space-2);
+    }
+    .action-buttons button {
+      min-width: 0;
+      width: 100%;
+    }
   }
 </style>

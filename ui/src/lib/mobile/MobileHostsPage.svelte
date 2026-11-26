@@ -185,8 +185,8 @@
     color: var(--fg-muted);
   }
   .search {
-    height: var(--control-height, 40px);
-    min-height: 40px;
+    height: var(--control-height, 36px);
+    min-height: 36px;
     background: var(--fill);
   }
   .search input {
@@ -212,6 +212,11 @@
   }
   .unlock button {
     flex: none;
+    height: var(--m-btn-inline-height, 30px);
+    min-width: 0;
+    padding: 0 12px;
+    border-radius: 8px;
+    font-size: calc(12.5px * var(--ui-scale));
   }
   .row {
     display: flex;

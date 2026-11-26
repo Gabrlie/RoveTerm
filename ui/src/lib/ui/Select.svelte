@@ -31,7 +31,8 @@
   function place(): void {
     if (!trigger) return;
     const rect = trigger.getBoundingClientRect();
-    const listHeight = Math.min(options.length * 30 + 8, 260);
+    const rowHeight = window.innerWidth < 768 ? 38 : 30;
+    const listHeight = Math.min(options.length * rowHeight + 10, 260);
     const above = rect.bottom + listHeight > window.innerHeight && rect.top > listHeight;
     position = { left: rect.left, top: above ? rect.top - 4 : rect.bottom + 4, width: rect.width, above };
   }
@@ -247,5 +248,16 @@
     display: inline-flex;
     width: 16px;
     color: inherit;
+  }
+  @media (max-width: 767px) {
+    .select {
+      border-radius: 9px;
+      padding: 0 8px 0 12px;
+    }
+    li {
+      height: 38px;
+      padding: 0 12px 0 8px;
+      border-radius: 6px;
+    }
   }
 </style>

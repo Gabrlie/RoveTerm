@@ -1023,6 +1023,13 @@
     height: auto;
     min-height: var(--control-height);
   }
+  .compact .card-header button,
+  .compact .fingerprint button {
+    min-height: var(--m-btn-inline-height, 30px);
+    padding: 0 11px;
+    border-radius: 8px;
+    font-size: calc(12.5px * var(--ui-scale));
+  }
   .compact .pane {
     padding: var(--space-3) var(--space-3) var(--space-5);
   }

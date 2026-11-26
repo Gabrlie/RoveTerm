@@ -57,6 +57,13 @@
   import { errorText, t } from './lib/i18n';
   import { arePanelsSuspended, type PaneId } from './lib/layout/layout';
   import { viewport } from './lib/layout/viewport.svelte';
+  import {
+    emptyMobileSettingsNav,
+    openMobileSettings,
+    selectMobileSettingsSection,
+    stepBackMobileSettings,
+    type MobileSettingsNavState,
+  } from './lib/mobile/settingsNavigation';
   import { handleBack, pushBackHandler } from './lib/ui/backStack';
 
   type PasswordRequest =
@@ -101,7 +108,8 @@
   let sidebarOpen = $state(stored('ui.sidebar', true));
   $effect(() => store('ui.sidebar', sidebarOpen));
   let mobileTab = $state<MobileDestination>('hosts');
-  let mobileSettingsSection = $state<SettingsSection | null>(null);
+  let mobileSettingsNav = $state<MobileSettingsNavState>(emptyMobileSettingsNav());
+  const mobileSettingsSection = $derived(mobileSettingsNav.section);
 
   const activeCompactPane = $derived(viewport.compact ? workspace.focusedPane : undefined);
   const showingMobileTerminal = $derived(!!activeCompactPane && isTerminalTarget(activeCompactPane.target));
@@ -288,12 +296,35 @@
   /** Opens settings on `section` (the first one when unset). */
   function openSettings(section?: SettingsSection): void {
     if (viewport.compact) {
+      const returnTarget =
+        activeCompactPane || effectiveRightPage || mobileTab !== 'settings'
+          ? {
+              tab: mobileTab,
+              paneId: activeCompactPane?.id ?? null,
+              rightPage: effectiveRightPage,
+            }
+          : null;
       selectMobileDestination('settings');
-      mobileSettingsSection = section ?? null;
+      mobileSettingsNav = openMobileSettings(section ?? null, returnTarget);
       return;
     }
     settingsSection = section;
     settingsOpen = true;
+  }
+
+  function backFromMobileSettings(): void {
+    const outcome = stepBackMobileSettings(mobileSettingsNav);
+    mobileSettingsNav = outcome.state;
+    if (outcome.kind === 'restore') {
+      const { tab, paneId, rightPage: savedRight } = outcome.target;
+      mobileTab = tab;
+      if (paneId && workspace.panes[paneId]) {
+        workspace.reveal(paneId);
+      } else {
+        workspace.activateHome();
+      }
+      if (savedRight) openRight(savedRight);
+    }
   }
 
   const fleetWaiting = $derived.by(() => {
@@ -307,7 +338,7 @@
     paletteOpen = false;
     workspace.activateHome();
     mobileTab = destination;
-    mobileSettingsSection = null;
+    mobileSettingsNav = emptyMobileSettingsNav();
   }
 
   function showMobileHosts(): void {
@@ -825,7 +856,8 @@
             {:else if mobileTab === 'settings'}
               <MobileSettingsPage
                 section={mobileSettingsSection}
-                onselect={(section) => (mobileSettingsSection = section)}
+                onselect={(section, pushCurrent) => (mobileSettingsNav = selectMobileSettingsSection(mobileSettingsNav, section, pushCurrent))}
+                onback={backFromMobileSettings}
                 onopentailscale={() => (tailscaleOpen = true)}
               />
             {:else if mobileTab === 'tools'}

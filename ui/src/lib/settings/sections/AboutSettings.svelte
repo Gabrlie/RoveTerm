@@ -5,7 +5,7 @@
   import Switch from '../../ui/Switch.svelte';
   import { errorText, t } from '../../i18n';
   import { logsReveal, type UpdateChannel } from '../../ipc';
-  import { isMobile } from '../../platform';
+  import { isAndroid, isMobile } from '../../platform';
   import { notify } from '../../ui/toast.svelte';
   import AutostartRow from '../AutostartRow.svelte';
   import { editDevice } from '../edit.svelte';
@@ -18,7 +18,7 @@
 
   const activeChannel = $derived(effectiveUpdateChannel(prefs.device.updates.channel, version));
   const channelBusy = $derived(
-    updater.phase === 'downloading' || updater.phase === 'installing' || updater.phase === 'ready',
+    updater.phase === 'downloading' || updater.phase === 'installing' || (updater.phase === 'ready' && !isAndroid),
   );
 
   async function selectChannel(next: UpdateChannel): Promise<void> {
@@ -49,8 +49,8 @@
         return t('update.installing');
       case 'ready':
         return updater.info?.version
-          ? t('update.readySummary', { version: updater.info.version })
-          : t('update.readyBanner');
+          ? t(isAndroid ? 'update.androidReadySummary' : 'update.readySummary', { version: updater.info.version })
+          : t(isAndroid ? 'update.androidReadyBanner' : 'update.readyBanner');
       case 'up_to_date':
         return t('update.upToDate');
       case 'error':
@@ -123,7 +123,7 @@
       {/if}
       {#if updater.phase === 'ready' || updater.phase === 'available' || updater.phase === 'downloading' || updater.phase === 'installing'}
         <button type="button" class="primary" onclick={() => updater.openDialog()}>
-          {updater.phase === 'ready' ? t('update.restartNow') : t('update.viewUpdate')}
+          {updater.phase === 'ready' && !isAndroid ? t('update.restartNow') : t('update.viewUpdate')}
         </button>
       {:else}
         <button
@@ -206,7 +206,10 @@
     margin: var(--space-2) 0 0;
     color: var(--fg);
   }
-  @media (max-width: 560px) {
+  @media (max-width: 767px) {
+    .about {
+      padding: var(--space-4) var(--space-3) var(--space-3);
+    }
     .log-buttons {
       flex-wrap: wrap;
     }

@@ -148,10 +148,13 @@
   .keybar.immersion {
     --keycap-bg: color-mix(in srgb, var(--term-fg) 10%, var(--term-bg));
     --keycap-pressed: color-mix(in srgb, var(--term-fg) 18%, var(--term-bg));
-    --keybar-separator: color-mix(in srgb, var(--term-fg) 10%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 2px var(--space-2) 5px;
     background: var(--term-bg);
     color: var(--term-fg);
-    box-shadow: inset 0 1px 0 var(--keybar-separator);
+    box-shadow: none;
   }
   .key-row {
     display: grid;
@@ -161,6 +164,10 @@
     height: 36px;
     padding-inline: var(--space-2);
     overflow: hidden;
+  }
+  .keybar.immersion .key-row {
+    height: auto;
+    padding-inline: 0;
   }
   .keycap {
     position: relative;

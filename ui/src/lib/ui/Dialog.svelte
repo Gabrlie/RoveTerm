@@ -127,8 +127,7 @@
     flex: none;
     align-items: center;
     gap: var(--space-2);
-    min-height: var(--m-header-nav, 48px);
-    padding: 0 var(--space-3);
+    padding: 14px 16px 6px;
     font-size: var(--m-text-nav, 16px);
     overflow-wrap: anywhere;
   }
@@ -139,11 +138,18 @@
     flex-direction: column;
     gap: var(--space-3);
   }
+  .compact .body {
+    padding: var(--space-2) 16px var(--space-3);
+  }
   footer {
     display: flex;
     justify-content: flex-end;
     gap: var(--space-2);
     padding: var(--space-4) var(--space-5) var(--space-5);
+  }
+  .compact footer {
+    padding: 10px 16px 14px;
+    flex-wrap: wrap;
   }
   .backdrop.page {
     inset: 0;
@@ -160,7 +166,7 @@
   }
   .page header {
     min-height: calc(var(--safe-top) + var(--m-header-nav, 48px));
-    padding-top: var(--safe-top);
+    padding: var(--safe-top) var(--space-3) 0;
     background: var(--material-bar);
     box-shadow: inset 0 -0.5px 0 var(--separator);
   }
@@ -177,9 +183,6 @@
     padding: var(--space-3) var(--space-4) calc(max(var(--safe-bottom), var(--ime-bottom)) + var(--space-3));
     background: var(--material-bar);
     box-shadow: inset 0 0.5px 0 var(--separator);
-  }
-  .compact footer {
-    flex-wrap: wrap;
   }
   .dialog :global(label) {
     display: flex;

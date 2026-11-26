@@ -8,6 +8,7 @@ import {
   isPrereleaseVersion,
   isSkippedVersion,
   normalizeVersion,
+  shouldAutoPromptUpdate,
   shouldShowUpdateBadge,
 } from './updaterLogic.ts';
 
@@ -62,5 +63,58 @@ describe('updaterLogic', () => {
     assert.equal(formatReleaseDate('2026-11-22T08:00:00Z'), '2026-11-22');
     assert.equal(formatReleaseDate(null), '');
     assert.equal(formatReleaseDate('invalid'), '');
+  });
+
+  it('auto-prompts update dialog once per version on mobile unless skipped', () => {
+    assert.equal(
+      shouldAutoPromptUpdate({
+        isMobile: true,
+        available: true,
+        version: '0.3.0-beta.3',
+        skipped: '',
+        lastPromptedVersion: null,
+      }),
+      true,
+    );
+    assert.equal(
+      shouldAutoPromptUpdate({
+        isMobile: false,
+        available: true,
+        version: '0.3.0-beta.3',
+        skipped: '',
+        lastPromptedVersion: null,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldAutoPromptUpdate({
+        isMobile: true,
+        available: true,
+        version: 'v0.3.0-beta.3',
+        skipped: '0.3.0-beta.3',
+        lastPromptedVersion: null,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldAutoPromptUpdate({
+        isMobile: true,
+        available: true,
+        version: '0.3.0-beta.3',
+        skipped: '',
+        lastPromptedVersion: '0.3.0-beta.3',
+      }),
+      false,
+    );
+    assert.equal(
+      shouldAutoPromptUpdate({
+        isMobile: true,
+        available: true,
+        version: '0.3.0-beta.4',
+        skipped: '',
+        lastPromptedVersion: '0.3.0-beta.3',
+      }),
+      true,
+    );
   });
 });

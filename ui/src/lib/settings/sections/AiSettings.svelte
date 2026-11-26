@@ -228,7 +228,7 @@
 {#if activeTab === 'models'}
   <div class="section-heading">
     <h3 class="section-label">{t('ai.providers')}</h3>
-    <button type="button" class="primary" onclick={() => (providerEditor = { provider: null })}>+ {t('ai.addProvider')}</button>
+    <button type="button" class="primary add-action" onclick={() => (providerEditor = { provider: null })}>+ {t('ai.addProvider')}</button>
   </div>
   <div class="form-group">
     {#each providers as provider (provider.id)}
@@ -255,7 +255,7 @@
   {#if capabilities.localAgents}
     <div class="section-heading">
       <h3 class="section-label">{t('ai.localAgents')}</h3>
-      <button type="button" class="primary" onclick={() => (customEditor = { agent: null })}>+ {t('ai.addAgent')}</button>
+      <button type="button" class="primary add-action" onclick={() => (customEditor = { agent: null })}>+ {t('ai.addAgent')}</button>
     </div>
     <div class="form-group">
       {#each localAgents as agent (agent.agent)}
@@ -409,7 +409,9 @@
   .ai-tabs { display: flex; }
   .ai-tabs > button { flex: 1; min-width: 0; height: auto; min-height: var(--control-height); padding: var(--space-1); }
   .section-heading { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); }
+  .section-heading .section-label { margin: 0; }
   .section-heading button { flex: none; }
+  .section-heading .add-action { min-width: 0; height: 26px; padding: 0 10px; font-size: var(--text-footnote); }
   .item { gap: var(--space-2); }
   .item-name { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1) var(--space-2); overflow-wrap: anywhere; }
   .item .off { opacity: 0.65; }
@@ -436,9 +438,32 @@
   .install-note.failed { background: var(--danger-soft); }
   .failed, .danger-text { color: var(--danger); }
   .remove-key { margin-right: auto; }
+  @media (max-width: 767px) {
+    .ai-tabs > button {
+      min-height: 30px;
+      height: 30px;
+      padding: 0 10px;
+    }
+    .section-heading {
+      margin: 8px 0 2px;
+    }
+    .section-heading .add-action {
+      height: var(--m-btn-heading-height, 28px);
+      padding: 0 10px;
+      border-radius: 7px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      box-shadow: none;
+      font-size: calc(12.5px * var(--ui-scale));
+      font-weight: 600;
+    }
+    .section-heading .add-action:active:not(:disabled) {
+      background: color-mix(in srgb, var(--accent) 22%, transparent);
+    }
+  }
   @media (max-width: 560px) {
     .control { width: 100%; max-width: 100%; }
-    .section-heading, .item { flex-wrap: wrap; }
+    .item { flex-wrap: wrap; }
     .row-actions { margin-inline-start: auto; }
   }
 </style>

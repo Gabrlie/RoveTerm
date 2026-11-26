@@ -63,4 +63,17 @@
     opacity: 0.45;
     cursor: default;
   }
+  @media (max-width: 767px) {
+    .switch {
+      width: 40px;
+      height: 24px;
+    }
+    .knob {
+      width: 20px;
+      height: 20px;
+    }
+    .switch.on .knob {
+      transform: translateX(16px);
+    }
+  }
 </style>

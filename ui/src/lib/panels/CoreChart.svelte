@@ -92,4 +92,28 @@
   .compact .label {
     display: none;
   }
+  @media (max-width: 767px) {
+    .chart {
+      height: 60px;
+      border-radius: 8px;
+    }
+    .chart.compact {
+      height: 36px;
+    }
+    svg {
+      top: 18px;
+      height: calc(100% - 18px);
+    }
+    .label,
+    .value {
+      top: 2px;
+      font-size: 11px;
+    }
+    .label {
+      left: 6px;
+    }
+    .value {
+      right: 6px;
+    }
+  }
 </style>

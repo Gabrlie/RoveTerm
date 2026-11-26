@@ -16,11 +16,12 @@
 
   interface Props {
     section?: SettingsSection | null;
-    onselect?: (section: SettingsSection | null) => void;
+    onselect?: (section: SettingsSection | null, pushCurrent?: boolean) => void;
+    onback?: () => void;
     onopentailscale?: () => void;
   }
 
-  let { section = $bindable(null), onselect, onopentailscale }: Props = $props();
+  let { section = $bindable(null), onselect, onback, onopentailscale }: Props = $props();
   let appVersion = $state('');
   const entries = settingsSections({ isMobile, biometricVault: capabilities.biometricVault, includeShortcuts: false });
   const groups = groupSettingsSections(entries);
@@ -33,9 +34,14 @@
     system: 'settings.themeSystem',
   };
 
-  function select(next: SettingsSection | null): void {
-    if (onselect) onselect(next);
+  function select(next: SettingsSection | null, pushCurrent = false): void {
+    if (onselect) onselect(next, pushCurrent);
     else section = next;
+  }
+
+  function goBack(): void {
+    if (onback) onback();
+    else select(null);
   }
 
   function summary(id: SettingsSection): string {
@@ -58,7 +64,7 @@
   }
 
   $effect(() => {
-    if (selected) return pushBackHandler(() => select(null));
+    if (selected) return pushBackHandler(goBack);
   });
 
   onMount(() => {
@@ -73,13 +79,13 @@
 
 <section class="settings-page" aria-label={t('settings.title')}>
   {#if selected}
-    <MobilePageHeader title={t(selected.label)} onback={() => select(null)} />
+    <MobilePageHeader title={t(selected.label)} onback={goBack} />
     {#key selected.id}
-      <div class="content detail">
+      <div class="content detail" class:fill={selected.id === 'logs'}>
         {#if settingsError.text}
           <p class="problem" role="alert">{settingsError.text}</p>
         {/if}
-        <SettingsSectionContent section={selected.id} {onopentailscale} onopenlogs={() => select('logs')} />
+        <SettingsSectionContent section={selected.id} {onopentailscale} onopenlogs={() => select('logs', true)} />
       </div>
     {/key}
   {:else}
@@ -133,8 +139,22 @@
   .content > :global(*) {
     flex-shrink: 0;
   }
-  .detail :global(.section-label) {
-    margin-top: var(--space-3);
+  .content.fill {
+    overflow: hidden;
+    padding-bottom: max(var(--space-3), var(--safe-bottom));
+  }
+  .content.fill > :global(*) {
+    flex-shrink: 1;
+  }
+  .detail > :global(.section-label),
+  .detail > :global(.section-heading) {
+    margin-top: 10px;
+  }
+  .detail > :global(.section-label:first-child),
+  .detail > :global(.section-heading:first-child),
+  .detail > :global(.problem + .section-label),
+  .detail > :global(.problem + .section-heading) {
+    margin-top: 2px;
   }
   .section-label {
     margin-bottom: var(--space-2);
@@ -199,6 +219,7 @@
     background: var(--danger);
   }
   .problem {
+    flex: none;
     margin: 0;
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-sm);

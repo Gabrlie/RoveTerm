@@ -7,6 +7,7 @@ import {
   type UpdateInfo,
   type UpdateProgress,
 } from '../ipc';
+import { isAndroid, isMobile } from '../platform';
 import { editDevice } from '../settings/edit.svelte';
 import { prefs } from '../settings/prefs.svelte';
 import { notify } from '../ui/toast.svelte';
@@ -14,6 +15,7 @@ import {
   downloadPercent,
   isSkippedVersion,
   normalizeVersion,
+  shouldAutoPromptUpdate,
   shouldShowUpdateBadge,
   type UpdatePhase,
 } from './updaterLogic';
@@ -35,6 +37,7 @@ class UpdaterStore {
   error = $state('');
   dialogOpen = $state(false);
   lastCheckedAt = $state<number | null>(null);
+  private lastAutoPromptedVersion: string | null = null;
 
   readonly percent = $derived(downloadPercent(this.downloaded, this.total));
   readonly skipped = $derived(
@@ -64,7 +67,10 @@ class UpdaterStore {
 
   /** Clears stale check results when the user switches between stable and beta channels. */
   resetForChannelChange(): void {
-    if (this.phase === 'downloading' || this.phase === 'installing' || this.phase === 'ready') {
+    if (this.phase === 'downloading' || this.phase === 'installing') {
+      return;
+    }
+    if (this.phase === 'ready' && !isAndroid) {
       return;
     }
     this.phase = 'idle';
@@ -91,7 +97,20 @@ class UpdaterStore {
       this.lastCheckedAt = Date.now();
       if (result.available && result.version) {
         this.phase = 'available';
-        if (interactive) this.dialogOpen = true;
+        if (interactive) {
+          this.dialogOpen = true;
+        } else if (
+          shouldAutoPromptUpdate({
+            isMobile,
+            available: result.available,
+            version: result.version,
+            skipped: prefs.device.updates.skipped_version,
+            lastPromptedVersion: this.lastAutoPromptedVersion,
+          })
+        ) {
+          this.lastAutoPromptedVersion = normalizeVersion(result.version);
+          this.dialogOpen = true;
+        }
       } else {
         this.phase = 'up_to_date';
         if (interactive && !silent) {
@@ -119,7 +138,10 @@ class UpdaterStore {
       await this.openRelease();
       return;
     }
-    if (this.phase === 'downloading' || this.phase === 'installing' || this.phase === 'ready') {
+    if (this.phase === 'downloading' || this.phase === 'installing') {
+      return;
+    }
+    if (this.phase === 'ready' && !isAndroid) {
       return;
     }
 

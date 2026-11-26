@@ -55,6 +55,21 @@ export function shouldShowUpdateBadge(
   return normalized.length > 0 && !isSkippedVersion(normalized, skipped);
 }
 
+/** Whether a silent startup check should open the update dialog automatically (mobile lacks a status bar). */
+export function shouldAutoPromptUpdate(params: {
+  isMobile: boolean;
+  available: boolean;
+  version: string | null | undefined;
+  skipped: string | null | undefined;
+  lastPromptedVersion: string | null | undefined;
+}): boolean {
+  if (!params.isMobile || !params.available) return false;
+  const target = normalizeVersion(params.version);
+  if (!target) return false;
+  if (isSkippedVersion(target, params.skipped)) return false;
+  return normalizeVersion(params.lastPromptedVersion) !== target;
+}
+
 /** Download percentage (0–100), or `null` when total byte size is unknown. */
 export function downloadPercent(downloaded: number, total: number | null): number | null {
   if (total === null || !Number.isFinite(total) || total <= 0) return null;
