@@ -6,4 +6,6 @@
 
 `get_insets()` 读取最近一次原生更新，初值为零。`rove-mobile://insets` 发布安全区域和键盘底部高度，Android 使用 dp，iOS 使用 point。
 
+`get_network()`、`on_network_change()` 与 `on_lifecycle()` 在工作线程分发经校验去重的原生网络快照（Android 通过 `ConnectivityManager` 默认网络回调，iOS 通过 `NWPathMonitor` 与 `getifaddrs`）与前后台生命周期事件，供用户态 Tailscale 感知切网与回前台恢复。
+
 Android 侧还提供 `install_apk(path)`：仅允许应用缓存目录内的常规 `.apk` 文件，先检查未知来源安装权限（未授权时跳转系统设置并在返回后自动续装），授权后通过 `FileProvider` 拉起系统包安装器。

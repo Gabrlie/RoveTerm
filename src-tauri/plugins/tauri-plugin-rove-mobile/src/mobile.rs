@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex, mpsc},
+};
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -13,7 +16,7 @@ use zeroize::Zeroizing;
 use crate::models::{InstallApkRequest, InstallApkResponse};
 use crate::{
     ApkInstallStatus, BACK_EVENT, BiometricStatus, INSETS_EVENT, KeepAliveAction, KeepAliveUpdate,
-    LIFECYCLE_EVENT, LifecycleEvent, MobileError, MobileInsets, StagedFile,
+    LIFECYCLE_EVENT, LifecycleEvent, MobileError, MobileInsets, MobileNetworkSnapshot, StagedFile,
     error::map_invoke_error,
     models::{
         MASTER_KEY_LEN, NativeLifecycleEvent, decode_master_key, encode_base64, parse_external_url,
@@ -58,9 +61,56 @@ pub(crate) fn init<R: Runtime, C: DeserializeOwned>(
         .run_mobile_plugin::<()>("registerInsetsChannel", RegisterChannelArgs { channel })
         .map_err(invoke_error)?;
 
+    // Run bridge callbacks in order, off the native threads that service bridge calls.
+    let (dispatch, callbacks) = mpsc::channel::<CallbackTask>();
+    std::thread::Builder::new()
+        .name("rove-mobile-events".into())
+        .spawn(move || {
+            for callback in callbacks {
+                callback();
+            }
+        })
+        .map_err(|err| MobileError::Unavailable(err.to_string()))?;
+
+    let initial = handle
+        .run_mobile_plugin::<MobileNetworkSnapshot>("getNetwork", ())
+        .map(MobileNetworkSnapshot::sanitized)
+        .unwrap_or_else(|err| {
+            tracing::warn!(error = %err, "could not read initial mobile network snapshot");
+            MobileNetworkSnapshot::default()
+        });
+    let network = Arc::new(NetworkChannelState {
+        latest: Mutex::new(initial),
+        handlers: CallbackHandlers::new(dispatch.clone()),
+    });
+    let weak_network = Arc::downgrade(&network);
+    let channel = Channel::<Value>::new(move |payload| {
+        let Some(network) = weak_network.upgrade() else {
+            return Ok(());
+        };
+        let Ok(snapshot) = payload.deserialize::<MobileNetworkSnapshot>() else {
+            tracing::warn!("ignored malformed mobile network snapshot");
+            return Ok(());
+        };
+        let snapshot = snapshot.sanitized();
+        {
+            let mut latest = network.latest.lock().unwrap_or_else(|err| err.into_inner());
+            if *latest == snapshot {
+                return Ok(());
+            }
+            *latest = snapshot.clone();
+        }
+        network.handlers.notify(snapshot);
+        Ok(())
+    });
+    handle
+        .run_mobile_plugin::<()>("registerNetworkChannel", RegisterChannelArgs { channel })
+        .map_err(invoke_error)?;
+
     let lifecycle = Arc::new(LifecycleChannelState {
         app: app.clone(),
         keepalive_action_handler: Mutex::new(None),
+        handlers: CallbackHandlers::new(dispatch),
     });
     let weak_lifecycle = Arc::downgrade(&lifecycle);
     let channel = Channel::<Value>::new(move |payload| {
@@ -72,9 +122,11 @@ pub(crate) fn init<R: Runtime, C: DeserializeOwned>(
             return Ok(());
         };
         match event {
-            NativeLifecycleEvent::Lifecycle { state } => lifecycle
-                .app
-                .emit(LIFECYCLE_EVENT, LifecycleEvent { state }),
+            NativeLifecycleEvent::Lifecycle { state } => {
+                let event = LifecycleEvent { state };
+                lifecycle.handlers.notify(event);
+                lifecycle.app.emit(LIFECYCLE_EVENT, event)
+            }
             NativeLifecycleEvent::Back => lifecycle.app.emit(BACK_EVENT, ()),
             NativeLifecycleEvent::KeepAliveAction { action } => {
                 let handler = lifecycle
@@ -98,6 +150,7 @@ pub(crate) fn init<R: Runtime, C: DeserializeOwned>(
         handle,
         insets,
         lifecycle,
+        network,
     })
 }
 
@@ -107,10 +160,90 @@ struct InsetsState<R: Runtime> {
 }
 
 type KeepAliveActionHandler = Arc<dyn Fn(KeepAliveAction) + Send + Sync>;
+type CallbackTask = Box<dyn FnOnce() + Send>;
+type Callback<T> = Arc<dyn Fn(T) + Send + Sync>;
+
+struct CallbackHandlers<T> {
+    dispatch: mpsc::Sender<CallbackTask>,
+    handlers: Mutex<BTreeMap<u64, Callback<T>>>,
+    next_id: std::sync::atomic::AtomicU64,
+}
+
+impl<T: Clone + Send + 'static> CallbackHandlers<T> {
+    fn new(dispatch: mpsc::Sender<CallbackTask>) -> Arc<Self> {
+        Arc::new(Self {
+            dispatch,
+            handlers: Mutex::default(),
+            next_id: std::sync::atomic::AtomicU64::new(1),
+        })
+    }
+
+    fn insert(&self, handler: impl Fn(T) + Send + Sync + 'static) -> u64 {
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.handlers
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(id, Arc::new(handler));
+        id
+    }
+
+    fn remove(&self, id: u64) {
+        let removed = self
+            .handlers
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(&id);
+        drop(removed);
+    }
+
+    fn notify(self: &Arc<Self>, event: T) {
+        let ids: Vec<_> = self
+            .handlers
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .keys()
+            .copied()
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let handlers = Arc::downgrade(self);
+        if self
+            .dispatch
+            .send(Box::new(move || {
+                let Some(handlers) = handlers.upgrade() else {
+                    return;
+                };
+                for id in ids {
+                    let callback = handlers
+                        .handlers
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .get(&id)
+                        .cloned();
+                    if let Some(callback) = callback {
+                        callback(event.clone());
+                    }
+                }
+            }))
+            .is_err()
+        {
+            tracing::warn!("mobile event worker is unavailable");
+        }
+    }
+}
+
+struct NetworkChannelState {
+    latest: Mutex<MobileNetworkSnapshot>,
+    handlers: Arc<CallbackHandlers<MobileNetworkSnapshot>>,
+}
 
 struct LifecycleChannelState<R: Runtime> {
     app: AppHandle<R>,
     keepalive_action_handler: Mutex<Option<KeepAliveActionHandler>>,
+    handlers: Arc<CallbackHandlers<LifecycleEvent>>,
 }
 
 #[derive(Serialize)]
@@ -193,6 +326,7 @@ pub struct MobileBridge<R: Runtime> {
     handle: PluginHandle<R>,
     insets: Arc<InsetsState<R>>,
     lifecycle: Arc<LifecycleChannelState<R>>,
+    network: Arc<NetworkChannelState>,
 }
 
 impl<R: Runtime> MobileBridge<R> {
@@ -330,6 +464,35 @@ impl<R: Runtime> MobileBridge<R> {
             .latest
             .lock()
             .unwrap_or_else(|err| err.into_inner()))
+    }
+
+    pub fn get_network(&self) -> MobileNetworkSnapshot {
+        self.network
+            .latest
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone()
+    }
+
+    /// Registers a worker-thread callback for subsequent snapshot changes.
+    pub fn on_network_change(
+        &self,
+        handler: impl Fn(MobileNetworkSnapshot) + Send + Sync + 'static,
+    ) -> u64 {
+        self.network.handlers.insert(handler)
+    }
+
+    pub fn remove_network_change_handler(&self, id: u64) {
+        self.network.handlers.remove(id);
+    }
+
+    /// Registers a worker-thread callback for subsequent foreground and background events.
+    pub fn on_lifecycle(&self, handler: impl Fn(LifecycleEvent) + Send + Sync + 'static) -> u64 {
+        self.lifecycle.handlers.insert(handler)
+    }
+
+    pub fn remove_lifecycle_handler(&self, id: u64) {
+        self.lifecycle.handlers.remove(id);
     }
 
     pub fn update_keepalive(&self, update: &KeepAliveUpdate) -> Result<(), MobileError> {

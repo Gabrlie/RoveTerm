@@ -1,4 +1,8 @@
-use std::path::Path;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::IpAddr,
+    path::Path,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -110,6 +114,89 @@ impl MobileInsets {
             bottom: nonnegative(self.bottom),
             left: nonnegative(self.left),
             ime_bottom: nonnegative(self.ime_bottom),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MobileNetworkAddr {
+    pub ip: String,
+    pub prefix_len: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MobileNetworkInterface {
+    pub id: u64,
+    pub name: String,
+    pub addrs: Vec<MobileNetworkAddr>,
+    pub default_v4: bool,
+    pub default_v6: bool,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MobileNetworkSnapshot {
+    pub interfaces: Vec<MobileNetworkInterface>,
+}
+
+impl MobileNetworkSnapshot {
+    pub fn sanitized(self) -> Self {
+        const MAX_INTERFACES: usize = 32;
+        const MAX_ADDRS: usize = 16;
+        const MAX_NAME_CHARS: usize = 64;
+
+        let mut interfaces = BTreeMap::<u64, MobileNetworkInterface>::new();
+        for mut interface in self.interfaces {
+            interface.name = interface
+                .name
+                .chars()
+                .filter(|ch| !ch.is_control())
+                .collect();
+            interface.name = interface.name.trim().chars().take(MAX_NAME_CHARS).collect();
+            interface.name.truncate(interface.name.trim_end().len());
+            if interface.name.is_empty() {
+                interface.name = format!("if{}", interface.id);
+            }
+            if let Some(existing) = interfaces.get_mut(&interface.id) {
+                existing.name = std::mem::take(&mut existing.name).min(interface.name);
+                existing.default_v4 |= interface.default_v4;
+                existing.default_v6 |= interface.default_v6;
+                existing.addrs.extend(interface.addrs);
+            } else {
+                interfaces.insert(interface.id, interface);
+            }
+        }
+
+        Self {
+            interfaces: interfaces
+                .into_values()
+                .take(MAX_INTERFACES)
+                .map(|mut interface| {
+                    let mut addrs = BTreeSet::new();
+                    for addr in interface.addrs {
+                        let Ok(ip) = addr.ip.parse::<IpAddr>() else {
+                            continue;
+                        };
+                        let canonical = ip.to_canonical();
+                        if canonical.is_loopback() || canonical.is_unspecified() {
+                            continue;
+                        }
+                        let prefix_len = addr.prefix_len.min(if ip.is_ipv4() { 32 } else { 128 });
+                        addrs.insert((ip, prefix_len));
+                    }
+                    interface.addrs = addrs
+                        .into_iter()
+                        .take(MAX_ADDRS)
+                        .map(|(ip, prefix_len)| MobileNetworkAddr {
+                            ip: ip.to_string(),
+                            prefix_len,
+                        })
+                        .collect();
+                    interface
+                })
+                .collect(),
         }
     }
 }
@@ -299,6 +386,136 @@ pub(crate) fn parse_external_url(input: &str) -> Result<Url, MobileError> {
 mod tests {
     use super::*;
     use serde_json::{from_value, json, to_value};
+
+    fn network_addr(ip: &str, prefix_len: u8) -> MobileNetworkAddr {
+        MobileNetworkAddr {
+            ip: ip.into(),
+            prefix_len,
+        }
+    }
+
+    fn network_interface(
+        id: u64,
+        name: &str,
+        addrs: Vec<MobileNetworkAddr>,
+    ) -> MobileNetworkInterface {
+        MobileNetworkInterface {
+            id,
+            name: name.into(),
+            addrs,
+            default_v4: false,
+            default_v6: false,
+        }
+    }
+
+    #[test]
+    fn network_snapshot_validates_and_normalizes_addresses() {
+        let snapshot = MobileNetworkSnapshot {
+            interfaces: vec![network_interface(
+                9,
+                "  wlan0\n",
+                vec![
+                    network_addr("2001:0DB8:0000:0000::2", 255),
+                    network_addr("192.0.2.10", 255),
+                    network_addr("192.0.2.2", 24),
+                    network_addr("2001:db8::2", 128),
+                    network_addr("invalid", 24),
+                    network_addr("fe80::2%en0", 64),
+                    network_addr("127.0.0.23", 8),
+                    network_addr("::1", 128),
+                    network_addr("::ffff:127.0.0.1", 128),
+                    network_addr("0.0.0.0", 0),
+                    network_addr("::", 0),
+                ],
+            )],
+        };
+        assert_eq!(
+            snapshot.sanitized().interfaces,
+            vec![network_interface(
+                9,
+                "wlan0",
+                vec![
+                    network_addr("192.0.2.2", 24),
+                    network_addr("192.0.2.10", 32),
+                    network_addr("2001:db8::2", 128),
+                ],
+            )]
+        );
+    }
+
+    #[test]
+    fn network_snapshot_deduplicates_interfaces_and_sorts_by_id() {
+        let mut v4 = network_interface(9, "z", vec![network_addr("192.0.2.1", 24)]);
+        v4.default_v4 = true;
+        let mut v6 = network_interface(9, " en0 ", vec![network_addr("2001:db8::1", 64)]);
+        v6.default_v6 = true;
+        let mut snapshot = MobileNetworkSnapshot {
+            interfaces: vec![v4, network_interface(3, "\t", vec![]), v6],
+        };
+
+        let canonical = snapshot.clone().sanitized();
+        snapshot.interfaces.reverse();
+        assert_eq!(snapshot.sanitized(), canonical);
+        assert_eq!(canonical.clone().sanitized(), canonical);
+        assert_eq!(canonical.interfaces.len(), 2);
+        assert_eq!(canonical.interfaces[0], network_interface(3, "if3", vec![]));
+        let merged = &canonical.interfaces[1];
+        assert_eq!(merged.id, 9);
+        assert_eq!(merged.name, "en0");
+        assert!(merged.default_v4 && merged.default_v6);
+        assert_eq!(
+            merged.addrs,
+            vec![
+                network_addr("192.0.2.1", 24),
+                network_addr("2001:db8::1", 64)
+            ]
+        );
+    }
+
+    #[test]
+    fn network_snapshot_bounds_names_interfaces_and_addresses() {
+        let name = "网".repeat(70);
+        let addrs: Vec<_> = (1..=20)
+            .rev()
+            .map(|n| network_addr(&format!("192.0.2.{n}"), 24))
+            .collect();
+        let snapshot = MobileNetworkSnapshot {
+            interfaces: (1..=40)
+                .rev()
+                .map(|id| network_interface(id, &name, addrs.clone()))
+                .collect(),
+        }
+        .sanitized();
+
+        assert_eq!(snapshot.interfaces.len(), 32);
+        assert_eq!(snapshot.interfaces[31].id, 32);
+        let first = &snapshot.interfaces[0];
+        assert_eq!(first.id, 1);
+        assert_eq!(first.name, "网".repeat(64));
+        assert_eq!(first.addrs.len(), 16);
+        assert_eq!(first.addrs[0].ip, "192.0.2.1");
+        assert_eq!(first.addrs[15].ip, "192.0.2.16");
+    }
+
+    #[test]
+    fn network_snapshot_uses_camel_case_on_the_wire() {
+        let wire = json!({
+            "interfaces": [{
+                "id": i64::MAX,
+                "name": "en0",
+                "addrs": [{"ip": "192.0.2.1", "prefixLen": 24}],
+                "defaultV4": true,
+                "defaultV6": false
+            }]
+        });
+        let snapshot = from_value::<MobileNetworkSnapshot>(wire.clone()).unwrap();
+        assert_eq!(snapshot.interfaces[0].id, i64::MAX as u64);
+        assert_eq!(to_value(snapshot.sanitized()).unwrap(), wire);
+        assert_eq!(
+            to_value(MobileNetworkSnapshot::default()).unwrap(),
+            json!({"interfaces": []})
+        );
+    }
 
     #[test]
     fn stage_uris_require_a_supported_scheme_and_nonempty_remainder() {

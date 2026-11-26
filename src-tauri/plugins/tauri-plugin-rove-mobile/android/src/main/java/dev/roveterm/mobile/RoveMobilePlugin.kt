@@ -66,6 +66,7 @@ class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     private val insets = InsetsObserver(activity)
+    private val networkMonitor = NetworkMonitor(activity)
     private val keystore = KeystoreHelper(activity)
     private val fileBridge = FileBridge(activity)
     private val main = Handler(Looper.getMainLooper())
@@ -362,6 +363,23 @@ class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     @Command
+    fun getNetwork(invoke: Invoke) {
+        invoke.resolve(networkMonitor.snapshot())
+    }
+
+    @Command
+    fun registerNetworkChannel(invoke: Invoke) {
+        val channel = try {
+            invoke.parseArgs(RegisterChannelArgs::class.java).channel
+        } catch (_: Exception) {
+            invoke.reject("Invalid network channel", "invalid_input")
+            return
+        }
+        invoke.resolve()
+        main.post { if (!activity.isDestroyed) networkMonitor.register(channel) }
+    }
+
+    @Command
     fun registerLifecycleChannel(invoke: Invoke) {
         val channel = try {
             invoke.parseArgs(RegisterChannelArgs::class.java).channel
@@ -431,6 +449,7 @@ class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
         }
         lifecycleChannel = null
         insets.close()
+        networkMonitor.close()
         activeExport?.let { pending ->
             finishExport(pending.invoke, Result.failure(BridgeFailure("unavailable", "Export was interrupted")))
         }

@@ -69,6 +69,7 @@ private struct KeepAliveArgs: Decodable {
 
 final class RoveMobilePlugin: Plugin {
     private let insets = InsetsObserver()
+    private let networkMonitor = NetworkMonitor()
     private let keepAlive = KeepAliveController()
     private let fileBridge = FileBridge()
     private let vaultQueue = DispatchQueue(label: "dev.roveterm.mobile.keychain")
@@ -142,6 +143,10 @@ final class RoveMobilePlugin: Plugin {
         DispatchQueue.main.async { invoke.resolve(self.insets.snapshot()) }
     }
 
+    @objc public func getNetwork(_ invoke: Invoke) {
+        invoke.resolve(networkMonitor.snapshot())
+    }
+
     @objc func stageFile(_ invoke: Invoke) {
         Self.run(invoke) {
             let args = try invoke.parseArgs(StageFileArgs.self)
@@ -189,6 +194,14 @@ final class RoveMobilePlugin: Plugin {
             let args = try invoke.parseArgs(RegisterChannelArgs.self)
             invoke.resolve()
             DispatchQueue.main.async { self.keepAlive.register(args.channel) }
+        }
+    }
+
+    @objc public func registerNetworkChannel(_ invoke: Invoke) {
+        Self.run(invoke) {
+            let args = try invoke.parseArgs(RegisterChannelArgs.self)
+            invoke.resolve()
+            networkMonitor.register(args.channel)
         }
     }
 

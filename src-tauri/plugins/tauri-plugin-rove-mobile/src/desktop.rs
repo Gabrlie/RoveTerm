@@ -4,8 +4,8 @@ use tauri::Runtime;
 use zeroize::Zeroizing;
 
 use crate::{
-    ApkInstallStatus, BiometricStatus, KeepAliveAction, KeepAliveUpdate, MobileError, MobileInsets,
-    StagedFile,
+    ApkInstallStatus, BiometricStatus, KeepAliveAction, KeepAliveUpdate, LifecycleEvent,
+    MobileError, MobileInsets, MobileNetworkSnapshot, StagedFile,
     models::{parse_stage_uri, sanitize_file_name, validate_local_file_path},
 };
 
@@ -81,6 +81,25 @@ impl<R: Runtime> MobileBridge<R> {
     pub fn get_insets(&self) -> Result<MobileInsets, MobileError> {
         Ok(MobileInsets::default())
     }
+
+    pub fn get_network(&self) -> MobileNetworkSnapshot {
+        MobileNetworkSnapshot::default()
+    }
+
+    pub fn on_network_change(
+        &self,
+        _handler: impl Fn(MobileNetworkSnapshot) + Send + Sync + 'static,
+    ) -> u64 {
+        0
+    }
+
+    pub fn remove_network_change_handler(&self, _id: u64) {}
+
+    pub fn on_lifecycle(&self, _handler: impl Fn(LifecycleEvent) + Send + Sync + 'static) -> u64 {
+        0
+    }
+
+    pub fn remove_lifecycle_handler(&self, _id: u64) {}
 
     pub fn update_keepalive(&self, _update: &KeepAliveUpdate) -> Result<(), MobileError> {
         Ok(())
