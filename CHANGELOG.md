@@ -5,6 +5,22 @@ This file documents notable changes to RoveTerm in both Simplified Chinese and E
 
 ## [Unreleased]
 
+## [0.3.0-beta.2] - 2026-11-26
+
+### 中文更新日志
+
+- **移动端原生界面与统一比例体系**：手机端采用「主机 / 工具 / 设置」三标签底部导航、独立设置页与全屏表单页面，统一顶栏、列表行高、图标盒、控件与字号令牌（`--m-*`）；冷启动不再恢复桌面侧栏或旧分屏布局，打开终端工具面板或状态页前自动收起软键盘。
+- **沉浸式单会话终端与 2×7 快捷键栏**：重做手机端单会话终端底栏与工具面板；默认提供 Termux 风格的固定 2×7 圆角等宽快捷键网格（取消横向滚动及多余右侧按钮），`CTRL` / `ALT` 改为单次触发并以底部细横条指示，支持自定义页行容量提示与旧布局自动迁移；彻底隐藏终端横向滚动条并收窄触屏纵向滚动条。
+- **弹窗防穿透、同步与图标修复**：修复主机更多菜单点击遮罩时穿透触发底层主机连接的问题并移除冗余取消按钮，拦截对话框遮罩穿透事件；修复 WebDAV 同步页密码显示为明文的问题；替换 Android 自适应图标与 iOS 启动图标为 RoveTerm 专属终端图标。
+- **Android 后台保活同步与真实版本号**：会话从表中移除时立即发出 `SessionClosed` 事件并取消 SSH 读循环，通知栏保活服务随即清除前台通知与唤醒锁，不再滞留残留会话计数；Android 构建现自动从根目录 `Cargo.toml` 同步真实 `versionName` 与单调递增 `versionCode`。
+
+### English Changelog
+
+- **Native Mobile Shell & Unified Visual Scale**: Adopted 3-tab bottom navigation (**Hosts / Tools / Settings**), a standalone Settings page, full-screen mobile forms, and unified phone typography, row height, icon tile, and control tokens (`--m-*`). Compact cold starts skip restoring desktop panels/multi-tab layouts and dismiss the soft keyboard before opening terminal overlays.
+- **Immersive Single-Session Terminal & 2×7 Key Bar**: Redesigned the compact terminal dock and tools sheet; switched the virtual key bar to a fixed non-scrolling 2×7 Termux-style rounded grid (removing right-side chrome) with one-shot `CTRL` / `ALT` bottom-bar indicators, row-capacity hints in customization, and automatic migration from prior layouts. Hid terminal horizontal scrollbars and slimmed vertical touch scrollbars.
+- **Overlay Click-Through, Sync & App Icon Fixes**: Kept compact context-menu backdrops mounted through taps so dismissing never clicks through to rows underneath, removed the redundant bottom Cancel button, and blocked dialog backdrop pass-through; masked WebDAV password inputs properly; replaced default launcher icons with RoveTerm adaptive Android and opaque iOS icons.
+- **Android Keep-Alive Sync & Real APK Versioning**: Added an immediate `SessionClosed` live event and SSH reader cancellation so closing a terminal removes the Android foreground keep-alive notification and wake lock right away; Android Gradle builds now derive `versionName` and a monotonic `versionCode` directly from workspace `Cargo.toml`.
+
 ## [0.3.0-beta.1] - 2026-11-25
 
 ### 中文更新日志
