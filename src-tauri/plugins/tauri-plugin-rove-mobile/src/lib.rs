@@ -19,8 +19,8 @@ pub use error::MobileError;
 #[cfg(mobile)]
 pub use mobile::MobileBridge;
 pub use models::{
-    BiometricStatus, KeepAliveAction, KeepAliveUpdate, LifecycleEvent, LifecycleState,
-    MobileInsets, StagedFile,
+    ApkInstallStatus, BiometricStatus, KeepAliveAction, KeepAliveUpdate, LifecycleEvent,
+    LifecycleState, MobileInsets, StagedFile,
 };
 
 pub const INSETS_EVENT: &str = "rove-mobile://insets";

@@ -4,7 +4,8 @@ use tauri::Runtime;
 use zeroize::Zeroizing;
 
 use crate::{
-    BiometricStatus, KeepAliveAction, KeepAliveUpdate, MobileError, MobileInsets, StagedFile,
+    ApkInstallStatus, BiometricStatus, KeepAliveAction, KeepAliveUpdate, MobileError, MobileInsets,
+    StagedFile,
     models::{parse_stage_uri, sanitize_file_name, validate_local_file_path},
 };
 
@@ -44,6 +45,10 @@ impl<R: Runtime> MobileBridge<R> {
     }
 
     pub fn open_external_url(&self, _url: &str) -> Result<(), MobileError> {
+        Err(MobileError::Unsupported)
+    }
+
+    pub fn install_apk(&self, _path: &str) -> Result<ApkInstallStatus, MobileError> {
         Err(MobileError::Unsupported)
     }
 

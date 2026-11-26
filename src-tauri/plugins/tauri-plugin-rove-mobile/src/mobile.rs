@@ -9,9 +9,11 @@ use tauri::{
 };
 use zeroize::Zeroizing;
 
+#[cfg(target_os = "android")]
+use crate::models::{InstallApkRequest, InstallApkResponse};
 use crate::{
-    BACK_EVENT, BiometricStatus, INSETS_EVENT, KeepAliveAction, KeepAliveUpdate, LIFECYCLE_EVENT,
-    LifecycleEvent, MobileError, MobileInsets, StagedFile,
+    ApkInstallStatus, BACK_EVENT, BiometricStatus, INSETS_EVENT, KeepAliveAction, KeepAliveUpdate,
+    LIFECYCLE_EVENT, LifecycleEvent, MobileError, MobileInsets, StagedFile,
     error::map_invoke_error,
     models::{
         MASTER_KEY_LEN, NativeLifecycleEvent, decode_master_key, encode_base64, parse_external_url,
@@ -261,6 +263,23 @@ impl<R: Runtime> MobileBridge<R> {
         self.handle
             .run_mobile_plugin("openExternalUrl", UrlArgs { url: url.as_str() })
             .map_err(invoke_error)
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn install_apk(&self, path: &str) -> Result<ApkInstallStatus, MobileError> {
+        let args = InstallApkRequest {
+            path: validate_local_file_path(path)?,
+        };
+        let response: InstallApkResponse = self
+            .handle
+            .run_mobile_plugin("installApk", args)
+            .map_err(invoke_error)?;
+        Ok(response.status)
+    }
+
+    #[cfg(target_os = "ios")]
+    pub fn install_apk(&self, _path: &str) -> Result<ApkInstallStatus, MobileError> {
+        Err(MobileError::Unsupported)
     }
 
     pub fn stage_file(

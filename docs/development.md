@@ -40,7 +40,7 @@
 
 1. 同步递增版本号：显式指定版本 `pnpm release:bump 0.3.0-beta.1`，或按通道自动递增 `pnpm release:bump:beta`（`0.2.1` → `0.3.0-beta.1` → `0.3.0-beta.2`）/ `pnpm release:bump:stable`（`0.3.0-beta.2` → `0.3.0`，或递增 `PATCH`），并在 [CHANGELOG.md](../CHANGELOG.md) 记录中英双语更新日志。
 2. 签名密钥保存在构建机本机（如 `~/.tauri/roveterm.key`，权限 `0600`），私钥绝不入库。公钥写入 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`。构建时传入 `TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/roveterm.key)"` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，无密码时传空字符串。打包开源 macOS 版本时同时设置 `APPLE_SIGNING_IDENTITY="-"`。
-3. 汇总产物、生成 `latest.json`（若含已签名发布 `.apk` 则同步生成带通道标记的 `latest-android.json`）、`SHA256SUMS.txt` 与带平台图标下载表的双语 `RELEASE_NOTES.md`：稳定版运行 `pnpm release:prepare:stable --tag v0.3.0`（对比基准默认取上一个稳定 tag，发布命令附带 `--latest`），测试版运行 `pnpm release:prepare:beta --tag v0.3.0-beta.1`（自动附带双语测试版说明与 `--prerelease`）。多台机器分批补建其他平台时，传入 `--merge-latest <已有 latest.json 路径或 URL>` 或 `--merge-android` 合并平台条目，再使用 `gh release upload --clobber` 更新。
+3. 汇总产物、生成 `latest.json`（若含已签名发布 `.apk` 则同步生成带通道标记的 `latest-android.json`）、`SHA256SUMS.txt` 与带平台图标下载表的双语 `RELEASE_NOTES.md`：稳定版运行 `pnpm release:prepare:stable --tag v0.3.0`（对比基准默认取上一个稳定 tag，发布命令附带 `--latest`），测试版运行 `pnpm release:prepare:beta --tag v0.3.0-beta.1`（自动附带双语测试版说明与 `--prerelease`）。客户端按 Release 实际包含的平台资产筛选更新，未改动且未上传产物的平台不会收到更新提示，因此单平台迭代可只构建并发布受影响平台。多台机器分批补建其他平台时，传入 `--merge-latest <已有 latest.json 路径或 URL>` 或 `--merge-android` 合并平台条目，再使用 `gh release upload --clobber` 更新。
 4. 审阅并按需微调生成的 `RELEASE_NOTES.md`，执行脚本输出的 `gh release create` 命令（或附加 `--publish --draft` 先创建草稿发布）。
 
 发布三个 macOS 安装包时，用多个 `--from` 指定各架构的 `bundle/dmg` 和通用包的 `bundle/macos`。通用包的更新归档及签名供两种 macOS 架构共用。
@@ -58,9 +58,9 @@
 
 Android 使用 Keystore 保护凭据库的设备主密钥，可在应用的安全设置中启用生物识别或屏幕锁验证。也可在装有 Android SDK、NDK、JDK 17、Rust 与 Node.js / pnpm 的 Docker 容器中挂载工作区，使用相同命令构建 APK。
 
-`src-tauri/gen/android/app/src/main/AndroidManifest.xml` 声明 `SessionKeepAliveService` 为 `specialUse` 类型的前台服务，登记用途及 `FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_SPECIAL_USE`、`POST_NOTIFICATIONS` 和 `WAKE_LOCK` 权限。有活动会话等工作时，服务通过带「断开全部」操作的通知展示保活状态。
+`src-tauri/gen/android/app/src/main/AndroidManifest.xml` 声明 `SessionKeepAliveService` 为 `specialUse` 类型的前台服务，登记用途及 `FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_SPECIAL_USE`、`POST_NOTIFICATIONS`、`WAKE_LOCK` 与用于应用内 APK 更新安装的 `REQUEST_INSTALL_PACKAGES` 权限。有活动会话等工作时，服务通过带「断开全部」操作的通知展示保活状态。
 
-`file_paths.xml` 通过 `files-path`、`external-files-path` 和 `external-cache-path` 为 `FileProvider` 注册应用文件及外部缓存目录，供系统分享面板读取下载文件。
+`file_paths.xml` 通过 `cache-path`、`files-path`、`external-files-path` 和 `external-cache-path` 为 `FileProvider` 注册应用缓存、文件及外部缓存目录，供应用内 APK 更新安装器与系统分享面板安全读取本地文件。应用内更新下载已签名发布 APK 至应用缓存并完成 SHA-256 校验后自动拉起系统安装界面，首次缺少未知来源安装权限时引导授权并在返回后自动续装。
 
 移动端启动图标以 [RoveTerm 图标](../src-tauri/icons/icon.png) 为源。Android 提供自适应图标与各密度的回退资源，iOS 的 AppIcon 使用不透明 PNG。
 

@@ -1,4 +1,4 @@
-//! Application update checking and signed in-app installation.
+//! Application update checking and in-app installation.
 //!
 //! Desktop builds prefer `tauri-plugin-updater` (minisign-verified `latest.json` artifacts) and
 //! fall back to the GitHub Releases API when signed metadata is unavailable. Stable builds read
@@ -11,12 +11,24 @@
 #[cfg(any(target_os = "android", test))]
 use std::collections::BTreeMap;
 use std::time::Duration;
+#[cfg(any(target_os = "android", test))]
+use std::{io, path::Path};
 
 use rove_http::reqwest::{StatusCode, Url};
 use rove_vault::UpdateChannel;
 use semver::Version;
 use serde::{Deserialize, Serialize};
+#[cfg(any(target_os = "android", test))]
+use sha2::{Digest, Sha256};
+#[cfg(target_os = "android")]
+use tauri::Manager;
 use tauri::{AppHandle, State, ipc::Channel};
+#[cfg(target_os = "android")]
+use tauri_plugin_rove_mobile::{ApkInstallStatus, MobileBridgeExt};
+#[cfg(any(target_os = "android", test))]
+use tokio::fs;
+#[cfg(target_os = "android")]
+use tokio::io::AsyncWriteExt;
 
 use crate::error::CommandError;
 use crate::state::AppState;
@@ -33,12 +45,14 @@ const RELEASE_PAGE_URL: &str = "https://github.com/Gabrlie/RoveTerm/releases";
 const RELEASE_PATH_PREFIX: &str = "/Gabrlie/RoveTerm/releases";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RELEASE_RESPONSE_BYTES: usize = 1024 * 1024;
+#[cfg(any(target_os = "android", test))]
+const MAX_APK_BYTES: u64 = 256 * 1024 * 1024;
 
 /// How an available update can be installed on the current platform and bundle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UpdateInstallMode {
-    /// Downloaded, signature-verified and applied inside the running application.
+    /// Verified and handed to the platform installer by the running application.
     InApp,
     /// Opened on the allowlisted GitHub Releases page for manual download.
     External,
@@ -61,7 +75,7 @@ pub struct UpdateInfo {
     pub notes: String,
     /// ISO-8601 / RFC-3339 publication timestamp when supplied by the release feed.
     pub published_at: Option<String>,
-    /// Allowlisted GitHub Releases URL for viewing or downloading this release.
+    /// GitHub Releases HTML page for this release.
     pub release_url: String,
     /// Whether this build can apply the update in place or should open the release page.
     pub install_mode: UpdateInstallMode,
@@ -89,6 +103,15 @@ pub struct PendingUpdate {
     pub update: tauri_plugin_updater::Update,
 }
 
+#[cfg(any(target_os = "android", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingAndroidUpdate {
+    version: String,
+    download_url: String,
+    sha256: String,
+    size: Option<u64>,
+}
+
 /// Shared update state held in [`AppState`].
 #[derive(Default)]
 pub struct UpdateState {
@@ -97,6 +120,10 @@ pub struct UpdateState {
     /// The verified updater handle cached from the most recent desktop check.
     #[cfg(desktop)]
     pub pending: tokio::sync::Mutex<Option<PendingUpdate>>,
+    #[cfg(target_os = "android")]
+    pending_android: tokio::sync::Mutex<Option<PendingAndroidUpdate>>,
+    #[cfg(target_os = "android")]
+    android_install_lock: tokio::sync::Mutex<()>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,6 +139,70 @@ struct GithubRelease {
     draft: bool,
     #[serde(default)]
     prerelease: bool,
+    #[serde(default)]
+    assets: Vec<GithubReleaseAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubReleaseAsset {
+    name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdatePlatform {
+    #[cfg(any(target_os = "macos", test))]
+    Macos,
+    #[cfg(any(target_os = "windows", test))]
+    Windows,
+    #[cfg(any(target_os = "linux", test))]
+    Linux,
+    #[cfg(any(target_os = "android", test))]
+    Android,
+    #[cfg(any(target_os = "ios", test))]
+    Ios,
+}
+
+fn current_update_platform() -> UpdatePlatform {
+    #[cfg(target_os = "macos")]
+    {
+        UpdatePlatform::Macos
+    }
+    #[cfg(target_os = "windows")]
+    {
+        UpdatePlatform::Windows
+    }
+    #[cfg(target_os = "linux")]
+    {
+        UpdatePlatform::Linux
+    }
+    #[cfg(target_os = "android")]
+    {
+        UpdatePlatform::Android
+    }
+    #[cfg(target_os = "ios")]
+    {
+        UpdatePlatform::Ios
+    }
+}
+
+fn release_matches_platform(assets: &[GithubReleaseAsset], platform: UpdatePlatform) -> bool {
+    assets.iter().any(|asset| {
+        let name = asset.name.to_ascii_lowercase();
+        match platform {
+            #[cfg(any(target_os = "macos", test))]
+            UpdatePlatform::Macos => name.ends_with(".dmg") || name.ends_with(".app.tar.gz"),
+            #[cfg(any(target_os = "windows", test))]
+            UpdatePlatform::Windows => name.ends_with(".exe") || name.ends_with(".msi"),
+            #[cfg(any(target_os = "linux", test))]
+            UpdatePlatform::Linux => [".appimage", ".deb", ".rpm"]
+                .iter()
+                .any(|ext| name.ends_with(ext)),
+            #[cfg(any(target_os = "android", test))]
+            UpdatePlatform::Android => name == "latest-android.json" || name.ends_with(".apk"),
+            #[cfg(any(target_os = "ios", test))]
+            UpdatePlatform::Ios => name == "latest-ios.json" || name.ends_with(".ipa"),
+        }
+    })
 }
 
 #[cfg(any(target_os = "android", test))]
@@ -131,7 +222,9 @@ struct AndroidManifest {
 #[cfg(any(target_os = "android", test))]
 #[derive(Debug, Deserialize)]
 struct AndroidAbiAsset {
+    #[serde(default)]
     url: String,
+    #[serde(default)]
     sha256: String,
     #[serde(default)]
     size: Option<u64>,
@@ -172,6 +265,15 @@ fn is_allowed_release_url(raw: &str) -> bool {
     }
     let path = url.path();
     path == RELEASE_PATH_PREFIX || path.starts_with(&format!("{RELEASE_PATH_PREFIX}/"))
+}
+
+fn is_release_page_url(raw: &str) -> bool {
+    is_allowed_release_url(raw)
+        && Url::parse(raw.trim()).is_ok_and(|url| {
+            url.path()
+                .strip_prefix("/Gabrlie/RoveTerm/releases/tag/")
+                .is_some_and(|tag| !tag.is_empty() && !tag.contains('/'))
+        })
 }
 
 fn resolve_channel(stored: Option<UpdateChannel>, current: &Version) -> UpdateChannel {
@@ -264,93 +366,175 @@ impl ReleaseCandidate {
     }
 }
 
+fn is_release_footer(line: &str) -> bool {
+    [
+        "<div align=\"center\"",
+        "[![Release Downloads]",
+        "**按操作系统点击图标下载",
+        "**Download based on your OS",
+        "<details>",
+        "**Full Changelog**",
+        "<!--",
+    ]
+    .iter()
+    .any(|marker| line.trim_start().starts_with(marker))
+}
+
+fn strip_release_html(raw: &str) -> String {
+    let mut text = String::new();
+    let mut rest = raw;
+    while let Some(start) = rest.find('<') {
+        text.push_str(&rest[..start]);
+        rest = &rest[start..];
+        if let Some(comment) = rest.strip_prefix("<!--") {
+            let Some((_, after)) = comment.split_once("-->") else {
+                return text;
+            };
+            rest = after;
+            continue;
+        }
+        let tag = rest[1..].strip_prefix('/').unwrap_or(&rest[1..]);
+        let name_end = tag
+            .find(|ch: char| !ch.is_ascii_alphabetic())
+            .unwrap_or(tag.len());
+        let (name, tail) = tag.split_at(name_end);
+        if matches!(
+            name.to_ascii_lowercase().as_str(),
+            "div"
+                | "table"
+                | "thead"
+                | "tbody"
+                | "tfoot"
+                | "tr"
+                | "th"
+                | "td"
+                | "details"
+                | "summary"
+                | "img"
+                | "br"
+                | "p"
+                | "a"
+        ) && tail.starts_with(|ch: char| ch.is_ascii_whitespace() || matches!(ch, '/' | '>'))
+            && let Some(end) = tail.find(['<', '>'])
+            && tail.as_bytes()[end] == b'>'
+        {
+            rest = &tail[end + 1..];
+            continue;
+        }
+        text.push('<');
+        rest = &rest[1..];
+    }
+    text.push_str(rest);
+    text
+}
+
+fn sanitize_release_notes(raw: &str) -> String {
+    let normalized = raw.replace("\r\n", "\n");
+    let mut lines: Vec<_> = normalized.lines().collect();
+    let mut start = 0;
+    loop {
+        while lines.get(start).is_some_and(|line| line.trim().is_empty()) {
+            start += 1;
+        }
+        let Some(alert) = lines
+            .get(start)
+            .and_then(|line| line.trim_start().strip_prefix('>'))
+        else {
+            break;
+        };
+        if !matches!(
+            alert.trim(),
+            "[!NOTE]" | "[!TIP]" | "[!IMPORTANT]" | "[!WARNING]" | "[!CAUTION]"
+        ) {
+            break;
+        }
+        while lines
+            .get(start)
+            .is_some_and(|line| line.trim_start().starts_with('>'))
+        {
+            start += 1;
+        }
+    }
+
+    for index in start..lines.len() {
+        let line = lines[index].trim();
+        if is_release_footer(line)
+            || (matches!(line, "---" | "***" | "___")
+                && lines[index + 1..]
+                    .iter()
+                    .find(|next| !next.trim().is_empty())
+                    .is_some_and(|next| is_release_footer(next)))
+        {
+            lines.truncate(index);
+            break;
+        }
+    }
+
+    let stripped = strip_release_html(&lines[start..].join("\n"));
+    let mut notes = String::new();
+    let mut paragraph_break = false;
+    for line in stripped.lines().map(str::trim_end) {
+        if line.is_empty() {
+            paragraph_break = true;
+            continue;
+        }
+        if !notes.is_empty() {
+            notes.push('\n');
+            if paragraph_break {
+                notes.push('\n');
+            }
+        }
+        notes.push_str(line);
+        paragraph_break = false;
+    }
+    notes
+}
+
 fn candidate_from_release(
     release: &GithubRelease,
-    channel: UpdateChannel,
-) -> Result<Option<ReleaseCandidate>, CommandError> {
-    if release.draft {
-        return Ok(None);
-    }
-    let version = parse_semver(&release.tag_name)?;
-    let prerelease = release.prerelease || !version.pre.is_empty();
-    if channel == UpdateChannel::Stable && prerelease {
-        return Ok(None);
-    }
-    let release_url = if release.html_url.trim().is_empty() {
-        tag_release_url(&version)
-    } else if is_allowed_release_url(&release.html_url) {
+    version: Version,
+    prerelease: bool,
+) -> Result<ReleaseCandidate, CommandError> {
+    let release_url = if is_release_page_url(&release.html_url) {
         release.html_url.trim().to_owned()
+    } else if release.html_url.trim().is_empty() || is_allowed_release_url(&release.html_url) {
+        tag_release_url(&version)
     } else {
         return Err(CommandError::new(
             "update.invalid_response",
             "release URL is outside the allowed repository",
         ));
     };
-    Ok(Some(ReleaseCandidate {
+    Ok(ReleaseCandidate {
         tag_name: release.tag_name.trim().to_owned(),
         version,
         prerelease,
-        notes: release.body.clone().unwrap_or_default(),
+        notes: sanitize_release_notes(release.body.as_deref().unwrap_or_default()),
         published_at: release.published_at.clone(),
         release_url,
-    }))
+    })
 }
 
-/// Compares a GitHub release payload against `current_raw` and validates its URL.
-fn compare_release(
-    current_raw: &str,
-    release: &GithubRelease,
-    channel: UpdateChannel,
-) -> Result<UpdateInfo, CommandError> {
-    let current = parse_semver(current_raw)?;
-    let Some(candidate) = candidate_from_release(release, channel)? else {
-        return Ok(up_to_date(current.to_string(), channel));
-    };
-    if candidate.version <= current {
-        return Ok(up_to_date(current.to_string(), channel));
-    }
-    Ok(candidate.into_external_info(current.to_string(), channel))
-}
-
-/// Selects the strictly newest valid release matching `channel` from a GitHub releases list.
-fn select_latest_release(
+/// Selects the strictly newest release matching the channel and platform.
+fn select_release_candidate(
     current: &Version,
     releases: &[GithubRelease],
     channel: UpdateChannel,
+    platform: UpdatePlatform,
 ) -> Result<Option<ReleaseCandidate>, CommandError> {
     let mut best: Option<ReleaseCandidate> = None;
     for release in releases {
-        if release.draft {
+        if release.draft || !release_matches_platform(&release.assets, platform) {
             continue;
         }
         let Ok(version) = parse_semver(&release.tag_name) else {
             continue;
         };
         let prerelease = release.prerelease || !version.pre.is_empty();
-        if channel == UpdateChannel::Stable && prerelease {
+        if (channel == UpdateChannel::Stable && prerelease) || version <= *current {
             continue;
         }
-        if version <= *current {
-            continue;
-        }
-        let release_url = if release.html_url.trim().is_empty() {
-            tag_release_url(&version)
-        } else if is_allowed_release_url(&release.html_url) {
-            release.html_url.trim().to_owned()
-        } else {
-            return Err(CommandError::new(
-                "update.invalid_response",
-                "release URL is outside the allowed repository",
-            ));
-        };
-        let candidate = ReleaseCandidate {
-            tag_name: release.tag_name.trim().to_owned(),
-            version,
-            prerelease,
-            notes: release.body.clone().unwrap_or_default(),
-            published_at: release.published_at.clone(),
-            release_url,
-        };
+        let candidate = candidate_from_release(release, version, prerelease)?;
         if best
             .as_ref()
             .is_none_or(|existing| candidate.version > existing.version)
@@ -373,7 +557,7 @@ fn parse_android_manifest(
     payload: &str,
     abi: &str,
     channel: UpdateChannel,
-) -> Result<UpdateInfo, CommandError> {
+) -> Result<(UpdateInfo, Option<PendingAndroidUpdate>), CommandError> {
     let current = parse_semver(current_raw)?;
     let manifest: AndroidManifest = serde_json::from_str(payload).map_err(|error| {
         CommandError::new(
@@ -383,60 +567,48 @@ fn parse_android_manifest(
     })?;
     let latest = parse_semver(&manifest.version)?;
     let prerelease = !latest.pre.is_empty();
-    if channel == UpdateChannel::Stable && prerelease {
-        return Ok(up_to_date(current.to_string(), channel));
+    if latest <= current || (channel == UpdateChannel::Stable && prerelease) {
+        return Ok((up_to_date(current.to_string(), channel), None));
     }
     let release_url = match manifest.release_url.as_deref().map(str::trim) {
-        Some(url) if !url.is_empty() => {
-            if !is_allowed_release_url(url) {
-                return Err(CommandError::new(
-                    "update.invalid_response",
-                    "Android manifest release URL is outside the allowed repository",
-                ));
-            }
-            url.to_owned()
+        Some(url) if is_release_page_url(url) => url.to_owned(),
+        Some(url) if !url.is_empty() && !is_allowed_release_url(url) => {
+            return Err(CommandError::new(
+                "update.invalid_response",
+                "Android manifest release URL is outside the allowed repository",
+            ));
         }
         _ => tag_release_url(&latest),
     };
-    if latest <= current {
-        return Ok(up_to_date(current.to_string(), channel));
-    }
-    let asset = manifest
-        .platforms
-        .get(abi)
-        .or_else(|| manifest.platforms.get("universal"));
-    let (download_url, sha256, size) = match asset {
-        Some(asset) => {
-            if !is_allowed_release_url(&asset.url) {
-                return Err(CommandError::new(
-                    "update.invalid_response",
-                    "Android APK URL is outside the allowed repository",
-                ));
-            }
-            let digest = asset.sha256.trim().to_ascii_lowercase();
-            if !is_valid_sha256(&digest) {
-                return Err(CommandError::new(
-                    "update.invalid_response",
-                    "Android APK SHA-256 digest is not valid",
-                ));
-            }
-            (asset.url.trim().to_owned(), Some(digest), asset.size)
-        }
-        None => (release_url, None, None),
-    };
-    Ok(UpdateInfo {
+    let version = latest.to_string();
+    let pending = [abi, "universal"]
+        .into_iter()
+        .filter_map(|abi| manifest.platforms.get(abi))
+        .find(|asset| is_allowed_release_url(&asset.url) && is_valid_sha256(&asset.sha256))
+        .map(|asset| PendingAndroidUpdate {
+            version: version.clone(),
+            download_url: asset.url.trim().to_owned(),
+            sha256: asset.sha256.to_ascii_lowercase(),
+            size: asset.size,
+        });
+    let info = UpdateInfo {
         current_version: current.to_string(),
         channel,
         available: true,
-        version: Some(latest.to_string()),
+        version: Some(version),
         prerelease,
-        notes: manifest.notes,
+        notes: sanitize_release_notes(&manifest.notes),
         published_at: manifest.pub_date,
-        release_url: download_url,
-        install_mode: UpdateInstallMode::External,
-        asset_sha256: sha256,
-        asset_size: size,
-    })
+        release_url,
+        install_mode: if pending.is_some() {
+            UpdateInstallMode::InApp
+        } else {
+            UpdateInstallMode::External
+        },
+        asset_sha256: pending.as_ref().map(|asset| asset.sha256.clone()),
+        asset_size: pending.as_ref().and_then(|asset| asset.size),
+    };
+    Ok((info, pending))
 }
 
 async fn fetch_limited_text(url: &str, accept: &str) -> Result<Option<String>, CommandError> {
@@ -483,25 +655,41 @@ async fn fetch_limited_text(url: &str, accept: &str) -> Result<Option<String>, C
     Ok(Some(text))
 }
 
+#[cfg(not(target_os = "android"))]
 async fn check_github_stable_release(current_version: &str) -> Result<UpdateInfo, CommandError> {
-    let Some(body) =
-        fetch_limited_text(GITHUB_LATEST_RELEASE_URL, "application/vnd.github+json").await?
-    else {
-        return Ok(up_to_date(
-            current_version.to_owned(),
-            UpdateChannel::Stable,
-        ));
-    };
-    let release: GithubRelease = serde_json::from_str(&body).map_err(|error| {
-        CommandError::new(
-            "update.invalid_response",
-            format!("could not decode GitHub release: {error}"),
-        )
-    })?;
-    compare_release(current_version, &release, UpdateChannel::Stable)
+    let current = parse_semver(current_version)?;
+    let channel = UpdateChannel::Stable;
+    Ok(match fetch_stable_candidate(&current).await? {
+        Some(candidate) => candidate.into_external_info(current.to_string(), channel),
+        None => up_to_date(current.to_string(), channel),
+    })
 }
 
-async fn fetch_beta_candidate(current: &Version) -> Result<Option<ReleaseCandidate>, CommandError> {
+async fn fetch_stable_candidate(
+    current: &Version,
+) -> Result<Option<ReleaseCandidate>, CommandError> {
+    let channel = UpdateChannel::Stable;
+    let platform = current_update_platform();
+    if let Some(body) =
+        fetch_limited_text(GITHUB_LATEST_RELEASE_URL, "application/vnd.github+json").await?
+    {
+        let release: GithubRelease = serde_json::from_str(&body).map_err(|error| {
+            CommandError::new(
+                "update.invalid_response",
+                format!("could not decode GitHub release: {error}"),
+            )
+        })?;
+        if release_matches_platform(&release.assets, platform) {
+            return select_release_candidate(current, &[release], channel, platform);
+        }
+    }
+    fetch_release_candidate(current, channel).await
+}
+
+async fn fetch_release_candidate(
+    current: &Version,
+    channel: UpdateChannel,
+) -> Result<Option<ReleaseCandidate>, CommandError> {
     let Some(body) =
         fetch_limited_text(GITHUB_RELEASES_LIST_URL, "application/vnd.github+json").await?
     else {
@@ -513,7 +701,7 @@ async fn fetch_beta_candidate(current: &Version) -> Result<Option<ReleaseCandida
             format!("could not decode GitHub releases list: {error}"),
         )
     })?;
-    select_latest_release(current, &releases, UpdateChannel::Beta)
+    select_release_candidate(current, &releases, channel, current_update_platform())
 }
 
 #[cfg(target_os = "android")]
@@ -530,10 +718,71 @@ fn current_android_abi() -> &'static str {
     {
         "x86_64"
     }
-    #[cfg(not(any(target_arch = "aarch64", target_arch = "arm", target_arch = "x86_64")))]
+    #[cfg(target_arch = "x86")]
+    {
+        "x86"
+    }
+    #[cfg(not(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    )))]
     {
         "universal"
     }
+}
+
+#[cfg(target_os = "android")]
+async fn fetch_android_manifest(
+    url: &str,
+    current_version: &str,
+    channel: UpdateChannel,
+) -> Option<(UpdateInfo, Option<PendingAndroidUpdate>)> {
+    let result = match fetch_limited_text(url, "application/json").await {
+        Ok(Some(body)) => {
+            parse_android_manifest(current_version, &body, current_android_abi(), channel)
+        }
+        Ok(None) => return None,
+        Err(error) => Err(error),
+    };
+    match result {
+        Ok(update) => Some(update),
+        Err(error) => {
+            tracing::info!(error = %error.message, "Android manifest unavailable; falling back to GitHub Releases");
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+async fn check_android_update(
+    current: &Version,
+    current_version: String,
+    channel: UpdateChannel,
+) -> Result<(UpdateInfo, Option<PendingAndroidUpdate>), CommandError> {
+    let candidate = match channel {
+        UpdateChannel::Stable => {
+            if let Some(update) =
+                fetch_android_manifest(ANDROID_MANIFEST_URL, &current_version, channel).await
+            {
+                return Ok(update);
+            }
+            fetch_stable_candidate(current).await?
+        }
+        UpdateChannel::Beta => fetch_release_candidate(current, channel).await?,
+    };
+    let Some(candidate) = candidate else {
+        return Ok((up_to_date(current_version, channel), None));
+    };
+    if let Ok(url) = tag_download_url(&candidate.tag_name, "latest-android.json")
+        && let Some((info, pending)) =
+            fetch_android_manifest(url.as_str(), &current_version, channel).await
+        && info.version.as_deref() == Some(candidate.version.to_string().as_str())
+    {
+        return Ok((info, pending));
+    }
+    Ok((candidate.into_external_info(current_version, channel), None))
 }
 
 #[cfg(desktop)]
@@ -562,7 +811,7 @@ async fn check_desktop_updater(
                 return Ok(Some(up_to_date(current_version.to_owned(), channel)));
             }
             let normalized = version_parsed.to_string();
-            let notes = update.body.clone().unwrap_or_default();
+            let notes = sanitize_release_notes(update.body.as_deref().unwrap_or_default());
             let published_at = update.date.map(|date| date.to_string());
             let release_url = tag_release_url(&version_parsed);
             *state.updates.pending.lock().await = Some(PendingUpdate {
@@ -625,6 +874,23 @@ pub async fn update_check(
         .and_then(|prefs| prefs.updates.channel);
     let channel = resolve_channel(stored_channel, &current_semver);
 
+    #[cfg(target_os = "android")]
+    {
+        let result = check_android_update(&current_semver, current_version, channel).await;
+        let mut slot = state.updates.pending_android.lock().await;
+        match result {
+            Ok((info, pending)) => {
+                *slot = pending;
+                Ok(info)
+            }
+            Err(error) => {
+                *slot = None;
+                Err(error)
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "android"))]
     match channel {
         UpdateChannel::Stable => {
             #[cfg(desktop)]
@@ -655,41 +921,13 @@ pub async fn update_check(
                 return check_github_stable_release(&current_version).await;
             }
 
-            #[cfg(target_os = "android")]
-            {
-                match fetch_limited_text(ANDROID_MANIFEST_URL, "application/json").await {
-                    Ok(Some(body)) => match parse_android_manifest(
-                        &current_version,
-                        &body,
-                        current_android_abi(),
-                        channel,
-                    ) {
-                        Ok(info) => return Ok(info),
-                        Err(error) => {
-                            tracing::info!(
-                                error = %error.message,
-                                "Android manifest invalid; falling back to GitHub Releases"
-                            );
-                        }
-                    },
-                    Ok(None) => {}
-                    Err(error) => {
-                        tracing::info!(
-                            error = %error.message,
-                            "Android manifest fetch failed; falling back to GitHub Releases"
-                        );
-                    }
-                }
-                return check_github_stable_release(&current_version).await;
-            }
-
             #[cfg(target_os = "ios")]
             {
                 check_github_stable_release(&current_version).await
             }
         }
         UpdateChannel::Beta => {
-            let Some(candidate) = fetch_beta_candidate(&current_semver).await? else {
+            let Some(candidate) = fetch_release_candidate(&current_semver, channel).await? else {
                 #[cfg(desktop)]
                 {
                     *state.updates.pending.lock().await = None;
@@ -701,12 +939,13 @@ pub async fn update_check(
             {
                 use tauri_plugin_updater::UpdaterExt;
 
-                match tag_download_url(&candidate.tag_name, "latest.json")
-                    .and_then(|manifest_url| {
+                match tag_download_url(&candidate.tag_name, "latest.json").and_then(
+                    |manifest_url| {
                         url::Url::parse(manifest_url.as_str()).map_err(|error| {
                             CommandError::new("update.invalid_response", error.to_string())
                         })
-                    }) {
+                    },
+                ) {
                     Ok(manifest_url) => {
                         match app
                             .updater_builder()
@@ -748,41 +987,6 @@ pub async fn update_check(
                 Ok(candidate.into_external_info(current_version, channel))
             }
 
-            #[cfg(target_os = "android")]
-            {
-                if let Ok(manifest_url) =
-                    tag_download_url(&candidate.tag_name, "latest-android.json")
-                {
-                    match fetch_limited_text(manifest_url.as_str(), "application/json").await {
-                        Ok(Some(body)) => match parse_android_manifest(
-                            &current_version,
-                            &body,
-                            current_android_abi(),
-                            channel,
-                        ) {
-                            Ok(info) if info.available => return Ok(info),
-                            Ok(_) => {}
-                            Err(error) => {
-                                tracing::info!(
-                                    error = %error.message,
-                                    tag = %candidate.tag_name,
-                                    "beta Android manifest invalid; falling back to GitHub Release"
-                                );
-                            }
-                        },
-                        Ok(None) => {}
-                        Err(error) => {
-                            tracing::info!(
-                                error = %error.message,
-                                tag = %candidate.tag_name,
-                                "beta Android manifest fetch failed; falling back to GitHub Release"
-                            );
-                        }
-                    }
-                }
-                Ok(candidate.into_external_info(current_version, channel))
-            }
-
             #[cfg(target_os = "ios")]
             {
                 Ok(candidate.into_external_info(current_version, channel))
@@ -791,16 +995,229 @@ pub async fn update_check(
     }
 }
 
+#[cfg(any(target_os = "android", test))]
+async fn remove_cached_file(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path).await {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+async fn cleanup_stale_apks(dir: &Path, apk: &Path, partial: &Path) -> io::Result<()> {
+    let mut entries = fs::read_dir(dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let file = entry.path();
+        if file == apk || file == partial || entry.file_type().await?.is_dir() {
+            continue;
+        }
+        if file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                name.starts_with("RoveTerm-") && (name.ends_with(".apk") || name.ends_with(".part"))
+            })
+        {
+            remove_cached_file(&file).await?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "android", test))]
+async fn verified_apk_size(path: &Path, expected: &str) -> io::Result<Option<u64>> {
+    use tokio::io::AsyncReadExt;
+
+    let metadata = match fs::symlink_metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_file() || metadata.len() > MAX_APK_BYTES {
+        return Ok(None);
+    }
+    let mut file = fs::File::open(path).await?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0; 64 * 1024];
+    let mut len = 0;
+    loop {
+        let read = file.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        len += read as u64;
+        if len > MAX_APK_BYTES {
+            return Ok(None);
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize())
+        .eq_ignore_ascii_case(expected)
+        .then_some(len))
+}
+
+#[cfg(target_os = "android")]
+fn install_error(error: impl std::fmt::Display) -> CommandError {
+    CommandError::new("update.install_failed", error.to_string())
+}
+
+#[cfg(target_os = "android")]
+async fn download_android_apk(
+    pending: &PendingAndroidUpdate,
+    partial: &Path,
+    progress: &Channel<UpdateProgress>,
+) -> Result<(), CommandError> {
+    use std::time::Instant;
+
+    if !is_allowed_release_url(&pending.download_url) {
+        return Err(install_error(
+            "Android APK URL is outside the allowed repository",
+        ));
+    }
+    let client = rove_http::client(None).map_err(install_error)?;
+    let mut response = client
+        .get(&pending.download_url)
+        .send()
+        .await
+        .and_then(|response| response.error_for_status())
+        .map_err(|error| install_error(error.without_url()))?;
+    let total = response.content_length().or(pending.size);
+    if total.is_some_and(|len| len > MAX_APK_BYTES) {
+        return Err(install_error("Android APK exceeds the size limit"));
+    }
+    let _ = progress.send(UpdateProgress::Started { total });
+    let mut file = fs::File::create_new(partial).await.map_err(install_error)?;
+    let mut hasher = Sha256::new();
+    let mut downloaded = 0;
+    let mut last_reported = 0;
+    let mut last_report = Instant::now();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| install_error(error.without_url()))?
+    {
+        downloaded += chunk.len() as u64;
+        if downloaded > MAX_APK_BYTES {
+            return Err(install_error("Android APK exceeds the size limit"));
+        }
+        file.write_all(&chunk).await.map_err(install_error)?;
+        hasher.update(&chunk);
+        if downloaded - last_reported >= 64 * 1024
+            || last_report.elapsed() >= Duration::from_millis(100)
+        {
+            let _ = progress.send(UpdateProgress::Downloading { downloaded, total });
+            last_reported = downloaded;
+            last_report = Instant::now();
+        }
+    }
+    if downloaded != last_reported {
+        let _ = progress.send(UpdateProgress::Downloading { downloaded, total });
+    }
+    file.flush().await.map_err(install_error)?;
+    if !format!("{:x}", hasher.finalize()).eq_ignore_ascii_case(&pending.sha256) {
+        return Err(install_error("downloaded APK checksum mismatch"));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+async fn install_android_update(
+    app: AppHandle,
+    state: &UpdateState,
+    version: &str,
+    progress: Channel<UpdateProgress>,
+) -> Result<(), CommandError> {
+    let _guard = state
+        .android_install_lock
+        .try_lock()
+        .map_err(|_| install_error("an Android update installation is in progress"))?;
+    let requested = parse_semver(version)
+        .ok()
+        .map(|version| version.to_string());
+    let pending = state
+        .pending_android
+        .lock()
+        .await
+        .as_ref()
+        .filter(|pending| requested.as_deref() == Some(pending.version.as_str()))
+        .cloned()
+        .ok_or_else(|| {
+            CommandError::new(
+                "update.not_ready",
+                "no verified update matches the requested version",
+            )
+        })?;
+
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(install_error)?
+        .join("updates");
+    fs::create_dir_all(&dir).await.map_err(install_error)?;
+    // The normalized SemVer uses filename-safe ASCII characters.
+    let basename = format!("RoveTerm-{}", pending.version);
+    let apk = dir.join(format!("{basename}.apk"));
+    let partial = dir.join(format!("{basename}.part"));
+    cleanup_stale_apks(&dir, &apk, &partial)
+        .await
+        .map_err(install_error)?;
+    remove_cached_file(&partial).await.map_err(install_error)?;
+
+    if let Some(len) = verified_apk_size(&apk, &pending.sha256)
+        .await
+        .map_err(install_error)?
+    {
+        let _ = progress.send(UpdateProgress::Started { total: Some(len) });
+    } else {
+        remove_cached_file(&apk).await.map_err(install_error)?;
+        let result = async {
+            download_android_apk(&pending, &partial, &progress).await?;
+            fs::rename(&partial, &apk).await.map_err(install_error)
+        }
+        .await;
+        if let Err(error) = result {
+            if let Err(cleanup_error) = remove_cached_file(&partial).await {
+                tracing::warn!(%cleanup_error, "could not remove partial APK");
+            }
+            return Err(error);
+        }
+    }
+
+    let apk = apk
+        .into_os_string()
+        .into_string()
+        .map_err(|_| install_error("APK path is not UTF-8"))?;
+    let _ = progress.send(UpdateProgress::Installing);
+    let result = tauri::async_runtime::spawn_blocking(move || app.rove_mobile().install_apk(&apk))
+        .await
+        .map_err(install_error)?;
+    match result {
+        Ok(ApkInstallStatus::Launched) => {
+            let _ = progress.send(UpdateProgress::Finished);
+            Ok(())
+        }
+        Ok(ApkInstallStatus::PermissionRequired) => Err(CommandError::new(
+            "update.install_permission_required",
+            "Android unknown app installs permission is required",
+        )),
+        Err(error) => Err(install_error(format!(
+            "failed to launch APK installer: {error}"
+        ))),
+    }
+}
+
 /// Downloads, verifies and installs the pending update matching `version`, streaming progress over
 /// `on_progress`.
 #[tauri::command]
 pub async fn update_install(
+    app: AppHandle,
     state: State<'_, AppState>,
     version: String,
     on_progress: Channel<UpdateProgress>,
 ) -> Result<(), CommandError> {
     #[cfg(desktop)]
     {
+        let _ = app;
         let requested = parse_semver(&version)?.to_string();
         let pending = {
             let mut slot = state.updates.pending.lock().await;
@@ -859,9 +1276,14 @@ pub async fn update_install(
         }
     }
 
-    #[cfg(mobile)]
+    #[cfg(target_os = "android")]
     {
-        let _ = (state, version, on_progress);
+        install_android_update(app, &state.updates, &version, on_progress).await
+    }
+
+    #[cfg(target_os = "ios")]
+    {
+        let _ = (app, state, version, on_progress);
         Err(CommandError::new(
             "update.unsupported",
             "in-app update installation is not supported on this platform yet",
@@ -899,14 +1321,20 @@ pub async fn update_open_release(app: AppHandle, url: String) -> Result<(), Comm
 mod tests {
     use super::*;
 
-    fn sample_release(tag: &str, url: &str) -> GithubRelease {
+    fn sample_release(tag: &str, names: &[&str]) -> GithubRelease {
         GithubRelease {
             tag_name: tag.into(),
             body: Some("## What's New\n- Faster startup".into()),
-            html_url: url.into(),
+            html_url: format!("{RELEASE_PAGE_URL}/tag/{tag}"),
             published_at: Some("2026-11-22T08:00:00Z".into()),
             draft: false,
             prerelease: false,
+            assets: names
+                .iter()
+                .map(|name| GithubReleaseAsset {
+                    name: (*name).into(),
+                })
+                .collect(),
         }
     }
 
@@ -974,184 +1402,317 @@ mod tests {
     }
 
     #[test]
-    fn compares_github_releases_for_newer_same_older_and_invalid_urls() {
-        let newer = compare_release(
-            "0.1.0",
-            &sample_release(
-                "v0.2.0",
-                "https://github.com/Gabrlie/RoveTerm/releases/tag/v0.2.0",
-            ),
-            UpdateChannel::Stable,
-        )
-        .unwrap();
-        assert!(newer.available);
-        assert_eq!(newer.channel, UpdateChannel::Stable);
-        assert!(!newer.prerelease);
-        assert_eq!(newer.version.as_deref(), Some("0.2.0"));
-        assert_eq!(newer.install_mode, UpdateInstallMode::External);
-        assert!(newer.notes.contains("Faster startup"));
-
-        let same = compare_release(
-            "0.2.0",
-            &sample_release(
-                "v0.2.0",
-                "https://github.com/Gabrlie/RoveTerm/releases/tag/v0.2.0",
-            ),
-            UpdateChannel::Stable,
-        )
-        .unwrap();
-        assert!(!same.available);
-        assert_eq!(same.version, None);
-
-        let older = compare_release(
-            "0.3.0",
-            &sample_release(
-                "v0.2.0",
-                "https://github.com/Gabrlie/RoveTerm/releases/tag/v0.2.0",
-            ),
-            UpdateChannel::Stable,
-        )
-        .unwrap();
-        assert!(!older.available);
-
-        let mut prerelease = sample_release(
-            "v0.3.0-beta.1",
-            "https://github.com/Gabrlie/RoveTerm/releases/tag/v0.3.0-beta.1",
+    fn sanitizes_release_notes_banner_and_html_download_table() {
+        let raw = "\r\n> [!NOTE]\r\n> Beta pre-release\r\n>\r\n> Switch channels in Settings.\r\n\r\n\
+                   > [!WARNING]\r\n> Early build.\r\n\r\n\
+                   ## What's new\r\n- Faster startup\r\n\r\n---\r\n\r\n\
+                   <div align=\"center\">\r\n[![Release Downloads](badge)](releases)\r\n</div>\r\n\
+                   <table><tr><td><img src=\"badge\"></td></tr></table>";
+        assert_eq!(
+            sanitize_release_notes(raw),
+            "## What's new\n- Faster startup"
         );
-        prerelease.prerelease = true;
+    }
+
+    #[test]
+    fn truncates_each_release_footer_with_or_without_horizontal_rule() {
+        for footer in [
+            "<div align=\"center\">",
+            "[![Release Downloads](badge)](releases)",
+            "**按操作系统点击图标下载**",
+            "**Download based on your OS:**",
+            "<details>\n<summary>SHA-256 checksums</summary>",
+            "**Full Changelog**: https://example.org",
+            "<!-- generated -->",
+        ] {
+            for separator in ["", "---\n\n", "***\n", "___\n  \n"] {
+                let raw = format!("Changes\n\n{separator}{footer}\nDiscarded");
+                assert_eq!(sanitize_release_notes(&raw), "Changes", "{raw}");
+            }
+        }
+    }
+
+    #[test]
+    fn strips_remaining_html_and_preserves_clean_markdown() {
+        let raw = "<div>\n<p align=\"left\">Faster <img src=\"badge\">startup</p>\n</div>\n\
+                   <table>\n<tr><td>Bug fixes</td></tr>\n</table><br>\n\n\n\
+                   Version <!-- internal\nmetadata -->2.0";
+        assert_eq!(
+            sanitize_release_notes(raw),
+            "Faster startup\n\nBug fixes\n\nVersion 2.0"
+        );
+        let clean = "## Updates\n\n- Faster **startup**\n- [Details](https://example.org)\n\n---\n\n> User quote";
+        assert_eq!(sanitize_release_notes(clean), clean);
+        assert_eq!(sanitize_release_notes("\n    $ rove"), "    $ rove");
+        assert_eq!(
+            sanitize_release_notes("Use <p-name> or <<operator"),
+            "Use <p-name> or <<operator"
+        );
+    }
+
+    #[test]
+    fn matches_supported_assets_case_insensitively_by_platform() {
+        use UpdatePlatform::*;
+        let platforms = [Macos, Windows, Linux, Android, Ios];
+        for (expected, names) in [
+            (Macos, &["rove.DMG", "Rove.APP.TAR.GZ"][..]),
+            (Windows, &["rove.EXE", "rove.MsI"][..]),
+            (Linux, &["rove.APPIMAGE", "rove.DEB", "rove.RPM"][..]),
+            (Android, &["LATEST-ANDROID.JSON", "rove.APK"][..]),
+            (Ios, &["LATEST-IOS.JSON", "rove.IPA"][..]),
+        ] {
+            for name in names {
+                let asset = GithubReleaseAsset {
+                    name: (*name).into(),
+                };
+                for platform in platforms {
+                    assert_eq!(
+                        release_matches_platform(std::slice::from_ref(&asset), platform),
+                        platform == expected,
+                        "{name} on {platform:?}"
+                    );
+                    assert!(!release_matches_platform(&[], platform));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn selects_platform_compatible_versions_from_staggered_releases() {
+        use UpdatePlatform::*;
+        let releases = [
+            sample_release("v0.4.0", &[]),
+            sample_release("v0.3.3", &["Rove.APK", "latest-android.json"]),
+            sample_release("v0.3.0", &["rove.dmg", "rove.deb", "rove.msi"]),
+            sample_release("v0.3.2", &["rove.exe"]),
+            sample_release("v0.3.1", &["rove.ipa"]),
+        ];
+        for (platform, expected) in [
+            (Macos, "v0.3.0"),
+            (Windows, "v0.3.2"),
+            (Linux, "v0.3.0"),
+            (Android, "v0.3.3"),
+            (Ios, "v0.3.1"),
+        ] {
+            for channel in [UpdateChannel::Stable, UpdateChannel::Beta] {
+                let candidate =
+                    select_release_candidate(&Version::new(0, 2, 0), &releases, channel, platform)
+                        .unwrap()
+                        .unwrap();
+                assert_eq!(candidate.tag_name, expected);
+                assert!(
+                    select_release_candidate(&candidate.version, &releases, channel, platform)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        }
         assert!(
-            !compare_release("0.2.0", &prerelease, UpdateChannel::Stable)
-                .unwrap()
-                .available
+            select_release_candidate(
+                &Version::new(0, 2, 0),
+                &releases[2..],
+                UpdateChannel::Stable,
+                Android
+            )
+            .unwrap()
+            .is_none()
         );
-        let beta = compare_release("0.2.0", &prerelease, UpdateChannel::Beta).unwrap();
-        assert!(beta.available);
-        assert_eq!(beta.channel, UpdateChannel::Beta);
-        assert!(beta.prerelease);
-        assert_eq!(beta.version.as_deref(), Some("0.3.0-beta.1"));
-
-        let bad_url = compare_release(
-            "0.1.0",
-            &sample_release("v0.2.0", "https://evil.example/download"),
-            UpdateChannel::Stable,
-        );
-        assert!(bad_url.is_err());
     }
 
     #[test]
     fn selects_highest_release_for_stable_and_beta_channels() {
-        let mut draft = sample_release(
-            "v0.4.0-beta.1",
-            "https://github.com/Gabrlie/RoveTerm/releases/tag/v0.4.0-beta.1",
-        );
+        let mut draft = sample_release("v0.4.0-beta.1", &["rove.dmg"]);
         draft.draft = true;
-        draft.prerelease = true;
-
-        let mut beta1 = sample_release(
-            "v0.3.0-beta.1",
-            "https://github.com/Gabrlie/RoveTerm/releases/tag/v0.3.0-beta.1",
-        );
-        beta1.prerelease = true;
-
-        let mut beta2 = sample_release(
-            "v0.3.0-beta.2",
-            "https://github.com/Gabrlie/RoveTerm/releases/tag/v0.3.0-beta.2",
-        );
-        beta2.prerelease = true;
-
-        let stable = sample_release(
-            "v0.2.1",
-            "https://github.com/Gabrlie/RoveTerm/releases/tag/v0.2.1",
-        );
-        let non_semver = sample_release("nightly", "https://github.com/Gabrlie/RoveTerm/releases");
-        let list = vec![draft, beta1, beta2, stable, non_semver];
-
-        let cur = Version::parse("0.2.1").unwrap();
+        let list = [
+            draft,
+            sample_release("v0.3.0-beta.1", &["rove.dmg"]),
+            sample_release("v0.3.0-beta.2", &["rove.dmg"]),
+            sample_release("v0.2.1", &["rove.dmg"]),
+            sample_release("nightly", &["rove.dmg"]),
+        ];
+        let current = Version::new(0, 2, 1);
+        let platform = UpdatePlatform::Macos;
         assert!(
-            select_latest_release(&cur, &list, UpdateChannel::Stable)
+            select_release_candidate(&current, &list, UpdateChannel::Stable, platform)
                 .unwrap()
                 .is_none()
         );
-        let picked = select_latest_release(&cur, &list, UpdateChannel::Beta)
+        let beta = select_release_candidate(&current, &list, UpdateChannel::Beta, platform)
             .unwrap()
             .unwrap();
-        assert_eq!(picked.tag_name, "v0.3.0-beta.2");
-        assert!(picked.prerelease);
+        assert_eq!(beta.tag_name, "v0.3.0-beta.2");
+        assert!(beta.prerelease);
 
-        // Beta users graduate seamlessly when 0.3.0 stable arrives.
-        let mut with_final = list;
-        with_final.push(sample_release(
-            "v0.3.0",
-            "https://github.com/Gabrlie/RoveTerm/releases/tag/v0.3.0",
-        ));
-        let cur_beta = Version::parse("0.3.0-beta.2").unwrap();
-        let graduated = select_latest_release(&cur_beta, &with_final, UpdateChannel::Beta)
-            .unwrap()
-            .unwrap();
-        assert_eq!(graduated.tag_name, "v0.3.0");
-        assert!(!graduated.prerelease);
+        let stable = sample_release("v0.3.0", &["rove.dmg"]);
+        let stable =
+            select_release_candidate(&beta.version, &[stable], UpdateChannel::Beta, platform)
+                .unwrap()
+                .unwrap();
+        assert_eq!(stable.tag_name, "v0.3.0");
+        assert!(!stable.prerelease);
     }
 
     #[test]
-    fn parses_and_validates_android_manifest() {
-        let sha = "a".repeat(64);
-        let manifest = serde_json::json!({
-            "version": "0.2.0",
-            "notes": "Android release notes",
+    fn github_candidate_sanitizes_notes_and_preserves_release_page() {
+        let current = Version::new(0, 1, 0);
+        let mut release = sample_release("v0.2.0", &["rove.apk"]);
+        release.body = Some("> [!TIP]\n> Banner\n\nNotes\n\n**Full Changelog**: link".into());
+        release.html_url = APK_URL.into();
+        let candidate = select_release_candidate(
+            &current,
+            std::slice::from_ref(&release),
+            UpdateChannel::Stable,
+            UpdatePlatform::Android,
+        )
+        .unwrap()
+        .unwrap();
+        let info = candidate.into_external_info(current.to_string(), UpdateChannel::Stable);
+        assert_eq!(info.release_url, TAG_URL);
+        assert_eq!(info.notes, "Notes");
+        assert_eq!(info.install_mode, UpdateInstallMode::External);
+
+        release.html_url = "https://example.org".into();
+        assert!(
+            select_release_candidate(
+                &current,
+                &[release],
+                UpdateChannel::Stable,
+                UpdatePlatform::Android
+            )
+            .is_err()
+        );
+    }
+
+    const TAG_URL: &str = "https://github.com/Gabrlie/RoveTerm/releases/tag/v0.2.0";
+    const APK_URL: &str =
+        "https://github.com/Gabrlie/RoveTerm/releases/download/v0.2.0/RoveTerm.apk";
+
+    fn android_manifest() -> serde_json::Value {
+        serde_json::json!({
+            "version": "V0.2.0",
+            "notes": "Android notes\n\n---\n<details>\nChecksums",
             "pub_date": "2026-11-22T09:00:00Z",
-            "release_url": "https://github.com/Gabrlie/RoveTerm/releases/tag/v0.2.0",
+            "release_url": TAG_URL,
             "platforms": {
                 "arm64-v8a": {
-                    "url": "https://github.com/Gabrlie/RoveTerm/releases/download/v0.2.0/RoveTerm_0.2.0_arm64-v8a.apk",
-                    "sha256": sha,
+                    "url": APK_URL,
+                    "sha256": "A".repeat(64),
                     "size": 18_500_000u64
                 }
             }
         })
-        .to_string();
+    }
 
-        let update =
-            parse_android_manifest("0.1.0", &manifest, "arm64-v8a", UpdateChannel::Stable).unwrap();
-        assert!(update.available);
-        assert_eq!(update.channel, UpdateChannel::Stable);
-        assert!(!update.prerelease);
-        assert_eq!(update.version.as_deref(), Some("0.2.0"));
-        assert_eq!(update.asset_sha256.as_deref(), Some(sha.as_str()));
-        assert_eq!(update.asset_size, Some(18_500_000));
-        assert!(update.release_url.ends_with("arm64-v8a.apk"));
-
-        // Falls back to release page when ABI is not present yet.
-        let fallback =
-            parse_android_manifest("0.1.0", &manifest, "x86_64", UpdateChannel::Stable).unwrap();
-        assert!(fallback.available);
+    #[test]
+    fn android_manifest_keeps_verified_apk_metadata_separate_from_release_page() {
+        let mut manifest = android_manifest();
+        manifest["release_url"] = APK_URL.into();
+        let (info, pending) = parse_android_manifest(
+            "0.1.0",
+            &manifest.to_string(),
+            "arm64-v8a",
+            UpdateChannel::Stable,
+        )
+        .unwrap();
+        assert!(info.available);
+        assert_eq!(info.release_url, TAG_URL);
+        assert_eq!(info.install_mode, UpdateInstallMode::InApp);
+        assert_eq!(info.notes, "Android notes");
+        assert_eq!(info.version.as_deref(), Some("0.2.0"));
+        assert_eq!(info.asset_size, Some(18_500_000));
+        assert_eq!(info.asset_sha256, Some("a".repeat(64)));
         assert_eq!(
-            fallback.release_url,
-            "https://github.com/Gabrlie/RoveTerm/releases/tag/v0.2.0"
+            pending.unwrap(),
+            PendingAndroidUpdate {
+                version: "0.2.0".into(),
+                download_url: APK_URL.into(),
+                sha256: "a".repeat(64),
+                size: Some(18_500_000),
+            }
         );
-        assert_eq!(fallback.asset_sha256, None);
+    }
 
-        // Pre-release Android manifests are ignored on Stable and accepted on Beta.
-        let beta_manifest = manifest.replace("0.2.0", "0.3.0-beta.1");
-        assert!(
-            !parse_android_manifest("0.2.1", &beta_manifest, "arm64-v8a", UpdateChannel::Stable)
-                .unwrap()
-                .available
-        );
-        let beta_update =
-            parse_android_manifest("0.2.1", &beta_manifest, "arm64-v8a", UpdateChannel::Beta)
-                .unwrap();
-        assert!(beta_update.available);
-        assert!(beta_update.prerelease);
-        assert_eq!(beta_update.version.as_deref(), Some("0.3.0-beta.1"));
+    #[test]
+    fn android_manifest_falls_back_for_missing_or_invalid_assets() {
+        let manifest = android_manifest();
+        let mut invalid_sha = manifest.clone();
+        invalid_sha["platforms"]["arm64-v8a"]["sha256"] = "z".repeat(64).into();
+        let mut invalid_url = manifest.clone();
+        invalid_url["platforms"]["arm64-v8a"]["url"] = "https://example.org/rove.apk".into();
+        for (manifest, abi) in [
+            (manifest, "x86_64"),
+            (invalid_sha, "arm64-v8a"),
+            (invalid_url, "arm64-v8a"),
+        ] {
+            let (info, pending) =
+                parse_android_manifest("0.1.0", &manifest.to_string(), abi, UpdateChannel::Stable)
+                    .unwrap();
+            assert!(info.available);
+            assert_eq!(info.release_url, TAG_URL);
+            assert_eq!(info.install_mode, UpdateInstallMode::External);
+            assert_eq!(info.asset_sha256, None);
+            assert!(pending.is_none());
+        }
+    }
 
-        // Rejects tampered host or malformed SHA-256.
-        let bad_sha = manifest.replace(&sha, "not-hex");
-        assert!(
-            parse_android_manifest("0.1.0", &bad_sha, "arm64-v8a", UpdateChannel::Stable).is_err()
-        );
-        let bad_host = manifest.replace("https://github.com/", "https://evil.test/");
-        assert!(
-            parse_android_manifest("0.1.0", &bad_host, "arm64-v8a", UpdateChannel::Stable).is_err()
-        );
+    #[test]
+    fn android_manifest_uses_universal_for_invalid_abi_asset_on_beta() {
+        let mut manifest = android_manifest();
+        manifest["version"] = "0.3.0-beta.1".into();
+        manifest["platforms"]["universal"] = manifest["platforms"]["arm64-v8a"].clone();
+        manifest["platforms"]["arm64-v8a"]["sha256"] = "bad".into();
+        let manifest = manifest.to_string();
+        let (stable, pending) =
+            parse_android_manifest("0.2.0", &manifest, "arm64-v8a", UpdateChannel::Stable).unwrap();
+        assert!(!stable.available && pending.is_none());
+        let (beta, pending) =
+            parse_android_manifest("0.2.0", &manifest, "arm64-v8a", UpdateChannel::Beta).unwrap();
+        assert!(beta.available && beta.prerelease);
+        assert_eq!(pending.unwrap().version, "0.3.0-beta.1");
+    }
+
+    #[tokio::test]
+    async fn verifies_cached_apk_by_streaming_and_returns_actual_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("RoveTerm-0.2.0.apk");
+        let contents = vec![17u8; 144_000];
+        let sha = format!("{:X}", Sha256::digest(&contents));
+        assert_eq!(verified_apk_size(&path, &sha).await.unwrap(), None);
+        fs::write(&path, &contents).await.unwrap();
+        assert_eq!(verified_apk_size(&path, &sha).await.unwrap(), Some(144_000));
+        fs::write(&path, vec![18u8; contents.len()]).await.unwrap();
+        assert_eq!(verified_apk_size(&path, &sha).await.unwrap(), None);
+        fs::File::create(&path)
+            .await
+            .unwrap()
+            .set_len(MAX_APK_BYTES + 1)
+            .await
+            .unwrap();
+        assert_eq!(verified_apk_size(&path, &sha).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn removes_stale_apks_and_partials_for_other_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path();
+        let kept = [
+            "RoveTerm-0.2.0.apk",
+            "RoveTerm-0.2.0.part",
+            "unrelated.apk",
+            "RoveTerm-0.1.0.txt",
+        ];
+        let removed = ["RoveTerm-0.1.0.apk", "RoveTerm-0.3.0.part"];
+        for path in kept.into_iter().chain(removed) {
+            fs::write(dir.join(path), b"cache").await.unwrap();
+        }
+        cleanup_stale_apks(dir, &dir.join(kept[0]), &dir.join(kept[1]))
+            .await
+            .unwrap();
+        for path in kept {
+            assert!(dir.join(path).exists(), "{path}");
+        }
+        for path in removed {
+            assert!(!dir.join(path).exists(), "{path}");
+        }
     }
 }

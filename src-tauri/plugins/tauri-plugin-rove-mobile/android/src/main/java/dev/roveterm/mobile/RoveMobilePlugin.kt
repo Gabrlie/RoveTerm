@@ -5,12 +5,14 @@ import android.app.Activity
 import android.app.Application
 import android.app.KeyguardManager
 import android.content.Intent
+import android.content.ActivityNotFoundException
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.UserNotAuthenticatedException
 import android.util.Base64
@@ -51,6 +53,11 @@ internal class StageFileArgs {
     var maxBytes: BigInteger? = null
 }
 
+@InvokeArg
+internal class InstallApkArgs {
+    lateinit var path: String
+}
+
 @TauriPlugin
 class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
     private companion object {
@@ -65,11 +72,13 @@ class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
     private val keyguard = activity.getSystemService(KeyguardManager::class.java)
     private var active: Invoke? = null
     private var activeExport: PendingExport? = null
+    private var pendingInstall: PendingInstall? = null
     private var prompt: BiometricPrompt? = null
     private var legacyOperation: (() -> Unit)? = null
     private var lifecycleChannel: Channel? = null
 
     private data class PendingExport(val invoke: Invoke, val sourceFile: File)
+    private data class PendingInstall(val invoke: Invoke, val apkFile: File)
     private val lifecycleCallbacks = object : Application.ActivityLifecycleCallbacks {
         override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
         override fun onActivityStarted(activity: Activity) {}
@@ -164,20 +173,92 @@ class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun openExternalUrl(invoke: Invoke) {
-        try {
-            val uri = Uri.parse(invoke.getArgs().requireString("url"))
-            if (uri.scheme !in listOf("http", "https") || uri.host.isNullOrBlank()) {
-                throw BridgeFailure("invalid_input", "External URL requires HTTP or HTTPS and a host")
+        activity.runOnUiThread {
+            try {
+                val uri = Uri.parse(invoke.getArgs().requireString("url"))
+                if (uri.scheme !in listOf("http", "https") || uri.host.isNullOrBlank()) {
+                    throw BridgeFailure("invalid_input", "External URL requires HTTP or HTTPS and a host")
+                }
+                activity.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                invoke.resolve()
+            } catch (error: BridgeFailure) {
+                invoke.reject(error.message, error.code)
+            } catch (_: JSONException) {
+                invoke.reject("Invalid URL arguments", "invalid_input")
+            } catch (_: Exception) {
+                invoke.reject("Could not open the external URL", "unavailable")
             }
-            activity.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            invoke.resolve()
+        }
+    }
+
+    @Command
+    fun installApk(invoke: Invoke) {
+        activity.runOnUiThread {
+            withFileOperation(invoke) {
+                requireFileWindow()
+                if (pendingInstall != null) {
+                    throw BridgeFailure("unavailable", "An APK install permission request is in progress")
+                }
+                val path = try {
+                    invoke.parseArgs(InstallApkArgs::class.java).path
+                } catch (_: Exception) {
+                    throw BridgeFailure("invalid_input", "Invalid APK install arguments")
+                }
+                val apkFile = fileBridge.requireCachedApk(path)
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || activity.packageManager.canRequestPackageInstalls()) {
+                    launchApkInstaller(invoke, apkFile)
+                } else {
+                    if (activeExport != null || legacyOperation != null) {
+                        throw BridgeFailure("unavailable", "Another system activity is in progress")
+                    }
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:${activity.packageName}"),
+                    )
+                    pendingInstall = PendingInstall(invoke, apkFile)
+                    try {
+                        startActivityForResult(invoke, intent, ::installPermissionResult.name)
+                    } catch (_: Exception) {
+                        // Some devices cannot open this settings screen.
+                        pendingInstall = null
+                        resolveInstallPermissionRequired(invoke)
+                    }
+                }
+            }
+        }
+    }
+
+    @ActivityCallback
+    @Suppress("UNUSED_PARAMETER")
+    fun installPermissionResult(invoke: Invoke, result: ActivityResult) {
+        val pending = pendingInstall ?: return
+        if (pending.invoke !== invoke) return
+        pendingInstall = null
+        withFileOperation(invoke) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && activity.packageManager.canRequestPackageInstalls()) {
+                launchApkInstaller(invoke, pending.apkFile)
+            } else {
+                resolveInstallPermissionRequired(invoke)
+            }
+        }
+    }
+
+    private fun launchApkInstaller(invoke: Invoke, apkFile: File) {
+        try {
+            requireFileWindow()
+            fileBridge.launchApkInstaller(apkFile)
+            invoke.resolve(JSObject().put("status", "launched"))
+        } catch (_: ActivityNotFoundException) {
+            invoke.reject("No Android APK installer is available", "unavailable")
         } catch (error: BridgeFailure) {
             invoke.reject(error.message, error.code)
-        } catch (_: JSONException) {
-            invoke.reject("Invalid URL arguments", "invalid_input")
         } catch (_: Exception) {
-            invoke.reject("Could not open the external URL", "unavailable")
+            invoke.reject("Could not launch the APK installer", "unavailable")
         }
+    }
+
+    private fun resolveInstallPermissionRequired(invoke: Invoke) {
+        invoke.resolve(JSObject().put("status", "permission_required"))
     }
 
     @Command
@@ -219,7 +300,7 @@ class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
         activity.runOnUiThread {
             withFileOperation(invoke) {
                 requireFileWindow()
-                if (activeExport != null || legacyOperation != null) {
+                if (activeExport != null || legacyOperation != null || pendingInstall != null) {
                     throw BridgeFailure("unavailable", "Another system picker is in progress")
                 }
                 val args = invoke.getArgs()
@@ -353,6 +434,9 @@ class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
         activeExport?.let { pending ->
             finishExport(pending.invoke, Result.failure(BridgeFailure("unavailable", "Export was interrupted")))
         }
+        val interruptedInstall = pendingInstall
+        pendingInstall = null
+        interruptedInstall?.invoke?.reject("APK installation was interrupted", "unavailable")
         fileBridge.close()
         val previousPrompt = prompt
         active?.let { invoke ->
@@ -533,8 +617,8 @@ class RoveMobilePlugin(private val activity: Activity) : Plugin(activity) {
     private fun startCredentialConfirmation(
         invoke: Invoke, title: String, subtitle: String, operation: () -> Unit,
     ) {
-        if (activeExport != null) {
-            throw BridgeFailure("unavailable", "A system file picker is in progress")
+        if (activeExport != null || pendingInstall != null) {
+            throw BridgeFailure("unavailable", "Another system activity is in progress")
         }
         val intent = keyguard?.createConfirmDeviceCredentialIntent(title, subtitle)
             ?: throw BridgeFailure("biometric_unavailable", "No device credential is enrolled")

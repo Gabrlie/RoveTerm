@@ -94,6 +94,24 @@ internal class FileBridge(private val activity: Activity) {
         activity.startActivity(Intent.createChooser(send, title ?: file.name))
     }
 
+    fun requireCachedApk(path: String): File {
+        val file = canonicalFile(path)
+        val cache = activity.cacheDir.canonicalFile
+        if (file == cache || !isInside(file, cache) || !file.isFile || !file.extension.equals("apk", ignoreCase = true)) {
+            throw BridgeFailure("invalid_input", "Expected a regular APK file inside the app cache")
+        }
+        return file
+    }
+
+    fun launchApkInstaller(apkFile: File) {
+        val file = requireCachedApk(apkFile.path)
+        val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, "application/vnd.android.package-archive")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        activity.startActivity(intent)
+    }
+
     fun prepareExportIntent(sourcePath: String, suggestedName: String): Export {
         val source = requireAppFile(sourcePath)
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {

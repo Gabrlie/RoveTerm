@@ -4,6 +4,25 @@ use serde::{Deserialize, Serialize};
 
 use crate::MobileError;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApkInstallStatus {
+    Launched,
+    PermissionRequired,
+}
+
+#[cfg(target_os = "android")]
+#[derive(Serialize)]
+pub(crate) struct InstallApkRequest<'a> {
+    pub path: &'a str,
+}
+
+#[cfg(target_os = "android")]
+#[derive(Deserialize)]
+pub(crate) struct InstallApkResponse {
+    pub status: ApkInstallStatus,
+}
+
 #[cfg(any(mobile, test))]
 use {url::Url, zeroize::Zeroizing};
 
