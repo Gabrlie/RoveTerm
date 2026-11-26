@@ -5,6 +5,20 @@ This file documents notable changes to RoveTerm in both Simplified Chinese and E
 
 ## [Unreleased]
 
+## [0.3.0-beta.3] - 2026-11-27
+
+### 中文更新日志
+
+- **Android 应用内更新下载与自动安装**：支持在应用内流式下载已签名发布 APK（实时显示进度与已下载大小）、完成 SHA-256 校验后通过 `FileProvider` 直接唤起系统安装器；Android 8+ 首次缺少「安装未知应用」权限时自动引导开启并在返回后继续安装，失败或重试直接复用本地已校验缓存包；保留真实指向 GitHub Release 页面的「前往 GitHub 下载」手动兜底按钮并移除不可点击的假按钮标签。
+- **跨平台按资产更新过滤与纯净更新日志**：桌面端与移动端检查更新时按 Release 实际包含的平台安装包筛选，未改动平台不再收到无意义的更新推送；服务端与客户端统一剥离自动生成的测试版横幅、下载表格 HTML 与尾部校验区，杜绝首次打开更新弹窗出现原始 HTML 源码的问题；移动端启动检查发现未跳过的新版本时自动弹出更新窗口，并精简冗余提示文案。
+- **移动端控件比例、页面排版与返回栈精修**：重塑移动端按钮、分段控件、下拉选择框、开关与分组标题比例（区分 36px 常规操作、30px 行内/工具栏与 28px 分组标题轻质感胶囊按钮），消除高按钮撑高标题栏与顶部异常留白；日志查看窗口自动撑满屏幕剩余高度；移除终端工具栏与 2×7 快捷键栏之间不对称的分割线并统一 4px 间距；服务器状态面板网卡行保持单行显示并提升移动端卡片边距、字号与核心图可读性；从运维总管或终端侧栏进入设置后，返回手势现直接回到来源页面。
+
+### English Changelog
+
+- **In-App Android APK Updates & Auto-Install**: Stream-download signed release APKs directly inside RoveTerm with live progress and incremental SHA-256 verification, then launch Android's package installer via `FileProvider`. On Android 8+, guide users through granting the "Install unknown apps" permission and automatically resume installation on return, reusing the verified cached APK on retries. Replaced the non-interactive mode pill with a working **Download on GitHub** fallback pointing to the GitHub Release page.
+- **Per-Platform Update Filtering & Clean Release Notes**: Update checks now filter GitHub Releases by platform-specific assets so platforms without changes are no longer prompted unnecessarily. Sanitized generated beta banners, download badge HTML tables, and checksum footers across both manifest and API fallback paths so raw HTML never leaks into release notes. Mobile startup checks now automatically open the update dialog once per unskipped version.
+- **Mobile Control Proportions, Layout & Back-Stack Polish**: Harmonized mobile button tiers (36px primary/dialog, 30px inline/toolbar, 28px soft-accent section-heading pills), 32px segmented tracks, 38px Select options, and 40×24px switches without altering desktop sizing. Expanded the mobile Logs viewer to fill remaining viewport height, removed the uneven terminal dock/keybar divider for uniform 4px spacing, kept Status panel network rows single-line with improved mobile padding/typography, and restored the caller pane (such as Fleet Lead) when navigating back from compact Settings.
+
 ## [0.3.0-beta.2] - 2026-11-26
 
 ### 中文更新日志

@@ -1346,7 +1346,7 @@ dependencies = [
 
 [[package]]
 name = "devsshd"
-version = "0.3.0-beta.2"
+version = "0.3.0-beta.3"
 dependencies = [
  "rand 0.10.3",
  "rove-pty",
@@ -4970,7 +4970,7 @@ dependencies = [
 
 [[package]]
 name = "rove-ai"
-version = "0.3.0-beta.2"
+version = "0.3.0-beta.3"
 dependencies = [
  "async-trait",
  "devsshd",
@@ -4995,7 +4995,7 @@ dependencies = [
 
 [[package]]
 name = "rove-fs"
-version = "0.3.0-beta.2"
+version = "0.3.0-beta.3"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -5013,7 +5013,7 @@ dependencies = [
 
 [[package]]
 name = "rove-http"
-version = "0.3.0-beta.2"
+version = "0.3.0-beta.3"
 dependencies = [
  "reqwest",
  "rustls",
@@ -5023,7 +5023,7 @@ dependencies = [
 
 [[package]]
 name = "rove-journal"
-version = "0.3.0-beta.2"
+version = "0.3.0-beta.3"
 dependencies = [
  "parking_lot",
  "rove-kernel",
@@ -5039,7 +5039,7 @@ dependencies = [
 
 [[package]]
 name = "rove-kernel"
-version = "0.3.0-beta.2"
+version = "0.3.0-beta.3"
 dependencies = [
  "parking_lot",
  "serde",
@@ -5051,7 +5051,7 @@ dependencies = [
 
 [[package]]
 name = "rove-ops"
-version = "0.3.0-beta.2"
+version = "0.3.0-beta.3"
 dependencies = [
  "parking_lot",
  "rove-journal",
@@ -5069,7 +5069,7 @@ dependencies = [
 
 [[package]]
 name = "rove-pty"
-version = "0.3.0-beta.2"
+version = "0.3.0-beta.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5085,7 +5085,7 @@ dependencies = [
 
 [[package]]
 name = "rove-session"
-version = "0.3.0-beta.2"
+version = "0.3.0-beta.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5101,7 +5101,7 @@ dependencies = [
 
 [[package]]
 name = "rove-ssh"
-version = "0.3.0-beta.2"
+version = "0.3.0-beta.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5126,7 +5126,7 @@ dependencies = [
 
 [[package]]
 name = "rove-sync"
-version = "0.3.0-beta.2"
+version = "0.3.0-beta.3"
 dependencies = [
  "argon2 0.5.3",
  "async-trait",
@@ -5151,7 +5151,7 @@ dependencies = [
 
 [[package]]
 name = "rove-tailscale"
-version = "0.3.0-beta.2"
+version = "0.3.0-beta.3"
 dependencies = [
  "async-trait",
  "futures",
@@ -5172,7 +5172,7 @@ dependencies = [
 
 [[package]]
 name = "rove-vault"
-version = "0.3.0-beta.2"
+version = "0.3.0-beta.3"
 dependencies = [
  "chacha20poly1305",
  "getrandom 0.3.4",
@@ -5195,7 +5195,7 @@ dependencies = [
 
 [[package]]
 name = "roveterm"
-version = "0.3.0-beta.2"
+version = "0.3.0-beta.3"
 dependencies = [
  "async-trait",
  "devsshd",
@@ -6750,7 +6750,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-rove-mobile"
-version = "0.3.0-beta.2"
+version = "0.3.0-beta.3"
 dependencies = [
  "serde",
  "serde_json",
