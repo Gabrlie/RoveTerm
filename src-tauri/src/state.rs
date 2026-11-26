@@ -40,10 +40,8 @@ pub struct AppState {
     pub journal: Arc<dyn rove_journal::JournalStore>,
     /// Durable, device-local operations tasks and their global worker budget.
     pub ops: Arc<rove_ops::OpsSupervisor>,
-    #[cfg(desktop)]
     pub tailscale: Arc<dyn rove_tailscale::TailnetService>,
     /// Serializes device identity and connection lifecycle changes.
-    #[cfg(desktop)]
     pub tailscale_lock: tokio::sync::Mutex<()>,
     /// Local PTY provider.
     #[cfg(desktop)]
@@ -91,9 +89,7 @@ impl AppState {
             local_fs: ctx.require::<LocalFs>()?,
             journal,
             ops: ctx.require::<rove_ops::OpsSupervisor>()?,
-            #[cfg(desktop)]
             tailscale: ctx.require::<dyn rove_tailscale::TailnetService>()?,
-            #[cfg(desktop)]
             tailscale_lock: tokio::sync::Mutex::new(()),
             ai,
             external: crate::commands::external::ExternalAccess::new(data_dir),

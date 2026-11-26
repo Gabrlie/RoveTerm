@@ -1,20 +1,16 @@
-//! Desktop tailnet lifecycle and browser authorization.
+//! Embedded tailnet lifecycle and browser authorization.
+
+use rove_tailscale::{
+    ConnectRequest, TailnetPingResult, TailnetSnapshot, TailnetState, TailnetStatus,
+    TailscaleError, TailscalePeerId, generate_key_state,
+};
+use rove_vault::{LockState, TailscalePrefs};
+use tauri::{Manager, State};
+use zeroize::Zeroizing;
 
 use crate::error::CommandError;
+use crate::state::AppState;
 
-#[cfg(desktop)]
-use {
-    crate::state::AppState,
-    rove_tailscale::{
-        ConnectRequest, TailnetPingResult, TailnetSnapshot, TailnetState, TailnetStatus,
-        TailscaleError, TailscalePeerId, generate_key_state,
-    },
-    rove_vault::{LockState, TailscalePrefs},
-    tauri::{Manager, State},
-    zeroize::Zeroizing,
-};
-
-#[cfg(desktop)]
 impl From<TailscaleError> for CommandError {
     fn from(error: TailscaleError) -> Self {
         let code = match error {
@@ -30,13 +26,11 @@ impl From<TailscaleError> for CommandError {
     }
 }
 
-#[cfg(desktop)]
 #[tauri::command]
 pub fn tailscale_status(state: State<'_, AppState>) -> TailnetStatus {
     state.tailscale.status()
 }
 
-#[cfg(desktop)]
 #[tauri::command]
 pub async fn tailscale_snapshot(
     state: State<'_, AppState>,
@@ -44,7 +38,6 @@ pub async fn tailscale_snapshot(
     Ok(state.tailscale.snapshot().await?)
 }
 
-#[cfg(desktop)]
 #[tauri::command]
 pub async fn tailscale_ping_peer(
     state: State<'_, AppState>,
@@ -55,7 +48,6 @@ pub async fn tailscale_ping_peer(
     Ok(state.tailscale.ping_peer(&peer_id).await?)
 }
 
-#[cfg(desktop)]
 #[tauri::command]
 pub async fn tailscale_connect(
     state: State<'_, AppState>,
@@ -98,7 +90,6 @@ pub async fn tailscale_connect(
         .await?)
 }
 
-#[cfg(desktop)]
 fn validate_auth_key(key: Zeroizing<String>) -> Result<Zeroizing<String>, CommandError> {
     let trimmed = key.trim();
     if trimmed.is_empty()
@@ -117,7 +108,6 @@ fn validate_auth_key(key: Zeroizing<String>) -> Result<Zeroizing<String>, Comman
     }
 }
 
-#[cfg(desktop)]
 #[tauri::command]
 pub async fn tailscale_disconnect(
     state: State<'_, AppState>,
@@ -127,7 +117,6 @@ pub async fn tailscale_disconnect(
     Ok(state.tailscale.disconnect(configured).await?)
 }
 
-#[cfg(desktop)]
 #[tauri::command]
 pub async fn tailscale_logout(state: State<'_, AppState>) -> Result<TailnetStatus, CommandError> {
     let _guard = state.tailscale_lock.lock().await;
@@ -144,7 +133,6 @@ pub async fn tailscale_logout(state: State<'_, AppState>) -> Result<TailnetStatu
     Ok(state.tailscale.status())
 }
 
-#[cfg(desktop)]
 #[tauri::command]
 pub fn tailscale_open_auth_url(
     app: tauri::AppHandle,
@@ -165,14 +153,12 @@ pub fn tailscale_open_auth_url(
 }
 
 /// Reconnects the stored identity after unlock, if this installation enables auto-connect.
-#[cfg(desktop)]
 pub async fn auto_connect(app: &tauri::AppHandle) {
     if let Err(error) = auto_connect_state(&app.state::<AppState>()).await {
         tracing::warn!(code = error.code, "could not start Tailscale automatically");
     }
 }
 
-#[cfg(desktop)]
 pub(crate) async fn auto_connect_state(state: &AppState) -> Result<(), CommandError> {
     let _guard = state.tailscale_lock.lock().await;
     if !matches!(
@@ -195,7 +181,6 @@ pub(crate) async fn auto_connect_state(state: &AppState) -> Result<(), CommandEr
     Ok(())
 }
 
-#[cfg(desktop)]
 fn request(
     prefs: TailscalePrefs,
     key_state_json: Zeroizing<Vec<u8>>,
@@ -208,32 +193,3 @@ fn request(
         hostname: (!prefs.hostname.is_empty()).then_some(prefs.hostname),
     }
 }
-
-#[cfg(mobile)]
-pub(crate) fn unsupported() -> CommandError {
-    CommandError::new(
-        "tailscale.unsupported",
-        "embedded Tailscale is available on desktop",
-    )
-}
-
-#[cfg(mobile)]
-macro_rules! unsupported_command {
-    ($($name:ident),+ $(,)?) => {$(
-        #[tauri::command]
-        pub fn $name() -> Result<(), CommandError> {
-            Err(unsupported())
-        }
-    )+};
-}
-
-#[cfg(mobile)]
-unsupported_command!(
-    tailscale_status,
-    tailscale_snapshot,
-    tailscale_ping_peer,
-    tailscale_connect,
-    tailscale_disconnect,
-    tailscale_logout,
-    tailscale_open_auth_url,
-);

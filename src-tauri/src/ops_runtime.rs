@@ -580,6 +580,7 @@ fn add_host_report(summary: &mut Value, body: &Value) {
 }
 
 /// Renders report fields as Markdown text, escaping formatting in untrusted evidence.
+#[cfg(any(desktop, test))]
 pub(crate) fn format_report_fallback(summaries: &[Value]) -> String {
     fn plain(value: &str) -> String {
         let text = value

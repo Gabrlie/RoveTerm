@@ -17,7 +17,6 @@ const SAMPLE_TIMEOUT: Duration = Duration::from_secs(8);
 pub struct ServerStatsResponse {
     #[serde(flatten)]
     pub stats: ServerStats,
-    #[cfg(desktop)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tailscale_path: Option<rove_tailscale::TailnetPath>,
 }
@@ -53,7 +52,7 @@ pub async fn server_stats(
     address: Option<String>,
     local: Option<bool>,
 ) -> Result<ServerStatsResponse, CommandError> {
-    let (target, _host) = match monitor_target(host_id.as_deref(), address.as_deref(), local)? {
+    let (target, host) = match monitor_target(host_id.as_deref(), address.as_deref(), local)? {
         MonitorTarget::SavedHost(id) => {
             let host = state.vault.host(id.parse()?)?;
             (host_target(&state, &host)?, Some(host))
@@ -98,9 +97,8 @@ pub async fn server_stats(
                 other => other.into(),
             })
     };
-    #[cfg(desktop)]
     let (stats, tailscale_path) = tokio::join!(sample, async {
-        let host = _host.as_ref()?;
+        let host = host.as_ref()?;
         let rove_vault::HostRoute::Tailscale { peer_id } = &host.route else {
             return None;
         };
@@ -114,11 +112,8 @@ pub async fn server_stats(
         .ok()
         .flatten()
     });
-    #[cfg(mobile)]
-    let stats = sample.await;
     Ok(ServerStatsResponse {
         stats: stats?,
-        #[cfg(desktop)]
         tailscale_path,
     })
 }

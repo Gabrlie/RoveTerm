@@ -170,20 +170,16 @@ pub async fn vault_unlock(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<LockState, CommandError> {
-    #[cfg(desktop)]
     let was_unlocked = state.vault.lock_state() == LockState::Unlocked;
     let vault = state.vault.clone();
     let lock = tauri::async_runtime::spawn_blocking(move || vault.unlock())
         .await
         .map_err(|error| CommandError::new("app.task", error.to_string()))?;
-    #[cfg(desktop)]
     if !was_unlocked && lock == LockState::Unlocked {
         tauri::async_runtime::spawn(async move {
             crate::commands::tailscale::auto_connect(&app).await;
         });
     }
-    #[cfg(mobile)]
-    drop(app);
     Ok(lock)
 }
 
@@ -192,18 +188,14 @@ pub async fn vault_unlock(
 #[tauri::command]
 pub async fn vault_reset_secrets(state: State<'_, AppState>) -> Result<LockState, CommandError> {
     let lock = {
-        #[cfg(desktop)]
         let _guard = state.tailscale_lock.lock().await;
         let lock = state.vault.reset_secrets()?;
-        #[cfg(desktop)]
-        {
-            let mut prefs = state.vault.device_preferences()?;
-            if prefs.tailscale.configured {
-                prefs.tailscale.configured = false;
-                state.vault.set_device_preferences(prefs)?;
-            }
-            state.tailscale.disconnect(false).await?;
+        let mut prefs = state.vault.device_preferences()?;
+        if prefs.tailscale.configured {
+            prefs.tailscale.configured = false;
+            state.vault.set_device_preferences(prefs)?;
         }
+        state.tailscale.disconnect(false).await?;
         lock
     };
     crate::commands::sync::after_secrets_reset(state.inner()).await?;

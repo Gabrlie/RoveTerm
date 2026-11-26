@@ -20,7 +20,6 @@ pub fn catalog() -> Vec<Arc<dyn Plugin>> {
         Arc::new(rove_fs::FsPlugin),
         Arc::new(rove_ssh::SshPlugin),
         Arc::new(rove_ops::OpsPlugin),
-        #[cfg(desktop)]
         Arc::new(rove_tailscale::TailscalePlugin),
         #[cfg(desktop)]
         Arc::new(rove_pty::PtyPlugin),
@@ -79,6 +78,20 @@ fn runtime_layer(data_dir: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mobile_profile_declares_only_registered_plugins() {
+        let profile = Profile::from_layers([include_str!("../profiles/mobile.toml")])
+            .expect("built-in mobile profile parses");
+        let catalog = catalog();
+        assert!(profile.plugins().iter().any(|name| name == "tailscale"));
+        for name in profile.plugins() {
+            assert!(
+                catalog.iter().any(|plugin| plugin.name() == name),
+                "mobile plugin {name} is missing from the catalog"
+            );
+        }
+    }
 
     #[test]
     fn builtin_profile_boots_with_runtime_layer_and_user_overrides() {

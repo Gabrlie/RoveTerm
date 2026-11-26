@@ -52,19 +52,15 @@ pub fn autostart_set(app: AppHandle, enabled: bool) -> Result<(), CommandError> 
 }
 
 /// Minimizes the main window when this start came from logging in.
+#[cfg(desktop)]
 pub fn apply(app: &tauri::App) {
-    #[cfg(desktop)]
-    {
-        use tauri::Manager;
-        if !std::env::args().any(|arg| arg == MINIMIZED_ARG) {
-            return;
-        }
-        if let Some(window) = app.get_webview_window("main")
-            && let Err(error) = window.minimize()
-        {
-            tracing::warn!(%error, "minimizing the window at login failed");
-        }
+    use tauri::Manager;
+    if !std::env::args().any(|arg| arg == MINIMIZED_ARG) {
+        return;
     }
-    #[cfg(not(desktop))]
-    let _ = app;
+    if let Some(window) = app.get_webview_window("main")
+        && let Err(error) = window.minimize()
+    {
+        tracing::warn!(%error, "minimizing the window at login failed");
+    }
 }

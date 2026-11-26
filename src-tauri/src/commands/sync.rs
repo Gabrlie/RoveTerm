@@ -491,6 +491,7 @@ fn read_local(vault: &Vault) -> Result<Option<Local>, CommandError> {
     }))
 }
 
+#[cfg(desktop)]
 pub(super) async fn reserve_schedule(
     vault: &Vault,
     task: &rove_vault::Schedule,
@@ -520,6 +521,7 @@ pub(super) async fn reserve_schedule(
 }
 
 /// An exclusive create arbitrates between devices only when they address the same live filesystem.
+#[cfg(any(desktop, test))]
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "android"))]
 fn shared_claim_volume(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
@@ -560,6 +562,7 @@ fn shared_claim_volume(path: &Path) -> bool {
     matches!(path.components().next(), Some(Component::Prefix(p)) if matches!(p.kind(),Prefix::UNC(..)|Prefix::VerbatimUNC(..)))
 }
 
+#[cfg(any(desktop, test))]
 #[cfg(not(any(
     target_os = "macos",
     target_os = "linux",
@@ -570,6 +573,7 @@ fn shared_claim_volume(_: &Path) -> bool {
     false
 }
 
+#[cfg(any(desktop, test))]
 async fn reserve_in_space(
     backend: &dyn SyncBackend,
     key: &SyncKey,

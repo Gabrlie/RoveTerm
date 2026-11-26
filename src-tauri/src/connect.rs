@@ -322,10 +322,7 @@ fn route<'a>(
     Box::pin(async move {
         match &host.route {
             HostRoute::Direct => Ok(Via::Direct),
-            #[cfg(desktop)]
             HostRoute::Tailscale { peer_id } => tailnet_route(state, peer_id.clone()).await,
-            #[cfg(mobile)]
-            HostRoute::Tailscale { .. } => Err(crate::commands::tailscale::unsupported()),
             HostRoute::Proxy {
                 protocol,
                 host: proxy,
@@ -352,7 +349,6 @@ fn route<'a>(
     })
 }
 
-#[cfg(desktop)]
 async fn tailnet_route(state: &AppState, peer_id: Option<String>) -> Result<Via, CommandError> {
     use rove_tailscale::{TailnetState, TailscaleError};
 
@@ -394,13 +390,11 @@ async fn tailnet_route(state: &AppState, peer_id: Option<String>) -> Result<Via,
     }
 }
 
-#[cfg(desktop)]
 struct TailnetDialer {
     service: Arc<dyn rove_tailscale::TailnetService>,
     peer_id: Option<String>,
 }
 
-#[cfg(desktop)]
 #[async_trait::async_trait]
 impl rove_ssh::TransportDialer for TailnetDialer {
     async fn dial(

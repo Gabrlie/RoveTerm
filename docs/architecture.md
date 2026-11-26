@@ -77,7 +77,7 @@ src-tauri 的 OutputSink → ipc::Channel → TermView.write(Uint8Array)
 
 会话活在 Rust 侧，UI 只持有 `SessionId`。WebView 重载或面板重新挂载时，通过回放缓冲恢复屏幕内容；这也是会话恢复和"AI 操作终端"的前提。
 
-移动端由 `src-tauri/src/keepalive.rs` 汇总活动状态（含待审批运维任务），经 `tauri-plugin-rove-mobile` 驱动 Android 的 `SessionKeepAliveService` 和 iOS 的 `KeepAliveController`。插件通过 `rove-mobile://lifecycle` 和 `rove-mobile://back` 发布生命周期与返回事件，并桥接文件暂存、分享和导出。移动端省略本地 ACP 与外部 MCP 桥接。平台配置见[开发指南](development.md#android)。
+移动端由 `src-tauri/src/keepalive.rs` 汇总活动状态（含待审批运维任务），经 `tauri-plugin-rove-mobile` 驱动 Android 的 `SessionKeepAliveService` 和 iOS 的 `KeepAliveController`。插件通过 `rove-mobile://lifecycle` 和 `rove-mobile://back` 发布生命周期与返回事件，桥接宿主网络监听到 `TailnetService`，并处理文件暂存、分享和导出。移动端省略本地 ACP 与外部 MCP 桥接。平台配置见[开发指南](development.md#android)。
 
 ## SSH 连接复用
 
@@ -95,7 +95,7 @@ src-tauri 的 OutputSink → ipc::Channel → TermView.write(Uint8Array)
 | `FileSystem` | rove-fs | 本地、SFTP | 传输队列、SFTP 面板、ACP `fs/*`、MCP 文件工具 |
 | `SyncBackend` | rove-sync | WebDAV、S3、Gist、自建服务 | 同步引擎 |
 | `Policy` | rove-ai | 规则策略、模型审阅 | `exec/pre`、`fs/pre`、`tool/pre` 拦截器 |
-| `TailnetService` | rove-tailscale | 内置 tailscale-rs 设备 | 桌面设备列表、SSH 自定义路由 |
+| `TailnetService` | rove-tailscale | 内置 tailscale-rs 设备 | 桌面与移动端设备列表、SSH 自定义路由 |
 | `TaskStore` | rove-ops | 本机 Journal 任务事件 | `OpsSupervisor`、总管和定时调度 |
 
 终端和文件系统绑定在同一个**主机上下文**上：AI 的 `terminal/*` 和 `fs/*` 指向哪台主机，就整体在哪台主机上执行，Provider 不需要为此分叉实现。

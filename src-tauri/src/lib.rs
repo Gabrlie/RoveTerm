@@ -65,6 +65,36 @@ fn data_dir(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
     )?)
 }
 
+#[cfg(any(mobile, test))]
+fn host_network_snapshot(
+    snapshot: tauri_plugin_rove_mobile::MobileNetworkSnapshot,
+) -> rove_tailscale::HostNetworkSnapshot {
+    use rove_tailscale::{HostNetworkAddr, HostNetworkInterface, HostNetworkSnapshot};
+
+    HostNetworkSnapshot {
+        interfaces: snapshot
+            .interfaces
+            .into_iter()
+            .map(|interface| HostNetworkInterface {
+                id: interface.id,
+                name: interface.name,
+                addrs: interface
+                    .addrs
+                    .into_iter()
+                    .filter_map(|addr| {
+                        Some(HostNetworkAddr {
+                            ip: addr.ip.parse::<std::net::IpAddr>().ok()?,
+                            prefix_len: addr.prefix_len,
+                        })
+                    })
+                    .collect(),
+                default_v4: interface.default_v4,
+                default_v6: interface.default_v6,
+            })
+            .collect(),
+    }
+}
+
 fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = data_dir(app)?;
     let staging_root = app.path().app_cache_dir();
@@ -109,7 +139,6 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             #[cfg(mobile)]
             mobile_cache.set_biometric(device.vault_biometric);
             commands::prefs::apply_connection(&state, &device.connection);
-            #[cfg(desktop)]
             state.tailscale.set_configured(device.tailscale.configured);
             let transfers = state.transfers.clone();
             tauri::async_runtime::spawn(async move {
@@ -145,7 +174,6 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         disposers.extend(host_services);
     }
 
-    #[cfg(desktop)]
     let tailnet_events = {
         let handle = app.handle().clone();
         let mut status = state.tailscale.subscribe();
@@ -160,18 +188,50 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         rove_kernel::Disposer::new(move || task.abort())
     };
 
-    #[cfg(desktop)]
     if let Some((_, disposers)) = state.lifetime.lock().expect("lifetime lock").as_mut() {
         disposers.push(tailnet_events);
     }
     #[cfg(mobile)]
     {
+        use tauri_plugin_rove_mobile::{LifecycleState, MobileBridgeExt};
+
+        let mobile = app.rove_mobile();
+        let network_handler = {
+            // Apply the initial snapshot before publishing updates from the callback.
+            let updates = std::sync::Arc::new(parking_lot::Mutex::new(()));
+            let _initial = updates.lock();
+            let updates = updates.clone();
+            let tailscale = state.tailscale.clone();
+            let id = mobile.on_network_change(move |snapshot| {
+                let _update = updates.lock();
+                tailscale.update_network(host_network_snapshot(snapshot));
+            });
+            state
+                .tailscale
+                .update_network(host_network_snapshot(mobile.get_network()));
+            let handle = app.handle().clone();
+            rove_kernel::Disposer::new(move || {
+                handle.rove_mobile().remove_network_change_handler(id);
+            })
+        };
+        let tailscale = state.tailscale.clone();
+        let id = mobile.on_lifecycle(move |event| {
+            if event.state == LifecycleState::Foreground {
+                tailscale.notify_foreground();
+            }
+        });
+        let handle = app.handle().clone();
+        let lifecycle_handler = rove_kernel::Disposer::new(move || {
+            handle.rove_mobile().remove_lifecycle_handler(id);
+        });
         let keepalive = keepalive::start(app.handle().clone(), &ctx, &state);
         let mut lifetime = state
             .lifetime
             .lock()
             .map_err(|_| std::io::Error::other("application lifetime lock poisoned"))?;
         if let Some((_, disposers)) = lifetime.as_mut() {
+            disposers.push(network_handler);
+            disposers.push(lifecycle_handler);
             disposers.extend(keepalive);
         }
     }
@@ -185,7 +245,6 @@ fn boot(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         if let Err(error) = handle.emit(VAULT_STATE_EVENT, &lock_state) {
             tracing::error!(%error, "emitting vault state failed");
         }
-        #[cfg(desktop)]
         if lock_state == rove_vault::LockState::Unlocked {
             tauri::async_runtime::spawn(async move {
                 commands::tailscale::auto_connect(&handle).await;
@@ -245,7 +304,6 @@ pub(crate) async fn shutdown_async(app: &tauri::AppHandle) {
     state.ai.stop_all().await;
     state.sessions.close_all().await;
     state.ssh.disconnect_all().await;
-    #[cfg(desktop)]
     {
         let _guard = state.tailscale_lock.lock().await;
         let configured = state.tailscale.status().configured;
@@ -487,7 +545,89 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rove_tailscale::{HostNetworkAddr, HostNetworkInterface};
     use std::ffi::OsString;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use tauri_plugin_rove_mobile::{
+        MobileNetworkAddr, MobileNetworkInterface, MobileNetworkSnapshot,
+    };
+
+    #[test]
+    fn converts_mobile_ipv4_and_ipv6_addresses() {
+        let snapshot = host_network_snapshot(MobileNetworkSnapshot {
+            interfaces: vec![MobileNetworkInterface {
+                id: 7,
+                name: "wlan0".into(),
+                addrs: vec![
+                    MobileNetworkAddr {
+                        ip: "192.0.2.42".into(),
+                        prefix_len: 24,
+                    },
+                    MobileNetworkAddr {
+                        ip: "2001:db8::42".into(),
+                        prefix_len: 64,
+                    },
+                ],
+                default_v4: true,
+                default_v6: false,
+            }],
+        });
+        assert_eq!(
+            snapshot.interfaces,
+            vec![HostNetworkInterface {
+                id: 7,
+                name: "wlan0".into(),
+                addrs: vec![
+                    HostNetworkAddr {
+                        ip: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 42)),
+                        prefix_len: 24,
+                    },
+                    HostNetworkAddr {
+                        ip: IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x42)),
+                        prefix_len: 64,
+                    },
+                ],
+                default_v4: true,
+                default_v6: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn skips_invalid_mobile_ip_addresses() {
+        let snapshot = host_network_snapshot(MobileNetworkSnapshot {
+            interfaces: vec![MobileNetworkInterface {
+                id: 9,
+                name: "rmnet0".into(),
+                addrs: vec![
+                    MobileNetworkAddr {
+                        ip: "invalid-ip".into(),
+                        prefix_len: 24,
+                    },
+                    MobileNetworkAddr {
+                        ip: "2001:db8::1".into(),
+                        prefix_len: 64,
+                    },
+                ],
+                default_v4: false,
+                default_v6: true,
+            }],
+        });
+        assert_eq!(
+            snapshot.interfaces[0].addrs,
+            vec![HostNetworkAddr {
+                ip: IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
+                prefix_len: 64,
+            }]
+        );
+        assert!(snapshot.interfaces[0].default_v6);
+    }
+
+    #[test]
+    fn empty_mobile_snapshot_signals_disconnection() {
+        let snapshot = host_network_snapshot(MobileNetworkSnapshot::default());
+        assert!(snapshot.interfaces.is_empty());
+    }
 
     #[test]
     fn data_dir_isolates_debug_builds_from_production() {
