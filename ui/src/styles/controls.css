@@ -267,17 +267,6 @@
     border-radius: 9px;
     padding: 0 12px;
   }
-  .segmented {
-    padding: 3px;
-    border-radius: 9px;
-  }
-  .segmented > button {
-    height: 26px;
-    padding: 0 11px;
-    border-radius: 6.5px;
-    font-size: calc(12.5px * var(--ui-scale));
-    white-space: nowrap;
-  }
 }
 
 /* A text field inside a component's own framed box (search fields, path bars) draws no frame. */
@@ -301,6 +290,9 @@
   background: var(--fill);
 }
 .segmented > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   height: 22px;
   padding: 0 var(--space-3);
   border: none;
@@ -325,6 +317,20 @@
   box-shadow:
     0 0 0 0.5px var(--separator),
     0 1px 2px rgb(0 0 0 / 0.1);
+}
+@media (max-width: 767px) {
+  .segmented {
+    padding: 3px;
+    border-radius: 9px;
+  }
+  .segmented > button {
+    height: 30px;
+    padding: 0 11px;
+    border-radius: 6.5px;
+    font-size: calc(12.5px * var(--ui-scale));
+    line-height: 1.2;
+    white-space: nowrap;
+  }
 }
 
 /* Loading placeholder: a rounded block with a light sweep. Sized by the caller (width, height). */

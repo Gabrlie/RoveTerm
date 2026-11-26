@@ -457,7 +457,10 @@
     .filter-bar .segmented > button {
       flex: 1;
       min-width: 0;
-      padding: 0 6px;
+      height: auto;
+      min-height: 34px;
+      padding: 7px 6px;
+      line-height: 1.2;
     }
     .log-viewport {
       flex: 1;
