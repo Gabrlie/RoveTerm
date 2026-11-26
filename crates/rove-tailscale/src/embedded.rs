@@ -8,10 +8,11 @@ use std::{
 use async_trait::async_trait;
 use futures::FutureExt;
 use tailscale::{
-    AuthStatus, ControlLinkState, Device, NodeInfo, NodeStatus, ProbePath, ProbeResult,
-    keys::PersistState,
+    AuthStatus, ControlLinkState, Device, ExternalInterface, ExternalNetworkAddr,
+    ExternalNetworkSnapshot, NodeInfo, NodeStatus, ProbePath, ProbeResult, keys::PersistState,
 };
 use tokio::{
+    runtime::Handle,
     sync::{Mutex, oneshot, watch},
     task::JoinHandle,
     time::{Instant as TokioInstant, MissedTickBehavior, interval, sleep, sleep_until, timeout},
@@ -19,9 +20,9 @@ use tokio::{
 use zeroize::Zeroizing;
 
 use crate::{
-    ConnectRequest, TailnetDerpRegion, TailnetPath, TailnetPeer, TailnetPingResult,
-    TailnetSelfNode, TailnetService, TailnetSnapshot, TailnetState, TailnetStatus, TailnetStream,
-    TailscaleConfig, TailscaleError, TailscalePeerId,
+    ConnectRequest, HostNetworkSnapshot, TailnetDerpRegion, TailnetPath, TailnetPeer,
+    TailnetPingResult, TailnetSelfNode, TailnetService, TailnetSnapshot, TailnetState,
+    TailnetStatus, TailnetStream, TailscaleConfig, TailscaleError, TailscalePeerId,
 };
 
 pub fn generate_key_state() -> Result<Zeroizing<Vec<u8>>, TailscaleError> {
@@ -34,10 +35,29 @@ pub fn generate_key_state() -> Result<Zeroizing<Vec<u8>>, TailscaleError> {
 struct Current {
     status: watch::Sender<TailnetStatus>,
     peers: Vec<TailnetPeer>,
-    device: Option<Arc<Device>>,
+    device: Option<ActiveDevice>,
+    last_foreground_probe: Option<Instant>,
+}
+
+struct ActiveDevice {
+    handle: Arc<Device>,
+    runtime: Handle,
 }
 
 impl Current {
+    fn foreground_probe(&mut self, now: Instant) -> Option<&ActiveDevice> {
+        const PROBE_INTERVAL: Duration = Duration::from_millis(1500);
+        let device = self.device.as_ref()?;
+        if self
+            .last_foreground_probe
+            .is_some_and(|last| now.duration_since(last) < PROBE_INTERVAL)
+        {
+            return None;
+        }
+        self.last_foreground_probe = Some(now);
+        Some(device)
+    }
+
     fn publish(
         &mut self,
         configured: bool,
@@ -94,6 +114,7 @@ struct Live {
 pub struct EmbeddedTailnet {
     current: Shared,
     live: Mutex<Option<Live>>,
+    network_tx: watch::Sender<Option<ExternalNetworkSnapshot>>,
     connect_timeout: Duration,
     peer_refresh: Duration,
 }
@@ -114,8 +135,10 @@ impl EmbeddedTailnet {
                 }),
                 peers: Vec::new(),
                 device: None,
+                last_foreground_probe: None,
             })),
             live: Mutex::new(None),
+            network_tx: watch::Sender::new(None),
             connect_timeout,
             peer_refresh,
         })
@@ -162,6 +185,8 @@ impl TailnetService for EmbeddedTailnet {
             key_state_json,
             control_url,
             hostname,
+            external_netmon: (!tailscale::has_platform_netmon())
+                .then(|| self.network_tx.subscribe()),
         };
         let config = params.resolve()?;
         let mut live = self.live.lock().await;
@@ -206,7 +231,7 @@ impl TailnetService for EmbeddedTailnet {
                 device
             };
             if let Some(device) = device {
-                shutdown_device(&device, connect_timeout).await;
+                shutdown_device(&device.handle, connect_timeout).await;
             }
         });
         *live = Some(Live {
@@ -319,17 +344,60 @@ impl TailnetService for EmbeddedTailnet {
             current.idle(configured);
         }
     }
+
+    fn update_network(&self, snapshot: HostNetworkSnapshot) {
+        self.network_tx.send_replace(Some(snapshot.into()));
+    }
+
+    fn notify_foreground(&self) {
+        if let Some(device) = self.current.lock().foreground_probe(Instant::now()) {
+            let handle = device.handle.clone();
+            device.runtime.spawn(async move {
+                // The device can shut down before the probe is dispatched.
+                let _ = handle.probe_control().await;
+            });
+        }
+    }
 }
 
 impl EmbeddedTailnet {
     fn running_device(&self) -> Result<Arc<Device>, TailscaleError> {
         let current = self.current.lock();
         match current.status.borrow().state {
-            TailnetState::Running => current.device.clone().ok_or(TailscaleError::NotConnected),
+            TailnetState::Running => current
+                .device
+                .as_ref()
+                .map(|device| device.handle.clone())
+                .ok_or(TailscaleError::NotConnected),
             TailnetState::NeedsLogin | TailnetState::NeedsMachineAuth => {
                 Err(TailscaleError::NeedsLogin)
             }
             _ => Err(TailscaleError::NotConnected),
+        }
+    }
+}
+
+impl From<HostNetworkSnapshot> for ExternalNetworkSnapshot {
+    fn from(snapshot: HostNetworkSnapshot) -> Self {
+        Self {
+            interfaces: snapshot
+                .interfaces
+                .into_iter()
+                .map(|interface| ExternalInterface {
+                    id: interface.id,
+                    name: interface.name,
+                    addrs: interface
+                        .addrs
+                        .into_iter()
+                        .map(|addr| ExternalNetworkAddr {
+                            ip: addr.ip,
+                            prefix_len: addr.prefix_len,
+                        })
+                        .collect(),
+                    default_v4: interface.default_v4,
+                    default_v6: interface.default_v6,
+                })
+                .collect(),
         }
     }
 }
@@ -346,6 +414,7 @@ struct ConnectParams {
     key_state_json: Zeroizing<Vec<u8>>,
     control_url: Option<String>,
     hostname: Option<String>,
+    external_netmon: Option<watch::Receiver<Option<ExternalNetworkSnapshot>>>,
 }
 
 impl ConnectParams {
@@ -353,6 +422,7 @@ impl ConnectParams {
         let key_state: PersistState = serde_json::from_slice(&self.key_state_json)
             .map_err(|_| TailscaleError::InvalidKeyState)?;
         let mut config = tailscale::Config::from(key_state);
+        config.external_netmon.clone_from(&self.external_netmon);
         config.client_name = Some("RoveTerm".into());
         if let Some(url) = &self.control_url {
             let parsed =
@@ -432,7 +502,10 @@ async fn run(
                     })?;
                 drop(config);
                 let device = Arc::new(device);
-                current.lock().device = Some(device.clone());
+                current.lock().device = Some(ActiveDevice {
+                    handle: device.clone(),
+                    runtime: Handle::current(),
+                });
                 monitor_device(
                     current, &device, connect_timeout, peer_refresh,
                     &mut was_running, &mut recovery_delay,
@@ -456,7 +529,7 @@ async fn run(
             device
         };
         if let Some(device) = device {
-            shutdown_device(&device, Duration::from_secs(3)).await;
+            shutdown_device(&device.handle, Duration::from_secs(3)).await;
         }
 
         tokio::select! {
@@ -773,6 +846,110 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{HostNetworkAddr, HostNetworkInterface};
+
+    #[test]
+    fn updates_network_for_current_and_rebuilt_devices() {
+        let service = EmbeddedTailnet::new(TailscaleConfig::default()).unwrap();
+        let ipv4 = "192.0.2.8".parse().unwrap();
+        let ipv6 = "2001:db8::8".parse().unwrap();
+        service.update_network(HostNetworkSnapshot {
+            interfaces: vec![HostNetworkInterface {
+                id: 42,
+                name: "wlan0".into(),
+                addrs: vec![
+                    HostNetworkAddr {
+                        ip: ipv4,
+                        prefix_len: 24,
+                    },
+                    HostNetworkAddr {
+                        ip: ipv6,
+                        prefix_len: 64,
+                    },
+                ],
+                default_v4: true,
+                default_v6: false,
+            }],
+        });
+
+        let params = ConnectParams {
+            key_state_json: generate_key_state().unwrap(),
+            control_url: None,
+            hostname: None,
+            external_netmon: Some(service.network_tx.subscribe()),
+        };
+        let mut initial = params.resolve().unwrap().external_netmon.unwrap();
+        assert_eq!(
+            *initial.borrow_and_update(),
+            Some(ExternalNetworkSnapshot {
+                interfaces: vec![ExternalInterface {
+                    id: 42,
+                    name: "wlan0".into(),
+                    addrs: vec![
+                        ExternalNetworkAddr {
+                            ip: ipv4,
+                            prefix_len: 24
+                        },
+                        ExternalNetworkAddr {
+                            ip: ipv6,
+                            prefix_len: 64
+                        },
+                    ],
+                    default_v4: true,
+                    default_v6: false,
+                }],
+            }),
+        );
+        service.update_network(HostNetworkSnapshot { interfaces: vec![] });
+        assert!(initial.has_changed().unwrap());
+        let disconnected = Some(ExternalNetworkSnapshot { interfaces: vec![] });
+        assert_eq!(*initial.borrow(), disconnected);
+        let rebuilt = params.resolve().unwrap().external_netmon.unwrap();
+        assert_eq!(*rebuilt.borrow(), disconnected);
+    }
+
+    #[tokio::test]
+    async fn foreground_probes_are_throttled_with_a_device_awaiting_login() {
+        let service = EmbeddedTailnet::new(TailscaleConfig::default()).unwrap();
+        service.notify_foreground();
+        assert!(service.current.lock().last_foreground_probe.is_none());
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = tailscale::Config {
+            control_server_url: format!("http://{}", listener.local_addr().unwrap())
+                .parse()
+                .unwrap(),
+            ..tailscale::Config::default()
+        };
+        let device = Arc::new(Device::new(&config, None).await.unwrap());
+        {
+            let mut current = service.current.lock();
+            current.device = Some(ActiveDevice {
+                handle: device.clone(),
+                runtime: Handle::current(),
+            });
+            current.publish(true, TailnetState::NeedsLogin, None, None, None, vec![]);
+        }
+
+        service.notify_foreground();
+        let first = service.current.lock().last_foreground_probe.unwrap();
+        service.notify_foreground();
+        {
+            let mut current = service.current.lock();
+            assert_eq!(current.last_foreground_probe, Some(first));
+            assert!(
+                current
+                    .foreground_probe(first + Duration::from_millis(1499))
+                    .is_none()
+            );
+            assert!(
+                current
+                    .foreground_probe(first + Duration::from_millis(1500))
+                    .is_some()
+            );
+        }
+        shutdown_device(&device, Duration::from_secs(1)).await;
+    }
 
     #[test]
     fn wake_threshold_is_five_ticks_or_at_least_ten_seconds() {

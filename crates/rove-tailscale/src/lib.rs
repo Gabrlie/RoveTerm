@@ -1,4 +1,4 @@
-//! Embedded Tailscale networking and peer discovery for desktop profiles.
+//! Embedded Tailscale networking and peer discovery.
 
 mod embedded;
 
@@ -144,6 +144,27 @@ pub struct ConnectRequest {
     pub hostname: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostNetworkAddr {
+    pub ip: IpAddr,
+    pub prefix_len: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostNetworkInterface {
+    pub id: u64,
+    pub name: String,
+    pub addrs: Vec<HostNetworkAddr>,
+    pub default_v4: bool,
+    pub default_v6: bool,
+}
+
+/// The host's active network interfaces. An empty list signals disconnection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostNetworkSnapshot {
+    pub interfaces: Vec<HostNetworkInterface>,
+}
+
 pub trait TailnetStream:
     tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static
 {
@@ -173,6 +194,10 @@ pub trait TailnetService: Send + Sync {
         peer_id: Option<&str>,
     ) -> Result<Box<dyn TailnetStream>, TailscaleError>;
     fn set_configured(&self, configured: bool);
+    /// Publish the latest host network state for platforms that use an external monitor.
+    fn update_network(&self, _snapshot: HostNetworkSnapshot) {}
+    /// Check the control connection after the host application returns to the foreground.
+    fn notify_foreground(&self) {}
 }
 
 /// Errors are safe to relay to the WebView and logs.

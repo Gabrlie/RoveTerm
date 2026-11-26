@@ -135,7 +135,8 @@ pub use error::{Error, InternalErrorKind};
 pub use ts_control::{Node as NodeInfo, NodeStatus};
 use ts_netstack_smoltcp::{CreateSocket, netcore::Channel};
 pub use ts_runtime::{
-    ControlLinkState, DerpRegion, ProbePath, ProbeResult, control_runner::AuthStatus,
+    ControlLinkState, DerpRegion, ExternalInterface, ExternalNetworkAddr, ExternalNetworkSnapshot,
+    ProbePath, ProbeResult, control_runner::AuthStatus, has_platform_netmon,
 };
 use ts_runtime::{Spawn, control_runner::AuthResponse};
 
@@ -224,6 +225,7 @@ impl Device {
             control_config: config.into(),
             auth_key: auth_key.map(Arc::new),
             keys,
+            external_netmon: config.external_netmon.clone(),
         });
 
         // Cancel actors even when the caller drops this future before startup completes.
@@ -299,7 +301,7 @@ impl Device {
         Ok(receiver)
     }
 
-    /// Request a health check of the current control connection.
+    /// Request a control health check or wake a pending browser authorization poll.
     pub async fn probe_control(&self) -> Result<(), Error> {
         self.runtime
             .ask(ts_runtime::ProbeControl)

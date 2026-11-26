@@ -4,6 +4,8 @@ use std::path::Path;
 
 use ts_keys::PersistState;
 
+use crate::ExternalNetworkSnapshot;
+
 const CONTROL_URL_VAR: &str = "TS_CONTROL_URL";
 const HOSTNAME_VAR: &str = "TS_HOSTNAME";
 const AUTHKEY_VAR: &str = "TS_AUTH_KEY";
@@ -41,6 +43,9 @@ pub struct Config {
     ///
     /// [KB article on ephemeral nodes]: https://tailscale.com/docs/features/ephemeral-nodes
     pub ephemeral: bool,
+
+    /// Host network snapshots to use in place of the platform monitor.
+    pub external_netmon: Option<tokio::sync::watch::Receiver<Option<ExternalNetworkSnapshot>>>,
 }
 
 impl Config {
@@ -140,6 +145,7 @@ impl Default for Config {
             requested_hostname: None,
             requested_tags: vec![],
             ephemeral: false,
+            external_netmon: None,
         }
     }
 }

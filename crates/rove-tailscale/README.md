@@ -1,6 +1,6 @@
 # rove-tailscale
 
-桌面 profile 通过固定版本的 [tailscale-rs](https://github.com/tailscale/tailscale-rs/tree/e88a60083ed2b9b2b8fd62733fe86ea887e72780) 启动用户态尾网设备。应用向 `TailnetService` 提供已解密的设备身份，读取连接状态和节点快照，并为 SSH 打开尾网 TCP 流。接口见 [tailscale 子系统](../../docs/subsystems/tailscale.md)。
+桌面和移动 profile 通过固定版本的 [tailscale-rs](https://github.com/tailscale/tailscale-rs/tree/e88a60083ed2b9b2b8fd62733fe86ea887e72780) 启动用户态尾网设备。应用向 `TailnetService` 提供已解密的设备身份，读取连接状态和节点快照，并为 SSH 打开尾网 TCP 流。接口见 [tailscale 子系统](../../docs/subsystems/tailscale.md)。
 
 `connect()` 启动后台设备并返回当前状态。调用者可订阅认证和节点变化。`disconnect()` 停止设备并清理快照。节点列表按名称（忽略大小写）和稳定 ID 排序，地址按 IPv4、IPv6 排列。设备名默认为 `RoveTerm`，旧配置中的空设备名沿用该默认值。
 
@@ -11,6 +11,8 @@
 设备首次进入运行状态前，启动超时或设备错误会结束本次连接。设备运行后，休眠唤醒或控制流持续重连 25 秒会触发重建。重建清空节点快照，使用现有设备身份重新注册，并按 1、2、4、8、15、30 秒退避。控制服务要求登录或管理员批准时，设备会发布相应状态。
 
 控制流空闲超过 75 秒后，运行时在下一次 30 秒检查时探测连接。TCP 拨号超时或出现设备错误也会触发后台探测。网络地址或默认路由变化时，运行时刷新控制连接、重连活跃的 DERP 传输，并重新测量 DERP 延迟和 STUN 地址。直连探测失败时的回退规则见 [SSH 路由](../../docs/subsystems/tailscale.md#ssh-路由)。
+
+在没有内建平台网络监听器的目标（Android、iOS）上，应用通过 `update_network()` 注入宿主网络接口快照，设备重建后沿用最新快照驱动相同的网络事件流。应用切回前台时调用 `notify_foreground()`（按 1.5 秒节流）触发控制面探测；若处于浏览器授权长轮询中，在 400 毫秒宽限期未返回时重建连接并复用原登录 URL 立即重查。
 
 ## 插件配置
 

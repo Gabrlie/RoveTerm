@@ -38,6 +38,7 @@ pub use control_runner::ControlLinkState;
 pub(crate) use env::Env;
 pub use error::{Error, ErrorKind};
 pub use kameo::actor::{ActorRef, Spawn};
+pub use netmon::{ExternalInterface, ExternalNetmon, ExternalNetworkAddr, ExternalNetworkSnapshot};
 pub use peer_probe::{DerpRegion, PeerProbe, ProbePath, ProbeResult};
 pub use registry::Registry;
 pub use task::{ErasedTask, Task};
@@ -56,6 +57,24 @@ pub struct Config {
     pub auth_key: Option<Arc<zeroize::Zeroizing<String>>>,
     /// The keys to use.
     pub keys: ts_keys::NodeState,
+    /// Host network snapshots to use in place of the platform monitor.
+    pub external_netmon: Option<tokio::sync::watch::Receiver<Option<ExternalNetworkSnapshot>>>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            control_config: Default::default(),
+            auth_key: None,
+            keys: ts_keys::NodeState::generate(),
+            external_netmon: None,
+        }
+    }
+}
+
+/// Whether the current target provides a native network monitor.
+pub fn has_platform_netmon() -> bool {
+    ts_netmon::platform_mon().is_some()
 }
 
 impl kameo::Actor for Runtime {
@@ -106,8 +125,14 @@ impl kameo::Actor for Runtime {
             .spawn()
             .await;
 
-        if let Some(mon) = ts_netmon::platform_mon() {
-            netmon::NetmonActor::supervise(&slf, (env.clone(), Arc::new(mon)))
+        let mon: Option<Arc<dyn ts_netmon::Netmon>> = match config.external_netmon {
+            Some(receiver) => Some(Arc::new(ExternalNetmon(receiver))),
+            None => {
+                ts_netmon::platform_mon().map(|mon| Arc::new(mon) as Arc<dyn ts_netmon::Netmon>)
+            }
+        };
+        if let Some(mon) = mon {
+            netmon::NetmonActor::supervise(&slf, (env.clone(), mon))
                 .spawn()
                 .await;
         }

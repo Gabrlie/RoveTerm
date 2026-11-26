@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use http::{HeaderName, HeaderValue, StatusCode};
 use tokio::{
-    sync::watch,
+    sync::{Notify, watch},
     task::AbortHandle,
     time::{Instant, MissedTickBehavior, sleep, timeout},
 };
@@ -40,6 +40,7 @@ use crate::{
 pub struct ControlRunner {
     params: Params,
     state: RegState,
+    registration_probe: Arc<Notify>,
     auth_status: watch::Sender<AuthStatus>,
     control_link: watch::Sender<ControlLinkState>,
     last_stream_activity: Option<Instant>,
@@ -162,6 +163,7 @@ struct MapRequestState {
 
 const INITIAL_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 const MAP_REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+const FOLLOWUP_PROBE_GRACE: Duration = Duration::from_millis(400);
 
 fn next_reconnect_delay(delay: Duration) -> Duration {
     let doubled = delay * 2;
@@ -290,12 +292,69 @@ async fn register(
     Ok(parsed)
 }
 
+async fn poll_registration<C, F>(
+    mut client: Option<C>,
+    followup: Option<&url::Url>,
+    probe: &Notify,
+    mut send: impl FnMut(Option<C>, Option<url::Url>) -> F,
+) -> Result<(C, RegisterResponse), RegisterFailure>
+where
+    F: Future<Output = Result<(C, RegisterResponse), RegisterFailure>>,
+{
+    let request_timeout = Duration::from_secs(if followup.is_some() { 90 } else { 12 });
+    loop {
+        let probed = probe.notified();
+        let request = send(client.take(), followup.cloned());
+        tokio::pin!(request);
+        let result = tokio::select! {
+            biased;
+            response = &mut request => return response,
+            _ = probed, if followup.is_some() => {
+                timeout(FOLLOWUP_PROBE_GRACE, &mut request).await
+            }
+            _ = sleep(request_timeout) => return Err(RegisterFailure::Network),
+        };
+        if let Ok(response) = result {
+            return response;
+        }
+        // Dropping the request also drops its connection. The next request
+        // continues the same authorization session with the existing followup URL.
+    }
+}
+
+async fn register_attempt(
+    env: &Env,
+    config: &ts_control::Config,
+    auth_key: Option<&str>,
+    client: Option<HttpConn>,
+    followup: Option<url::Url>,
+    attempt: u64,
+) -> Result<(HttpConn, RegisterResponse), RegisterFailure> {
+    let conn = match client {
+        Some(conn) => conn,
+        None => env
+            .ask::<DialerActor, _>(
+                None,
+                DialNext {
+                    url: config.server_url.clone(),
+                    timeout: Duration::from_secs(8),
+                },
+                true,
+            )
+            .await
+            .map_err(|_| RegisterFailure::Network)?,
+    };
+    let response = register(config, &env.keys, auth_key, followup, &conn, attempt).await?;
+    Ok((conn, response))
+}
+
 async fn register_until_authorized(
     actor: WeakActorRef<ControlRunner>,
     env: Env,
     config: ts_control::Config,
     mut auth_key: Option<Arc<Zeroizing<String>>>,
     startup: bool,
+    registration_probe: &Notify,
 ) -> Result<HttpConn, RegisterFailure> {
     let mut client = None;
     let mut followup = None;
@@ -303,45 +362,27 @@ async fn register_until_authorized(
     let mut retries = 0;
     let mut attempt = 0;
     loop {
-        attempt += 1;
-        let request_timeout = Duration::from_secs(match (followup.is_some(), pending) {
-            (true, _) => 90,
-            (false, true) => 12,
-            (false, false) => 12,
-        });
-        let result = tokio::time::timeout(request_timeout, async {
-            if client.is_none() {
-                let conn = env
-                    .ask::<DialerActor, _>(
-                        None,
-                        DialNext {
-                            url: config.server_url.clone(),
-                            timeout: Duration::from_secs(8),
-                        },
-                        true,
-                    )
-                    .await
-                    .map_err(|_| RegisterFailure::Network)?;
-                client = Some(conn);
-            }
-            let conn = client.as_ref().ok_or(RegisterFailure::Network)?;
-            register(
-                &config,
-                &env.keys,
-                auth_key.as_ref().map(|key| key.as_str()),
-                followup.clone(),
-                conn,
-                attempt,
-            )
-            .await
-        })
-        .await
-        .unwrap_or(Err(RegisterFailure::Network));
+        let result = poll_registration(
+            client.take(),
+            followup.as_ref(),
+            registration_probe,
+            |client, followup| {
+                attempt += 1;
+                register_attempt(
+                    &env,
+                    &config,
+                    auth_key.as_ref().map(|key| key.as_str()),
+                    client,
+                    followup,
+                    attempt,
+                )
+            },
+        )
+        .await;
 
-        let response = match result {
+        let (conn, response) = match result {
             Ok(response) => response,
             Err(error) if error.retryable() && (pending || (startup && retries < 2)) => {
-                client = None;
                 retries += 1;
                 let delay = Duration::from_secs(if pending {
                     (2 << (retries - 1).min(3)).min(10)
@@ -356,7 +397,7 @@ async fn register_until_authorized(
         };
 
         if response.machine_authorized == Some(true) {
-            return client.ok_or(RegisterFailure::Network);
+            return Ok(conn);
         }
         if response
             .error
@@ -389,6 +430,7 @@ async fn register_until_authorized(
             .await
             .map_err(|_| RegisterFailure::Network)?;
         followup = next;
+        client = Some(conn);
         retries = 0;
         pending = true;
         tokio::time::sleep(delay).await;
@@ -400,21 +442,31 @@ impl kameo::Actor for ControlRunner {
     type Error = ControlRunnerError;
 
     async fn on_start(mut params: Params, slf: ActorRef<Self>) -> Result<Self, Self::Error> {
+        let registration_probe = Arc::new(Notify::new());
         Task::supervise_with(&slf, {
             let aref = slf.downgrade();
             let env = params.env.clone();
             let config = params.config.clone();
             let auth_key = params.auth_key.take();
+            let registration_probe = registration_probe.clone();
 
             move || {
                 let aref = aref.clone();
                 let env = env.clone();
                 let config = config.clone();
                 let auth_key = auth_key.clone();
+                let registration_probe = registration_probe.clone();
 
                 async move {
-                    let result =
-                        register_until_authorized(aref.clone(), env, config, auth_key, true).await;
+                    let result = register_until_authorized(
+                        aref.clone(),
+                        env,
+                        config,
+                        auth_key,
+                        true,
+                        &registration_probe,
+                    )
+                    .await;
                     if let Some(actor) = aref.upgrade() {
                         drop(actor.tell(RegisterResult(result)).await);
                     }
@@ -448,6 +500,7 @@ impl kameo::Actor for ControlRunner {
             state: RegState::NotRegistered {
                 pending_auth_requests: Default::default(),
             },
+            registration_probe,
             auth_status: watch::Sender::new(AuthStatus::Starting),
             control_link: watch::Sender::new(ControlLinkState::Connecting),
             last_stream_activity: None,
@@ -485,10 +538,15 @@ impl ControlRunner {
         (self.control_link.subscribe(),)
     }
 
-    /// Check an existing control connection with a map request.
+    /// Check an existing control connection or wake a browser authorization poll.
     #[message(ctx)]
     pub async fn probe_control(&mut self, ctx: &mut Context<Self, ()>) {
-        self.update_map_request(ctx.actor_ref()).await;
+        match self.state {
+            RegState::NotRegistered { .. } | RegState::AuthRequired(_) => {
+                self.registration_probe.notify_waiters();
+            }
+            _ => self.update_map_request(ctx.actor_ref()).await,
+        }
     }
 
     /// Read the selected home DERP region.
@@ -697,17 +755,19 @@ impl ControlRunner {
         let config = self.params.config.clone();
         let map_request = self.map_request.clone();
         let weak = actor.downgrade();
+        let registration_probe = self.registration_probe.clone();
 
         tracing::debug!(
             retry_in_secs = delay.as_secs(),
             "reconnecting control map stream"
         );
         Task::supervise_with(actor, move || {
-            let (env, config, map_request, weak) = (
+            let (env, config, map_request, weak, registration_probe) = (
                 env.clone(),
                 config.clone(),
                 map_request.clone(),
                 weak.clone(),
+                registration_probe.clone(),
             );
             async move {
                 sleep(delay).await;
@@ -718,6 +778,7 @@ impl ControlRunner {
                         config.clone(),
                         None,
                         false,
+                        &registration_probe,
                     )
                     .await?;
                     let stream = map_request.open_stream(&config, &env.keys, &conn).await?;
@@ -1118,6 +1179,97 @@ impl DialerActor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct RegistrationProbe;
+
+    impl Message<RegistrationProbe> for ControlRunner {
+        type Reply = (Arc<Notify>,);
+
+        async fn handle(
+            &mut self,
+            _: RegistrationProbe,
+            _: &mut Context<Self, Self::Reply>,
+        ) -> Self::Reply {
+            (self.registration_probe.clone(),)
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn probe_restarts_stalled_registration_with_same_followup() {
+        let actor = ControlRunner::spawn(Params {
+            config: Default::default(),
+            auth_key: None,
+            env: Env::new(ts_keys::NodeState::generate()),
+        });
+        let followup = url::Url::parse("https://example.test/authorize/session").unwrap();
+        actor
+            .tell(AuthRequired(Some(followup.clone())))
+            .await
+            .unwrap();
+        let (probe,) = actor.ask(RegistrationProbe).await.unwrap();
+        let mut attempts = 0;
+        {
+            let registration =
+                poll_registration(Some(1), Some(&followup), &probe, |client, url| {
+                    assert_eq!(url.as_ref(), Some(&followup));
+                    attempts += 1;
+                    let first = attempts == 1;
+                    async move {
+                        if first {
+                            assert_eq!(client, Some(1));
+                            return std::future::pending().await;
+                        }
+                        assert_eq!(client, None);
+                        Ok((
+                            2,
+                            RegisterResponse {
+                                machine_authorized: Some(true),
+                                ..Default::default()
+                            },
+                        ))
+                    }
+                });
+            tokio::pin!(registration);
+            assert!(futures::poll!(&mut registration).is_pending());
+            actor.ask(ProbeControl).await.unwrap();
+            assert!(futures::poll!(&mut registration).is_pending());
+            tokio::time::advance(Duration::from_millis(399)).await;
+            assert!(futures::poll!(&mut registration).is_pending());
+            tokio::time::advance(Duration::from_millis(1)).await;
+            let (conn, response) = timeout(Duration::from_millis(50), registration)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(conn, 2);
+            assert_eq!(response.machine_authorized, Some(true));
+        }
+        assert_eq!(attempts, 2);
+        actor.kill();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn probe_retains_registration_response_within_grace_period() {
+        let followup = url::Url::parse("https://example.test/authorize/session").unwrap();
+        let probe = Notify::new();
+        let registration =
+            poll_registration(Some(1), Some(&followup), &probe, |client, _| async move {
+                assert_eq!(client, Some(1));
+                sleep(Duration::from_millis(100)).await;
+                Ok((
+                    client.unwrap(),
+                    RegisterResponse {
+                        machine_authorized: Some(true),
+                        ..Default::default()
+                    },
+                ))
+            });
+        tokio::pin!(registration);
+        assert!(futures::poll!(&mut registration).is_pending());
+        probe.notify_waiters();
+        let (conn, response) = registration.await.unwrap();
+        assert_eq!(response.machine_authorized, Some(true));
+        assert_eq!(conn, 1);
+    }
 
     #[test]
     fn reconnect_backoff_doubles_and_caps() {

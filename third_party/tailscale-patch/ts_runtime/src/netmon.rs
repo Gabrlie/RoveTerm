@@ -1,6 +1,7 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, BTreeSet, HashMap},
     io,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     sync::{Arc, atomic::AtomicUsize},
     time::Duration,
 };
@@ -12,9 +13,155 @@ use kameo::{
     message::{Context, Message, StreamMessage},
 };
 use smol_str::ToSmolStr;
-use ts_netmon::{Event, Family, InterfaceId, Netmon};
+use tokio::sync::watch;
+use tokio_stream::wrappers::WatchStream;
+use ts_netmon::{Event, Family, Interface, InterfaceId, MonType, Netmon, Route};
 
 use crate::env::Env;
+
+/// An IP address assigned to an interface in a host network snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalNetworkAddr {
+    pub ip: IpAddr,
+    pub prefix_len: u8,
+}
+
+/// An active host network interface. Its ID identifies the current network attachment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalInterface {
+    pub id: u64,
+    pub name: String,
+    pub addrs: Vec<ExternalNetworkAddr>,
+    pub default_v4: bool,
+    pub default_v6: bool,
+}
+
+/// The current set of active host network interfaces. An empty set signals disconnection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalNetworkSnapshot {
+    pub interfaces: Vec<ExternalInterface>,
+}
+
+const HOST_BRIDGE: MonType = MonType::new_static("host_bridge");
+
+/// Network monitor backed by snapshots supplied by the host application.
+pub struct ExternalNetmon(pub watch::Receiver<Option<ExternalNetworkSnapshot>>);
+
+impl Netmon for ExternalNetmon {
+    fn ty(&self) -> MonType {
+        HOST_BRIDGE
+    }
+
+    fn event_stream(&self) -> io::Result<ts_netmon::BoxStream<io::Result<Event>>> {
+        let mut previous = ExternalNetworkState::default();
+        Ok(WatchStream::new(self.0.clone())
+            .filter_map(|snapshot| async { snapshot.map(ExternalNetworkState::from) })
+            .flat_map(move |snapshot| {
+                let events = previous.diff(&snapshot);
+                previous = snapshot;
+                futures::stream::iter(events.into_iter().map(Ok))
+            })
+            .boxed())
+    }
+
+    fn strong_delete_consistency(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Default)]
+struct ExternalNetworkState {
+    interfaces: BTreeMap<InterfaceId, Interface>,
+    addrs: BTreeSet<(InterfaceId, ipnet::IpNet)>,
+    default_routes: BTreeSet<(InterfaceId, IpAddr)>,
+}
+
+impl From<ExternalNetworkSnapshot> for ExternalNetworkState {
+    fn from(snapshot: ExternalNetworkSnapshot) -> Self {
+        let mut state = Self::default();
+        for interface in snapshot.interfaces {
+            let id = InterfaceId::new(HOST_BRIDGE, interface.id);
+            state
+                .addrs
+                .extend(interface.addrs.into_iter().filter_map(|addr| {
+                    ipnet::IpNet::new(addr.ip, addr.prefix_len)
+                        .ok()
+                        .map(|addr| (id.clone(), addr))
+                }));
+            if interface.default_v4 {
+                state
+                    .default_routes
+                    .insert((id.clone(), Ipv4Addr::UNSPECIFIED.into()));
+            }
+            if interface.default_v6 {
+                state
+                    .default_routes
+                    .insert((id.clone(), Ipv6Addr::UNSPECIFIED.into()));
+            }
+            state.interfaces.insert(
+                id.clone(),
+                Interface {
+                    id,
+                    up: true,
+                    name: interface.name,
+                    mtu: None,
+                    hardware_addr: None,
+                    metric_v4: 0,
+                    metric_v6: 0,
+                },
+            );
+        }
+        state
+    }
+}
+
+impl ExternalNetworkState {
+    fn diff(&self, next: &Self) -> Vec<Event> {
+        let mut events = Vec::new();
+        events.extend(
+            self.default_routes
+                .difference(&next.default_routes)
+                .map(|(id, ip)| Event::RouteRemoved(id.clone(), external_default_route(*ip))),
+        );
+        events.extend(
+            self.addrs
+                .difference(&next.addrs)
+                .map(|(id, addr)| Event::AddrRemoved(id.clone(), *addr)),
+        );
+        for id in self.interfaces.keys() {
+            if !next.interfaces.contains_key(id) {
+                events.push(Event::InterfaceRemoved(id.clone()));
+            }
+        }
+
+        for (id, interface) in &next.interfaces {
+            if self.interfaces.get(id) != Some(interface) {
+                events.push(Event::InterfaceUpsert(interface.clone()));
+            }
+        }
+        events.extend(
+            next.addrs
+                .difference(&self.addrs)
+                .map(|(id, addr)| Event::AddrUpsert(id.clone(), *addr)),
+        );
+        events.extend(
+            next.default_routes
+                .difference(&self.default_routes)
+                .map(|(id, ip)| Event::RouteUpsert(id.clone(), external_default_route(*ip))),
+        );
+        events
+    }
+}
+
+fn external_default_route(ip: IpAddr) -> Route {
+    Route {
+        dst: ipnet::IpNet::new_assert(ip, 0),
+        // The host supplies route ownership only. Netmon requires a gateway entry
+        // to recognize a default route.
+        gateway: smallvec::smallvec![ip],
+        metric: 0,
+    }
+}
 
 pub struct NetmonActor {
     mon: Arc<dyn Netmon>,
@@ -380,5 +527,178 @@ impl NetmonActor {
         } else {
             (*addr, addr.prefix_len())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::FutureExt;
+
+    use super::*;
+
+    fn addr(ip: &str, prefix_len: u8) -> ExternalNetworkAddr {
+        ExternalNetworkAddr {
+            ip: ip.parse().unwrap(),
+            prefix_len,
+        }
+    }
+
+    fn interface(id: u64, name: &str, addrs: Vec<ExternalNetworkAddr>) -> ExternalInterface {
+        ExternalInterface {
+            id,
+            name: name.into(),
+            addrs,
+            default_v4: false,
+            default_v6: false,
+        }
+    }
+
+    fn snapshot(interfaces: Vec<ExternalInterface>) -> Option<ExternalNetworkSnapshot> {
+        Some(ExternalNetworkSnapshot { interfaces })
+    }
+
+    fn id(value: u64) -> InterfaceId {
+        InterfaceId::new(HOST_BRIDGE, value)
+    }
+
+    fn available_events(
+        stream: &mut (impl futures::Stream<Item = io::Result<Event>> + Unpin),
+    ) -> Vec<Event> {
+        std::iter::from_fn(|| stream.next().now_or_never().flatten())
+            .collect::<io::Result<_>>()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn emits_initial_snapshot_and_diffs_interface_and_address_changes() {
+        let mut wifi = interface(
+            1,
+            "wlan0",
+            vec![addr("192.0.2.5", 24), addr("2001:db8::5", 64)],
+        );
+        let (tx, rx) = watch::channel(snapshot(vec![wifi.clone()]));
+        let mut stream = ExternalNetmon(rx).event_stream().unwrap();
+        let events = available_events(&mut stream);
+        assert!(
+            matches!(&events[0], Event::InterfaceUpsert(i) if i.id == id(1) && i.name == "wlan0" && i.up)
+        );
+        assert_eq!(
+            events[1..],
+            [
+                Event::AddrUpsert(id(1), "192.0.2.5/24".parse().unwrap()),
+                Event::AddrUpsert(id(1), "2001:db8::5/64".parse().unwrap()),
+            ],
+        );
+
+        wifi.name = "wifi".into();
+        wifi.addrs = vec![addr("192.0.2.5", 25), addr("192.0.2.6", 25)];
+        tx.send_replace(snapshot(vec![wifi.clone()]));
+        let events = available_events(&mut stream);
+        assert_eq!(events.len(), 5);
+        assert_eq!(
+            events[..2],
+            [
+                Event::AddrRemoved(id(1), "192.0.2.5/24".parse().unwrap()),
+                Event::AddrRemoved(id(1), "2001:db8::5/64".parse().unwrap()),
+            ],
+        );
+        assert!(
+            matches!(&events[2], Event::InterfaceUpsert(i) if i.id == id(1) && i.name == "wifi")
+        );
+        assert_eq!(
+            events[3..],
+            [
+                Event::AddrUpsert(id(1), "192.0.2.5/25".parse().unwrap()),
+                Event::AddrUpsert(id(1), "192.0.2.6/25".parse().unwrap()),
+            ],
+        );
+        wifi.addrs.reverse();
+        tx.send_replace(snapshot(vec![wifi]));
+        assert!(available_events(&mut stream).is_empty());
+    }
+
+    #[tokio::test]
+    async fn moves_default_routes_to_cellular_and_clears_disconnected_state() {
+        let wifi = interface(1, "wlan0", vec![addr("192.0.2.5", 24)]);
+        let mut cell = interface(2, "rmnet0", vec![addr("198.51.100.5", 24)]);
+        let (tx, rx) = watch::channel(None);
+        let mon = ExternalNetmon(rx);
+        let mut stream = Box::pin((&mon as &dyn Netmon).with_default_route_events().unwrap());
+        assert!(available_events(&mut stream).is_empty());
+
+        tx.send_replace(snapshot(vec![
+            ExternalInterface {
+                default_v4: true,
+                default_v6: true,
+                ..wifi.clone()
+            },
+            cell.clone(),
+        ]));
+        let events = available_events(&mut stream);
+        assert!(events.contains(&Event::DefaultRouteInterface(Some(id(1)), Family::Ipv4)));
+        assert!(events.contains(&Event::DefaultRouteInterface(Some(id(1)), Family::Ipv6)));
+
+        cell.default_v4 = true;
+        cell.default_v6 = true;
+        tx.send_replace(snapshot(vec![wifi, cell]));
+        let events = available_events(&mut stream);
+        for (destination, family) in [("0.0.0.0/0", Family::Ipv4), ("::/0", Family::Ipv6)] {
+            let destination: ipnet::IpNet = destination.parse().unwrap();
+            assert!(events.iter().any(|event|
+                matches!(event, Event::RouteRemoved(i, route) if *i == id(1) && route.dst == destination)));
+            assert!(events.iter().any(|event|
+                matches!(event, Event::RouteUpsert(i, route) if *i == id(2) && route.dst == destination)));
+            assert!(events.contains(&Event::DefaultRouteInterface(Some(id(2)), family)));
+        }
+
+        tx.send_replace(snapshot(vec![]));
+        let events = available_events(&mut stream);
+        assert_eq!(events.len(), 8);
+        assert!(events.contains(&Event::DefaultRouteInterface(None, Family::Ipv4)));
+        assert!(events.contains(&Event::DefaultRouteInterface(None, Family::Ipv6)));
+        assert!(events.contains(&Event::AddrRemoved(id(1), "192.0.2.5/24".parse().unwrap())));
+        assert!(events.contains(&Event::AddrRemoved(
+            id(2),
+            "198.51.100.5/24".parse().unwrap()
+        )));
+        assert!(events.contains(&Event::InterfaceRemoved(id(1))));
+        assert!(events.contains(&Event::InterfaceRemoved(id(2))));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, Event::RouteRemoved(i, _) if *i == id(2)))
+                .count(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn replaces_interface_id_when_router_changes_with_the_same_address() {
+        let mut wifi = interface(1, "wlan0", vec![addr("192.0.2.5", 24)]);
+        wifi.default_v4 = true;
+        let (tx, rx) = watch::channel(snapshot(vec![wifi.clone()]));
+        let mon = ExternalNetmon(rx);
+        let mut stream = Box::pin((&mon as &dyn Netmon).with_default_route_events().unwrap());
+        assert!(
+            available_events(&mut stream)
+                .contains(&Event::DefaultRouteInterface(Some(id(1)), Family::Ipv4))
+        );
+
+        wifi.id = 7;
+        tx.send_replace(snapshot(vec![wifi]));
+        let events = available_events(&mut stream);
+        let address = "192.0.2.5/24".parse().unwrap();
+        assert!(events.contains(&Event::AddrRemoved(id(1), address)));
+        assert!(events.contains(&Event::AddrUpsert(id(7), address)));
+        assert!(events.contains(&Event::InterfaceRemoved(id(1))));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::InterfaceUpsert(i) if i.id == id(7)))
+        );
+        assert_eq!(
+            events.last(),
+            Some(&Event::DefaultRouteInterface(Some(id(7)), Family::Ipv4))
+        );
     }
 }
