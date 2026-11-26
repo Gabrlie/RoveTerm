@@ -5,6 +5,20 @@ This file documents notable changes to RoveTerm in both Simplified Chinese and E
 
 ## [Unreleased]
 
+## [0.3.0-beta.4] - 2026-11-27
+
+### 中文更新日志
+
+- **移动端内置用户态 Tailscale（零 VPN 权限）**：在移动 profile 启用 `rove-tailscale`，完全运行于应用进程内用户态网络栈，Android 无需 `VpnService`、iOS 无需 Network Extension 权限（免费 Apple ID 自签名即可使用，且可与系统 VPN 共存）；完整开放移动端 `tailscale_*` 命令、`HostRoute::Tailscale` SSH 拨号、节点延迟探测、`server_stats` 路径徽标，以及解锁凭据库后自动重连。
+- **移动端原生网络监听与前台授权加速**：`tauri-plugin-rove-mobile` 新增 Android `ConnectivityManager` 与 iOS `NWPathMonitor + getifaddrs` 原生网络状态桥接，并通过 `ExternalNetmon` 驱动 `ts_runtime` 事件流，覆盖 Wi-Fi ↔ 5G 切网、同局域网直连、同 IP 换路由接口 ID 与断网清理（设备重建后持续同步）；切回前台自动触发节流控制面探测，并为挂起的 90 秒浏览器 OAuth 长轮询提供 400ms 宽限期唤醒与原链接复用，授权返回即可快速进入运行态。
+- **移动端 Tailscale 三 Tab 入口、全屏页面与细节修复**：在「设置 → 连接与同步」「工具 → Tailscale 设备」「主机 → 直连主机转换横幅」无缝接入移动端三 Tab 壳层，`TailscaleDialog` 升级为全屏页面并对齐移动端控件比例与返回栈；修复移动端日志筛选分段按钮高度被桌面默认样式覆盖的问题，补充上下内边距以提升触控可读性。
+
+### English Changelog
+
+- **Built-In Userspace Tailscale on Mobile (Zero VPN Permissions)**: Enabled `rove-tailscale` in the mobile profile using the in-process userspace networking stack—requiring neither Android `VpnService` nor iOS Network Extension entitlements (compatible with free Apple ID self-signing and system VPNs). Unlocked all Tailscale commands, `HostRoute::Tailscale` SSH dialing, peer ping probes, `server_stats` connection path badges, and automatic reconnect after vault unlock on mobile.
+- **Native Mobile Network Monitor & Foreground Auth Wakeup**: Added native Android (`ConnectivityManager`) and iOS (`NWPathMonitor` + `getifaddrs`) network snapshots in `tauri-plugin-rove-mobile` bridged into `ts_runtime` via `ExternalNetmon` across device rebuilds, handling Wi-Fi ↔ cellular switches, LAN direct paths, router interface swaps, and offline cleanup. Returning to the foreground triggers throttled control probes and wakes stalled 90s browser OAuth polls after a 400ms grace period while reusing the active login URL.
+- **Mobile Tailscale Navigation, Full-Screen Sheet & Filter Polish**: Integrated Tailscale across the 3-tab mobile shell (**Settings → Connections**, **Tools → Tailscale Devices**, and **Hosts** conversion banner), promoted `TailscaleDialog` to a full-screen mobile page aligned with mobile control proportions and back navigation, and fixed the CSS cascade override on mobile segmented log filter pills with comfortable vertical padding.
+
 ## [0.3.0-beta.3] - 2026-11-27
 
 ### 中文更新日志
