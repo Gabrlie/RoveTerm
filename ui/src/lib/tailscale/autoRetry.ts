@@ -20,12 +20,10 @@ export function isTailscaleFailureCode(code: string | null | undefined): boolean
 
 /** Whether a failed pane should offer "Open Tailscale settings" instead of password fallback. */
 export function showTailscaleSettingsAction(params: {
-  isMobile: boolean;
   isTailscaleHost: boolean;
   tailscaleConnected: boolean;
   failureCode: string;
 }): boolean {
-  if (params.isMobile) return false;
   if (isTailscaleFailureCode(params.failureCode)) return true;
   if (!params.isTailscaleHost) return false;
   return !params.tailscaleConnected || params.failureCode === 'ssh.connect' || params.failureCode === 'ssh.timeout';

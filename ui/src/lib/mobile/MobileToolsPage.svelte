@@ -6,6 +6,7 @@
   import { t } from '../i18n';
   import type { HostEntry } from '../ipc';
   import { keys } from '../keys/keys.svelte';
+  import { tailscale } from '../tailscale/tailscale.svelte';
   import Dialog from '../ui/Dialog.svelte';
   import Icon from '../ui/Icon.svelte';
   import type { IconName } from '../ui/icons';
@@ -17,14 +18,35 @@
     onkeys: () => void;
     onimport: () => void;
     onquick: () => void;
+    ontailscale: () => void;
     ontransfers: () => void;
     onforwards: (host: HostEntry) => void;
     onsnippets: () => void;
     onnotice: (message: string) => void;
   }
 
-  let { activeTransfers, activeForwards, onkeys, onimport, onquick, ontransfers, onforwards, onsnippets, onnotice }: Props = $props();
+  let { activeTransfers, activeForwards, onkeys, onimport, onquick, ontailscale, ontransfers, onforwards, onsnippets, onnotice }: Props = $props();
   let choosingHost = $state(false);
+
+  const tailscaleSummary = $derived.by(() => {
+    switch (tailscale.status.state) {
+      case 'running':
+        return tailscale.status.peer_count > 0
+          ? `${t('tailscale.summaryConnected')} · ${tailscale.status.peer_count}`
+          : t('tailscale.summaryConnected');
+      case 'starting':
+        return t('tailscale.summaryConnecting');
+      case 'needs_login':
+        return t('tailscale.summaryNeedsLogin');
+      case 'needs_machine_auth':
+        return t('tailscale.summaryNeedsApproval');
+      case 'disconnected':
+      case 'error':
+        return t('tailscale.summaryDisconnected');
+      default:
+        return t('tailscale.summaryUnconfigured');
+    }
+  });
 
   function chooseForwards(): void {
     const [first, second] = hosts.items;
@@ -67,6 +89,7 @@
       <h2 class="section-label">{t('mobile.tools.groupConnect')}</h2>
       <div class="form-group">
         {@render tool('quickConnect', 'var(--sys-green)', t('action.host.quickConnect'), t('mobile.tools.quickDesc'), onquick)}
+        {@render tool('network', 'var(--sys-blue)', t('tailscale.title'), t('tailscale.toolsDesc'), ontailscale, tailscaleSummary)}
         {@render tool('transfer', 'var(--sys-teal)', t('action.panel.transfers'), t('mobile.tools.transfersDesc'), ontransfers, '', activeTransfers)}
         {@render tool('forwards', 'var(--sys-purple)', t('host.forwards'), t('mobile.tools.forwardsDesc'), chooseForwards, '', activeForwards)}
         {@render tool('snippets', 'var(--sys-pink)', t('action.panel.snippets'), t('mobile.tools.snippetsDesc'), onsnippets)}

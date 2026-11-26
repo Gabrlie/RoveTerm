@@ -10,6 +10,9 @@
   import ContextMenu from '../ui/ContextMenu.svelte';
   import Icon from '../ui/Icon.svelte';
   import IconButton from '../ui/IconButton.svelte';
+  import { notify } from '../ui/toast.svelte';
+  import { findConversionCandidates } from '../tailscale/matching';
+  import { tailscale } from '../tailscale/tailscale.svelte';
   import { vault } from '../vault/vault.svelte';
   import type { PaneState } from '../workspace/workspace.svelte';
   import MobilePageHeader from './MobilePageHeader.svelte';
@@ -39,6 +42,38 @@
   });
   const backgroundTarget = $derived(backgroundTerminal?.target);
   const backgroundHost = $derived(backgroundTarget?.kind === 'ssh' ? hosts.find(backgroundTarget.hostId) : undefined);
+  const conversionCandidates = $derived(
+    tailscale.connected ? findConversionCandidates(hosts.items, tailscale.peers, tailscale.dismissed) : [],
+  );
+  const firstConversionCandidate = $derived(conversionCandidates[0] ?? null);
+
+  async function convertCandidate(candidate: (typeof conversionCandidates)[number]): Promise<void> {
+    try {
+      await tailscale.convertHost(candidate.host, candidate.peer);
+      notify(t('tailscale.converted', { name: candidate.host.name }), 'success');
+    } catch (error) {
+      onnotice(errorText(error));
+    }
+  }
+
+  async function convertAllCandidates(): Promise<void> {
+    let converted = 0;
+    for (const candidate of conversionCandidates) {
+      try {
+        await tailscale.convertHost(candidate.host, candidate.peer);
+        converted += 1;
+      } catch (error) {
+        onnotice(errorText(error));
+      }
+    }
+    if (converted) notify(t('tailscale.convertedCount', { count: converted }), 'success');
+  }
+
+  function dismissAllCandidates(): void {
+    for (const candidate of conversionCandidates) {
+      tailscale.dismissCandidate(candidate.host.id, candidate.peer.id);
+    }
+  }
 
   function lastSeen(host: HostEntry): string {
     if (!host.last_connected_at) return t('home.never');
@@ -84,6 +119,31 @@
     </div>
 
     {#if hosts.items.length > 0}
+      {#if conversionCandidates.length > 0}
+        <section class="ts-convert" aria-label={t('tailscale.matches')}>
+          <div class="ts-convert-head">
+            <span class="ts-convert-icon"><Icon name="network" size={16} /></span>
+            <div class="ts-convert-copy">
+              <strong>{t('tailscale.conversionTitle')}</strong>
+              {#if conversionCandidates.length === 1 && firstConversionCandidate}
+                <small>{t('tailscale.conversionSingle', { host: firstConversionCandidate.host.name, hostname: firstConversionCandidate.host.hostname, peer: firstConversionCandidate.peer.name || firstConversionCandidate.peer.dns_name })}</small>
+              {:else}
+                <small>{t('tailscale.conversionCount', { count: conversionCandidates.length, names: conversionCandidates.slice(0, 3).map(({ host }) => host.name).join(', ') })}</small>
+              {/if}
+            </div>
+          </div>
+          <div class="ts-convert-actions">
+            {#if conversionCandidates.length === 1 && firstConversionCandidate}
+              {@const candidate = firstConversionCandidate}
+              <button type="button" class="secondary" onclick={() => tailscale.dismissCandidate(candidate.host.id, candidate.peer.id)}>{t('tailscale.ignore')}</button>
+              <button type="button" class="primary" onclick={() => void convertCandidate(candidate)}>{t('tailscale.convertHost')}</button>
+            {:else}
+              <button type="button" class="secondary" onclick={dismissAllCandidates}>{t('tailscale.dismissAll')}</button>
+              <button type="button" class="primary" onclick={() => void convertAllCandidates()}>{t('tailscale.convertAll')}</button>
+            {/if}
+          </div>
+        </section>
+      {/if}
       <div class="form-group">
         <button type="button" class="row fleet" onclick={onfleet}>
           <span class="glyph"><Icon name="bot" size={17} /></span>
@@ -212,6 +272,57 @@
   }
   .unlock button {
     flex: none;
+    height: var(--m-btn-inline-height, 30px);
+    min-width: 0;
+    padding: 0 12px;
+    border-radius: 8px;
+    font-size: calc(12.5px * var(--ui-scale));
+  }
+  .ts-convert {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: var(--m-card-radius, 12px);
+    background: var(--surface-raised);
+    box-shadow: 0 0 0 0.5px var(--separator), var(--shadow-sm);
+  }
+  .ts-convert-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .ts-convert-icon {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .ts-convert-copy {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .ts-convert-copy strong {
+    font-size: calc(13.5px * var(--ui-scale));
+    white-space: normal;
+  }
+  .ts-convert-copy small {
+    white-space: normal;
+    line-height: 1.4;
+  }
+  .ts-convert-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .ts-convert-actions button {
     height: var(--m-btn-inline-height, 30px);
     min-width: 0;
     padding: 0 12px;

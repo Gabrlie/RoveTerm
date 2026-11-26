@@ -783,6 +783,7 @@
       onMobileLifecycle(({ state }) => {
         if (mounted && state === 'foreground') {
           for (const term of terminals.values()) term.refresh();
+          void tailscale.refreshOnForeground();
         }
       }),
     ].map((listener) => listener.catch((error: unknown) => console.warn('mobile events unavailable', error)));
@@ -806,7 +807,7 @@
     hosts.refresh().catch((error: unknown) => showNotice(errorText(error), 'error'));
     keys.refresh().catch((error: unknown) => console.warn('key library unavailable', error));
     forwardStatuses.start().catch((error: unknown) => console.warn('forward events unavailable', error));
-    if (!isMobile) void tailscale.init();
+    void tailscale.init();
     const cancelStartupUpdate = updater.scheduleStartupCheck();
     const unlisten = onHostKeyPrompt((prompt) => (hostKeyPrompts = [...hostKeyPrompts, prompt]));
     return () => {
@@ -867,6 +868,7 @@
                 onkeys={() => (keysOpen = true)}
                 onimport={() => void importSshConfig()}
                 onquick={() => (quickOpen = true)}
+                ontailscale={() => (tailscaleOpen = true)}
                 ontransfers={() => openRight('transfers')}
                 onforwards={(host) => (forwardsHost = host)}
                 onsnippets={() => openRight('snippets')}

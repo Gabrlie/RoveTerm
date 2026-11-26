@@ -98,7 +98,6 @@ test('auto-retries failed Tailscale tabs when Tailscale connects and once on sta
 
 test('replaces password fallback with Tailscale settings on Tailscale failures', () => {
   assert.equal(showTailscaleSettingsAction({
-    isMobile: false,
     isTailscaleHost: true,
     tailscaleConnected: false,
     failureCode: 'tailscale.not_connected',
@@ -112,7 +111,6 @@ test('replaces password fallback with Tailscale settings on Tailscale failures',
 
   // SSH auth failure after Tailscale is up still allows password sign-in.
   assert.equal(showTailscaleSettingsAction({
-    isMobile: false,
     isTailscaleHost: true,
     tailscaleConnected: true,
     failureCode: 'ssh.auth_failed',
@@ -126,7 +124,6 @@ test('replaces password fallback with Tailscale settings on Tailscale failures',
 
   // Tailscale connect/timeout failure offers Tailscale settings, not password fallback.
   assert.equal(showTailscaleSettingsAction({
-    isMobile: false,
     isTailscaleHost: true,
     tailscaleConnected: true,
     failureCode: 'ssh.connect',

@@ -140,7 +140,11 @@
   }
 </script>
 
-<Dialog presentation="page" title={t('tailscale.title')} {onclose} width={760}>
+{#snippet desktopActions()}
+  <button type="button" class="secondary" onclick={onclose}>{t('common.close')}</button>
+{/snippet}
+
+<Dialog presentation="page" title={t('tailscale.title')} {onclose} width={760} actions={viewport.compact ? undefined : desktopActions}>
   <div class="ts-dialog" class:compact={viewport.compact}>
     <section class="status-card">
       <div class="status-main">
@@ -197,29 +201,31 @@
         <Icon name="search" size={14} />
         <input class="bare" bind:value={query} placeholder={t('tailscale.search')} spellcheck="false" />
       </div>
-      <div class="segmented" role="group" aria-label={t('tailscale.title')}>
-        <button type="button" aria-pressed={presence === 'all'} onclick={() => (presence = 'all')}>
-          {t('tailscale.filterAll', { n: peerList.length })}
+      <div class="toolbar-controls">
+        <div class="segmented" role="group" aria-label={t('tailscale.title')}>
+          <button type="button" aria-pressed={presence === 'all'} onclick={() => (presence = 'all')}>
+            {t('tailscale.filterAll', { n: peerList.length })}
+          </button>
+          <button type="button" aria-pressed={presence === 'online'} onclick={() => (presence = 'online')}>
+            {t('tailscale.filterOnline', { n: onlineCount })}
+          </button>
+        </div>
+        <button
+          type="button"
+          class="secondary compact-btn"
+          disabled={status.state !== 'running' || tailscale.pingingAll || peers.length === 0}
+          onclick={() => void tailscale.pingAllPeers(peers.map((peer) => peer.id))}
+        >
+          <Icon name="pulse" size={14} />
+          {tailscale.pingingAll ? t('tailscale.pinging') : t('tailscale.pingAll')}
         </button>
-        <button type="button" aria-pressed={presence === 'online'} onclick={() => (presence = 'online')}>
-          {t('tailscale.filterOnline', { n: onlineCount })}
+        <button type="button" class="secondary icon-btn" onclick={refresh} disabled={view.refreshing} title={t('tailscale.refresh')}>
+          <Icon name="refresh" size={14} />
+        </button>
+        <button type="button" class="secondary icon-btn" onclick={onsettings} title={t('tailscale.settings')}>
+          <Icon name="settings" size={14} />
         </button>
       </div>
-      <button
-        type="button"
-        class="secondary compact-btn"
-        disabled={status.state !== 'running' || tailscale.pingingAll || peers.length === 0}
-        onclick={() => void tailscale.pingAllPeers(peers.map((peer) => peer.id))}
-      >
-        <Icon name="pulse" size={14} />
-        {tailscale.pingingAll ? t('tailscale.pinging') : t('tailscale.pingAll')}
-      </button>
-      <button type="button" class="secondary icon-btn" onclick={refresh} disabled={view.refreshing} title={t('tailscale.refresh')}>
-        <Icon name="refresh" size={14} />
-      </button>
-      <button type="button" class="secondary icon-btn" onclick={onsettings} title={t('tailscale.settings')}>
-        <Icon name="settings" size={14} />
-      </button>
     </div>
 
     {#if conversionCandidates.length > 0}
@@ -296,8 +302,6 @@
       {/each}
     </div>
   </div>
-
-  {#snippet actions()}<button class:page-action={viewport.compact} type="button" class="secondary" onclick={onclose}>{t('common.close')}</button>{/snippet}
 </Dialog>
 
 {#if selected}
@@ -415,6 +419,12 @@
     color: var(--danger);
   }
   .toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .toolbar-controls {
     display: flex;
     align-items: center;
     gap: var(--space-2);
@@ -624,23 +634,101 @@
     font-size: var(--text-footnote);
   }
 
-  .page-action {
-    min-height: var(--touch-target, 44px);
-    height: auto;
-    white-space: normal;
-  }
   .compact .devices {
     max-height: none;
     overflow: visible;
+    border-radius: var(--m-card-radius, 12px);
   }
-  .compact :is(.status-card, .device-row, .device-actions) {
+  .compact .status-card {
+    flex-wrap: wrap;
+    padding: 12px 14px;
+    border-radius: var(--m-card-radius, 12px);
+  }
+  .compact .status-card .compact-btn {
+    height: var(--m-btn-inline-height, 30px);
+    padding: 0 12px;
+    border-radius: 8px;
+    font-size: calc(12.5px * var(--ui-scale));
+  }
+  .compact .search {
+    flex: 1 1 100%;
+    min-width: 0;
+    padding: 0 12px;
+    border-radius: 9px;
+  }
+  .compact .toolbar-controls {
+    width: 100%;
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+  .compact .toolbar-controls .segmented {
+    flex: 1;
+    display: flex;
+    min-width: 0;
+  }
+  .compact .toolbar-controls .segmented > button {
+    flex: 1;
+    min-width: 0;
+    padding: 0 8px;
+  }
+  .compact .toolbar-controls .compact-btn {
+    height: var(--m-btn-inline-height, 30px);
+    padding: 0 10px;
+    border-radius: 8px;
+    font-size: calc(12.5px * var(--ui-scale));
+  }
+  .compact .toolbar-controls .icon-btn {
+    width: var(--m-btn-inline-height, 30px);
+    height: var(--m-btn-inline-height, 30px);
+    border-radius: 8px;
+  }
+  .compact .conversion-card {
+    padding: 10px 14px;
+    border-radius: var(--m-card-radius, 12px);
+  }
+  .compact .conversion-row {
     flex-wrap: wrap;
   }
-  .compact .device-info {
-    flex-basis: 100%;
+  .compact .conversion-row .compact-btn {
+    height: var(--m-btn-inline-height, 30px);
+    padding: 0 11px;
+    border-radius: 8px;
+    font-size: calc(12.5px * var(--ui-scale));
+  }
+  .compact .device-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 12px 14px;
+  }
+  .compact .device-sub {
+    flex-wrap: wrap;
+    padding-left: 15px;
+  }
+  .compact .ip-copy {
+    padding: 2px 7px;
+    font-size: 12px;
   }
   .compact .device-actions {
-    max-width: 100%;
-    margin-inline-start: auto;
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+  .compact .device-actions .ping-pill {
+    margin-inline-end: auto;
+    height: 24px;
+    font-size: 12px;
+  }
+  .compact .device-actions .compact-btn {
+    height: var(--m-btn-inline-height, 30px);
+    padding: 0 12px;
+    border-radius: 8px;
+    font-size: calc(12.5px * var(--ui-scale));
+  }
+  .compact .device-actions .icon-btn {
+    width: var(--m-btn-inline-height, 30px);
+    height: var(--m-btn-inline-height, 30px);
+    border-radius: 8px;
   }
 </style>

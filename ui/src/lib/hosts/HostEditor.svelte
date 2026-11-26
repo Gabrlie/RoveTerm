@@ -9,7 +9,6 @@
   import { hosts } from './hosts.svelte';
 
   import { keys } from '../keys/keys.svelte';
-  import { isMobile } from '../platform';
   import { findDuplicateHost, peerIpOptions, preferredAddress, SAVED_PEER_PREFIX } from '../tailscale/discovery';
   import { matchTailscalePeer, normalizeHostAddress } from '../tailscale/matching';
   import { tailscale } from '../tailscale/tailscale.svelte';
@@ -67,7 +66,7 @@
   let saving = $state(false);
   let duplicate = $state<HostEntry | null>(null);
   let lastAutoPeerName = '';
-  const useTailscaleSelect = $derived(!isMobile && routeKind === 'tailscale');
+  const useTailscaleSelect = $derived(routeKind === 'tailscale');
   const savedTargetHostname = initial?.route.kind === 'tailscale' ? initial.hostname : (imported?.route?.kind === 'tailscale' ? imported.hostname : '');
   const savedTargetPeerId = initial?.route.kind === 'tailscale' ? (initial.route.peer_id ?? null) : (imported?.route?.kind === 'tailscale' ? (imported.route.peer_id ?? null) : null);
   const tsPeerOptions = $derived(
@@ -89,7 +88,7 @@
     }
     return '';
   });
-  const matchedPeer = $derived(!isMobile && routeKind === 'direct' && tailscale.peers.length > 0 ? matchTailscalePeer({ hostname, route: { kind: 'direct' } }, tailscale.peers) : null);
+  const matchedPeer = $derived(routeKind === 'direct' && tailscale.peers.length > 0 ? matchTailscalePeer({ hostname, route: { kind: 'direct' } }, tailscale.peers) : null);
   const duplicateMatch = $derived(duplicate ? findDuplicateHost([duplicate], { hostname, port: Number(port), username, route: route() }) : undefined);
   /** Notes kept about the host, for the user and the AI agents; saved with the host. */
   let notes = $state('');
@@ -304,7 +303,7 @@
           { value: 'jump', label: t('host.route.jump') },
           { value: 'http', label: t('host.route.http') },
           { value: 'socks5', label: t('host.route.socks5') },
-          ...(!isMobile || routeKind === 'tailscale' ? [{ value: 'tailscale' as const, label: t('host.route.tailscale') }] : []),
+          { value: 'tailscale', label: t('host.route.tailscale') },
         ]}
       />
     </label>

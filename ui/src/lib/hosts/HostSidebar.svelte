@@ -11,7 +11,6 @@
   import type { HostEntry } from '../ipc';
   import { hostMenuItems } from './hostMenu';
   import { hostAddress, hostSubtitle } from './route';
-  import { isMobile } from '../platform';
   import { tailscale } from '../tailscale/tailscale.svelte';
   import type { MessageKey } from '../i18n';
   import { viewport } from '../layout/viewport.svelte';
@@ -70,7 +69,7 @@
     <Icon name="search" size={14} />
     <input class="bare" bind:value={hosts.query} placeholder={t('host.search')} spellcheck="false" />
   </div>
-  {#if !isMobile && tailscale.configured}
+  {#if tailscale.configured}
     <div class="integration">
       <button type="button" class="footer-button tailscale-btn" onclick={ontailscale} title={tailscaleStatusLabel}>
         <Icon name="network" size={14} />

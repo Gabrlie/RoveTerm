@@ -4,8 +4,9 @@
   import { t, type MessageKey } from '../i18n';
   import type { Theme } from '../ipc';
   import MobilePageHeader from '../mobile/MobilePageHeader.svelte';
-  import { capabilities, isMobile } from '../platform';
+  import { capabilities } from '../platform';
   import { sync } from '../sync/sync.svelte';
+  import { tailscale } from '../tailscale/tailscale.svelte';
   import { updater } from '../update/updater.svelte';
   import { pushBackHandler } from '../ui/backStack';
   import Icon from '../ui/Icon.svelte';
@@ -23,7 +24,7 @@
 
   let { section = $bindable(null), onselect, onback, onopentailscale }: Props = $props();
   let appVersion = $state('');
-  const entries = settingsSections({ isMobile, biometricVault: capabilities.biometricVault, includeShortcuts: false });
+  const entries = settingsSections({ biometricVault: capabilities.biometricVault, includeShortcuts: false });
   const groups = groupSettingsSections(entries);
   const selected = $derived(entries.find((entry) => entry.id === section));
   const updateAvailable = $derived(updater.info?.available ?? false);
@@ -55,6 +56,24 @@
         return t(sync.status?.configured ? 'mobile.settings.syncPending' : 'mobile.settings.notConfigured');
       case 'security':
         return t(prefs.device.vault_biometric ? 'mobile.settings.enabled' : 'mobile.settings.disabled');
+      case 'tailscale':
+        switch (tailscale.status.state) {
+          case 'running':
+            return tailscale.status.peer_count > 0
+              ? `${t('tailscale.summaryConnected')} · ${tailscale.status.peer_count}`
+              : t('tailscale.summaryConnected');
+          case 'starting':
+            return t('tailscale.summaryConnecting');
+          case 'needs_login':
+            return t('tailscale.summaryNeedsLogin');
+          case 'needs_machine_auth':
+            return t('tailscale.summaryNeedsApproval');
+          case 'disconnected':
+          case 'error':
+            return t('tailscale.summaryDisconnected');
+          default:
+            return t('tailscale.summaryUnconfigured');
+        }
       case 'about':
         if (updateAvailable) return t('mobile.settings.updateAvailable');
         return currentVersion ? `v${currentVersion}` : '';

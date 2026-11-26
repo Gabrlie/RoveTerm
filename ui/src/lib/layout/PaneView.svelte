@@ -354,7 +354,6 @@
         {#if pane.failure}
           {@const failure = pane.failure}
           {@const offerTailscaleSettings = showTailscaleSettingsAction({
-            isMobile,
             isTailscaleHost,
             tailscaleConnected: tailscale.connected,
             failureCode: failure.code,

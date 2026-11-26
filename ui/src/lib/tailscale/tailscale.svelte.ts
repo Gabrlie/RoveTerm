@@ -1,6 +1,5 @@
 import { hostUpdate, onTailscaleStatus, tailscaleConnect, tailscaleDisconnect, tailscaleLogout, tailscaleOpenAuthUrl, tailscalePingPeer, tailscaleSnapshot, tailscaleStatus, type HostEntry } from '../ipc';
 import { errorText, t } from '../i18n';
-import { isMobile } from '../platform';
 import { hosts } from '../hosts/hosts.svelte';
 import { prefs } from '../settings/prefs.svelte';
 import { preferredAddress, RefreshGate } from './discovery';
@@ -59,7 +58,7 @@ class TailscaleStore {
   }
 
   async init(): Promise<void> {
-    if (this.initialized || isMobile) return;
+    if (this.initialized) return;
     this.initialized = true;
     void onTailscaleStatus((status) => {
       this.statusEventReceived = true;
@@ -108,6 +107,20 @@ class TailscaleStore {
       if (this.requests.accepts(revision)) this.error = errorText(error);
     } finally {
       if (this.requests.accepts(revision)) this.refreshing = false;
+    }
+  }
+
+  /** Refreshes status and peer snapshot when returning to the foreground on mobile. */
+  async refreshOnForeground(): Promise<void> {
+    if (!this.initialized) return;
+    try {
+      const status = await tailscaleStatus();
+      this.applyStatus(status);
+      if (this.connected) {
+        await this.refreshSnapshot();
+      }
+    } catch (error) {
+      console.warn('foreground tailscale refresh failed', error);
     }
   }
 

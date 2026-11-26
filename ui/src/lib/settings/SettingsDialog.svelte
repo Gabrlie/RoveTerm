@@ -10,14 +10,14 @@
   import { settingsError } from './edit.svelte';
   import { settingsSections, type SettingsSection } from './sections';
   import SettingsSectionContent from './SettingsSectionContent.svelte';
-  import { capabilities, isMobile } from '../platform';
+  import { capabilities } from '../platform';
   import { viewport } from '../layout/viewport.svelte';
   import { pushBackHandler } from '../ui/backStack';
   import { initialCompactDetail, masterDetailView } from '../ui/masterDetail';
 
   let { initial, onclose, onopentailscale }: { initial?: SettingsSection; onclose: () => void; onopentailscale?: () => void } = $props();
 
-  const entries = settingsSections({ isMobile, biometricVault: capabilities.biometricVault, includeShortcuts: true });
+  const entries = settingsSections({ biometricVault: capabilities.biometricVault, includeShortcuts: true });
 
   // svelte-ignore state_referenced_locally
   let section = $state<SettingsSection>(initial ?? 'appearance');

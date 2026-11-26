@@ -35,14 +35,12 @@ const GROUPS: readonly { id: SettingsGroupId; label: MessageKey }[] = [
   { id: 'assistant', label: 'mobile.settings.groupAssistant' },
 ];
 
-export function settingsSections({ isMobile, biometricVault, includeShortcuts = true }: {
-  isMobile: boolean;
+export function settingsSections({ biometricVault, includeShortcuts = true }: {
   biometricVault: boolean;
   includeShortcuts?: boolean;
 }): SettingsSectionEntry[] {
   return SECTIONS.filter(({ id }) => {
     if (id === 'security') return biometricVault;
-    if (id === 'tailscale') return !isMobile;
     if (id === 'shortcuts') return includeShortcuts;
     return true;
   });

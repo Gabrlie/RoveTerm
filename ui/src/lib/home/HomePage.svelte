@@ -13,7 +13,7 @@
   import { hostMenuItems } from '../hosts/hostMenu';
   import { hostAddress, hostSubtitle } from '../hosts/route';
   import { actions, isActionAvailable, type ActionId } from '../actions';
-  import { capabilities, isMobile } from '../platform';
+  import { capabilities } from '../platform';
   import { tailscale } from '../tailscale/tailscale.svelte';
   import { findConversionCandidates } from '../tailscale/matching';
   import { notify } from '../ui/toast.svelte';
@@ -42,7 +42,7 @@
   /** Actions offered when right-clicking empty space. */
   const PAGE_ACTIONS = (['host.new', 'host.quickConnect', 'host.import', 'tab.newLocal'] satisfies ActionId[])
     .filter((id) => isActionAvailable(id));
-  const conversionCandidates = $derived(!isMobile && tailscale.connected ? findConversionCandidates(hosts.items, tailscale.peers, tailscale.dismissed) : []);
+  const conversionCandidates = $derived(tailscale.connected ? findConversionCandidates(hosts.items, tailscale.peers, tailscale.dismissed) : []);
   const firstConversionCandidate = $derived(conversionCandidates[0] ?? null);
 
   async function convert(candidate: (typeof conversionCandidates)[number]): Promise<void> {
@@ -434,6 +434,9 @@
     }
     .grid {
       grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr));
+    }
+    .conversion-heading {
+      flex-wrap: wrap;
     }
   }
   @media (pointer: coarse) {

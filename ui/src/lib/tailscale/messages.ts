@@ -1,5 +1,5 @@
 export const tailscaleEn = {
-  'error.tailscale.unsupported': 'Tailscale is available on desktop.',
+  'error.tailscale.unsupported': 'Tailscale is not available in this build.',
   'error.tailscale.failed': 'Tailscale reported an error',
   'error.tailscale.not_connected': 'Tailscale is not connected',
   'error.tailscale.needs_login': 'Sign in to Tailscale to continue',
@@ -94,10 +94,17 @@ export const tailscaleEn = {
   'tailscale.copyIp': 'Copy IP address',
   'tailscale.saveShort': 'Save',
   'tailscale.noOnlineMatch': 'No online devices match.',
+  'tailscale.toolsDesc': 'Browse tailnet devices, test latency and connect',
+  'tailscale.summaryConnected': 'Connected',
+  'tailscale.summaryConnecting': 'Connecting',
+  'tailscale.summaryNeedsLogin': 'Sign in',
+  'tailscale.summaryNeedsApproval': 'Pending',
+  'tailscale.summaryDisconnected': 'Disconnected',
+  'tailscale.summaryUnconfigured': 'Not set up',
 } as const;
 
 export const tailscaleZhCN: Record<keyof typeof tailscaleEn, string> = {
-  'error.tailscale.unsupported': 'Tailscale 适用于桌面端。',
+  'error.tailscale.unsupported': '当前构建不支持内置 Tailscale。',
   'error.tailscale.failed': 'Tailscale 报告了错误',
   'error.tailscale.not_connected': 'Tailscale 尚未连接',
   'error.tailscale.needs_login': '请登录 Tailscale 后继续',
@@ -192,4 +199,11 @@ export const tailscaleZhCN: Record<keyof typeof tailscaleEn, string> = {
   'tailscale.copyIp': '复制 IP 地址',
   'tailscale.saveShort': '保存',
   'tailscale.noOnlineMatch': '没有匹配的在线设备。',
+  'tailscale.toolsDesc': '查看尾网设备、测速并快速连接',
+  'tailscale.summaryConnected': '已连接',
+  'tailscale.summaryConnecting': '连接中',
+  'tailscale.summaryNeedsLogin': '待登录',
+  'tailscale.summaryNeedsApproval': '待审批',
+  'tailscale.summaryDisconnected': '未连接',
+  'tailscale.summaryUnconfigured': '未配置',
 };

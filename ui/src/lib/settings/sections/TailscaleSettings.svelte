@@ -182,4 +182,41 @@
   .actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
   .window-row { justify-content: flex-end; }
   .danger-text, .failed { color: var(--danger); }
+  @media (max-width: 767px) {
+    .field {
+      width: 100%;
+      max-width: 100%;
+    }
+    .value {
+      max-width: 60%;
+      font-size: var(--m-text-sub, 12.5px);
+    }
+    .auth-card {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+      padding: 12px;
+      border-radius: 10px;
+    }
+    .auth-card button {
+      width: 100%;
+      height: var(--control-height, 36px);
+      font-size: calc(13.5px * var(--ui-scale));
+    }
+    .window-row {
+      justify-content: stretch;
+    }
+    .window-row button {
+      width: 100%;
+      height: var(--control-height, 36px);
+      font-size: calc(13.5px * var(--ui-scale));
+    }
+    .actions {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .actions button {
+      width: 100%;
+    }
+  }
 </style>
